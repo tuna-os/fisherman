@@ -1,11 +1,8 @@
 {
   "app-id": "org.tunaos.Installer",
   "runtime": "org.gnome.Platform",
-  "runtime-version": "47",
+  "runtime-version": "49",
   "sdk": "org.gnome.Sdk",
-  "sdk-extensions": [
-    "org.freedesktop.Sdk.Extension.golang"
-  ],
   "command": "tuna-installer",
   "finish-args": [
     "--share=network",
@@ -19,14 +16,31 @@
     "--allow=devel"
   ],
   "build-options": {
-    "append-path": "/usr/lib/sdk/golang/bin",
     "env": {
-      "GOFLAGS": "-mod=vendor",
-      "GOPATH": "/run/build/fisherman/gopath",
+      "PATH": "/app/go/bin:/usr/bin:/bin",
+      "GOPATH": "/run/build/tuna-installer/gopath",
+      "GOCACHE": "/run/build/tuna-installer/gocache",
+      "GONOSUMDB": "*",
+      "GOFLAGS": "",
       "GOPROXY": "off"
     }
   },
   "modules": [
+    {
+      "name": "go",
+      "buildsystem": "simple",
+      "build-commands": [
+        "cp -r go /app/go"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://go.dev/dl/go1.26.1.linux-amd64.tar.gz",
+          "sha256": "031f088e5d955bab8657ede27ad4e3bc5b7c1ba281f05f245bcc304f327c987a",
+          "strip-components": 0
+        }
+      ]
+    },
     {
       "name": "vte",
       "buildsystem": "meson",
@@ -43,22 +57,7 @@
         {
           "type": "git",
           "url": "https://gitlab.gnome.org/GNOME/vte.git",
-          "tag": "0.76.3",
-          "commit": "af36891e28c0a00e85de5f148b9f70b66a0f3fe0"
-        }
-      ]
-    },
-    {
-      "name": "fisherman",
-      "buildsystem": "simple",
-      "build-commands": [
-        "go build -C fisherman -o /app/bin/fisherman ./cmd/fisherman"
-      ],
-      "sources": [
-        {
-          "type": "git",
-          "url": "https://github.com/tuna-os/tuna-installer.git",
-          "branch": "main"
+          "tag": "0.78.0"
         }
       ]
     },
@@ -67,9 +66,8 @@
       "buildsystem": "meson",
       "sources": [
         {
-          "type": "git",
-          "url": "https://github.com/tuna-os/tuna-installer.git",
-          "branch": "main"
+          "type": "dir",
+          "path": ".."
         }
       ]
     },
@@ -81,9 +79,8 @@
       ],
       "sources": [
         {
-          "type": "git",
-          "url": "https://github.com/tuna-os/tuna-installer.git",
-          "branch": "main"
+          "type": "dir",
+          "path": ".."
         }
       ]
     }

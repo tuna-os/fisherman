@@ -27,7 +27,7 @@ fisherman_build = custom_target(
   command: [
     go, 'build',
     '-C', meson.project_source_root() / 'fisherman',
-    '-o', '@OUTPUT@',
+    '-o', meson.current_build_dir() / 'fisherman',
     './cmd/fisherman',
   ],
   install: true,
