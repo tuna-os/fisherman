@@ -47,8 +47,7 @@
               </object>
             </child>
             <child>
-              <object class="GtkScrolledWindow">
-                <property name="id">console_box</property>
+              <object class="GtkScrolledWindow" id="console_box">
                 <property name="visible">false</property>
                 <property name="height-request">200</property>
                 <property name="width-request">560</property>
