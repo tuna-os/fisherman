@@ -61,9 +61,7 @@ func (r *Recipe) Validate() error {
 	if r.Encryption.Type == "luks-passphrase" && r.Encryption.Passphrase == "" {
 		return fmt.Errorf("encryption.passphrase required for luks-passphrase")
 	}
-	if r.Image == "" {
-		return fmt.Errorf("image is required")
-	}
+	// image may be empty in live-ISO mode; bootc auto-detects the running container.
 	if r.Hostname == "" {
 		return fmt.Errorf("hostname is required")
 	}

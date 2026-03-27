@@ -79,3 +79,14 @@ func SetupBtrfsSubvolumes(dev, target string) error {
 	// Remount with the @ subvolume and transparent compression.
 	return Mount(dev, target, "subvol=@,compress=zstd:1")
 }
+
+// MountEFI creates the /boot/efi directory tree under rootMount and mounts
+// efiPart there. This is required before running `bootc install to-filesystem`
+// so bootc can find and install the bootloader.
+func MountEFI(rootMount, efiPart string) error {
+efiDir := rootMount + "/boot/efi"
+if err := os.MkdirAll(efiDir, 0o755); err != nil {
+return fmt.Errorf("mkdir %s: %w", efiDir, err)
+}
+return runner.Run("mount", efiPart, efiDir)
+}

@@ -124,6 +124,13 @@ func main() {
 	}
 	cleanup.AddMount(targetMount)
 
+	// Mount the EFI partition at /boot/efi inside the target.
+	// bootc install to-filesystem requires this to exist before it runs.
+	if err := disk.MountEFI(targetMount, efiPart); err != nil {
+		fatal("mounting EFI: %v", err)
+	}
+	cleanup.AddMount(targetMount + "/boot/efi")
+
 	// Mount a 4 GiB tmpfs at /var/tmp so bootc has room for layer blobs.
 	// The live ISO's overlayfs root is too small for large image writes.
 	if err := disk.MountTmpfs("/var/tmp", "4G"); err != nil {
