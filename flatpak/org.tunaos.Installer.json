@@ -50,7 +50,7 @@
         "-Dvapi=false",
         "-Ddocs=false",
         "-D_systemd=false",
-        "-Dgir=false",
+        "-Dgir=true",
         "-Dfribidi=false"
       ],
       "sources": [
