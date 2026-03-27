@@ -1,0 +1,91 @@
+{
+  "app-id": "org.tunaos.Installer",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "47",
+  "sdk": "org.gnome.Sdk",
+  "sdk-extensions": [
+    "org.freedesktop.Sdk.Extension.golang"
+  ],
+  "command": "tuna-installer",
+  "finish-args": [
+    "--share=network",
+    "--share=ipc",
+    "--socket=wayland",
+    "--socket=fallback-x11",
+    "--device=all",
+    "--filesystem=host",
+    "--talk-name=org.freedesktop.Flatpak",
+    "--system-talk-name=org.freedesktop.PolicyKit1",
+    "--allow=devel"
+  ],
+  "build-options": {
+    "append-path": "/usr/lib/sdk/golang/bin",
+    "env": {
+      "GOFLAGS": "-mod=vendor",
+      "GOPATH": "/run/build/fisherman/gopath",
+      "GOPROXY": "off"
+    }
+  },
+  "modules": [
+    {
+      "name": "vte",
+      "buildsystem": "meson",
+      "config-opts": [
+        "-Dgtk4=true",
+        "-Dgtk3=false",
+        "-Dvapi=false",
+        "-Ddocs=false",
+        "-D_systemd=false",
+        "-Dgir=false",
+        "-Dfribidi=false"
+      ],
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://gitlab.gnome.org/GNOME/vte.git",
+          "tag": "0.76.3",
+          "commit": "af36891e28c0a00e85de5f148b9f70b66a0f3fe0"
+        }
+      ]
+    },
+    {
+      "name": "fisherman",
+      "buildsystem": "simple",
+      "build-commands": [
+        "go build -C fisherman -o /app/bin/fisherman ./cmd/fisherman"
+      ],
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/tuna-os/tuna-installer.git",
+          "branch": "main"
+        }
+      ]
+    },
+    {
+      "name": "tuna-installer",
+      "buildsystem": "meson",
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/tuna-os/tuna-installer.git",
+          "branch": "main"
+        }
+      ]
+    },
+    {
+      "name": "polkit-action",
+      "buildsystem": "simple",
+      "build-commands": [
+        "install -Dm644 data/polkit/org.tunaos.Installer.policy /app/share/polkit-1/actions/org.tunaos.Installer.policy"
+      ],
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://github.com/tuna-os/tuna-installer.git",
+          "branch": "main"
+        }
+      ]
+    }
+  ]
+}

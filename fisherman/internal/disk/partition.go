@@ -3,6 +3,7 @@ package disk
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -71,19 +72,35 @@ func Partition(disk string) error {
 // loopRescan detaches a loop device and re-attaches it with --partscan (-P)
 // so the kernel creates partition block devices (/dev/loopNpM).
 func loopRescan(disk string) error {
-	out, err := exec.Command("losetup", "--noheadings", "-O", "BACK-FILE", disk).Output()
+	spawnArgs := func(name string, args ...string) (string, []string) {
+		if inFlatpakEnv() {
+			return "flatpak-spawn", append([]string{"--host", name}, args...)
+		}
+		return name, args
+	}
+
+	qname, qargs := spawnArgs("losetup", "--noheadings", "-O", "BACK-FILE", disk)
+	out, err := exec.Command(qname, qargs...).Output()
 	if err != nil {
 		return fmt.Errorf("query backing file: %w", err)
 	}
 	backFile := strings.TrimSpace(string(out))
 
-	if err := exec.Command("losetup", "-d", disk).Run(); err != nil {
+	dname, dargs := spawnArgs("losetup", "-d", disk)
+	if err := exec.Command(dname, dargs...).Run(); err != nil {
 		return fmt.Errorf("detach: %w", err)
 	}
-	if err := exec.Command("losetup", "-P", disk, backFile).Run(); err != nil {
+	rname, rargs := spawnArgs("losetup", "-P", disk, backFile)
+	if err := exec.Command(rname, rargs...).Run(); err != nil {
 		return fmt.Errorf("reattach with partscan: %w", err)
 	}
 
 	_ = runner.Run("udevadm", "settle")
 	return nil
+}
+
+// inFlatpakEnv reports whether the current process is inside a Flatpak sandbox.
+func inFlatpakEnv() bool {
+	_, err := os.Stat("/.flatpak-info")
+	return err == nil
 }

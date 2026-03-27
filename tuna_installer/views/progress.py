@@ -3,11 +3,18 @@
 # Copyright 2026 TunaOS contributors
 # SPDX-License-Identifier: GPL-3.0-only
 
+import os
 from gettext import gettext as _
 from gi.repository import Adw, Gdk, GLib, Gtk, Pango, Vte
 
-
-FISHERMAN_BIN = "/usr/local/bin/fisherman"
+# When running as a Flatpak, fisherman lives at /app/bin/fisherman and must be
+# elevated via pkexec (polkit action: org.tunaos.Installer.install).
+# On a live ISO or host install, fisherman is at /usr/local/bin/fisherman and
+# can be run with sudo (the live user already has passwordless sudo).
+if os.path.exists("/.flatpak-info"):
+    FISHERMAN_CMD = "pkexec /app/bin/fisherman"
+else:
+    FISHERMAN_CMD = "sudo /usr/local/bin/fisherman"
 
 
 @Gtk.Template(resource_path="/org/tunaos/Installer/gtk/progress.ui")
@@ -78,7 +85,7 @@ class TunaProgress(Adw.Bin):
         self.__terminal.spawn_async(
             Vte.PtyFlags.DEFAULT,
             "/",
-            ["sh", "-c", f"sudo {FISHERMAN_BIN} {recipe_path}; exit $?"],
+            ["sh", "-c", f"{FISHERMAN_CMD} {recipe_path}; exit $?"],
             [],
             GLib.SpawnFlags.DO_NOT_REAP_CHILD,
             None,
