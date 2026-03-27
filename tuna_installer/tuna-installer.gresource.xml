@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/org/tunaos/Installer">
+    <file preprocess="xml-stripblanks">gtk/window.ui</file>
+    <file preprocess="xml-stripblanks">gtk/welcome.ui</file>
+    <file preprocess="xml-stripblanks">gtk/disk.ui</file>
+    <file preprocess="xml-stripblanks">gtk/confirm.ui</file>
+    <file preprocess="xml-stripblanks">gtk/progress.ui</file>
+    <file preprocess="xml-stripblanks">gtk/done.ui</file>
+  </gresource>
+</gresources>

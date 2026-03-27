@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=TunaOS Installer
+Comment=Install TunaOS on your computer
+Exec=tuna-installer
+Icon=org.tunaos.Installer
+Terminal=false
+Type=Application
+Categories=System;
+Keywords=install;installer;tunaos;

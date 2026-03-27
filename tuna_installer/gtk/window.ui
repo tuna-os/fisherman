@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <template class="TunaInstallerWindow" parent="AdwApplicationWindow">
+    <property name="title">TunaOS Installer</property>
+    <property name="default-width">800</property>
+    <property name="default-height">600</property>
+    <property name="resizable">false</property>
+    <child>
+      <object class="GtkStack" id="view_stack">
+        <property name="transition-type">crossfade</property>
+      </object>
+    </child>
+  </template>
+</interface>

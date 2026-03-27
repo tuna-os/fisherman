@@ -1,0 +1,71 @@
+package recipe
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+)
+
+// Recipe describes a fisherman installation.
+type Recipe struct {
+	Disk            string     `json:"disk"`            // block device, e.g. "/dev/sda"
+	Filesystem      string     `json:"filesystem"`      // "xfs" or "btrfs"
+	BtrfsSubvolumes bool       `json:"btrfsSubvolumes"` // create @, @home, @snapshots
+	Encryption      Encryption `json:"encryption"`
+	Image           string     `json:"image"`        // source OCI image reference
+	TargetImgref    string     `json:"targetImgref"` // update-tracking ref (optional)
+	SelinuxDisabled bool       `json:"selinuxDisabled"`
+	Hostname        string     `json:"hostname"`
+}
+
+// Encryption describes the disk encryption configuration.
+type Encryption struct {
+	Type       string `json:"type"`       // "none", "tpm2-luks", "luks-passphrase"
+	Passphrase string `json:"passphrase"` // only for luks-passphrase
+}
+
+// Load reads and parses a recipe JSON file.
+func Load(path string) (*Recipe, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading recipe: %w", err)
+	}
+	var r Recipe
+	if err := json.Unmarshal(data, &r); err != nil {
+		return nil, fmt.Errorf("parsing recipe: %w", err)
+	}
+	return &r, nil
+}
+
+// Validate checks that the recipe fields are coherent and that the disk exists.
+func (r *Recipe) Validate() error {
+	if r.Disk == "" {
+		return fmt.Errorf("disk is required")
+	}
+	if _, err := os.Stat(r.Disk); err != nil {
+		return fmt.Errorf("disk %s: %w", r.Disk, err)
+	}
+	switch r.Filesystem {
+	case "xfs", "btrfs":
+	default:
+		return fmt.Errorf("filesystem must be \"xfs\" or \"btrfs\", got %q", r.Filesystem)
+	}
+	if r.BtrfsSubvolumes && r.Filesystem != "btrfs" {
+		return fmt.Errorf("btrfsSubvolumes requires filesystem=btrfs")
+	}
+	switch r.Encryption.Type {
+	case "", "none", "tpm2-luks", "luks-passphrase":
+	default:
+		return fmt.Errorf("encryption.type must be \"none\", \"tpm2-luks\", or \"luks-passphrase\"")
+	}
+	if r.Encryption.Type == "luks-passphrase" && r.Encryption.Passphrase == "" {
+		return fmt.Errorf("encryption.passphrase required for luks-passphrase")
+	}
+	if r.Image == "" {
+		return fmt.Errorf("image is required")
+	}
+	if r.Hostname == "" {
+		return fmt.Errorf("hostname is required")
+	}
+	return nil
+}

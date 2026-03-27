@@ -1,0 +1,28 @@
+#!/usr/bin/env @PYTHON@
+# tuna-installer launcher
+
+import os
+import sys
+
+pkgdatadir = '@pkgdatadir@'
+localedir = '@localedir@'
+VERSION = '@VERSION@'
+
+sys.path.insert(1, pkgdatadir)
+
+import signal
+signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+import gettext
+gettext.install('tuna_installer', localedir)
+
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+from gi.repository import Gio
+
+resource = Gio.Resource.load(os.path.join(pkgdatadir, 'tuna-installer.gresource'))
+resource._register()
+
+from tuna_installer.main import main
+sys.exit(main(VERSION))

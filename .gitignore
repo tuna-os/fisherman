@@ -1,0 +1,5 @@
+.build/
+builddir/
+__pycache__/
+*.pyc
+fisherman/fisherman
