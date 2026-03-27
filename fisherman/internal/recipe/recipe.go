@@ -12,9 +12,10 @@ type Recipe struct {
 	Filesystem      string     `json:"filesystem"`      // "xfs" or "btrfs"
 	BtrfsSubvolumes bool       `json:"btrfsSubvolumes"` // create @, @home, @snapshots
 	Encryption      Encryption `json:"encryption"`
-	Image           string     `json:"image"`        // source OCI image reference
-	TargetImgref    string     `json:"targetImgref"` // update-tracking ref (optional)
+	Image           string     `json:"image"`           // source OCI image reference
+	TargetImgref    string     `json:"targetImgref"`    // update-tracking ref (optional)
 	SelinuxDisabled bool       `json:"selinuxDisabled"`
+	UnifiedStorage  bool       `json:"unifiedStorage"`  // pass --experimental-unified-storage
 	Hostname        string     `json:"hostname"`
 }
 

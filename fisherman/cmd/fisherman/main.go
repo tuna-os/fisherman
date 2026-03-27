@@ -57,8 +57,8 @@ func main() {
 		fatal("partitioning disk: %v", err)
 	}
 
-	efiPart := disk.PartName(r.Disk, 2)
-	rootPart := disk.PartName(r.Disk, 3)
+	efiPart := disk.PartName(r.Disk, 1)
+	rootPart := disk.PartName(r.Disk, 2)
 	rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
 
 	// ── Step 2: Format EFI ───────────────────────────────────────────────────
@@ -152,6 +152,7 @@ func main() {
 		SourceImgref:    r.Image,
 		TargetImgref:    targetImgref,
 		SelinuxDisabled: r.SelinuxDisabled,
+		UnifiedStorage:  r.UnifiedStorage,
 		Target:          targetMount,
 	}); err != nil {
 		fatal("bootc install: %v", err)

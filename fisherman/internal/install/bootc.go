@@ -20,6 +20,9 @@ type Options struct {
 	TargetImgref string
 	// SelinuxDisabled passes --disable-selinux when true.
 	SelinuxDisabled bool
+	// UnifiedStorage passes --experimental-unified-storage when true.
+	// See: https://bootc-dev.github.io/bootc/unified-storage.html
+	UnifiedStorage bool
 	// Target is the path to the mounted root filesystem on the host.
 	Target string
 }
@@ -52,11 +55,10 @@ func bootcViaContainer(opts Options) error {
 	if opts.SelinuxDisabled {
 		bootcArgs = append(bootcArgs, "--disable-selinux")
 	}
-	// Skip finalize so the target stays read-write for post-install steps
-	// (hostname injection etc.). We remount/trim ourselves via cleanup.
+	if opts.UnifiedStorage {
+		bootcArgs = append(bootcArgs, "--experimental-unified-storage")
+	}
 	bootcArgs = append(bootcArgs, "--skip-finalize")
-	// Use /target inside the container — avoids missing-directory issues with host
-	// paths like /mnt/fisherman-target that may not exist in the container image.
 	bootcArgs = append(bootcArgs, "/target")
 
 	podmanArgs := []string{
@@ -96,6 +98,9 @@ func bootcDirect(opts Options) error {
 	}
 	if opts.SelinuxDisabled {
 		args = append(args, "--disable-selinux")
+	}
+	if opts.UnifiedStorage {
+		args = append(args, "--experimental-unified-storage")
 	}
 	args = append(args, "--skip-finalize")
 	args = append(args, opts.Target)
