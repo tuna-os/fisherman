@@ -1,71 +1,37 @@
-# tuna-installer
+# fisherman
 
-Graphical installer for TunaOS — a GTK4/Adwaita frontend paired with **fisherman**, a Go CLI backend for bootc-based OS installs.
+A bootc-only installer backend for TunaOS, inspired by [Albius](https://github.com/vanilla-os/albius).
+
+fisherman handles disk partitioning, formatting, encryption (LUKS), and bootc image installation. It is designed to be driven by a frontend such as [tuna-installer](https://github.com/tuna-os/tuna-installer).
 
 ## Architecture
 
-```
-tuna-installer (Python/GTK4 GUI)
-    └─ collects choices → writes /tmp/fisherman-recipe.json
-    └─ runs: sudo fisherman /tmp/fisherman-recipe.json (via VTE terminal)
+fisherman is a Go CLI that accepts a JSON recipe describing the installation steps and executes them against the target disk using `bootc install to-disk`.
 
-fisherman (Go CLI backend)
-    └─ reads recipe.json
-    └─ partitions disk (sgdisk)
-    └─ sets up LUKS (optional)
-    └─ formats filesystem (xfs or btrfs with subvolumes)
-    └─ runs: bootc install to-filesystem
-    └─ writes /etc/hostname
-    └─ unmounts cleanly
+When running inside a Flatpak sandbox, fisherman automatically wraps host subprocess calls via `flatpak-spawn --host`.
+
+## Usage
+
+```bash
+sudo fisherman <recipe.json>
 ```
 
-fisherman is inspired by [Albius](https://github.com/Vanilla-OS/Albius) from Vanilla OS, but purpose-built for bootc-based images — no squashfs extraction, no package management, no GRUB config; bootc handles all of that.
-
-## fisherman Recipe
+## Recipe format
 
 ```json
 {
   "disk": "/dev/sda",
-  "filesystem": "xfs",
-  "btrfsSubvolumes": false,
-  "encryption": {
-    "type": "none"
-  },
-  "image": "ghcr.io/tuna-os/yellowfin:gnome-hwe",
-  "targetImgref": "ghcr.io/tuna-os/yellowfin:gnome-hwe",
-  "selinuxDisabled": true,
-  "hostname": "tunaos"
+  "imgref": "ghcr.io/tuna-os/yellowfin:latest",
+  "luks": false,
+  "luks_password": ""
 }
 ```
-
-Encryption types: `none`, `tpm2-luks`, `luks-passphrase`
 
 ## Building
 
 ```bash
-# Build and install
-meson setup builddir --prefix=/usr
-meson compile -C builddir
-sudo meson install -C builddir
+go build ./...
 ```
-
-This compiles the fisherman Go binary and installs the Python GTK4 app.
-
-## Development
-
-```bash
-# Run fisherman directly
-sudo ./fisherman/fisherman /tmp/recipe.json
-
-# Set TUNAOS_INSTALLER_DEV=1 to show loopback devices in disk selector
-TUNAOS_INSTALLER_DEV=1 tuna-installer
-```
-
-## Components
-
-- `tuna_installer/` — Python GTK4 app (pages: Welcome → Disk → Confirm → Progress → Done)
-- `fisherman/` — Go CLI backend
-- `data/` — Desktop entry, icons
 
 ## License
 
