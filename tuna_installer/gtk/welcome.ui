@@ -9,7 +9,7 @@
           </object>
         </child>
         <property name="content">
-          <object class="Gtk.Box">
+          <object class="GtkBox">
             <property name="orientation">vertical</property>
             <property name="valign">center</property>
             <property name="halign">center</property>
