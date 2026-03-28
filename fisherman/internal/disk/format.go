@@ -45,6 +45,14 @@ func MountTmpfs(path, size string) error {
 	return runner.Run("mount", "-t", "tmpfs", "-o", "size="+size, "tmpfs", path)
 }
 
+// BindMount bind-mounts src onto dst, creating dst if needed.
+func BindMount(src, dst string) error {
+	if err := os.MkdirAll(dst, 0o1777); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dst, err)
+	}
+	return runner.Run("mount", "--bind", src, dst)
+}
+
 // Umount unmounts path (simple, non-recursive).
 func Umount(path string) error {
 	return runner.Run("umount", path)

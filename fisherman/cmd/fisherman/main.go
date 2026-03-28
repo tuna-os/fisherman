@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/tuna-os/fisherman/internal/disk"
 	"github.com/tuna-os/fisherman/internal/install"
@@ -138,10 +139,16 @@ func main() {
 	}
 	cleanup.AddMount(targetMount + "/boot/efi")
 
-	// Mount a 4 GiB tmpfs at /var/tmp so bootc has room for layer blobs.
-	// The live ISO's overlayfs root is too small for large image writes.
-	if err := disk.MountTmpfs("/var/tmp", "4G"); err != nil {
-		fatal("mounting tmpfs at /var/tmp: %v", err)
+	// Bind-mount the target disk's /var/tmp at /var/tmp so bootc can write
+	// layer blobs there. Using a fixed-size tmpfs is too small for large images
+	// (Bluefin LTS and similar can exceed 10 GiB of layer data). The target
+	// disk has hundreds of GiB free, so use that instead.
+	targetVarTmp := filepath.Join(targetMount, "var", "tmp")
+	if err := os.MkdirAll(targetVarTmp, 0o1777); err != nil {
+		fatal("creating target var/tmp: %v", err)
+	}
+	if err := disk.BindMount(targetVarTmp, "/var/tmp"); err != nil {
+		fatal("bind-mounting target var/tmp at /var/tmp: %v", err)
 	}
 	cleanup.AddMount("/var/tmp")
 
