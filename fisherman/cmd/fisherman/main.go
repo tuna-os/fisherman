@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
 
 	"github.com/tuna-os/fisherman/internal/disk"
 	"github.com/tuna-os/fisherman/internal/install"
@@ -44,7 +45,7 @@ func main() {
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
 
 	// Compute total step count up front so the GUI can show accurate progress.
-	totalSteps := 7
+	totalSteps := 8
 	if hasEncryption {
 		totalSteps++
 	}
@@ -229,6 +230,16 @@ func main() {
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
 	if err := post.WriteHostname(targetMount, r.Hostname); err != nil {
 		fatal("writing hostname: %v", err)
+	}
+
+	// ── Step 9: Finalize ─────────────────────────────────────────────────────
+	progress.Step(step, totalSteps, "Finalizing installation")
+	progress.Info("Running bootc install finalize (fstrim + seal read-only)")
+	finalizeCmd := exec.Command("bootc", "install", "finalize", targetMount)
+	finalizeCmd.Stdout = os.Stdout
+	finalizeCmd.Stderr = os.Stderr
+	if err := finalizeCmd.Run(); err != nil {
+		fatal("bootc install finalize: %v", err)
 	}
 
 	// Tear down mounts and LUKS before declaring success.
