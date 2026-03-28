@@ -75,3 +75,24 @@ func Close(mapperName string) error {
 	}
 	return nil
 }
+
+// EnrollTPM2 adds a TPM2 auto-unlock token to an existing LUKS2 container,
+// authenticating with the supplied passphrase. The passphrase remains as a
+// fallback unlock method. PCR 7 (Secure Boot state) is used by default.
+func EnrollTPM2(partition, passphrase string) error {
+	cmd := exec.Command(
+		"systemd-cryptenroll",
+		"--tpm2-device=auto",
+		"--tpm2-pcrs=7",
+		"--unlock-key-file=-",
+		partition,
+	)
+	cmd.Stdin = strings.NewReader(passphrase)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stdout
+	fmt.Fprintf(os.Stdout, "+ systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 %s\n", partition)
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("systemd-cryptenroll %s: %w", partition, err)
+	}
+	return nil
+}

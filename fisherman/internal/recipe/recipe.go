@@ -22,8 +22,8 @@ type Recipe struct {
 
 // Encryption describes the disk encryption configuration.
 type Encryption struct {
-	Type       string `json:"type"`       // "none", "tpm2-luks", "luks-passphrase"
-	Passphrase string `json:"passphrase"` // only for luks-passphrase
+	Type       string `json:"type"`       // "none", "luks-passphrase", "tpm2-luks", "tpm2-luks-passphrase"
+	Passphrase string `json:"passphrase"` // required for luks-passphrase and tpm2-luks-passphrase
 }
 
 // Load reads and parses a recipe JSON file.
@@ -56,12 +56,12 @@ func (r *Recipe) Validate() error {
 		return fmt.Errorf("btrfsSubvolumes requires filesystem=btrfs")
 	}
 	switch r.Encryption.Type {
-	case "", "none", "tpm2-luks", "luks-passphrase":
+	case "", "none", "tpm2-luks", "luks-passphrase", "tpm2-luks-passphrase":
 	default:
-		return fmt.Errorf("encryption.type must be \"none\", \"tpm2-luks\", or \"luks-passphrase\"")
+		return fmt.Errorf("encryption.type must be \"none\", \"luks-passphrase\", \"tpm2-luks\", or \"tpm2-luks-passphrase\"")
 	}
-	if r.Encryption.Type == "luks-passphrase" && r.Encryption.Passphrase == "" {
-		return fmt.Errorf("encryption.passphrase required for luks-passphrase")
+	if (r.Encryption.Type == "luks-passphrase" || r.Encryption.Type == "tpm2-luks-passphrase") && r.Encryption.Passphrase == "" {
+		return fmt.Errorf("encryption.passphrase required for %s", r.Encryption.Type)
 	}
 	// image may be empty in live-ISO mode; bootc auto-detects the running container.
 	if r.Hostname == "" {

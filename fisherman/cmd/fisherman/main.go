@@ -41,11 +41,15 @@ func main() {
 	}
 
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
+	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
 
 	// Compute total step count up front so the GUI can show accurate progress.
 	totalSteps := 7
 	if hasEncryption {
-		totalSteps = 8
+		totalSteps++
+	}
+	if hasTPM2 && r.Encryption.Type == "tpm2-luks-passphrase" {
+		totalSteps++ // extra step for TPM2 enrolment
 	}
 	step := 1
 
@@ -76,15 +80,11 @@ func main() {
 
 		var passphrase string
 		switch r.Encryption.Type {
-		case "luks-passphrase":
+		case "luks-passphrase", "tpm2-luks-passphrase":
 			passphrase = r.Encryption.Passphrase
 		case "tpm2-luks":
 			passphrase = luks.RandomPassphrase()
-			progress.Info(
-				"TPM2-LUKS: a temporary passphrase is used for installation. " +
-					"After first boot enroll the TPM2 chip with: " +
-					"systemd-cryptenroll --tpm2-device=auto /dev/disk/by-label/root",
-			)
+			progress.Info("TPM2-LUKS: using a temporary passphrase; TPM2 will be enrolled after install")
 		}
 
 		if err := luks.Format(rootPart, passphrase); err != nil {
@@ -156,6 +156,20 @@ func main() {
 		Target:          targetMount,
 	}); err != nil {
 		fatal("bootc install: %v", err)
+	}
+
+	// ── TPM2 enrolment (tpm2-luks-passphrase only) ────────────────────────────
+	// For plain tpm2-luks the random passphrase is ephemeral; no enrolment step.
+	// For tpm2-luks-passphrase the user's passphrase unlocks LUKS; we add a
+	// TPM2 token on top so the system auto-unlocks, with the password as fallback.
+	if r.Encryption.Type == "tpm2-luks-passphrase" {
+		progress.Step(step, totalSteps, "Enrolling TPM2 auto-unlock")
+		step++
+
+		if err := luks.EnrollTPM2(rootPart, r.Encryption.Passphrase); err != nil {
+			// Non-fatal: TPM2 hardware may not be present (e.g. VMs).
+			progress.Info(fmt.Sprintf("Warning: TPM2 enrolment failed (password unlock still works): %v", err))
+		}
 	}
 
 	// ── Step 7: Copy system flatpaks ──────────────────────────────────────────
