@@ -57,12 +57,26 @@ func main() {
 	progress.Step(step, totalSteps, "Partitioning disk")
 	step++
 
-	if err := disk.Partition(r.Disk); err != nil {
-		fatal("partitioning disk: %v", err)
+	if hasEncryption {
+		if err := disk.PartitionEncrypted(r.Disk); err != nil {
+			fatal("partitioning disk: %v", err)
+		}
+	} else {
+		if err := disk.Partition(r.Disk); err != nil {
+			fatal("partitioning disk: %v", err)
+		}
 	}
 
 	efiPart := disk.PartName(r.Disk, 1)
-	rootPart := disk.PartName(r.Disk, 2)
+	// With encryption: p2=/boot (unencrypted), p3=LUKS root
+	// Without encryption: p2=root
+	var bootPart, rootPart string
+	if hasEncryption {
+		bootPart = disk.PartName(r.Disk, 2)
+		rootPart = disk.PartName(r.Disk, 3)
+	} else {
+		rootPart = disk.PartName(r.Disk, 2)
+	}
 	rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
 
 	// ── Step 2: Format EFI ───────────────────────────────────────────────────
@@ -71,6 +85,11 @@ func main() {
 
 	if err := disk.FormatEFI(efiPart); err != nil {
 		fatal("formatting EFI: %v", err)
+	}
+	if hasEncryption {
+		if err := disk.FormatBoot(bootPart); err != nil {
+			fatal("formatting /boot: %v", err)
+		}
 	}
 
 	// ── Step 3: Disk encryption (optional) ───────────────────────────────────
@@ -130,6 +149,16 @@ func main() {
 		}
 	}
 	cleanup.AddMount(targetMount)
+
+	// For encrypted installs, mount the unencrypted /boot partition BEFORE the
+	// EFI partition. bootupctl (run by bootc) reads /boot's block device UUID
+	// from the raw partition — this only works with an unencrypted /boot.
+	if hasEncryption {
+		if err := disk.MountBoot(targetMount, bootPart); err != nil {
+			fatal("mounting /boot: %v", err)
+		}
+		cleanup.AddMount(targetMount + "/boot")
+	}
 
 	// Mount the EFI partition at /boot/efi inside the target.
 	// bootc install to-filesystem requires this to exist before it runs.

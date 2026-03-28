@@ -88,13 +88,29 @@ func SetupBtrfsSubvolumes(dev, target string) error {
 	return Mount(dev, target, "subvol=@,compress=zstd:1")
 }
 
+// FormatBoot formats a partition as ext4 for use as /boot.
+// ext4 is used for broad bootloader compatibility.
+func FormatBoot(part string) error {
+	return runner.Run("mkfs.ext4", "-L", "boot", "-F", part)
+}
+
+// MountBoot creates the /boot directory under rootMount and mounts bootPart
+// there. Must be called before MountEFI so /boot/efi can be created inside it.
+func MountBoot(rootMount, bootPart string) error {
+	bootDir := rootMount + "/boot"
+	if err := os.MkdirAll(bootDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", bootDir, err)
+	}
+	return runner.Run("mount", bootPart, bootDir)
+}
+
 // MountEFI creates the /boot/efi directory tree under rootMount and mounts
 // efiPart there. This is required before running `bootc install to-filesystem`
 // so bootc can find and install the bootloader.
 func MountEFI(rootMount, efiPart string) error {
-efiDir := rootMount + "/boot/efi"
-if err := os.MkdirAll(efiDir, 0o755); err != nil {
-return fmt.Errorf("mkdir %s: %w", efiDir, err)
-}
-return runner.Run("mount", efiPart, efiDir)
+	efiDir := rootMount + "/boot/efi"
+	if err := os.MkdirAll(efiDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", efiDir, err)
+	}
+	return runner.Run("mount", efiPart, efiDir)
 }

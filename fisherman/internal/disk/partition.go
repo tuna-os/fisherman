@@ -43,17 +43,41 @@ func PartName(disk string, num int) string {
 // around this by detaching and re-attaching the loop device with --partscan so
 // the kernel creates /dev/loopNpM nodes before returning.
 func Partition(disk string) error {
-	// Unmount any mounted partitions on this disk before partitioning.
-	if err := unmountAll(disk); err != nil {
-		return fmt.Errorf("unmounting partitions: %w", err)
-	}
-
 	script := strings.Join([]string{
 		"label: gpt",
 		"",
 		`size=512MiB, type=uefi, name="EFI-SYSTEM"`,
 		`type=linux, name="root"`,
 	}, "\n") + "\n"
+	return partition(disk, script)
+}
+
+// PartitionEncrypted wipes disk and creates a three-partition GPT layout:
+//
+//	Partition 1 – EFI System (512 MiB)
+//	Partition 2 – /boot (1 GiB, unencrypted — bootloader must read it)
+//	Partition 3 – LUKS root (remaining space)
+//
+// A separate unencrypted /boot partition is required for encrypted installs
+// so that bootupctl (which runs in a restricted bwrap sandbox) can find the
+// UUID of the boot filesystem from the raw block device.
+func PartitionEncrypted(disk string) error {
+	script := strings.Join([]string{
+		"label: gpt",
+		"",
+		`size=512MiB, type=uefi, name="EFI-SYSTEM"`,
+		`size=1GiB,   type=linux, name="boot"`,
+		`type=linux, name="root"`,
+	}, "\n") + "\n"
+	return partition(disk, script)
+}
+
+// partition is the shared implementation for Partition and PartitionEncrypted.
+func partition(disk, script string) error {
+	// Unmount any mounted partitions on this disk before partitioning.
+	if err := unmountAll(disk); err != nil {
+		return fmt.Errorf("unmounting partitions: %w", err)
+	}
 
 	if err := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", disk); err != nil {
 		return fmt.Errorf("sfdisk: %w", err)
