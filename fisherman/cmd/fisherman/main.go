@@ -43,9 +43,9 @@ func main() {
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
 
 	// Compute total step count up front so the GUI can show accurate progress.
-	totalSteps := 6
+	totalSteps := 7
 	if hasEncryption {
-		totalSteps = 7
+		totalSteps = 8
 	}
 	step := 1
 
@@ -158,7 +158,16 @@ func main() {
 		fatal("bootc install: %v", err)
 	}
 
-	// ── Step 7: Post-install configuration ───────────────────────────────────
+	// ── Step 7: Copy system flatpaks ──────────────────────────────────────────
+	progress.Step(step, totalSteps, "Copying system Flatpaks")
+	step++
+
+	if err := post.CopyFlatpaks(targetMount, r.Flatpaks); err != nil {
+		// Non-fatal — the system will work without pre-installed flatpaks.
+		progress.Info(fmt.Sprintf("Warning: could not copy flatpaks: %v", err))
+	}
+
+	// ── Step 8: Post-install configuration ───────────────────────────────────
 	progress.Step(step, totalSteps, "Configuring installed system")
 
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))

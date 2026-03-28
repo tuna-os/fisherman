@@ -43,6 +43,11 @@ func PartName(disk string, num int) string {
 // around this by detaching and re-attaching the loop device with --partscan so
 // the kernel creates /dev/loopNpM nodes before returning.
 func Partition(disk string) error {
+	// Unmount any mounted partitions on this disk before partitioning.
+	if err := unmountAll(disk); err != nil {
+		return fmt.Errorf("unmounting partitions: %w", err)
+	}
+
 	script := strings.Join([]string{
 		"label: gpt",
 		"",
@@ -96,6 +101,31 @@ func loopRescan(disk string) error {
 	}
 
 	_ = runner.Run("udevadm", "settle")
+	return nil
+}
+
+// unmountAll unmounts every mounted partition on disk by reading /proc/mounts.
+func unmountAll(disk string) error {
+	data, err := os.ReadFile("/proc/mounts")
+	if err != nil {
+		return fmt.Errorf("reading /proc/mounts: %w", err)
+	}
+	base := filepath.Base(disk) // e.g. "sda"
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		dev := fields[0] // e.g. /dev/sda1
+		mp := fields[1]  // e.g. /run/media/james/Yellowfin_Live
+		devBase := filepath.Base(dev)
+		if strings.HasPrefix(devBase, base) {
+			fmt.Fprintf(os.Stdout, "+ umount %s (%s)\n", mp, dev)
+			if err := runner.Run("umount", "-l", mp); err != nil {
+				return fmt.Errorf("unmounting %s: %w", mp, err)
+			}
+		}
+	}
 	return nil
 }
 

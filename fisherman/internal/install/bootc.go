@@ -1,10 +1,15 @@
 package install
 
 import (
+	"bufio"
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/tuna-os/fisherman/internal/progress"
 )
 
 // Options configures a bootc installation.
@@ -48,6 +53,12 @@ func bootcViaContainer(opts Options) error {
 		targetImgref = opts.SourceImgref
 	}
 
+	// Pull the image first with per-layer progress visible in the terminal.
+	// Once pulled, `podman run` uses the cache and starts instantly.
+	if err := pullImage(opts.SourceImgref); err != nil {
+		return fmt.Errorf("pulling image: %w", err)
+	}
+
 	bootcArgs := []string{"install", "to-filesystem"}
 	if targetImgref != "" {
 		bootcArgs = append(bootcArgs, "--target-imgref", targetImgref)
@@ -80,9 +91,7 @@ func bootcViaContainer(opts Options) error {
 	fmt.Fprintf(os.Stdout, "+ podman %s\n", strings.Join(podmanArgs, " "))
 
 	cmd := exec.Command("podman", podmanArgs...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stdout
-	if err := cmd.Run(); err != nil {
+	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("bootc install to-filesystem (via container): %w", err)
 	}
 	return nil
@@ -108,10 +117,157 @@ func bootcDirect(opts Options) error {
 	fmt.Fprintf(os.Stdout, "+ bootc %s\n", strings.Join(args, " "))
 
 	cmd := exec.Command("bootc", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stdout
-	if err := cmd.Run(); err != nil {
+	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("bootc install to-filesystem: %w", err)
 	}
 	return nil
+}
+
+// pullImage uses skopeo to download the container image into podman's storage.
+// skopeo outputs per-blob "Copying blob ... done" lines even on non-TTY pipes,
+// unlike podman pull which suppresses them. We run skopeo inspect first to get
+// the total layer count so we can show "layer X/Y".
+func pullImage(image string) error {
+	progress.Substep("Pulling container image")
+
+	totalLayers := getLayerCount(image)
+	if totalLayers > 0 {
+		progress.Substep(fmt.Sprintf("Pulling image: %d layers to download", totalLayers))
+	}
+
+	fmt.Fprintf(os.Stdout, "+ skopeo copy docker://%s containers-storage:%s\n", image, image)
+	cmd := exec.Command("skopeo", "copy", "docker://"+image, "containers-storage:"+image)
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+
+	if err := cmd.Start(); err != nil {
+		pw.Close()
+		return err
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scanner := bufio.NewScanner(pr)
+		scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+		layersDone := 0
+		for scanner.Scan() {
+			line := scanner.Text()
+			fmt.Fprintln(os.Stdout, line)
+			lower := strings.ToLower(line)
+
+			if strings.Contains(lower, "copying blob") {
+				if strings.Contains(lower, "done") || strings.Contains(lower, "skipped") || strings.Contains(lower, "already exists") {
+					layersDone++
+					if totalLayers > 0 {
+						progress.Substep(fmt.Sprintf("Pulling image: layer %d/%d", layersDone, totalLayers))
+					} else {
+						progress.Substep(fmt.Sprintf("Pulling image: layer %d", layersDone))
+					}
+				}
+			} else if strings.Contains(lower, "copying config") {
+				progress.Substep("Pulling image: copying config")
+			} else if strings.Contains(lower, "writing manifest") {
+				progress.Substep("Pulling image: writing manifest")
+			}
+		}
+	}()
+
+	err := cmd.Wait()
+	pw.Close()
+	<-done
+
+	if err != nil {
+		return fmt.Errorf("skopeo copy %s: %w", image, err)
+	}
+	progress.Substep("Image pulled successfully")
+	return nil
+}
+
+// getLayerCount uses skopeo inspect --raw to get the number of layers in an
+// OCI image manifest. Returns 0 if anything goes wrong.
+func getLayerCount(image string) int {
+	fmt.Fprintf(os.Stdout, "+ skopeo inspect --raw docker://%s\n", image)
+	out, err := exec.Command("skopeo", "inspect", "--raw", "docker://"+image).Output()
+	if err != nil {
+		return 0
+	}
+	// Parse the OCI manifest or manifest list.
+	var manifest struct {
+		Layers []json.RawMessage `json:"layers"`
+	}
+	if json.Unmarshal(out, &manifest) == nil && len(manifest.Layers) > 0 {
+		return len(manifest.Layers)
+	}
+	return 0
+}
+
+// runWithSubsteps runs a command, relays its combined stdout/stderr line-by-line
+// to our stdout, and emits JSON substep events when it recognises bootc progress.
+func runWithSubsteps(cmd *exec.Cmd) error {
+	pr, pw := io.Pipe()
+	cmd.Stdout = pw
+	cmd.Stderr = pw
+
+	if err := cmd.Start(); err != nil {
+		pw.Close()
+		return err
+	}
+
+	// Read lines in a goroutine so we don't block.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		scanner := bufio.NewScanner(pr)
+		// Increase buffer for long ostree/podman lines.
+		scanner.Buffer(make([]byte, 0, 256*1024), 256*1024)
+		lastSubstep := ""
+		for scanner.Scan() {
+			line := scanner.Text()
+			// Always relay the raw line to the VTE terminal.
+			fmt.Fprintln(os.Stdout, line)
+			// Detect bootc / ostree / podman progress keywords and emit substep.
+			if sub := classifyLine(line); sub != "" && sub != lastSubstep {
+				lastSubstep = sub
+				progress.Substep(sub)
+			}
+		}
+	}()
+
+	err := cmd.Wait()
+	pw.Close()
+	<-done
+	return err
+}
+
+// classifyLine maps a raw bootc/ostree/podman output line to a human-readable
+// substep description, or "" if the line is not interesting.
+func classifyLine(line string) string {
+	lower := strings.ToLower(line)
+	switch {
+	case strings.Contains(lower, "installing image:"):
+		return "Pulling container image"
+	case strings.Contains(lower, "layers") && strings.Contains(lower, "needed"):
+		return "Downloading image layers"
+	case strings.Contains(lower, "initializing ostree"):
+		return "Initializing ostree layout"
+	case strings.Contains(lower, "deploying container image"):
+		return "Deploying OS (this may take a while)"
+	case strings.Contains(lower, "bootloader:"):
+		return "Detected bootloader"
+	case strings.Contains(lower, "installing bootloader"):
+		return "Installing bootloader"
+	case strings.Contains(lower, "efibootmgr"):
+		return "Configuring EFI boot entry"
+	case strings.Contains(lower, "installed:") && strings.Contains(lower, "grub"):
+		return "Configuring GRUB"
+	case strings.Contains(lower, "installation complete"):
+		return "bootc installation complete"
+	case strings.Contains(lower, "selinux"):
+		return "Configuring SELinux"
+	case strings.Contains(lower, "generating initramfs") || strings.Contains(lower, "dracut"):
+		return "Generating initramfs"
+	}
+	return ""
 }

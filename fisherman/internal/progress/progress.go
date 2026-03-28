@@ -23,9 +23,19 @@ type completeEvent struct {
 	Message string `json:"message"`
 }
 
+type substepEvent struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
 // Step emits a JSON step-progress line to stdout.
 func Step(step, total int, name string) {
 	write(stepEvent{Type: "step", Step: step, TotalSteps: total, StepName: name})
+}
+
+// Substep emits a JSON sub-step message within the current step (e.g. bootc internal progress).
+func Substep(message string) {
+	write(substepEvent{Type: "substep", Message: message})
 }
 
 // Info emits a JSON informational message to stdout.

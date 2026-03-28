@@ -17,6 +17,7 @@ type Recipe struct {
 	SelinuxDisabled bool       `json:"selinuxDisabled"`
 	UnifiedStorage  bool       `json:"unifiedStorage"`  // pass --experimental-unified-storage
 	Hostname        string     `json:"hostname"`
+	Flatpaks        []string   `json:"flatpaks"`        // flatpak app IDs to install; empty = fallback
 }
 
 // Encryption describes the disk encryption configuration.
