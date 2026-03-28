@@ -87,6 +87,13 @@ func main() {
 			progress.Info("TPM2-LUKS: using a temporary passphrase; TPM2 will be enrolled after install")
 		}
 
+		// A previous interrupted run may have left the mapper open. Close it
+		// before formatting so luksFormat and luksOpen succeed cleanly.
+		if _, err := os.Stat(luks.MapperPath(luksMapper)); err == nil {
+			progress.Info(fmt.Sprintf("Closing stale mapper %s from previous run", luksMapper))
+			_ = luks.Close(luksMapper)
+		}
+
 		if err := luks.Format(rootPart, passphrase); err != nil {
 			fatal("LUKS format: %v", err)
 		}
