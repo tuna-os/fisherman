@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"os"
-	"os/exec"
 
 	"github.com/tuna-os/fisherman/internal/disk"
 	"github.com/tuna-os/fisherman/internal/install"
@@ -233,13 +232,14 @@ func main() {
 	}
 
 	// ── Step 9: Finalize ─────────────────────────────────────────────────────
+	// bootc's --skip-finalize kept the target writable for post-install writes.
+	// Now replicate what bootc's finalize_filesystem() does internally:
+	//   1. fstrim  — discard unused blocks (SSD optimization)
+	//   2. remount ro — flush writeback, lock the deployment read-only
+	//   3. fsfreeze/thaw — flush the journal for a clean first boot
 	progress.Step(step, totalSteps, "Finalizing installation")
-	progress.Info("Running bootc install finalize (fstrim + seal read-only)")
-	finalizeCmd := exec.Command("bootc", "install", "finalize", targetMount)
-	finalizeCmd.Stdout = os.Stdout
-	finalizeCmd.Stderr = os.Stderr
-	if err := finalizeCmd.Run(); err != nil {
-		fatal("bootc install finalize: %v", err)
+	if err := disk.FinalizeFilesystem(targetMount); err != nil {
+		fatal("finalizing target filesystem: %v", err)
 	}
 
 	// Tear down mounts and LUKS before declaring success.

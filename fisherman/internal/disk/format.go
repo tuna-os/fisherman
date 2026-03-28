@@ -104,6 +104,30 @@ func MountBoot(rootMount, bootPart string) error {
 	return runner.Run("mount", bootPart, bootDir)
 }
 
+// FinalizeFilesystem replicates the three operations bootc performs when
+// --skip-finalize is NOT passed (bootc's internal finalize_filesystem()):
+//  1. fstrim  — discards unused blocks for SSD health
+//  2. remount ro — flushes writeback and locks the deployment read-only
+//  3. fsfreeze/thaw — flushes the journal so the first boot is clean
+func FinalizeFilesystem(path string) error {
+	progress.Info(fmt.Sprintf("fstrim %s", path))
+	if err := runner.Run("fstrim", "--quiet-unsupported", "-v", path); err != nil {
+		return fmt.Errorf("fstrim: %w", err)
+	}
+	progress.Info(fmt.Sprintf("remount ro %s", path))
+	if err := runner.Run("mount", "-o", "remount,ro", path); err != nil {
+		return fmt.Errorf("remount ro: %w", err)
+	}
+	progress.Info(fmt.Sprintf("fsfreeze %s", path))
+	if err := runner.Run("fsfreeze", "-f", path); err != nil {
+		return fmt.Errorf("fsfreeze: %w", err)
+	}
+	if err := runner.Run("fsfreeze", "-u", path); err != nil {
+		return fmt.Errorf("fsfreeze -u: %w", err)
+	}
+	return nil
+}
+
 // MountEFI creates the /boot/efi directory tree under rootMount and mounts
 // efiPart there. This is required before running `bootc install to-filesystem`
 // so bootc can find and install the bootloader.
