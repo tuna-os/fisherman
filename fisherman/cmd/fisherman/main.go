@@ -171,7 +171,10 @@ func main() {
 	// disk-backed space for layer blobs. We deliberately use a path OUTSIDE
 	// the target tree so bootc's "empty rootfs" check doesn't find stray
 	// directories inside /mnt/fisherman-target.
-	scratchDir := "/run/fisherman-tmp"
+	// Use /var/fisherman-tmp (not /run/fisherman-tmp): /var is always
+	// disk-backed on ostree and conventional systems, whereas /run is a
+	// tmpfs sized at ~50% of RAM — too small for large images (e.g. 3.7 GB).
+	scratchDir := "/var/fisherman-tmp"
 	if err := os.MkdirAll(scratchDir, 0o1777); err != nil {
 		fatal("creating scratch dir: %v", err)
 	}
@@ -179,6 +182,7 @@ func main() {
 		fatal("bind-mounting scratch dir at /var/tmp: %v", err)
 	}
 	cleanup.AddMount("/var/tmp")
+	defer os.RemoveAll(scratchDir)
 
 	// ── Step 6: Install OS ────────────────────────────────────────────────────
 	progress.Step(step, totalSteps, "Installing OS")
