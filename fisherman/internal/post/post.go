@@ -47,9 +47,9 @@ func (c *Cleanup) Run() {
 	}
 }
 
-// deploymentDir returns the ostree deployment directory inside sysroot using
-// `ostree admin --sysroot=<sysroot> --print-current-dir`.
-func deploymentDir(sysroot string) (string, error) {
+// DefaultDeploymentDir returns the ostree deployment directory inside sysroot
+// using `ostree admin --sysroot=<sysroot> --print-current-dir`.
+func DefaultDeploymentDir(sysroot string) (string, error) {
 	out, err := exec.Command("ostree", "admin", "--sysroot="+sysroot, "--print-current-dir").Output()
 	if err != nil {
 		return "", fmt.Errorf("ostree admin --print-current-dir: %w", err)
@@ -61,16 +61,33 @@ func deploymentDir(sysroot string) (string, error) {
 	return path, nil
 }
 
-// WriteHostname writes /etc/hostname into the ostree deployment inside target.
-// It uses `ostree admin --print-current-dir` to locate the deployment directory,
-// which is necessary because bootc installs into an ostree deployment subtree,
-// not directly into the sysroot root.
+// DeploymentDirFn is called by WriteHostname to locate the ostree deployment
+// directory. Tests replace this with a stub; restore with post.DefaultDeploymentDir.
+var DeploymentDirFn = DefaultDeploymentDir
+
+// isComposeFsNative reports whether the installed system at sysroot uses the
+// composefs-native backend. Composefs-native deployments have no /ostree/
+// directory; ostree-based deployments always create one.
+func isComposeFsNative(sysroot string) bool {
+	_, err := os.Stat(filepath.Join(sysroot, "ostree"))
+	return os.IsNotExist(err)
+}
+
+// WriteHostname writes /etc/hostname into the installed system at target.
+// For ostree-based deployments the hostname goes into the ostree deployment
+// subtree (found via DeploymentDirFn). For composefs-native deployments it goes
+// directly at $TARGET/etc/hostname.
 func WriteHostname(target, hostname string) error {
-	deployDir, err := deploymentDir(target)
-	if err != nil {
-		return fmt.Errorf("finding deployment dir: %w", err)
+	var etcDir string
+	if isComposeFsNative(target) {
+		etcDir = filepath.Join(target, "etc")
+	} else {
+		deployDir, err := DeploymentDirFn(target)
+		if err != nil {
+			return fmt.Errorf("finding deployment dir: %w", err)
+		}
+		etcDir = filepath.Join(deployDir, "etc")
 	}
-	etcDir := filepath.Join(deployDir, "etc")
 	if err := os.MkdirAll(etcDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", etcDir, err)
 	}
