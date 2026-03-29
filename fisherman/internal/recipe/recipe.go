@@ -14,9 +14,13 @@ type Recipe struct {
 	Encryption      Encryption `json:"encryption"`
 	Image           string     `json:"image"`           // source OCI image reference
 	TargetImgref    string     `json:"targetImgref"`    // update-tracking ref (optional)
-	SelinuxDisabled bool       `json:"selinuxDisabled"`
-	UnifiedStorage  bool       `json:"unifiedStorage"`  // pass --experimental-unified-storage
-	Hostname        string     `json:"hostname"`
+	SelinuxDisabled  bool       `json:"selinuxDisabled"`
+	UnifiedStorage   bool       `json:"unifiedStorage"`  // pass --experimental-unified-storage
+	// ComposeFsBackend passes --composefs-backend to bootc install to-filesystem.
+	// Required for composefs-native images (e.g. ghcr.io/bootcrew/*).
+	// Independent of UnifiedStorage — these are different bootc features.
+	ComposeFsBackend bool       `json:"composeFsBackend"`
+	Hostname         string     `json:"hostname"`
 	Flatpaks        []string   `json:"flatpaks"`        // flatpak app IDs to install; empty = fallback
 }
 
