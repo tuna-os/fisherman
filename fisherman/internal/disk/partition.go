@@ -33,35 +33,22 @@ func PartName(disk string, num int) string {
 	return fmt.Sprintf("%s%s%d", disk, PartSuffix(disk), num)
 }
 
-// Partition wipes disk and creates a two-partition GPT layout using sfdisk:
-//
-//	Partition 1 – EFI System (512 MiB, unformatted — caller runs FormatEFI)
-//	Partition 2 – Linux root (remaining space, unformatted)
-//
-// On real block devices sfdisk notifies the kernel via BLKRRPART, so partition
-// devices appear after udevadm settle.  Loop devices reject BLKRRPART; we work
-// around this by detaching and re-attaching the loop device with --partscan so
-// the kernel creates /dev/loopNpM nodes before returning.
-func Partition(disk string) error {
-	script := strings.Join([]string{
-		"label: gpt",
-		"",
-		`size=512MiB, type=uefi, name="EFI-SYSTEM"`,
-		`type=linux, name="root"`,
-	}, "\n") + "\n"
-	return partition(disk, script)
-}
-
-// PartitionEncrypted wipes disk and creates a three-partition GPT layout:
+// Partition wipes disk and creates a three-partition GPT layout using sfdisk:
 //
 //	Partition 1 – EFI System (512 MiB)
-//	Partition 2 – /boot (1 GiB, unencrypted — bootloader must read it)
-//	Partition 3 – LUKS root (remaining space)
+//	Partition 2 – /boot     (1 GiB, ext4 — bootloader reads this)
+//	Partition 3 – Linux root (remaining space)
 //
-// A separate unencrypted /boot partition is required for encrypted installs
-// so that bootupctl (which runs in a restricted bwrap sandbox) can find the
-// UUID of the boot filesystem from the raw block device.
-func PartitionEncrypted(disk string) error {
+// A separate /boot partition is required because GRUB's built-in XFS driver
+// does not support the newer XFS features enabled by mkfs.xfs on el10
+// (nrext64, exchange, rmapbt). By keeping /boot on ext4, GRUB never needs
+// to parse XFS. This matches what bootc install to-disk always does.
+//
+// On real block devices sfdisk notifies the kernel via BLKRRPART, so
+// partition devices appear after udevadm settle. Loop devices reject
+// BLKRRPART; we work around this by detaching and re-attaching the loop
+// device with --partscan so the kernel creates /dev/loopNpM nodes.
+func Partition(disk string) error {
 	script := strings.Join([]string{
 		"label: gpt",
 		"",
@@ -70,6 +57,14 @@ func PartitionEncrypted(disk string) error {
 		`type=linux, name="root"`,
 	}, "\n") + "\n"
 	return partition(disk, script)
+}
+
+// PartitionEncrypted wipes disk and creates the same three-partition GPT
+// layout as Partition. The separate unencrypted /boot is also required for
+// encrypted installs so that bootupctl (which runs in a restricted bwrap
+// sandbox) can find the boot filesystem UUID from the raw block device.
+func PartitionEncrypted(disk string) error {
+	return Partition(disk)
 }
 
 // partition is the shared implementation for Partition and PartitionEncrypted.

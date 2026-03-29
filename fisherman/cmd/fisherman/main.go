@@ -44,9 +44,9 @@ func main() {
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
 
 	// Compute total step count up front so the GUI can show accurate progress.
-	totalSteps := 8
+	totalSteps := 9
 	if hasEncryption {
-		totalSteps++
+		totalSteps++ // extra step for LUKS setup
 	}
 	if hasTPM2 && r.Encryption.Type == "tpm2-luks-passphrase" {
 		totalSteps++ // extra step for TPM2 enrolment
@@ -67,16 +67,13 @@ func main() {
 		}
 	}
 
+	// All installs use a 3-partition layout: p1=EFI, p2=/boot, p3=root.
+	// The separate ext4 /boot ensures GRUB never needs to parse XFS, which
+	// is required because GRUB's built-in XFS driver does not support the
+	// newer XFS features enabled by mkfs.xfs on el10 (nrext64, exchange…).
 	efiPart := disk.PartName(r.Disk, 1)
-	// With encryption: p2=/boot (unencrypted), p3=LUKS root
-	// Without encryption: p2=root
-	var bootPart, rootPart string
-	if hasEncryption {
-		bootPart = disk.PartName(r.Disk, 2)
-		rootPart = disk.PartName(r.Disk, 3)
-	} else {
-		rootPart = disk.PartName(r.Disk, 2)
-	}
+	bootPart := disk.PartName(r.Disk, 2)
+	rootPart := disk.PartName(r.Disk, 3)
 	rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
 
 	// ── Step 2: Format EFI ───────────────────────────────────────────────────
@@ -86,10 +83,8 @@ func main() {
 	if err := disk.FormatEFI(efiPart); err != nil {
 		fatal("formatting EFI: %v", err)
 	}
-	if hasEncryption {
-		if err := disk.FormatBoot(bootPart); err != nil {
-			fatal("formatting /boot: %v", err)
-		}
+	if err := disk.FormatBoot(bootPart); err != nil {
+		fatal("formatting /boot: %v", err)
 	}
 
 	// ── Step 3: Disk encryption (optional) ───────────────────────────────────
@@ -150,15 +145,12 @@ func main() {
 	}
 	cleanup.AddMount(targetMount)
 
-	// For encrypted installs, mount the unencrypted /boot partition BEFORE the
-	// EFI partition. bootupctl (run by bootc) reads /boot's block device UUID
-	// from the raw partition — this only works with an unencrypted /boot.
-	if hasEncryption {
-		if err := disk.MountBoot(targetMount, bootPart); err != nil {
-			fatal("mounting /boot: %v", err)
-		}
-		cleanup.AddMount(targetMount + "/boot")
+	// Mount the unencrypted /boot partition before the EFI partition.
+	// bootupctl reads /boot's block device UUID from the raw partition.
+	if err := disk.MountBoot(targetMount, bootPart); err != nil {
+		fatal("mounting /boot: %v", err)
 	}
+	cleanup.AddMount(targetMount + "/boot")
 
 	// Mount the EFI partition at /boot/efi inside the target.
 	// bootc install to-filesystem requires this to exist before it runs.
