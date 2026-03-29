@@ -28,8 +28,34 @@ type Options struct {
 	// UnifiedStorage passes --experimental-unified-storage when true.
 	// See: https://bootc-dev.github.io/bootc/unified-storage.html
 	UnifiedStorage bool
+	// ComposeFsBackend passes --composefs-backend when true.
+	// Required for images using the composefs-native deployment backend (e.g. ghcr.io/bootcrew/*).
+	ComposeFsBackend bool
 	// Target is the path to the mounted root filesystem on the host.
 	Target string
+}
+
+// BuildBootcArgs builds the argument slice for `bootc install to-filesystem`.
+// resolvedTargetImgref is the --target-imgref value (empty to omit the flag).
+// installTarget is the final positional argument (e.g. "/target" in container mode,
+// or opts.Target in direct mode).
+func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []string {
+	args := []string{"install", "to-filesystem"}
+	if resolvedTargetImgref != "" {
+		args = append(args, "--target-imgref", resolvedTargetImgref)
+	}
+	if opts.SelinuxDisabled {
+		args = append(args, "--disable-selinux")
+	}
+	if opts.UnifiedStorage {
+		args = append(args, "--experimental-unified-storage")
+	}
+	if opts.ComposeFsBackend {
+		args = append(args, "--composefs-backend")
+	}
+	args = append(args, "--skip-finalize")
+	args = append(args, installTarget)
+	return args
 }
 
 // BootcInstall installs a bootc image to a pre-mounted filesystem.
@@ -59,18 +85,7 @@ func bootcViaContainer(opts Options) error {
 		return fmt.Errorf("pulling image: %w", err)
 	}
 
-	bootcArgs := []string{"install", "to-filesystem"}
-	if targetImgref != "" {
-		bootcArgs = append(bootcArgs, "--target-imgref", targetImgref)
-	}
-	if opts.SelinuxDisabled {
-		bootcArgs = append(bootcArgs, "--disable-selinux")
-	}
-	if opts.UnifiedStorage {
-		bootcArgs = append(bootcArgs, "--experimental-unified-storage")
-	}
-	bootcArgs = append(bootcArgs, "--skip-finalize")
-	bootcArgs = append(bootcArgs, "/target")
+	bootcArgs := BuildBootcArgs(opts, targetImgref, "/target")
 
 	podmanArgs := []string{
 		"run", "--rm",
@@ -101,18 +116,7 @@ func bootcViaContainer(opts Options) error {
 // Only valid when fisherman is already running inside the bootc container image
 // (i.e. on the live ISO), where bootc auto-detects the source image.
 func bootcDirect(opts Options) error {
-	args := []string{"install", "to-filesystem"}
-	if opts.TargetImgref != "" {
-		args = append(args, "--target-imgref", opts.TargetImgref)
-	}
-	if opts.SelinuxDisabled {
-		args = append(args, "--disable-selinux")
-	}
-	if opts.UnifiedStorage {
-		args = append(args, "--experimental-unified-storage")
-	}
-	args = append(args, "--skip-finalize")
-	args = append(args, opts.Target)
+	args := BuildBootcArgs(opts, opts.TargetImgref, opts.Target)
 
 	fmt.Fprintf(os.Stdout, "+ bootc %s\n", strings.Join(args, " "))
 
