@@ -187,11 +187,12 @@ func main() {
 	}
 
 	if err := install.BootcInstall(install.Options{
-		SourceImgref:    r.Image,
-		TargetImgref:    targetImgref,
-		SelinuxDisabled: r.SelinuxDisabled,
-		UnifiedStorage:  r.UnifiedStorage,
-		Target:          targetMount,
+		SourceImgref:     r.Image,
+		TargetImgref:     targetImgref,
+		SelinuxDisabled:  r.SelinuxDisabled,
+		UnifiedStorage:   r.UnifiedStorage,
+		ComposeFsBackend: r.ComposeFsBackend,
+		Target:           targetMount,
 	}); err != nil {
 		fatal("bootc install: %v", err)
 	}
