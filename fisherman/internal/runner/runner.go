@@ -26,13 +26,13 @@ func hostArgs(name string, args []string) (string, []string) {
 	return name, args
 }
 
-// Run executes a command, streaming its stdout and stderr to os.Stdout in real time.
-func Run(name string, args ...string) error {
-	return RunWithStdin(nil, name, args...)
-}
-
-// RunWithStdin executes a command with the given stdin reader, streaming output in real time.
-func RunWithStdin(stdin io.Reader, name string, args ...string) error {
+// DefaultRun is the real subprocess implementation. It applies flatpak-spawn
+// wrapping when running inside a Flatpak sandbox, then streams the command's
+// stdout and stderr to os.Stdout in real time.
+//
+// Replace RunFn in tests to intercept subprocess calls; restore it afterwards
+// with runner.RunFn = runner.DefaultRun.
+func DefaultRun(stdin io.Reader, name string, args ...string) error {
 	name, args = hostArgs(name, args)
 	cmd := exec.Command(name, args...)
 	if stdin != nil {
@@ -45,4 +45,18 @@ func RunWithStdin(stdin io.Reader, name string, args ...string) error {
 		return fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 	}
 	return nil
+}
+
+// RunFn is the function invoked by Run and RunWithStdin. Tests replace it with
+// a recording function to intercept subprocess calls without executing them.
+var RunFn = DefaultRun
+
+// Run executes a command, streaming its stdout and stderr to os.Stdout in real time.
+func Run(name string, args ...string) error {
+	return RunFn(nil, name, args...)
+}
+
+// RunWithStdin executes a command with the given stdin reader, streaming output in real time.
+func RunWithStdin(stdin io.Reader, name string, args ...string) error {
+	return RunFn(stdin, name, args...)
 }
