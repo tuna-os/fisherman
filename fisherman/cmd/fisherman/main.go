@@ -54,7 +54,7 @@ func main() {
 	step := 1
 
 	// ── Step 1: Partition disk ────────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Partitioning disk")
+	progress.Step(step, totalSteps, "Partitioning disk", 0, 0)
 	step++
 
 	if hasEncryption {
@@ -77,7 +77,7 @@ func main() {
 	rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
 
 	// ── Step 2: Format EFI ───────────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Formatting EFI partition")
+	progress.Step(step, totalSteps, "Formatting EFI partition", 0, 0)
 	step++
 
 	if err := disk.FormatEFI(efiPart); err != nil {
@@ -89,7 +89,7 @@ func main() {
 
 	// ── Step 3: Disk encryption (optional) ───────────────────────────────────
 	if hasEncryption {
-		progress.Step(step, totalSteps, "Setting up disk encryption")
+		progress.Step(step, totalSteps, "Setting up disk encryption", 0, 0)
 		step++
 
 		var passphrase string
@@ -119,7 +119,7 @@ func main() {
 	}
 
 	// ── Step 4: Format root filesystem ───────────────────────────────────────
-	progress.Step(step, totalSteps, "Formatting root filesystem")
+	progress.Step(step, totalSteps, "Formatting root filesystem", 0, 0)
 	step++
 
 	if err := disk.FormatRoot(rootDev, r.Filesystem); err != nil {
@@ -127,7 +127,7 @@ func main() {
 	}
 
 	// ── Step 5: Mount filesystem ──────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Mounting filesystem")
+	progress.Step(step, totalSteps, "Mounting filesystem", 0, 0)
 	step++
 
 	if err := os.MkdirAll(targetMount, 0o755); err != nil {
@@ -177,7 +177,7 @@ func main() {
 	defer os.RemoveAll(scratchDir)
 
 	// ── Step 6: Install OS ────────────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Installing OS")
+	progress.Step(step, totalSteps, "Installing OS", 0, 0)
 	step++
 
 	// Only pass --target-imgref when it is non-empty and differs from the source.
@@ -202,7 +202,7 @@ func main() {
 	// For tpm2-luks-passphrase the user's passphrase unlocks LUKS; we add a
 	// TPM2 token on top so the system auto-unlocks, with the password as fallback.
 	if r.Encryption.Type == "tpm2-luks-passphrase" {
-		progress.Step(step, totalSteps, "Enrolling TPM2 auto-unlock")
+		progress.Step(step, totalSteps, "Enrolling TPM2 auto-unlock", 0, 0)
 		step++
 
 		if err := luks.EnrollTPM2(rootPart, r.Encryption.Passphrase); err != nil {
@@ -212,7 +212,7 @@ func main() {
 	}
 
 	// ── Step 7: Copy system flatpaks ──────────────────────────────────────────
-	progress.Step(step, totalSteps, "Copying system Flatpaks")
+	progress.Step(step, totalSteps, "Copying system Flatpaks", 0, 0)
 	step++
 
 	if err := post.CopyFlatpaks(targetMount, r.Flatpaks); err != nil {
@@ -221,7 +221,7 @@ func main() {
 	}
 
 	// ── Step 8: Post-install configuration ───────────────────────────────────
-	progress.Step(step, totalSteps, "Configuring installed system")
+	progress.Step(step, totalSteps, "Configuring installed system", 0, 0)
 	step++
 
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
@@ -235,7 +235,7 @@ func main() {
 	//   1. fstrim  — discard unused blocks (SSD optimization)
 	//   2. remount ro — flush writeback, lock the deployment read-only
 	//   3. fsfreeze/thaw — flush the journal for a clean first boot
-	progress.Step(step, totalSteps, "Finalizing installation")
+	progress.Step(step, totalSteps, "Finalizing installation", 0, 0)
 	if err := disk.FinalizeFilesystem(targetMount); err != nil {
 		fatal("finalizing target filesystem: %v", err)
 	}

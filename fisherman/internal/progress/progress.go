@@ -10,10 +10,12 @@ import (
 var startTime = time.Now()
 
 type stepEvent struct {
-	Type       string `json:"type"`
-	Step       int    `json:"step"`
-	TotalSteps int    `json:"total_steps"`
-	StepName   string `json:"step_name"`
+	Type          string `json:"type"`
+	Step          int    `json:"step"`
+	TotalSteps    int    `json:"total_steps"`
+	StepName      string `json:"step_name"`
+	WeightPct     int    `json:"weight_pct"`
+	CumulativePct int    `json:"cumulative_pct"`
 }
 
 type infoEvent struct {
@@ -32,8 +34,17 @@ type substepEvent struct {
 }
 
 // Step emits a JSON step-progress line to stdout.
-func Step(step, total int, name string) {
-	write(stepEvent{Type: "step", Step: step, TotalSteps: total, StepName: name})
+// cumulativePct is the bar position (0–100) at the start of this step.
+// weightPct is the estimated share of total install time this step occupies.
+func Step(step, total int, name string, cumulativePct, weightPct int) {
+	write(stepEvent{
+		Type:          "step",
+		Step:          step,
+		TotalSteps:    total,
+		StepName:      name,
+		WeightPct:     weightPct,
+		CumulativePct: cumulativePct,
+	})
 }
 
 // Substep emits a JSON sub-step message within the current step (e.g. bootc internal progress).

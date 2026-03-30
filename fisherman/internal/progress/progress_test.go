@@ -31,7 +31,7 @@ func captureStdout(t *testing.T, fn func()) string {
 
 func TestStep(t *testing.T) {
 	out := captureStdout(t, func() {
-		progress.Step(2, 9, "Formatting EFI partition")
+		progress.Step(2, 8, "Formatting EFI partition", 0, 1)
 	})
 
 	var event map[string]interface{}
@@ -45,11 +45,17 @@ func TestStep(t *testing.T) {
 	if event["step"] != float64(2) {
 		t.Errorf("step = %v, want 2", event["step"])
 	}
-	if event["total_steps"] != float64(9) {
-		t.Errorf("total_steps = %v, want 9", event["total_steps"])
+	if event["total_steps"] != float64(8) {
+		t.Errorf("total_steps = %v, want 8", event["total_steps"])
 	}
 	if event["step_name"] != "Formatting EFI partition" {
 		t.Errorf("step_name = %v, want 'Formatting EFI partition'", event["step_name"])
+	}
+	if event["weight_pct"] != float64(1) {
+		t.Errorf("weight_pct = %v, want 1", event["weight_pct"])
+	}
+	if event["cumulative_pct"] != float64(0) {
+		t.Errorf("cumulative_pct = %v, want 0", event["cumulative_pct"])
 	}
 }
 
@@ -114,7 +120,7 @@ func TestOutputIsNewlineTerminated(t *testing.T) {
 		name string
 		fn   func()
 	}{
-		{"Step", func() { progress.Step(1, 9, "x") }},
+		{"Step", func() { progress.Step(1, 8, "x", 0, 0) }},
 		{"Substep", func() { progress.Substep("x") }},
 		{"Info", func() { progress.Info("x") }},
 		{"Complete", func() { progress.Complete("x") }},
