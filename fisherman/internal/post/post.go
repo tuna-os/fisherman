@@ -1,6 +1,7 @@
 package post
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
@@ -72,8 +73,9 @@ var DeploymentDirFn = DefaultDeploymentDir
 // composefs-native backend. Composefs-native deployments have no /ostree/
 // directory; ostree-based deployments always create one.
 func isComposeFsNative(sysroot string) bool {
-	_, err := os.Stat(filepath.Join(sysroot, "ostree"))
-	return os.IsNotExist(err)
+	// Use ls via runner to check existence, as os.Stat might look in the sandbox.
+	err := runner.Run("ls", filepath.Join(sysroot, "ostree"))
+	return err != nil
 }
 
 // WriteHostname writes /etc/hostname into the installed system at target.
@@ -91,11 +93,12 @@ func WriteHostname(target, hostname string) error {
 		}
 		etcDir = filepath.Join(deployDir, "etc")
 	}
-	if err := os.MkdirAll(etcDir, 0o755); err != nil {
+	if err := runner.Run("mkdir", "-p", etcDir); err != nil {
 		return fmt.Errorf("mkdir %s: %w", etcDir, err)
 	}
 	hostnameFile := filepath.Join(etcDir, "hostname")
-	if err := os.WriteFile(hostnameFile, []byte(hostname+"\n"), 0o644); err != nil {
+	data := []byte(hostname + "\n")
+	if err := runner.RunWithStdin(bytes.NewReader(data), "tee", hostnameFile); err != nil {
 		return fmt.Errorf("write %s: %w", hostnameFile, err)
 	}
 	fmt.Fprintf(os.Stdout, "  wrote hostname %q to %s\n", hostname, hostnameFile)
@@ -138,7 +141,7 @@ func CopyFlatpaks(target string, wantedRefs []string) error {
 	} else {
 		dst = filepath.Join(target, "ostree", "deploy", "default", "var", "lib", "flatpak")
 	}
-	if err := os.MkdirAll(dst, 0o755); err != nil {
+	if err := runner.Run("mkdir", "-p", dst); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dst, err)
 	}
 
@@ -180,10 +183,7 @@ func CopyFlatpaks(target string, wantedRefs []string) error {
 		name := flatpakAppName(ref)
 		progress.Substep(fmt.Sprintf("Promoting user app %d/%d: %s", i+1, len(userOnly), name))
 		fmt.Fprintf(os.Stdout, "  installing user flatpak to system: %s\n", ref)
-		cmd := Exec.Command("flatpak", "install", "--system", "-y", "--noninteractive", ref)
-		cmd.SetStdout(os.Stdout)
-		cmd.SetStderr(os.Stdout)
-		if err := cmd.Run(); err != nil {
+		if err := runner.Run("flatpak", "install", "--system", "-y", "--noninteractive", ref); err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: could not install %s to system: %v\n", ref, err)
 		}
 	}
