@@ -6,7 +6,7 @@ if go.found()
     output: 'fisherman',
     command: [
       go, 'build',
-      '-C', meson.current_source_dir(),
+      '-C', meson.current_source_dir() / 'fisherman',
       '-o', meson.current_build_dir() / 'fisherman',
       './cmd/fisherman',
     ],
