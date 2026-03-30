@@ -271,7 +271,7 @@ func runWithSubsteps(cmd *exec.Cmd) error {
 			// Always relay the raw line to the VTE terminal.
 			fmt.Fprintln(os.Stdout, line)
 			// Detect bootc / ostree / podman progress keywords and emit substep.
-			if sub := classifyLine(line); sub != "" && sub != lastSubstep {
+			if sub := ClassifyLine(line); sub != "" && sub != lastSubstep {
 				lastSubstep = sub
 				progress.Substep(sub)
 			}
@@ -284,14 +284,19 @@ func runWithSubsteps(cmd *exec.Cmd) error {
 	return err
 }
 
-// classifyLine maps a raw bootc/ostree/podman output line to a human-readable
+// ClassifyLine maps a raw bootc/ostree/podman output line to a human-readable
 // substep description, or "" if the line is not interesting.
-func classifyLine(line string) string {
+func ClassifyLine(line string) string {
 	lower := strings.ToLower(line)
 	switch {
 	case strings.Contains(lower, "installing image:"):
 		return "Pulling container image"
 	case strings.Contains(lower, "layers") && strings.Contains(lower, "needed"):
+		// e.g. "layers already present: 0; layers needed: 64 (3.7 GB)"
+		if i := strings.Index(lower, "layers needed:"); i >= 0 {
+			rest := strings.TrimSpace(line[i+len("layers needed:"):])
+			return "Deploying: " + rest
+		}
 		return "Downloading image layers"
 	case strings.Contains(lower, "initializing ostree"):
 		return "Initializing ostree layout"

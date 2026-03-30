@@ -74,6 +74,38 @@ func TestCheckImage_NeedsPullOnNetworkError(t *testing.T) {
 	}
 }
 
+func TestClassifyLine_LayersNeeded(t *testing.T) {
+	line := "layers already present: 0; layers needed: 64 (3.7\u00a0GB)"
+	got := install.ClassifyLine(line)
+	want := "Deploying: 64 (3.7\u00a0GB)"
+	if got != want {
+		t.Errorf("ClassifyLine(%q) = %q, want %q", line, got, want)
+	}
+}
+
+func TestClassifyLine_LayersNeededZero(t *testing.T) {
+	line := "layers already present: 64; layers needed: 0"
+	got := install.ClassifyLine(line)
+	want := "Deploying: 0"
+	if got != want {
+		t.Errorf("ClassifyLine(%q) = %q, want %q", line, got, want)
+	}
+}
+
+func TestClassifyLine_InstallingImage(t *testing.T) {
+	got := install.ClassifyLine("Installing image: docker://ghcr.io/tuna-os/yellowfin:gnome-hwe")
+	if got != "Pulling container image" {
+		t.Errorf("got %q, want 'Pulling container image'", got)
+	}
+}
+
+func TestClassifyLine_NoMatch(t *testing.T) {
+	got := install.ClassifyLine("some random line")
+	if got != "" {
+		t.Errorf("got %q, want empty string", got)
+	}
+}
+
 func TestBuildBootcArgs_BaseArgs(t *testing.T) {
 	args := install.BuildBootcArgs(install.Options{Target: "/mnt/target"}, "", "/target")
 	// Must always include these
