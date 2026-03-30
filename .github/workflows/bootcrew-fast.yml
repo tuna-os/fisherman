@@ -42,7 +42,9 @@ jobs:
         run: sudo apt-get install -y xfsprogs btrfs-progs cryptsetup-bin flatpak
 
       - name: Build fisherman
-        run: go build -o /tmp/fisherman ./cmd/fisherman/
+        run: |
+          go mod download
+          go build -o /tmp/fisherman ./
 
       - name: Add fake bins to PATH
         run: |

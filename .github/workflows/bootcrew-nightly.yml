@@ -46,7 +46,9 @@ jobs:
           sudo flatpak install -y flathub org.mozilla.firefox
 
       - name: Build fisherman
-        run: go build -o /tmp/fisherman ./cmd/fisherman/
+        run: |
+          go mod download
+          go build -o /tmp/fisherman ./
 
       - name: Create loop device (50 GB sparse)
         id: loopdev
