@@ -20,6 +20,53 @@ const (
 // cleanup is global so fatal() can tear everything down on any error path.
 var cleanup = &post.Cleanup{}
 
+type stepProfile struct {
+	cumulativePct int
+	weightPct     int
+}
+
+// buildProfile returns per-step weight profiles based on timing data from a
+// yellowfin gnome-hwe loop-device install (264s uncached, ~111s cached).
+// Weights sum to 100. cumulativePct is the bar position at step start.
+func buildProfile(needsPull, hasLUKS, hasTPM2enrolment bool) []stepProfile {
+	osWeight := 87
+	flatpakWeight := 11
+	if !needsPull {
+		osWeight = 68
+		flatpakWeight = 29
+	}
+	if hasLUKS {
+		osWeight--
+	}
+	if hasTPM2enrolment {
+		osWeight--
+	}
+
+	weights := []int{0, 1} // partition, format EFI
+	if hasLUKS {
+		weights = append(weights, 1) // LUKS setup
+	}
+	weights = append(weights, 0, 0)     // format root, mount
+	weights = append(weights, osWeight) // install OS
+	if hasTPM2enrolment {
+		weights = append(weights, 1) // TPM2 enrolment
+	}
+	weights = append(weights, flatpakWeight, 0) // flatpaks, configure
+	sum := 0
+	for _, w := range weights {
+		sum += w
+	}
+	weights = append(weights, 100-sum) // finalize
+
+	profile := make([]stepProfile, len(weights))
+	cumulative := 0
+	for i, w := range weights {
+		profile[i] = stepProfile{cumulative, w}
+		cumulative += w
+	}
+	return profile
+}
+
 func fatal(format string, args ...any) {
 	cleanup.Run()
 	fmt.Fprintf(os.Stderr, "fisherman: fatal: "+format+"\n", args...)
@@ -42,6 +89,22 @@ func main() {
 
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
+	hasTPM2enrolment := r.Encryption.Type == "tpm2-luks-passphrase"
+
+	// ── Pre-flight: check image cache ─────────────────────────────────────────
+	var imageCheck install.ImageCheck
+	if r.Image != "" {
+		progress.Info("Checking image cache...")
+		imageCheck = install.CheckImage(r.Image)
+		if imageCheck.NeedsPull {
+			progress.Info(fmt.Sprintf("Image pull required (%d layers)", imageCheck.LayerCount))
+		} else {
+			progress.Info("Image already up to date in local cache")
+		}
+	}
+
+	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2enrolment)
+	pi := 0 // profile index, incremented at each progress.Step call
 
 	// Compute total step count up front so the GUI can show accurate progress.
 	totalSteps := 8
@@ -54,7 +117,8 @@ func main() {
 	step := 1
 
 	// ── Step 1: Partition disk ────────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Partitioning disk", 0, 0)
+	progress.Step(step, totalSteps, "Partitioning disk", profile[pi].cumulativePct, profile[pi].weightPct)
+	pi++
 	step++
 
 	if hasEncryption {
@@ -77,7 +141,8 @@ func main() {
 	rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
 
 	// ── Step 2: Format EFI ───────────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Formatting EFI partition", 0, 0)
+	progress.Step(step, totalSteps, "Formatting EFI partition", profile[pi].cumulativePct, profile[pi].weightPct)
+	pi++
 	step++
 
 	if err := disk.FormatEFI(efiPart); err != nil {
@@ -89,7 +154,8 @@ func main() {
 
 	// ── Step 3: Disk encryption (optional) ───────────────────────────────────
 	if hasEncryption {
-		progress.Step(step, totalSteps, "Setting up disk encryption", 0, 0)
+		progress.Step(step, totalSteps, "Setting up disk encryption", profile[pi].cumulativePct, profile[pi].weightPct)
+		pi++
 		step++
 
 		var passphrase string
@@ -119,7 +185,8 @@ func main() {
 	}
 
 	// ── Step 4: Format root filesystem ───────────────────────────────────────
-	progress.Step(step, totalSteps, "Formatting root filesystem", 0, 0)
+	progress.Step(step, totalSteps, "Formatting root filesystem", profile[pi].cumulativePct, profile[pi].weightPct)
+	pi++
 	step++
 
 	if err := disk.FormatRoot(rootDev, r.Filesystem); err != nil {
@@ -127,7 +194,8 @@ func main() {
 	}
 
 	// ── Step 5: Mount filesystem ──────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Mounting filesystem", 0, 0)
+	progress.Step(step, totalSteps, "Mounting filesystem", profile[pi].cumulativePct, profile[pi].weightPct)
+	pi++
 	step++
 
 	if err := os.MkdirAll(targetMount, 0o755); err != nil {
@@ -177,7 +245,8 @@ func main() {
 	defer os.RemoveAll(scratchDir)
 
 	// ── Step 6: Install OS ────────────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Installing OS", 0, 0)
+	progress.Step(step, totalSteps, "Installing OS", profile[pi].cumulativePct, profile[pi].weightPct)
+	pi++
 	step++
 
 	// Only pass --target-imgref when it is non-empty and differs from the source.
@@ -193,6 +262,8 @@ func main() {
 		UnifiedStorage:   r.UnifiedStorage,
 		ComposeFsBackend: r.ComposeFsBackend,
 		Target:           targetMount,
+		NeedsPull:        imageCheck.NeedsPull,
+		LayerCount:       imageCheck.LayerCount,
 	}); err != nil {
 		fatal("bootc install: %v", err)
 	}
@@ -202,7 +273,8 @@ func main() {
 	// For tpm2-luks-passphrase the user's passphrase unlocks LUKS; we add a
 	// TPM2 token on top so the system auto-unlocks, with the password as fallback.
 	if r.Encryption.Type == "tpm2-luks-passphrase" {
-		progress.Step(step, totalSteps, "Enrolling TPM2 auto-unlock", 0, 0)
+		progress.Step(step, totalSteps, "Enrolling TPM2 auto-unlock", profile[pi].cumulativePct, profile[pi].weightPct)
+		pi++
 		step++
 
 		if err := luks.EnrollTPM2(rootPart, r.Encryption.Passphrase); err != nil {
@@ -212,7 +284,8 @@ func main() {
 	}
 
 	// ── Step 7: Copy system flatpaks ──────────────────────────────────────────
-	progress.Step(step, totalSteps, "Copying system Flatpaks", 0, 0)
+	progress.Step(step, totalSteps, "Copying system Flatpaks", profile[pi].cumulativePct, profile[pi].weightPct)
+	pi++
 	step++
 
 	if err := post.CopyFlatpaks(targetMount, r.Flatpaks); err != nil {
@@ -221,7 +294,8 @@ func main() {
 	}
 
 	// ── Step 8: Post-install configuration ───────────────────────────────────
-	progress.Step(step, totalSteps, "Configuring installed system", 0, 0)
+	progress.Step(step, totalSteps, "Configuring installed system", profile[pi].cumulativePct, profile[pi].weightPct)
+	pi++
 	step++
 
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
@@ -235,7 +309,7 @@ func main() {
 	//   1. fstrim  — discard unused blocks (SSD optimization)
 	//   2. remount ro — flush writeback, lock the deployment read-only
 	//   3. fsfreeze/thaw — flush the journal for a clean first boot
-	progress.Step(step, totalSteps, "Finalizing installation", 0, 0)
+	progress.Step(step, totalSteps, "Finalizing installation", profile[pi].cumulativePct, profile[pi].weightPct)
 	if err := disk.FinalizeFilesystem(targetMount); err != nil {
 		fatal("finalizing target filesystem: %v", err)
 	}
