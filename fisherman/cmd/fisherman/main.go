@@ -44,7 +44,7 @@ func main() {
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
 
 	// Compute total step count up front so the GUI can show accurate progress.
-	totalSteps := 9
+	totalSteps := 8
 	if hasEncryption {
 		totalSteps++ // extra step for LUKS setup
 	}
@@ -222,6 +222,7 @@ func main() {
 
 	// ── Step 8: Post-install configuration ───────────────────────────────────
 	progress.Step(step, totalSteps, "Configuring installed system")
+	step++
 
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
 	if err := post.WriteHostname(targetMount, r.Hostname); err != nil {
