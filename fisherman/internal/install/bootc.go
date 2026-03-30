@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/tuna-os/fisherman/internal/progress"
+	"github.com/tuna-os/fisherman/internal/runner"
 )
 
 // Options configures a bootc installation.
@@ -111,9 +112,10 @@ func bootcViaContainer(opts Options) error {
 	podmanArgs = append(podmanArgs, "bootc")
 	podmanArgs = append(podmanArgs, bootcArgs...)
 
-	fmt.Fprintf(os.Stdout, "+ podman %s\n", strings.Join(podmanArgs, " "))
+	name, args := runner.HostArgs("podman", podmanArgs)
+	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 
-	cmd := exec.Command("podman", podmanArgs...)
+	cmd := exec.Command(name, args...)
 	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("bootc install to-filesystem (via container): %w", err)
 	}
@@ -124,11 +126,12 @@ func bootcViaContainer(opts Options) error {
 // Only valid when fisherman is already running inside the bootc container image
 // (i.e. on the live ISO), where bootc auto-detects the source image.
 func bootcDirect(opts Options) error {
-	args := BuildBootcArgs(opts, opts.TargetImgref, opts.Target)
+	bargs := BuildBootcArgs(opts, opts.TargetImgref, opts.Target)
 
-	fmt.Fprintf(os.Stdout, "+ bootc %s\n", strings.Join(args, " "))
+	name, args := runner.HostArgs("bootc", bargs)
+	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 
-	cmd := exec.Command("bootc", args...)
+	cmd := exec.Command(name, args...)
 	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("bootc install to-filesystem: %w", err)
 	}
@@ -144,8 +147,10 @@ func pullImage(image string, layerCount int) error {
 		progress.Substep(fmt.Sprintf("Pulling image: %d layers to download", layerCount))
 	}
 
-	fmt.Fprintf(os.Stdout, "+ skopeo copy docker://%s containers-storage:%s\n", image, image)
-	cmd := exec.Command("skopeo", "copy", "docker://"+image, "containers-storage:"+image)
+	skopeoArgs := []string{"copy", "docker://" + image, "containers-storage:" + image}
+	name, args := runner.HostArgs("skopeo", skopeoArgs)
+	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
+	cmd := exec.Command(name, args...)
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw
 	cmd.Stderr = pw
@@ -202,7 +207,9 @@ type ImageCheck struct {
 
 // DefaultSkopeoInspect runs `skopeo inspect <args>` and returns stdout.
 func DefaultSkopeoInspect(args ...string) ([]byte, error) {
-	return exec.Command("skopeo", append([]string{"inspect"}, args...)...).Output()
+	name, hargs := runner.HostArgs("skopeo", append([]string{"inspect"}, args...))
+	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(hargs, " "))
+	return exec.Command(name, hargs...).Output()
 }
 
 // SkopeoInspectFn is the function used by CheckImage to call skopeo inspect.
@@ -219,7 +226,6 @@ func CheckImage(image string) ImageCheck {
 	}
 
 	// 1. Fetch remote normalized manifest (resolves fat/multi-arch manifests).
-	fmt.Fprintf(os.Stdout, "+ skopeo inspect docker://%s\n", image)
 	remoteOut, err := SkopeoInspectFn("docker://" + image)
 	if err != nil {
 		return ImageCheck{NeedsPull: true}
@@ -230,7 +236,6 @@ func CheckImage(image string) ImageCheck {
 	}
 
 	// 2. Fetch local digest from containers-storage.
-	fmt.Fprintf(os.Stdout, "+ skopeo inspect containers-storage:%s\n", image)
 	localOut, err := SkopeoInspectFn("containers-storage:" + image)
 	if err != nil {
 		// Image not present locally.

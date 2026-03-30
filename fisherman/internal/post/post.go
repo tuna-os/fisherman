@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +14,10 @@ import (
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/runner"
 )
+
+// Exec is the executor used by this package for all host commands.
+// Tests replace this with a mock; restore with runner.DefaultExecutor.
+var Exec runner.Executor = runner.DefaultExecutor
 
 // Cleanup tracks mounted filesystems and an open LUKS device so they can be
 // torn down in the correct order on both success and error paths.
@@ -50,7 +53,7 @@ func (c *Cleanup) Run() {
 // DefaultDeploymentDir returns the ostree deployment directory inside sysroot
 // using `ostree admin --sysroot=<sysroot> --print-current-dir`.
 func DefaultDeploymentDir(sysroot string) (string, error) {
-	out, err := exec.Command("ostree", "admin", "--sysroot="+sysroot, "--print-current-dir").Output()
+	out, err := Exec.Command("ostree", "admin", "--sysroot="+sysroot, "--print-current-dir").Output()
 	if err != nil {
 		return "", fmt.Errorf("ostree admin --print-current-dir: %w", err)
 	}
@@ -125,8 +128,16 @@ func CopyFlatpaks(target string, wantedRefs []string) error {
 		wantedSet[ref] = true
 	}
 
-	// Target /var/lib/flatpak is the shared var directory in ostree systems.
-	dst := filepath.Join(target, "var", "lib", "flatpak")
+	// Target /var/lib/flatpak: on ostree/bootc systems the runtime /var is the
+	// deployment stateroot var, not the sysroot var at {target}/var.
+	// bootc always uses "default" as the stateroot name.
+	// For composefs-native deployments the layout is flat and {target}/var is correct.
+	var dst string
+	if isComposeFsNative(target) {
+		dst = filepath.Join(target, "var", "lib", "flatpak")
+	} else {
+		dst = filepath.Join(target, "ostree", "deploy", "default", "var", "lib", "flatpak")
+	}
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dst, err)
 	}
@@ -169,9 +180,9 @@ func CopyFlatpaks(target string, wantedRefs []string) error {
 		name := flatpakAppName(ref)
 		progress.Substep(fmt.Sprintf("Promoting user app %d/%d: %s", i+1, len(userOnly), name))
 		fmt.Fprintf(os.Stdout, "  installing user flatpak to system: %s\n", ref)
-		cmd := exec.Command("flatpak", "install", "--system", "-y", "--noninteractive", ref)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stdout
+		cmd := Exec.Command("flatpak", "install", "--system", "-y", "--noninteractive", ref)
+		cmd.SetStdout(os.Stdout)
+		cmd.SetStderr(os.Stdout)
 		if err := cmd.Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: could not install %s to system: %v\n", ref, err)
 		}
@@ -179,29 +190,29 @@ func CopyFlatpaks(target string, wantedRefs []string) error {
 
 	// 4. Copy system flatpak directory to the target via tar pipe.
 	src := "/var/lib/flatpak"
-	if _, err := os.Stat(src); os.IsNotExist(err) {
-		fmt.Fprintf(os.Stdout, "  no system flatpak dir (%s), skipping\n", src)
+	totalBytes := dirSize(src)
+	if totalBytes == 0 {
+		fmt.Fprintf(os.Stdout, "  no system flatpak data found at %s, skipping copy\n", src)
 		return nil
 	}
 
 	allApps := flatpakList("--system", "--app")
-	totalBytes := dirSize(src)
 	progress.Substep(fmt.Sprintf("Copying %d Flatpak apps (%s)", len(allApps), humanBytes(totalBytes)))
 	fmt.Fprintf(os.Stdout, "  copying flatpaks: %s → %s (%d bytes)\n", src, dst, totalBytes)
 
 	// tar cf → countingReader → tar xf
-	tarC := exec.Command("tar", "cf", "-", "-C", src, ".")
-	tarX := exec.Command("tar", "xf", "-", "-C", dst)
+	tarC := Exec.Command("tar", "cf", "-", "-C", src, ".")
+	tarX := Exec.Command("tar", "xf", "-", "-C", dst)
 
 	pr, pw := io.Pipe()
 	var bytesRead atomic.Int64
 	cr := &countingReader{r: pr, n: &bytesRead}
 
-	tarC.Stdout = pw
-	tarC.Stderr = os.Stdout
-	tarX.Stdin = cr
-	tarX.Stdout = os.Stdout
-	tarX.Stderr = os.Stdout
+	tarC.SetStdout(pw)
+	tarC.SetStderr(os.Stdout)
+	tarX.SetStdin(cr)
+	tarX.SetStdout(os.Stdout)
+	tarX.SetStderr(os.Stdout)
 
 	if err := tarX.Start(); err != nil {
 		pw.Close()
@@ -271,7 +282,7 @@ func (c *countingReader) Read(p []byte) (int, error) {
 // dirSize returns the total size in bytes of a directory tree.
 func dirSize(path string) int64 {
 	// Fast path: use du -sb which handles hardlinks correctly.
-	out, err := exec.Command("du", "-sb", path).Output()
+	out, err := Exec.Command("du", "-sb", path).Output()
 	if err != nil {
 		return 0
 	}
@@ -309,11 +320,11 @@ func flatpakAppName(ref string) string {
 // flatpakList returns installed flatpak refs for the given installation flag
 // (--system or --user) and optional type filter (--app, --runtime, or "").
 func flatpakList(installFlag, typeFilter string) []string {
-	args := []string{"list", installFlag, "--columns=ref"}
+	fargs := []string{"list", installFlag, "--columns=ref"}
 	if typeFilter != "" {
-		args = append(args, typeFilter)
+		fargs = append(fargs, typeFilter)
 	}
-	out, err := exec.Command("flatpak", args...).Output()
+	out, err := Exec.Command("flatpak", fargs...).Output()
 	if err != nil {
 		return nil
 	}

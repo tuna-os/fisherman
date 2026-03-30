@@ -16,10 +16,10 @@ var inFlatpak = sync.OnceValue(func() bool {
 	return err == nil
 })
 
-// hostArgs prepends "flatpak-spawn --host" when running inside a Flatpak so
+// HostArgs prepends "flatpak-spawn --host" when running inside a Flatpak so
 // that privileged host tools (sfdisk, cryptsetup, podman, …) execute in the
 // host mount namespace rather than the sandbox.
-func hostArgs(name string, args []string) (string, []string) {
+func HostArgs(name string, args []string) (string, []string) {
 	if inFlatpak() {
 		return "flatpak-spawn", append([]string{"--host", name}, args...)
 	}
@@ -33,7 +33,7 @@ func hostArgs(name string, args []string) (string, []string) {
 // Replace RunFn in tests to intercept subprocess calls; restore it afterwards
 // with runner.RunFn = runner.DefaultRun.
 func DefaultRun(stdin io.Reader, name string, args ...string) error {
-	name, args = hostArgs(name, args)
+	name, args = HostArgs(name, args)
 	cmd := exec.Command(name, args...)
 	if stdin != nil {
 		cmd.Stdin = stdin
