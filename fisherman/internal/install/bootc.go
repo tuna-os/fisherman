@@ -33,6 +33,12 @@ type Options struct {
 	ComposeFsBackend bool
 	// Target is the path to the mounted root filesystem on the host.
 	Target string
+	// NeedsPull is the result of a pre-flight CheckImage call. When false,
+	// the image pull is skipped (image already in containers-storage).
+	NeedsPull bool
+	// LayerCount is the number of image layers from CheckImage, used to
+	// show "layer N/total" progress. 0 means unknown.
+	LayerCount int
 }
 
 // BuildBootcArgs builds the argument slice for `bootc install to-filesystem`.
@@ -79,10 +85,12 @@ func bootcViaContainer(opts Options) error {
 		targetImgref = opts.SourceImgref
 	}
 
-	// Pull the image first with per-layer progress visible in the terminal.
-	// Once pulled, `podman run` uses the cache and starts instantly.
-	if err := pullImage(opts.SourceImgref); err != nil {
-		return fmt.Errorf("pulling image: %w", err)
+	if opts.NeedsPull {
+		if err := pullImage(opts.SourceImgref, opts.LayerCount); err != nil {
+			return fmt.Errorf("pulling image: %w", err)
+		}
+	} else {
+		progress.Substep("Image already up to date, skipping pull")
 	}
 
 	bootcArgs := BuildBootcArgs(opts, targetImgref, "/target")
@@ -128,15 +136,12 @@ func bootcDirect(opts Options) error {
 }
 
 // pullImage uses skopeo to download the container image into podman's storage.
-// skopeo outputs per-blob "Copying blob ... done" lines even on non-TTY pipes,
-// unlike podman pull which suppresses them. We run skopeo inspect first to get
-// the total layer count so we can show "layer X/Y".
-func pullImage(image string) error {
+// layerCount is the expected number of layers (from CheckImage), used for
+// "layer N/total" progress display. Pass 0 if unknown.
+func pullImage(image string, layerCount int) error {
 	progress.Substep("Pulling container image")
-
-	totalLayers := getLayerCount(image)
-	if totalLayers > 0 {
-		progress.Substep(fmt.Sprintf("Pulling image: %d layers to download", totalLayers))
+	if layerCount > 0 {
+		progress.Substep(fmt.Sprintf("Pulling image: %d layers to download", layerCount))
 	}
 
 	fmt.Fprintf(os.Stdout, "+ skopeo copy docker://%s containers-storage:%s\n", image, image)
@@ -161,14 +166,14 @@ func pullImage(image string) error {
 			fmt.Fprintln(os.Stdout, line)
 			lower := strings.ToLower(line)
 
-			if strings.Contains(lower, "copying blob") {
-				if strings.Contains(lower, "done") || strings.Contains(lower, "skipped") || strings.Contains(lower, "already exists") {
-					layersDone++
-					if totalLayers > 0 {
-						progress.Substep(fmt.Sprintf("Pulling image: layer %d/%d", layersDone, totalLayers))
-					} else {
-						progress.Substep(fmt.Sprintf("Pulling image: layer %d", layersDone))
-					}
+			// Count each blob start line — skopeo emits one per blob when piped
+			// (no "done" suffix in non-TTY output).
+			if strings.HasPrefix(lower, "copying blob sha256:") {
+				layersDone++
+				if layerCount > 0 {
+					progress.Substep(fmt.Sprintf("Pulling image: layer %d/%d", layersDone, layerCount))
+				} else {
+					progress.Substep(fmt.Sprintf("Pulling image: layer %d", layersDone))
 				}
 			} else if strings.Contains(lower, "copying config") {
 				progress.Substep("Pulling image: copying config")
@@ -189,22 +194,56 @@ func pullImage(image string) error {
 	return nil
 }
 
-// getLayerCount uses skopeo inspect --raw to get the number of layers in an
-// OCI image manifest. Returns 0 if anything goes wrong.
-func getLayerCount(image string) int {
-	fmt.Fprintf(os.Stdout, "+ skopeo inspect --raw docker://%s\n", image)
-	out, err := exec.Command("skopeo", "inspect", "--raw", "docker://"+image).Output()
+// ImageCheck holds the result of a pre-flight image inspection.
+type ImageCheck struct {
+	NeedsPull  bool // true if the image is absent or stale in containers-storage
+	LayerCount int  // number of layers in the remote image; 0 if unknown
+}
+
+// DefaultSkopeoInspect runs `skopeo inspect <args>` and returns stdout.
+func DefaultSkopeoInspect(args ...string) ([]byte, error) {
+	return exec.Command("skopeo", append([]string{"inspect"}, args...)...).Output()
+}
+
+// SkopeoInspectFn is the function used by CheckImage to call skopeo inspect.
+// Replace in tests to avoid network calls.
+var SkopeoInspectFn = DefaultSkopeoInspect
+
+// CheckImage compares the remote and local (containers-storage) image digests
+// to determine whether a pull is required. It also returns the remote layer count.
+// On any error (network, auth, not cached), NeedsPull is true (safe fallback).
+func CheckImage(image string) ImageCheck {
+	type manifest struct {
+		Digest string   `json:"Digest"`
+		Layers []string `json:"Layers"`
+	}
+
+	// 1. Fetch remote normalized manifest (resolves fat/multi-arch manifests).
+	fmt.Fprintf(os.Stdout, "+ skopeo inspect docker://%s\n", image)
+	remoteOut, err := SkopeoInspectFn("docker://" + image)
 	if err != nil {
-		return 0
+		return ImageCheck{NeedsPull: true}
 	}
-	// Parse the OCI manifest or manifest list.
-	var manifest struct {
-		Layers []json.RawMessage `json:"layers"`
+	var remote manifest
+	if err := json.Unmarshal(remoteOut, &remote); err != nil {
+		return ImageCheck{NeedsPull: true}
 	}
-	if json.Unmarshal(out, &manifest) == nil && len(manifest.Layers) > 0 {
-		return len(manifest.Layers)
+
+	// 2. Fetch local digest from containers-storage.
+	fmt.Fprintf(os.Stdout, "+ skopeo inspect containers-storage:%s\n", image)
+	localOut, err := SkopeoInspectFn("containers-storage:" + image)
+	if err != nil {
+		// Image not present locally.
+		return ImageCheck{NeedsPull: true, LayerCount: len(remote.Layers)}
 	}
-	return 0
+	var local manifest
+	if err := json.Unmarshal(localOut, &local); err != nil {
+		return ImageCheck{NeedsPull: true, LayerCount: len(remote.Layers)}
+	}
+
+	// 3. Compare digests.
+	needsPull := remote.Digest == "" || remote.Digest != local.Digest
+	return ImageCheck{NeedsPull: needsPull, LayerCount: len(remote.Layers)}
 }
 
 // runWithSubsteps runs a command, relays its combined stdout/stderr line-by-line

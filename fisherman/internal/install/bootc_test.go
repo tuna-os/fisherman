@@ -1,10 +1,78 @@
 package install_test
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/install"
 )
+
+func TestCheckImage_NeedsPullWhenNotCached(t *testing.T) {
+	call := 0
+	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
+		call++
+		if call == 1 {
+			// Remote inspect: return manifest with digest + layers
+			return []byte(`{"Digest":"sha256:aaaa","Layers":["sha256:l1","sha256:l2"]}`), nil
+		}
+		// Local inspect: not found
+		return nil, fmt.Errorf("image not known")
+	}
+	defer func() { install.SkopeoInspectFn = install.DefaultSkopeoInspect }()
+
+	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
+	if !result.NeedsPull {
+		t.Error("NeedsPull should be true when image not in local storage")
+	}
+	if result.LayerCount != 2 {
+		t.Errorf("LayerCount = %d, want 2", result.LayerCount)
+	}
+}
+
+func TestCheckImage_NoPullWhenCachedAndCurrent(t *testing.T) {
+	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
+		// Both remote and local return same digest
+		return []byte(`{"Digest":"sha256:bbbb","Layers":["sha256:l1","sha256:l2","sha256:l3"]}`), nil
+	}
+	defer func() { install.SkopeoInspectFn = install.DefaultSkopeoInspect }()
+
+	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
+	if result.NeedsPull {
+		t.Error("NeedsPull should be false when local digest matches remote")
+	}
+	if result.LayerCount != 3 {
+		t.Errorf("LayerCount = %d, want 3", result.LayerCount)
+	}
+}
+
+func TestCheckImage_NeedsPullWhenDigestDiffers(t *testing.T) {
+	call := 0
+	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
+		call++
+		if call == 1 {
+			return []byte(`{"Digest":"sha256:remote","Layers":["sha256:l1"]}`), nil
+		}
+		return []byte(`{"Digest":"sha256:stale","Layers":["sha256:l1"]}`), nil
+	}
+	defer func() { install.SkopeoInspectFn = install.DefaultSkopeoInspect }()
+
+	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
+	if !result.NeedsPull {
+		t.Error("NeedsPull should be true when remote digest differs from local")
+	}
+}
+
+func TestCheckImage_NeedsPullOnNetworkError(t *testing.T) {
+	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
+		return nil, fmt.Errorf("network error")
+	}
+	defer func() { install.SkopeoInspectFn = install.DefaultSkopeoInspect }()
+
+	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
+	if !result.NeedsPull {
+		t.Error("NeedsPull should be true on network error (safe fallback)")
+	}
+}
 
 func TestBuildBootcArgs_BaseArgs(t *testing.T) {
 	args := install.BuildBootcArgs(install.Options{Target: "/mnt/target"}, "", "/target")
