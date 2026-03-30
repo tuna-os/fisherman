@@ -47,8 +47,9 @@ jobs:
 
       - name: Build fisherman
         run: |
+          cd fisherman/
           go mod download
-          go build -o /tmp/fisherman ./
+          go build -o /tmp/fisherman ./cmd/fisherman/
 
       - name: Create loop device (50 GB sparse)
         id: loopdev
