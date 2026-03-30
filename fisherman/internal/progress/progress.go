@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 )
+
+var startTime = time.Now()
 
 type stepEvent struct {
 	Type       string `json:"type"`
@@ -50,6 +53,20 @@ func Complete(message string) {
 
 func write(v any) {
 	data, err := json.Marshal(v)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "progress: marshal error: %v\n", err)
+		return
+	}
+	// Inject timestamp and elapsed_ms into every event without touching each
+	// struct individually. Key order is alphabetical (Go map marshaling).
+	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		fmt.Fprintf(os.Stderr, "progress: unmarshal error: %v\n", err)
+		return
+	}
+	m["timestamp"] = time.Now().UTC().Format(time.RFC3339Nano)
+	m["elapsed_ms"] = time.Since(startTime).Milliseconds()
+	data, err = json.Marshal(m)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "progress: marshal error: %v\n", err)
 		return
