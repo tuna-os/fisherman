@@ -61,7 +61,7 @@ jobs:
 
       - name: Generate recipe
         run: |
-          FLATPAKS=$(echo '${{ matrix.image.flatpaks }}' | jq -c '.')
+          FLATPAKS='${{ toJSON(matrix.image.flatpaks) }}'
 
           cat > /tmp/recipe.json <<EOF
           {
