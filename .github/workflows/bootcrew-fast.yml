@@ -39,7 +39,7 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Install disk tools
-        run: sudo apt-get install -y xfsprogs btrfs-progs cryptsetup-bin flatpak
+        run: sudo apt-get install -y xfsprogs btrfs-progs cryptsetup-bin flatpak ostree
 
       - name: Build fisherman
         run: go build -o /tmp/fisherman ./cmd/fisherman/
