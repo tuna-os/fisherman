@@ -2,8 +2,8 @@ name: Bootcrew Nightly (full install)
 
 on:
   schedule:
-  - cron: '0 2 * * 1' # Weekly, Monday 02:00 UTC
-  workflow_dispatch:
+    - cron: '0 2 * * 1'   # Weekly, Monday 02:00 UTC
+  workflow_dispatch:        # Manual trigger
 
 jobs:
   # Read the image matrix from tests/bootcrew-matrix.yaml.
@@ -38,18 +38,15 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-- name: Install tools
-  run: |
-    sudo apt-get update -qq
-    sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak flatpak-builder
-    sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-    sudo flatpak install -y flathub org.mozilla.firefox
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak
+          sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          sudo flatpak install -y flathub org.mozilla.firefox
 
-- name: Build fisherman
-  run: |
-    cd fisherman/fisherman
-    go mod download
-    go build -o /tmp/fisherman ./cmd/fisherman/
+      - name: Build fisherman
+        run: go build -o /tmp/fisherman ./cmd/fisherman/
 
       - name: Create loop device (50 GB sparse)
         id: loopdev
