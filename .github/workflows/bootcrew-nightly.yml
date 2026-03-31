@@ -2,8 +2,8 @@ name: Bootcrew Nightly (full install)
 
 on:
   schedule:
-    - cron: '0 2 * * 1'   # Weekly, Monday 02:00 UTC
-  workflow_dispatch:        # Manual trigger
+  - cron: '0 2 * * 1' # Weekly, Monday 02:00 UTC
+  workflow_dispatch:
 
 jobs:
   # Read the image matrix from tests/bootcrew-matrix.yaml.
