@@ -60,11 +60,7 @@ jobs:
 
       - name: Generate recipe
         run: |
-          IMAGE_NAME="${{ matrix.image.name }}"
-          FLATPAKS="[]"
-          if [[ "$IMAGE_NAME" == *"bluefin"* || "$IMAGE_NAME" == *"yellowfin"* ]]; then
-            FLATPAKS='["org.mozilla.firefox"]'
-          fi
+          FLATPAKS="${{ matrix.image.flatpaks || '[]' }}"
 
           cat > /tmp/recipe.json <<EOF
           {
