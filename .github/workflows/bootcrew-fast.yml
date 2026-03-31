@@ -43,6 +43,7 @@ jobs:
 
       - name: Build fisherman
         run: go build -o /tmp/fisherman ./cmd/fisherman/
+        working-directory: fisherman
 
       - name: Add fake bins to PATH
         run: |

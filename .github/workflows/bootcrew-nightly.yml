@@ -2,8 +2,8 @@ name: Bootcrew Nightly (full install)
 
 on:
   schedule:
-    - cron: '0 2 * * 1'   # Weekly, Monday 02:00 UTC
-  workflow_dispatch:        # Manual trigger
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
 
 jobs:
   # Read the image matrix from tests/bootcrew-matrix.yaml.
@@ -47,6 +47,7 @@ jobs:
 
       - name: Build fisherman
         run: go build -o /tmp/fisherman ./cmd/fisherman/
+        working-directory: fisherman
 
       - name: Create loop device (50 GB sparse)
         id: loopdev
