@@ -247,7 +247,24 @@
           "icon": "resource:///org/tunaos/Installer/images/bonito.svg"
         }
       ],
-      "icon": "resource:///org/tunaos/Installer/images/tunaos.svg"
+      "icon": "resource:///org/tunaos/Installer/images/tunaos.svg",
+      "carousel": [
+        {
+          "image": "resource:///org/tunaos/Installer/assets/welcome.png",
+          "title": "Installing TunaOS",
+          "description": "A modern, container-native Linux experience. This should only take a few minutes."
+        },
+        {
+          "image": "resource:///org/tunaos/Installer/assets/containerized.svg",
+          "title": "Atomic Updates",
+          "description": "Your system is updated as a whole container image — fully atomic and rollbackable."
+        },
+        {
+          "image": "resource:///org/tunaos/Installer/assets/complete.svg",
+          "title": "Ready Soon",
+          "description": "Sit back and relax. Your new system will be ready shortly."
+        }
+      ]
     },
     {
       "name": "Bluefin",
@@ -391,7 +408,19 @@
           "icon": "resource:///org/tunaos/Installer/images/bluefin-lts.png"
         }
       ],
-      "icon": "resource:///org/tunaos/Installer/images/bluefin.png"
+      "icon": "resource:///org/tunaos/Installer/images/bluefin.png",
+      "carousel": [
+        {
+          "image": "resource:///org/tunaos/Installer/assets/welcome.png",
+          "title": "Installing Bluefin",
+          "description": "A next-generation desktop for those who like to tinker. Powered by Universal Blue."
+        },
+        {
+          "image": "resource:///org/tunaos/Installer/assets/containerized.svg",
+          "title": "Built on OCI Containers",
+          "description": "Bluefin uses bootc for atomic, container-native OS updates from GHCR."
+        }
+      ]
     },
     {
       "name": "Aurora",
@@ -424,7 +453,19 @@
           "desc": "Fedora 43 base"
         }
       ],
-      "icon": "resource:///org/tunaos/Installer/images/aurora.svg"
+      "icon": "resource:///org/tunaos/Installer/images/aurora.svg",
+      "carousel": [
+        {
+          "image": "resource:///org/tunaos/Installer/assets/welcome.png",
+          "title": "Installing Aurora",
+          "description": "A KDE Plasma experience powered by Universal Blue and bootc."
+        },
+        {
+          "image": "resource:///org/tunaos/Installer/assets/containerized.svg",
+          "title": "Atomic KDE",
+          "description": "Aurora updates are delivered as complete OCI images — safe, reliable, and reversible."
+        }
+      ]
     },
     {
       "name": "Bazzite",
@@ -763,7 +804,19 @@
         }
       ],
       "icon": "resource:///org/tunaos/Installer/images/bazzite.svg",
-      "flatpaks": "https://raw.githubusercontent.com/ublue-os/bazzite/main/installer/kde_flatpaks/flatpaks"
+      "flatpaks": "https://raw.githubusercontent.com/ublue-os/bazzite/main/installer/kde_flatpaks/flatpaks",
+      "carousel": [
+        {
+          "image": "resource:///org/tunaos/Installer/assets/welcome.png",
+          "title": "Installing Bazzite",
+          "description": "A gaming-focused Linux experience. Steam, Lutris, and everything you need — ready to play."
+        },
+        {
+          "image": "resource:///org/tunaos/Installer/assets/containerized.svg",
+          "title": "Gaming-Ready",
+          "description": "Bazzite is built on Universal Blue and delivers a console-like gaming experience on Linux."
+        }
+      ]
     }
   ]
 }
