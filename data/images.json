@@ -24,7 +24,7 @@
                   "desc": "GNOME desktop"
                 },
                 {
-                  "name": "GNOME \u2014 HWE Kernel",
+                  "name": "GNOME — HWE Kernel",
                   "imgref": "ghcr.io/tuna-os/albacore:gnome-hwe",
                   "desc": "GNOME with Hardware Enablement kernel"
                 },
@@ -34,7 +34,7 @@
                   "desc": "GNOME 50 series"
                 },
                 {
-                  "name": "GNOME \u2014 Gaming",
+                  "name": "GNOME — Gaming",
                   "imgref": "ghcr.io/tuna-os/albacore:gnome-gdx",
                   "desc": "GNOME with gaming optimisations"
                 }
@@ -50,12 +50,12 @@
                   "desc": "KDE Plasma desktop"
                 },
                 {
-                  "name": "KDE Plasma \u2014 HWE Kernel",
+                  "name": "KDE Plasma — HWE Kernel",
                   "imgref": "ghcr.io/tuna-os/albacore:kde-hwe",
                   "desc": "KDE Plasma with Hardware Enablement kernel"
                 },
                 {
-                  "name": "KDE Plasma \u2014 Gaming",
+                  "name": "KDE Plasma — Gaming",
                   "imgref": "ghcr.io/tuna-os/albacore:kde-gdx",
                   "desc": "KDE Plasma with gaming optimisations"
                 }
@@ -83,7 +83,7 @@
                   "desc": "GNOME desktop"
                 },
                 {
-                  "name": "GNOME \u2014 HWE Kernel",
+                  "name": "GNOME — HWE Kernel",
                   "imgref": "ghcr.io/tuna-os/yellowfin:gnome-hwe",
                   "desc": "GNOME with Hardware Enablement kernel"
                 },
@@ -93,7 +93,7 @@
                   "desc": "GNOME 50 series"
                 },
                 {
-                  "name": "GNOME \u2014 Gaming",
+                  "name": "GNOME — Gaming",
                   "imgref": "ghcr.io/tuna-os/yellowfin:gnome-gdx",
                   "desc": "GNOME with gaming optimisations"
                 }
@@ -109,12 +109,12 @@
                   "desc": "KDE Plasma desktop"
                 },
                 {
-                  "name": "KDE Plasma \u2014 HWE Kernel",
+                  "name": "KDE Plasma — HWE Kernel",
                   "imgref": "ghcr.io/tuna-os/yellowfin:kde-hwe",
                   "desc": "KDE Plasma with Hardware Enablement kernel"
                 },
                 {
-                  "name": "KDE Plasma \u2014 Gaming",
+                  "name": "KDE Plasma — Gaming",
                   "imgref": "ghcr.io/tuna-os/yellowfin:kde-gdx",
                   "desc": "KDE Plasma with gaming optimisations"
                 }
@@ -142,7 +142,7 @@
                   "desc": "GNOME desktop"
                 },
                 {
-                  "name": "GNOME \u2014 HWE Kernel",
+                  "name": "GNOME — HWE Kernel",
                   "imgref": "ghcr.io/tuna-os/skipjack:gnome-hwe",
                   "desc": "GNOME with Hardware Enablement kernel"
                 },
@@ -152,7 +152,7 @@
                   "desc": "GNOME 50 series"
                 },
                 {
-                  "name": "GNOME \u2014 Gaming",
+                  "name": "GNOME — Gaming",
                   "imgref": "ghcr.io/tuna-os/skipjack:gnome-gdx",
                   "desc": "GNOME with gaming optimisations"
                 }
@@ -168,12 +168,12 @@
                   "desc": "KDE Plasma desktop"
                 },
                 {
-                  "name": "KDE Plasma \u2014 HWE Kernel",
+                  "name": "KDE Plasma — HWE Kernel",
                   "imgref": "ghcr.io/tuna-os/skipjack:kde-hwe",
                   "desc": "KDE Plasma with Hardware Enablement kernel"
                 },
                 {
-                  "name": "KDE Plasma \u2014 Gaming",
+                  "name": "KDE Plasma — Gaming",
                   "imgref": "ghcr.io/tuna-os/skipjack:kde-gdx",
                   "desc": "KDE Plasma with gaming optimisations"
                 }
@@ -201,7 +201,7 @@
                   "desc": "GNOME desktop"
                 },
                 {
-                  "name": "GNOME \u2014 HWE Kernel",
+                  "name": "GNOME — HWE Kernel",
                   "imgref": "ghcr.io/tuna-os/bonito:gnome-hwe",
                   "desc": "GNOME with Hardware Enablement kernel"
                 },
@@ -211,7 +211,7 @@
                   "desc": "GNOME 50 series"
                 },
                 {
-                  "name": "GNOME \u2014 Gaming",
+                  "name": "GNOME — Gaming",
                   "imgref": "ghcr.io/tuna-os/bonito:gnome-gdx",
                   "desc": "GNOME with gaming optimisations"
                 }
@@ -227,12 +227,12 @@
                   "desc": "KDE Plasma desktop"
                 },
                 {
-                  "name": "KDE Plasma \u2014 HWE Kernel",
+                  "name": "KDE Plasma — HWE Kernel",
                   "imgref": "ghcr.io/tuna-os/bonito:kde-hwe",
                   "desc": "KDE Plasma with Hardware Enablement kernel"
                 },
                 {
-                  "name": "KDE Plasma \u2014 Gaming",
+                  "name": "KDE Plasma — Gaming",
                   "imgref": "ghcr.io/tuna-os/bonito:kde-gdx",
                   "desc": "KDE Plasma with gaming optimisations"
                 }
@@ -258,32 +258,32 @@
           "name": "Latest",
           "children": [
             {
-              "name": "Bluefin \u2014 Latest",
+              "name": "Bluefin — Latest",
               "imgref": "ghcr.io/ublue-os/bluefin:latest",
               "desc": "Cutting-edge Fedora"
             },
             {
-              "name": "Bluefin \u2014 Fedora 43",
+              "name": "Bluefin — Fedora 43",
               "imgref": "ghcr.io/ublue-os/bluefin:43",
               "desc": "Fedora 43 base"
             },
             {
-              "name": "Bluefin \u2014 Fedora 42",
+              "name": "Bluefin — Fedora 42",
               "imgref": "ghcr.io/ublue-os/bluefin:42",
               "desc": "Fedora 42 base"
             },
             {
-              "name": "Bluefin DX \u2014 Latest",
+              "name": "Bluefin DX — Latest",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:latest",
               "desc": "Cutting-edge Fedora"
             },
             {
-              "name": "Bluefin DX \u2014 Fedora 43",
+              "name": "Bluefin DX — Fedora 43",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:43",
               "desc": "Fedora 43 base"
             },
             {
-              "name": "Bluefin DX \u2014 Fedora 42",
+              "name": "Bluefin DX — Fedora 42",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:42",
               "desc": "Fedora 42 base"
             }
@@ -293,32 +293,32 @@
           "name": "Stable",
           "children": [
             {
-              "name": "Bluefin \u2014 Stable",
+              "name": "Bluefin — Stable",
               "imgref": "ghcr.io/ublue-os/bluefin:stable",
               "desc": "Latest stable Fedora release"
             },
             {
-              "name": "Bluefin \u2014 Stable Daily",
+              "name": "Bluefin — Stable Daily",
               "imgref": "ghcr.io/ublue-os/bluefin:stable-daily",
               "desc": "Daily stable builds"
             },
             {
-              "name": "Bluefin \u2014 GTS",
+              "name": "Bluefin — GTS",
               "imgref": "ghcr.io/ublue-os/bluefin:gts",
               "desc": "Conservative stable"
             },
             {
-              "name": "Bluefin DX \u2014 Stable",
+              "name": "Bluefin DX — Stable",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:stable",
               "desc": "Latest stable Fedora release"
             },
             {
-              "name": "Bluefin DX \u2014 Stable Daily",
+              "name": "Bluefin DX — Stable Daily",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:stable-daily",
               "desc": "Daily stable builds"
             },
             {
-              "name": "Bluefin DX \u2014 GTS",
+              "name": "Bluefin DX — GTS",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:gts",
               "desc": "Conservative stable"
             }
@@ -328,62 +328,62 @@
           "name": "LTS",
           "children": [
             {
-              "name": "Bluefin \u2014 LTS",
+              "name": "Bluefin — LTS",
               "imgref": "ghcr.io/ublue-os/bluefin:lts",
               "desc": "Long-term support (CentOS Stream 10)"
             },
             {
-              "name": "Bluefin \u2014 LTS \u2014 HWE",
+              "name": "Bluefin — LTS — HWE",
               "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe",
               "desc": "LTS with Hardware Enablement kernel"
             },
             {
-              "name": "Bluefin \u2014 LTS Testing",
+              "name": "Bluefin — LTS Testing",
               "imgref": "ghcr.io/ublue-os/bluefin:lts-testing",
               "desc": "Pre-release LTS builds"
             },
             {
-              "name": "Bluefin \u2014 LTS Testing 50",
+              "name": "Bluefin — LTS Testing 50",
               "imgref": "ghcr.io/ublue-os/bluefin:lts-testing-50",
               "desc": "LTS testing with GNOME 50"
             },
             {
-              "name": "Bluefin \u2014 LTS HWE Testing",
+              "name": "Bluefin — LTS HWE Testing",
               "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe-testing",
               "desc": "LTS HWE pre-release builds"
             },
             {
-              "name": "Bluefin \u2014 LTS HWE Testing 50",
+              "name": "Bluefin — LTS HWE Testing 50",
               "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe-testing-50",
               "desc": "LTS HWE testing with GNOME 50"
             },
             {
-              "name": "Bluefin DX \u2014 LTS",
+              "name": "Bluefin DX — LTS",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:lts",
               "desc": "Long-term support (CentOS Stream 10)"
             },
             {
-              "name": "Bluefin DX \u2014 LTS \u2014 HWE",
+              "name": "Bluefin DX — LTS — HWE",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-hwe",
               "desc": "LTS with Hardware Enablement kernel"
             },
             {
-              "name": "Bluefin DX \u2014 LTS Testing",
+              "name": "Bluefin DX — LTS Testing",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-testing",
               "desc": "Pre-release LTS builds"
             },
             {
-              "name": "Bluefin DX \u2014 LTS Testing 50",
+              "name": "Bluefin DX — LTS Testing 50",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-testing-50",
               "desc": "LTS testing with GNOME 50"
             },
             {
-              "name": "Bluefin DX \u2014 LTS HWE Testing",
+              "name": "Bluefin DX — LTS HWE Testing",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-hwe-testing",
               "desc": "LTS HWE pre-release builds"
             },
             {
-              "name": "Bluefin DX \u2014 LTS HWE Testing 50",
+              "name": "Bluefin DX — LTS HWE Testing 50",
               "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-hwe-testing-50",
               "desc": "LTS HWE testing with GNOME 50"
             }
@@ -508,7 +508,8 @@
                 }
               ]
             }
-          ]
+          ],
+          "flatpaks": "https://raw.githubusercontent.com/ublue-os/bazzite/main/installer/gnome_flatpaks/flatpaks"
         },
         {
           "name": "KDE Plasma Desktop",
@@ -761,7 +762,8 @@
           ]
         }
       ],
-      "icon": "resource:///org/tunaos/Installer/images/bazzite.svg"
+      "icon": "resource:///org/tunaos/Installer/images/bazzite.svg",
+      "flatpaks": "https://raw.githubusercontent.com/ublue-os/bazzite/main/installer/kde_flatpaks/flatpaks"
     }
   ]
 }
