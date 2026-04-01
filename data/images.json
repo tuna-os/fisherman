@@ -816,7 +816,8 @@
           "title": "Gaming-Ready",
           "description": "Bazzite is built on Universal Blue and delivers a console-like gaming experience on Linux."
         }
-      ]
+      ],
+      "needs_user_creation": true
     }
   ]
 }
