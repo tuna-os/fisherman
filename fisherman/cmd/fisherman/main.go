@@ -317,5 +317,15 @@ func main() {
 	// Tear down mounts and LUKS before declaring success.
 	cleanup.Run()
 
-	progress.Complete("Installation complete!")
+	// Find the EFI boot entry so the frontend can set BootNext before rebooting.
+	// Non-fatal: on VMs or systems without efibootmgr this may return empty.
+	bootID, err := post.FindBootNextID(efiPart)
+	if err != nil {
+		progress.Info(fmt.Sprintf("Warning: could not determine EFI boot entry: %v", err))
+		bootID = ""
+	} else if bootID != "" {
+		progress.Info(fmt.Sprintf("EFI boot entry for installed system: Boot%s", bootID))
+	}
+
+	progress.Complete("Installation complete!", bootID)
 }
