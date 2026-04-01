@@ -219,3 +219,59 @@ func TestCopyFlatpaks_PromotesUserApps(t *testing.T) {
 		t.Errorf("expected %s to be promoted to system, but no flatpak install call found", wanted)
 	}
 }
+
+func TestEnsurePlymouthArgs(t *testing.T) {
+tests := []struct {
+name     string
+input    string
+wantOut  string
+wantMod  bool
+}{
+{
+name:    "adds rhgb and quiet when absent",
+input:   "title TunaOS\noptions root=UUID=abc rw\n",
+wantOut: "title TunaOS\noptions root=UUID=abc rw rhgb quiet\n",
+wantMod: true,
+},
+{
+name:    "adds only missing arg",
+input:   "options root=UUID=abc rw rhgb\n",
+wantOut: "options root=UUID=abc rw rhgb quiet\n",
+wantMod: true,
+},
+{
+name:    "no change when args already present",
+input:   "options root=UUID=abc rw rhgb quiet\n",
+wantOut: "options root=UUID=abc rw rhgb quiet\n",
+wantMod: false,
+},
+}
+
+for _, tc := range tests {
+t.Run(tc.name, func(t *testing.T) {
+dir := t.TempDir()
+entriesDir := dir + "/boot/loader/entries"
+if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+t.Fatal(err)
+}
+entryPath := entriesDir + "/test.conf"
+if err := os.WriteFile(entryPath, []byte(tc.input), 0o644); err != nil {
+t.Fatal(err)
+}
+n, err := post.EnsurePlymouthArgs(dir)
+if err != nil {
+t.Fatalf("EnsurePlymouthArgs: %v", err)
+}
+if tc.wantMod && n == 0 {
+t.Error("expected entry to be modified, but it was not")
+}
+if !tc.wantMod && n != 0 {
+t.Error("expected no modification, but entry was changed")
+}
+got, _ := os.ReadFile(entryPath)
+if string(got) != tc.wantOut {
+t.Errorf("entry content:\ngot:  %q\nwant: %q", string(got), tc.wantOut)
+}
+})
+}
+}

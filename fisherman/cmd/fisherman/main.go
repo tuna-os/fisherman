@@ -303,6 +303,15 @@ func main() {
 		fatal("writing hostname: %v", err)
 	}
 
+	// Ensure rhgb and quiet are in every BLS loader entry so Plymouth shows
+	// the graphical boot splash. Non-fatal: the system boots fine without it.
+	n, err := post.EnsurePlymouthArgs(targetMount)
+	if err != nil {
+		progress.Info(fmt.Sprintf("Warning: could not set Plymouth kernel args: %v", err))
+	} else if n > 0 {
+		progress.Info(fmt.Sprintf("Added Plymouth boot args to %d loader entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+	}
+
 	// ── Step 9: Finalize ─────────────────────────────────────────────────────
 	// bootc's --skip-finalize kept the target writable for post-install writes.
 	// Now replicate what bootc's finalize_filesystem() does internally:
