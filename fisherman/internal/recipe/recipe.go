@@ -22,6 +22,16 @@ type Recipe struct {
 	ComposeFsBackend bool       `json:"composeFsBackend"`
 	Hostname         string     `json:"hostname"`
 	Flatpaks        []string   `json:"flatpaks"`        // flatpak app IDs to install; empty = fallback
+	User            UserSpec   `json:"user"`            // optional user account to create
+}
+
+// UserSpec describes a user account to create during installation.
+// If Username is empty the user creation step is skipped.
+type UserSpec struct {
+	Username string   `json:"username"`
+	Fullname string   `json:"fullname"`
+	Password string   `json:"password"`
+	Groups   []string `json:"groups"`
 }
 
 // Encryption describes the disk encryption configuration.

@@ -303,6 +303,19 @@ func main() {
 		fatal("writing hostname: %v", err)
 	}
 
+	// Create a user account if the recipe requests one (e.g. Bazzite has no OOBE).
+	if r.User.Username != "" {
+		progress.Info(fmt.Sprintf("Creating user: %s", r.User.Username))
+		if err := post.CreateUser(targetMount, post.UserConfig{
+			Username: r.User.Username,
+			Fullname: r.User.Fullname,
+			Password: r.User.Password,
+			Groups:   r.User.Groups,
+		}); err != nil {
+			fatal("creating user: %v", err)
+		}
+	}
+
 	// Ensure rhgb and quiet are in every BLS loader entry so Plymouth shows
 	// the graphical boot splash. Non-fatal: the system boots fine without it.
 	n, err := post.EnsurePlymouthArgs(targetMount)
