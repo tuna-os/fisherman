@@ -67,12 +67,12 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name: "valid composefs_backend true",
-			r:    recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ComposeFsBackend: true},
+			r:    recipe.Recipe{Disk: diskPath, Filesystem: "btrfs", Hostname: "h", ComposeFsBackend: true},
 		},
 		{
 			name: "valid composefs_backend with luks-passphrase",
 			r: recipe.Recipe{
-				Disk: diskPath, Filesystem: "xfs", Hostname: "h",
+				Disk: diskPath, Filesystem: "btrfs", Hostname: "h",
 				ComposeFsBackend: true,
 				Encryption:       recipe.Encryption{Type: "luks-passphrase", Passphrase: "secret"},
 			},
@@ -109,6 +109,23 @@ func TestValidate(t *testing.T) {
 			name:    "btrfsSubvolumes without btrfs",
 			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", BtrfsSubvolumes: true, Hostname: "h"},
 			wantErr: "btrfsSubvolumes requires filesystem=btrfs",
+		},
+		{
+			name:    "composefs with xfs (no fs-verity)",
+			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ComposeFsBackend: true},
+			wantErr: "composeFsBackend requires a filesystem with fs-verity support",
+		},
+
+		// ── Invalid: imageType ────────────────────────────────────────────────
+		{
+			name:    "imageType ostree not yet supported",
+			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ImageType: "ostree"},
+			wantErr: "imageType \"ostree\" is not yet supported",
+		},
+		{
+			name:    "imageType unknown value",
+			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ImageType: "flatpak"},
+			wantErr: "imageType must be",
 		},
 
 		// ── Invalid: encryption ───────────────────────────────────────────────
