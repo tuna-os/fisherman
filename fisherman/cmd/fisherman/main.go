@@ -90,6 +90,7 @@ func main() {
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
 	hasTPM2enrolment := r.Encryption.Type == "tpm2-luks-passphrase"
+	isManual := len(r.CustomMounts) > 0
 
 	// ── Pre-flight: check image cache ─────────────────────────────────────────
 	var imageCheck install.ImageCheck
@@ -107,125 +108,163 @@ func main() {
 	pi := 0 // profile index, incremented at each progress.Step call
 
 	// Compute total step count up front so the GUI can show accurate progress.
+	// Manual layouts collapse the 4 auto disk-setup steps into a single step.
 	totalSteps := 8
-	if hasEncryption {
-		totalSteps++ // extra step for LUKS setup
+	if isManual {
+		totalSteps -= 3 // partition + format EFI + format root collapse into one step
+	}
+	if hasEncryption && !isManual {
+		totalSteps++ // extra step for LUKS setup (auto mode only)
 	}
 	if hasTPM2 && r.Encryption.Type == "tpm2-luks-passphrase" {
 		totalSteps++ // extra step for TPM2 enrolment
 	}
 	step := 1
 
-	// ── Step 1: Partition disk ────────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Partitioning disk", profile[pi].cumulativePct, profile[pi].weightPct)
-	pi++
-	step++
+	var activeTargetMount string
+	var activeEfiPart string
+	var activeRootPart string // only used for TPM2 enrolment, empty in manual mode
 
-	if hasEncryption {
-		if err := disk.PartitionEncrypted(r.Disk); err != nil {
-			fatal("partitioning disk: %v", err)
-		}
-	} else {
-		if err := disk.Partition(r.Disk); err != nil {
-			fatal("partitioning disk: %v", err)
-		}
-	}
-
-	// All installs use a 3-partition layout: p1=EFI, p2=/boot, p3=root.
-	// The separate ext4 /boot ensures GRUB never needs to parse XFS, which
-	// is required because GRUB's built-in XFS driver does not support the
-	// newer XFS features enabled by mkfs.xfs on el10 (nrext64, exchange…).
-	efiPart := disk.PartName(r.Disk, 1)
-	bootPart := disk.PartName(r.Disk, 2)
-	rootPart := disk.PartName(r.Disk, 3)
-	rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
-
-	// ── Step 2: Format EFI ───────────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Formatting EFI partition", profile[pi].cumulativePct, profile[pi].weightPct)
-	pi++
-	step++
-
-	if err := disk.FormatEFI(efiPart); err != nil {
-		fatal("formatting EFI: %v", err)
-	}
-	if err := disk.FormatBoot(bootPart); err != nil {
-		fatal("formatting /boot: %v", err)
-	}
-
-	// ── Step 3: Disk encryption (optional) ───────────────────────────────────
-	if hasEncryption {
-		progress.Step(step, totalSteps, "Setting up disk encryption", profile[pi].cumulativePct, profile[pi].weightPct)
+	if isManual {
+		// ── Step 1 (manual): Format and mount user-specified partitions ────────
+		progress.Step(step, totalSteps, "Preparing disk", profile[pi].cumulativePct, profile[pi].weightPct)
 		pi++
 		step++
 
-		var passphrase string
-		switch r.Encryption.Type {
-		case "luks-passphrase", "tpm2-luks-passphrase":
-			passphrase = r.Encryption.Passphrase
-		case "tpm2-luks":
-			passphrase = luks.RandomPassphrase()
-			progress.Info("TPM2-LUKS: using a temporary passphrase; TPM2 will be enrolled after install")
+		specs := make([]disk.MountSpec, 0, len(r.CustomMounts))
+		for _, cm := range r.CustomMounts {
+			specs = append(specs, disk.MountSpec{
+				Partition: cm.Partition,
+				Target:    cm.Target,
+				Fstype:    cm.Fstype,
+			})
 		}
 
-		// A previous interrupted run may have left the mapper open. Close it
-		// before formatting so luksFormat and luksOpen succeed cleanly.
-		if _, err := os.Stat(luks.MapperPath(luksMapper)); err == nil {
-			progress.Info(fmt.Sprintf("Closing stale mapper %s from previous run", luksMapper))
-			_ = luks.Close(luksMapper)
+		var mountedPaths []string
+		var applyErr error
+		activeTargetMount, activeEfiPart, mountedPaths, applyErr = disk.ApplyCustomLayout(specs, targetMount)
+		if applyErr != nil {
+			fatal("manual disk layout: %v", applyErr)
 		}
-
-		if err := luks.Format(rootPart, passphrase); err != nil {
-			fatal("LUKS format: %v", err)
-		}
-		if err := luks.Open(rootPart, passphrase, luksMapper); err != nil {
-			fatal("LUKS open: %v", err)
-		}
-		cleanup.SetLUKS(luksMapper)
-		rootDev = luks.MapperPath(luksMapper)
-	}
-
-	// ── Step 4: Format root filesystem ───────────────────────────────────────
-	progress.Step(step, totalSteps, "Formatting root filesystem", profile[pi].cumulativePct, profile[pi].weightPct)
-	pi++
-	step++
-
-	if err := disk.FormatRoot(rootDev, r.Filesystem); err != nil {
-		fatal("formatting root filesystem: %v", err)
-	}
-
-	// ── Step 5: Mount filesystem ──────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Mounting filesystem", profile[pi].cumulativePct, profile[pi].weightPct)
-	pi++
-	step++
-
-	if err := os.MkdirAll(targetMount, 0o755); err != nil {
-		fatal("creating mount point %s: %v", targetMount, err)
-	}
-
-	if r.BtrfsSubvolumes {
-		if err := disk.SetupBtrfsSubvolumes(rootDev, targetMount); err != nil {
-			fatal("setting up btrfs subvolumes: %v", err)
+		for _, p := range mountedPaths {
+			cleanup.AddMount(p)
 		}
 	} else {
-		if err := disk.Mount(rootDev, targetMount, ""); err != nil {
-			fatal("mounting root: %v", err)
+		// ── Step 1: Partition disk ────────────────────────────────────────────
+		progress.Step(step, totalSteps, "Partitioning disk", profile[pi].cumulativePct, profile[pi].weightPct)
+		pi++
+		step++
+
+		if hasEncryption {
+			if err := disk.PartitionEncrypted(r.Disk); err != nil {
+				fatal("partitioning disk: %v", err)
+			}
+		} else {
+			if err := disk.Partition(r.Disk); err != nil {
+				fatal("partitioning disk: %v", err)
+			}
 		}
-	}
-	cleanup.AddMount(targetMount)
 
-	// Mount the unencrypted /boot partition before the EFI partition.
-	// bootupctl reads /boot's block device UUID from the raw partition.
-	if err := disk.MountBoot(targetMount, bootPart); err != nil {
-		fatal("mounting /boot: %v", err)
-	}
-	cleanup.AddMount(targetMount + "/boot")
+		// All installs use a 3-partition layout: p1=EFI, p2=/boot, p3=root.
+		// The separate ext4 /boot ensures GRUB never needs to parse XFS, which
+		// is required because GRUB's built-in XFS driver does not support the
+		// newer XFS features enabled by mkfs.xfs on el10 (nrext64, exchange…).
+		efiPart := disk.PartName(r.Disk, 1)
+		bootPart := disk.PartName(r.Disk, 2)
+		rootPart := disk.PartName(r.Disk, 3)
+		rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
+		activeRootPart = rootPart
 
-	// Mount the EFI partition at /boot/efi inside the target.
-	// bootc install to-filesystem requires this to exist before it runs.
-	if err := disk.MountEFI(targetMount, efiPart); err != nil {
-		fatal("mounting EFI: %v", err)
+		// ── Step 2: Format EFI ───────────────────────────────────────────────
+		progress.Step(step, totalSteps, "Formatting EFI partition", profile[pi].cumulativePct, profile[pi].weightPct)
+		pi++
+		step++
+
+		if err := disk.FormatEFI(efiPart); err != nil {
+			fatal("formatting EFI: %v", err)
+		}
+		if err := disk.FormatBoot(bootPart); err != nil {
+			fatal("formatting /boot: %v", err)
+		}
+
+		// ── Step 3: Disk encryption (optional) ──────────────────────────────
+		if hasEncryption {
+			progress.Step(step, totalSteps, "Setting up disk encryption", profile[pi].cumulativePct, profile[pi].weightPct)
+			pi++
+			step++
+
+			var passphrase string
+			switch r.Encryption.Type {
+			case "luks-passphrase", "tpm2-luks-passphrase":
+				passphrase = r.Encryption.Passphrase
+			case "tpm2-luks":
+				passphrase = luks.RandomPassphrase()
+				progress.Info("TPM2-LUKS: using a temporary passphrase; TPM2 will be enrolled after install")
+			}
+
+			// A previous interrupted run may have left the mapper open. Close it
+			// before formatting so luksFormat and luksOpen succeed cleanly.
+			if _, err := os.Stat(luks.MapperPath(luksMapper)); err == nil {
+				progress.Info(fmt.Sprintf("Closing stale mapper %s from previous run", luksMapper))
+				_ = luks.Close(luksMapper)
+			}
+
+			if err := luks.Format(rootPart, passphrase); err != nil {
+				fatal("LUKS format: %v", err)
+			}
+			if err := luks.Open(rootPart, passphrase, luksMapper); err != nil {
+				fatal("LUKS open: %v", err)
+			}
+			cleanup.SetLUKS(luksMapper)
+			rootDev = luks.MapperPath(luksMapper)
+		}
+
+		// ── Step 4: Format root filesystem ──────────────────────────────────
+		progress.Step(step, totalSteps, "Formatting root filesystem", profile[pi].cumulativePct, profile[pi].weightPct)
+		pi++
+		step++
+
+		if err := disk.FormatRoot(rootDev, r.Filesystem); err != nil {
+			fatal("formatting root filesystem: %v", err)
+		}
+
+		// ── Step 5: Mount filesystem ─────────────────────────────────────────
+		progress.Step(step, totalSteps, "Mounting filesystem", profile[pi].cumulativePct, profile[pi].weightPct)
+		pi++
+		step++
+
+		if err := os.MkdirAll(targetMount, 0o755); err != nil {
+			fatal("creating mount point %s: %v", targetMount, err)
+		}
+
+		if r.BtrfsSubvolumes {
+			if err := disk.SetupBtrfsSubvolumes(rootDev, targetMount); err != nil {
+				fatal("setting up btrfs subvolumes: %v", err)
+			}
+		} else {
+			if err := disk.Mount(rootDev, targetMount, ""); err != nil {
+				fatal("mounting root: %v", err)
+			}
+		}
+		cleanup.AddMount(targetMount)
+
+		// Mount the unencrypted /boot partition before the EFI partition.
+		// bootupctl reads /boot's block device UUID from the raw partition.
+		if err := disk.MountBoot(targetMount, bootPart); err != nil {
+			fatal("mounting /boot: %v", err)
+		}
+		cleanup.AddMount(targetMount + "/boot")
+
+		// Mount the EFI partition at /boot/efi inside the target.
+		// bootc install to-filesystem requires this to exist before it runs.
+		if err := disk.MountEFI(targetMount, efiPart); err != nil {
+			fatal("mounting EFI: %v", err)
+		}
+		cleanup.AddMount(targetMount + "/boot/efi")
+
+		activeTargetMount = targetMount
+		activeEfiPart = efiPart
 	}
-	cleanup.AddMount(targetMount + "/boot/efi")
 
 	// Bind-mount a host-side scratch directory at /var/tmp so bootc has
 	// disk-backed space for layer blobs. We deliberately use a path OUTSIDE
@@ -261,7 +300,7 @@ func main() {
 		SelinuxDisabled:  r.SelinuxDisabled,
 		UnifiedStorage:   r.UnifiedStorage,
 		ComposeFsBackend: r.ComposeFsBackend,
-		Target:           targetMount,
+		Target:           activeTargetMount,
 		NeedsPull:        imageCheck.NeedsPull,
 		LayerCount:       imageCheck.LayerCount,
 	}); err != nil {
@@ -277,7 +316,7 @@ func main() {
 		pi++
 		step++
 
-		if err := luks.EnrollTPM2(rootPart, r.Encryption.Passphrase); err != nil {
+		if err := luks.EnrollTPM2(activeRootPart, r.Encryption.Passphrase); err != nil {
 			// Non-fatal: TPM2 hardware may not be present (e.g. VMs).
 			progress.Info(fmt.Sprintf("Warning: TPM2 enrolment failed (password unlock still works): %v", err))
 		}
@@ -288,7 +327,7 @@ func main() {
 	pi++
 	step++
 
-	if err := post.CopyFlatpaks(targetMount, r.Flatpaks); err != nil {
+	if err := post.CopyFlatpaks(activeTargetMount, r.Flatpaks); err != nil {
 		// Non-fatal — the system will work without pre-installed flatpaks.
 		progress.Info(fmt.Sprintf("Warning: could not copy flatpaks: %v", err))
 	}
@@ -299,14 +338,14 @@ func main() {
 	step++
 
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
-	if err := post.WriteHostname(targetMount, r.Hostname); err != nil {
+	if err := post.WriteHostname(activeTargetMount, r.Hostname); err != nil {
 		fatal("writing hostname: %v", err)
 	}
 
 	// Create a user account if the recipe requests one (e.g. Bazzite has no OOBE).
 	if r.User.Username != "" {
 		progress.Info(fmt.Sprintf("Creating user: %s", r.User.Username))
-		if err := post.CreateUser(targetMount, post.UserConfig{
+		if err := post.CreateUser(activeTargetMount, post.UserConfig{
 			Username: r.User.Username,
 			Fullname: r.User.Fullname,
 			Password: r.User.Password,
@@ -318,7 +357,7 @@ func main() {
 
 	// Ensure rhgb and quiet are in every BLS loader entry so Plymouth shows
 	// the graphical boot splash. Non-fatal: the system boots fine without it.
-	n, err := post.EnsurePlymouthArgs(targetMount)
+	n, err := post.EnsurePlymouthArgs(activeTargetMount)
 	if err != nil {
 		progress.Info(fmt.Sprintf("Warning: could not set Plymouth kernel args: %v", err))
 	} else if n > 0 {
@@ -332,7 +371,7 @@ func main() {
 	//   2. remount ro — flush writeback, lock the deployment read-only
 	//   3. fsfreeze/thaw — flush the journal for a clean first boot
 	progress.Step(step, totalSteps, "Finalizing installation", profile[pi].cumulativePct, profile[pi].weightPct)
-	if err := disk.FinalizeFilesystem(targetMount); err != nil {
+	if err := disk.FinalizeFilesystem(activeTargetMount); err != nil {
 		fatal("finalizing target filesystem: %v", err)
 	}
 
@@ -341,7 +380,7 @@ func main() {
 
 	// Find the EFI boot entry so the frontend can set BootNext before rebooting.
 	// Non-fatal: on VMs or systems without efibootmgr this may return empty.
-	bootID, err := post.FindBootNextID(efiPart)
+	bootID, err := post.FindBootNextID(activeEfiPart)
 	if err != nil {
 		progress.Info(fmt.Sprintf("Warning: could not determine EFI boot entry: %v", err))
 		bootID = ""
