@@ -99,6 +99,8 @@ func main() {
 		imageCheck = install.CheckImage(r.Image)
 		if imageCheck.NeedsPull {
 			progress.Info(fmt.Sprintf("Image pull required (%d layers)", imageCheck.LayerCount))
+		} else if imageCheck.Offline {
+			progress.Info("Offline: registry unreachable, using locally cached image")
 		} else {
 			progress.Info("Image already up to date in local cache")
 		}
