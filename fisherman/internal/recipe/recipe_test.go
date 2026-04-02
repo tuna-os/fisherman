@@ -81,6 +81,10 @@ func TestValidate(t *testing.T) {
 			name: "valid composefs_backend with btrfs",
 			r:    recipe.Recipe{Disk: diskPath, Filesystem: "btrfs", Hostname: "h", ComposeFsBackend: true},
 		},
+		{
+			name: "valid composefs_backend with xfs",
+			r:    recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ComposeFsBackend: true},
+		},
 
 		// ── Invalid: disk ─────────────────────────────────────────────────────
 		{
@@ -110,12 +114,6 @@ func TestValidate(t *testing.T) {
 			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", BtrfsSubvolumes: true, Hostname: "h"},
 			wantErr: "btrfsSubvolumes requires filesystem=btrfs",
 		},
-		{
-			name:    "composefs with xfs (no fs-verity)",
-			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ComposeFsBackend: true},
-			wantErr: "composeFsBackend requires a filesystem with fs-verity support",
-		},
-
 		// ── Invalid: imageType ────────────────────────────────────────────────
 		{
 			name:    "imageType ostree not yet supported",
