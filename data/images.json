@@ -1458,14 +1458,17 @@
             {
               "name": "Latest",
               "imgref": "ghcr.io/zirconium-dev/zirconium:latest",
-              "desc": "Latest Zirconium build"
+              "desc": "Latest Zirconium build",
+              "composefs": true
             },
             {
               "name": "Rawhide",
               "imgref": "ghcr.io/zirconium-dev/zirconium:rawhide",
-              "desc": "Fedora Rawhide based"
+              "desc": "Fedora Rawhide based",
+              "composefs": true
             }
-          ]
+          ],
+          "composefs": true
         },
         {
           "name": "Zirconium NVIDIA",
@@ -1474,9 +1477,11 @@
             {
               "name": "Latest",
               "imgref": "ghcr.io/zirconium-dev/zirconium-nvidia:latest",
-              "desc": "Latest with NVIDIA drivers"
+              "desc": "Latest with NVIDIA drivers",
+              "composefs": true
             }
-          ]
+          ],
+          "composefs": true
         },
         {
           "name": "Zirconium mkosi",
@@ -1485,9 +1490,11 @@
             {
               "name": "Latest",
               "imgref": "ghcr.io/zirconium-dev/zirconium-mkosi:latest",
-              "desc": "mkosi image"
+              "desc": "mkosi image",
+              "composefs": true
             }
-          ]
+          ],
+          "composefs": true
         }
       ]
     }
