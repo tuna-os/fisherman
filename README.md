@@ -36,5 +36,3 @@ go build ./...
 ## License
 
 GPL-3.0-only
-# Test
-# Test
