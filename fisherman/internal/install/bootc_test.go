@@ -62,7 +62,7 @@ func TestCheckImage_NeedsPullWhenDigestDiffers(t *testing.T) {
 	}
 }
 
-func TestCheckImage_NeedsPullOnNetworkError(t *testing.T) {
+func TestCheckImage_NeedsPullOnNetworkErrorNoCachedImage(t *testing.T) {
 	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
 		return nil, fmt.Errorf("network error")
 	}
@@ -70,7 +70,35 @@ func TestCheckImage_NeedsPullOnNetworkError(t *testing.T) {
 
 	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
 	if !result.NeedsPull {
-		t.Error("NeedsPull should be true on network error (safe fallback)")
+		t.Error("NeedsPull should be true when offline and image not in local storage")
+	}
+	if result.Offline {
+		t.Error("Offline should be false when image is not in local storage")
+	}
+}
+
+func TestCheckImage_OfflineWithLocalCache(t *testing.T) {
+	call := 0
+	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
+		call++
+		if call == 1 {
+			// Remote inspect: offline / unreachable
+			return nil, fmt.Errorf("network unreachable")
+		}
+		// Local inspect: image is cached
+		return []byte(`{"Digest":"sha256:cached","Layers":["sha256:l1","sha256:l2","sha256:l3"]}`), nil
+	}
+	defer func() { install.SkopeoInspectFn = install.DefaultSkopeoInspect }()
+
+	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
+	if result.NeedsPull {
+		t.Error("NeedsPull should be false when offline but image is in local storage")
+	}
+	if !result.Offline {
+		t.Error("Offline should be true when registry was unreachable")
+	}
+	if result.LayerCount != 3 {
+		t.Errorf("LayerCount = %d, want 3", result.LayerCount)
 	}
 }
 

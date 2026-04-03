@@ -97,7 +97,7 @@ func TestInfo(t *testing.T) {
 
 func TestComplete(t *testing.T) {
 	out := captureStdout(t, func() {
-		progress.Complete("Installation complete!")
+		progress.Complete("Installation complete!", "")
 	})
 
 	var event map[string]interface{}
@@ -123,7 +123,7 @@ func TestOutputIsNewlineTerminated(t *testing.T) {
 		{"Step", func() { progress.Step(1, 8, "x", 0, 0) }},
 		{"Substep", func() { progress.Substep("x") }},
 		{"Info", func() { progress.Info("x") }},
-		{"Complete", func() { progress.Complete("x") }},
+		{"Complete", func() { progress.Complete("x", "") }},
 	}
 	for _, f := range fns {
 		t.Run(f.name, func(t *testing.T) {

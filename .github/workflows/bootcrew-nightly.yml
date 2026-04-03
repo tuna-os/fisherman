@@ -2,8 +2,8 @@ name: Bootcrew Nightly (full install)
 
 on:
   schedule:
-    - cron: '0 2 * * 1'   # Weekly, Monday 02:00 UTC
-  workflow_dispatch:        # Manual trigger
+    - cron: '0 2 * * 1'
+  workflow_dispatch:
 
 jobs:
   # Read the image matrix from tests/bootcrew-matrix.yaml.
@@ -41,12 +41,13 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak
+          sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq
           sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install -y flathub org.mozilla.firefox
 
       - name: Build fisherman
         run: go build -o /tmp/fisherman ./cmd/fisherman/
+        working-directory: fisherman
 
       - name: Create loop device (50 GB sparse)
         id: loopdev
@@ -59,11 +60,7 @@ jobs:
 
       - name: Generate recipe
         run: |
-          IMAGE_NAME="${{ matrix.image.name }}"
-          FLATPAKS="[]"
-          if [[ "$IMAGE_NAME" == *"bluefin"* || "$IMAGE_NAME" == *"yellowfin"* ]]; then
-            FLATPAKS='["org.mozilla.firefox"]'
-          fi
+          FLATPAKS='${{ toJSON(matrix.image.flatpaks) }}'
 
           cat > /tmp/recipe.json <<EOF
           {

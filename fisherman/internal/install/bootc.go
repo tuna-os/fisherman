@@ -203,6 +203,7 @@ func pullImage(image string, layerCount int) error {
 type ImageCheck struct {
 	NeedsPull  bool // true if the image is absent or stale in containers-storage
 	LayerCount int  // number of layers in the remote image; 0 if unknown
+	Offline    bool // true if the registry was unreachable but a local copy was found
 }
 
 // DefaultSkopeoInspect runs `skopeo inspect <args>` and returns stdout.
@@ -218,7 +219,11 @@ var SkopeoInspectFn = DefaultSkopeoInspect
 
 // CheckImage compares the remote and local (containers-storage) image digests
 // to determine whether a pull is required. It also returns the remote layer count.
-// On any error (network, auth, not cached), NeedsPull is true (safe fallback).
+//
+// If the remote registry is unreachable (offline), CheckImage falls back to
+// checking local containers-storage: if the image is present locally it is used
+// as-is (NeedsPull=false, Offline=true). This allows a full offline install when
+// the image has been pre-pulled into podman storage.
 func CheckImage(image string) ImageCheck {
 	type manifest struct {
 		Digest string   `json:"Digest"`
@@ -226,19 +231,30 @@ func CheckImage(image string) ImageCheck {
 	}
 
 	// 1. Fetch remote normalized manifest (resolves fat/multi-arch manifests).
-	remoteOut, err := SkopeoInspectFn("docker://" + image)
-	if err != nil {
+	remoteOut, remoteErr := SkopeoInspectFn("docker://" + image)
+
+	// 2. Fetch local digest from containers-storage.
+	localOut, localErr := SkopeoInspectFn("containers-storage:" + image)
+
+	// If offline (remote failed), fall back to the locally cached image.
+	if remoteErr != nil {
+		if localErr == nil {
+			var local manifest
+			if json.Unmarshal(localOut, &local) == nil {
+				return ImageCheck{NeedsPull: false, LayerCount: len(local.Layers), Offline: true}
+			}
+		}
+		// Not reachable and not cached locally; a pull attempt will follow (and fail).
 		return ImageCheck{NeedsPull: true}
 	}
+
 	var remote manifest
 	if err := json.Unmarshal(remoteOut, &remote); err != nil {
 		return ImageCheck{NeedsPull: true}
 	}
 
-	// 2. Fetch local digest from containers-storage.
-	localOut, err := SkopeoInspectFn("containers-storage:" + image)
-	if err != nil {
-		// Image not present locally.
+	// Image not present locally: pull needed.
+	if localErr != nil {
 		return ImageCheck{NeedsPull: true, LayerCount: len(remote.Layers)}
 	}
 	var local manifest

@@ -183,7 +183,7 @@ func CopyFlatpaks(target string, wantedRefs []string) error {
 		name := flatpakAppName(ref)
 		progress.Substep(fmt.Sprintf("Promoting user app %d/%d: %s", i+1, len(userOnly), name))
 		fmt.Fprintf(os.Stdout, "  installing user flatpak to system: %s\n", ref)
-		if err := runner.Run("flatpak", "install", "--system", "-y", "--noninteractive", ref); err != nil {
+		if err := Exec.Command("flatpak", "install", "--system", "-y", "--noninteractive", ref).Run(); err != nil {
 			fmt.Fprintf(os.Stderr, "  warning: could not install %s to system: %v\n", ref, err)
 		}
 	}

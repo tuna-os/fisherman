@@ -26,6 +26,7 @@ type infoEvent struct {
 type completeEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
+	BootID  string `json:"boot_id,omitempty"`
 }
 
 type substepEvent struct {
@@ -58,8 +59,10 @@ func Info(message string) {
 }
 
 // Complete emits the final JSON completion message to stdout.
-func Complete(message string) {
-	write(completeEvent{Type: "complete", Message: message})
+// bootID is the 4-digit EFI boot entry number (e.g. "0001"); pass an empty
+// string when it is unknown so the field is omitted from the JSON.
+func Complete(message, bootID string) {
+	write(completeEvent{Type: "complete", Message: message, BootID: bootID})
 }
 
 func write(v any) {

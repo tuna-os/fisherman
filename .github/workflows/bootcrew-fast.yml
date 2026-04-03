@@ -39,10 +39,11 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Install disk tools
-        run: sudo apt-get install -y xfsprogs btrfs-progs cryptsetup-bin flatpak
+        run: sudo apt-get install -y xfsprogs btrfs-progs cryptsetup-bin flatpak ostree jq
 
       - name: Build fisherman
         run: go build -o /tmp/fisherman ./cmd/fisherman/
+        working-directory: fisherman
 
       - name: Add fake bins to PATH
         run: |
@@ -60,11 +61,7 @@ jobs:
 
       - name: Generate recipe
         run: |
-          IMAGE_NAME="${{ matrix.image.name }}"
-          FLATPAKS="[]"
-          if [[ "$IMAGE_NAME" == *"bluefin"* || "$IMAGE_NAME" == *"yellowfin"* ]]; then
-            FLATPAKS='["org.mozilla.firefox"]'
-          fi
+          FLATPAKS='${{ toJSON(matrix.image.flatpaks) }}'
 
           cat > /tmp/recipe.json <<EOF
           {
