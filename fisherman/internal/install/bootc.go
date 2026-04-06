@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/tuna-os/fisherman/internal/progress"
@@ -32,6 +33,9 @@ type Options struct {
 	// ComposeFsBackend passes --composefs-backend when true.
 	// Required for images using the composefs-native deployment backend (e.g. ghcr.io/bootcrew/*).
 	ComposeFsBackend bool
+	// Bootloader selects the bootloader passed to bootc via --bootloader.
+	// Empty or "grub2" uses the default (grub2). "systemd" passes --bootloader systemd.
+	Bootloader string
 	// Target is the path to the mounted root filesystem on the host.
 	Target string
 	// NeedsPull is the result of a pre-flight CheckImage call. When false,
@@ -59,6 +63,9 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	}
 	if opts.ComposeFsBackend {
 		args = append(args, "--composefs-backend")
+	}
+	if opts.Bootloader != "" && opts.Bootloader != "grub2" {
+		args = append(args, "--bootloader", opts.Bootloader)
 	}
 	args = append(args, "--skip-finalize")
 	args = append(args, installTarget)
@@ -104,11 +111,17 @@ func bootcViaContainer(opts Options) error {
 		"-v", "/dev:/dev",
 		// Required: gives bootc access to its own image layers in container storage.
 		"-v", "/var/lib/containers:/var/lib/containers",
+		// Ostree-based images (e.g. composefs) don't ship /var/tmp — it is created
+		// by systemd-tmpfiles on first boot. containers-image needs /var/tmp to write
+		// temp files when reconstructing layer blobs from containers-storage. Mount
+		// the disk-backed fisherman scratch space so there is always enough room.
+		"-v", "/var/fisherman-tmp:/var/tmp:z",
 		// Use shared propagation so submounts (e.g. /boot/efi) created on the host
 		// before launching the container are visible inside it at /target.
 		"--mount", fmt.Sprintf("type=bind,src=%s,dst=/target,bind-propagation=rslave", opts.Target),
-		opts.SourceImgref,
 	}
+
+	podmanArgs = append(podmanArgs, opts.SourceImgref)
 	podmanArgs = append(podmanArgs, "bootc")
 	podmanArgs = append(podmanArgs, bootcArgs...)
 
@@ -138,17 +151,254 @@ func bootcDirect(opts Options) error {
 	return nil
 }
 
-// pullImage uses skopeo to download the container image into podman's storage.
-// layerCount is the expected number of layers (from CheckImage), used for
-// "layer N/total" progress display. Pass 0 if unknown.
+// BootcToDisk installs a bootc image directly to a block device using
+// `bootc install to-disk --via-loopback`. Unlike BootcInstall (to-filesystem),
+// this handles partitioning, formatting, OS deployment, and bootloader
+// installation entirely inside the container. --via-loopback auto-enables
+// --generic-image which skips EFI NVRAM writes and the bootupd presence check,
+// required for images like Project Bluefin/Dakota that don't ship bootupd.
+//
+// diskDevice may be:
+//   - A loop device (/dev/loopN): the backing file is found, the loop device
+//     is detached, --via-loopback is passed to bootc, then the loop device is
+//     re-attached with partscan on return.
+//   - A raw image file (any path not starting with /dev/): --via-loopback is
+//     passed directly; after install the file is loop-attached and the
+//     assigned loop device is returned as effectiveDisk.
+//   - A real block device (/dev/sda, /dev/nvme…): installed directly. Note
+//     that images without bootupd (e.g. Dakota) will fail until
+//     bootc adds first-class systemd-boot support without requiring bootupd.
+//
+// effectiveDisk is the block device to use for post-install mounts (may differ
+// from diskDevice when a raw file is auto-loop-attached after install).
+func BootcToDisk(opts Options, diskDevice, filesystem string) (effectiveDisk string, err error) {
+	if opts.SourceImgref != "" {
+		return bootcToDiskViaContainer(opts, diskDevice, filesystem)
+	}
+	eff, err := bootcToDiskDirect(opts, diskDevice, filesystem)
+	return eff, err
+}
+
+func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effectiveDisk string, err error) {
+	targetImgref := opts.TargetImgref
+	if targetImgref == "" {
+		targetImgref = opts.SourceImgref
+	}
+
+	if opts.NeedsPull {
+		if err := pullImage(opts.SourceImgref, opts.LayerCount); err != nil {
+			return "", fmt.Errorf("pulling image: %w", err)
+		}
+	} else {
+		progress.Substep("Image already up to date, skipping pull")
+	}
+
+	bootcArgs := []string{"install", "to-disk"}
+	if targetImgref != "" {
+		bootcArgs = append(bootcArgs, "--target-imgref", targetImgref)
+	}
+	if filesystem != "" {
+		bootcArgs = append(bootcArgs, "--filesystem", filesystem)
+	}
+	if opts.ComposeFsBackend {
+		bootcArgs = append(bootcArgs, "--composefs-backend")
+	}
+	bootcArgs = append(bootcArgs, "--bootloader", "systemd", "--wipe")
+
+	isFile := !strings.HasPrefix(diskDevice, "/dev/")
+	isLoop := !isFile && strings.HasPrefix(filepath.Base(diskDevice), "loop")
+
+	podmanArgs := []string{
+		"run", "--rm",
+		"--privileged",
+		"--pid=host",
+		"--security-opt", "label=type:unconfined_t",
+		"-v", "/dev:/dev",
+		"-v", "/var/fisherman-tmp:/var/tmp:z",
+	}
+
+	if opts.ComposeFsBackend {
+		// composefs-backend requires raw OCI blobs (compressed layer tarballs)
+		// that podman pull does not preserve in containers-storage. Export the
+		// image to an OCI directory layout via skopeo so the blobs exist on disk,
+		// then pass --source-imgref oci:/var/tmp/oci-cache to bootc.
+		ociDir := "/var/fisherman-tmp/oci-cache"
+		if err := SkopeoExportOCIFn(opts.SourceImgref, ociDir); err != nil {
+			return "", fmt.Errorf("exporting image to OCI layout: %w", err)
+		}
+		// Inside the container, /var/fisherman-tmp is mounted at /var/tmp.
+		bootcArgs = append(bootcArgs, "--source-imgref", "oci:/var/tmp/oci-cache")
+		bootcArgs = append(bootcArgs, diskDevice)
+		effectiveDisk = diskDevice
+	} else {
+		// Standard (grub2/ostree) path: bind containers-storage into the container
+		// so bootc can read its image layers directly.
+		podmanArgs = append(podmanArgs, "-v", "/var/lib/containers:/var/lib/containers")
+
+		// --via-loopback is required for loop devices (BLKRRPART ioctl fails on
+		// loop devices so partition nodes never appear inside the container).
+		// For regular block devices on the non-composefs path, install directly.
+		switch {
+		case isFile:
+			bootcArgs = append(bootcArgs, "--via-loopback", diskDevice)
+		case isLoop:
+			backingFile, ferr := loopBackingFile(diskDevice)
+			if ferr != nil {
+				return "", fmt.Errorf("querying loop backing file: %w", ferr)
+			}
+			if ferr := loopDetach(diskDevice); ferr != nil {
+				return "", fmt.Errorf("detaching loop device: %w", ferr)
+			}
+			defer func() {
+				if rerr := loopReattach(diskDevice, backingFile); rerr != nil {
+					fmt.Fprintf(os.Stderr, "warning: re-attaching loop device: %v\n", rerr)
+				}
+			}()
+			bootcArgs = append(bootcArgs, "--via-loopback", backingFile)
+			effectiveDisk = diskDevice
+		default:
+			bootcArgs = append(bootcArgs, diskDevice)
+			effectiveDisk = diskDevice
+		}
+
+		// For file-based installs, bind-mount the file's directory so the
+		// container can access the path passed to --via-loopback.
+		if isFile {
+			dir := filepath.Dir(diskDevice)
+			podmanArgs = append(podmanArgs, "-v", dir+":"+dir)
+		}
+	}
+
+	podmanArgs = append(podmanArgs, opts.SourceImgref, "bootc")
+	podmanArgs = append(podmanArgs, bootcArgs...)
+
+	name, args := runner.HostArgs("podman", podmanArgs)
+	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
+	cmd := exec.Command(name, args...)
+	if err := runWithSubsteps(cmd); err != nil {
+		return "", fmt.Errorf("bootc install to-disk (via container): %w", err)
+	}
+
+	// For raw file targets, loop-attach the now-installed image so the caller
+	// can find and mount partitions.
+	if isFile && !opts.ComposeFsBackend {
+		loopDev, lerr := loopAttachFile(diskDevice)
+		if lerr != nil {
+			return "", fmt.Errorf("loop-attaching installed image file: %w", lerr)
+		}
+		effectiveDisk = loopDev
+	}
+	return effectiveDisk, nil
+}
+
+// DefaultSkopeoExportOCI is the default implementation of SkopeoExportOCIFn.
+var DefaultSkopeoExportOCI = skopeoExportOCI
+
+// SkopeoExportOCIFn is the function used by bootcToDiskViaContainer to export
+// a composefs image to an OCI layout. Replace in tests to avoid disk I/O.
+var SkopeoExportOCIFn = skopeoExportOCI
+
+// skopeoExportOCI exports an image from containers-storage to an OCI directory
+// layout. The composefs-backend requires raw OCI blobs (compressed layer
+// tarballs) that podman pull does not preserve; skopeo reconstructs them from
+// the tar-split.gz metadata stored alongside the overlay diffs.
+func skopeoExportOCI(image, destDir string) error {
+	progress.Substep("Exporting image to OCI layout for composefs install")
+	// Remove stale export if present.
+	if err := os.RemoveAll(destDir); err != nil {
+		return fmt.Errorf("removing old OCI cache: %w", err)
+	}
+
+	skopeoArgs := []string{
+		"copy",
+		"containers-storage:" + image,
+		"oci:" + destDir,
+	}
+	name, args := runner.HostArgs("skopeo", skopeoArgs)
+	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
+	cmd := exec.Command(name, args...)
+	if err := runWithSubsteps(cmd); err != nil {
+		return fmt.Errorf("skopeo copy: %w", err)
+	}
+	progress.Substep("OCI export complete")
+	return nil
+}
+
+// loopBackingFile returns the backing file path for a loop device.
+func loopBackingFile(loopDev string) (string, error) {
+	name, args := runner.HostArgs("losetup", []string{"--noheadings", "-O", "BACK-FILE", loopDev})
+	out, err := exec.Command(name, args...).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// loopDetach detaches a loop device.
+func loopDetach(loopDev string) error {
+	name, args := runner.HostArgs("losetup", []string{"-d", loopDev})
+	return exec.Command(name, args...).Run()
+}
+
+// loopReattach attaches backingFile to loopDev with --partscan so partition
+// nodes are visible on the host.
+func loopReattach(loopDev, backingFile string) error {
+	name, args := runner.HostArgs("losetup", []string{"-P", loopDev, backingFile})
+	return exec.Command(name, args...).Run()
+}
+
+// loopAttachFile attaches file to a free loop device with partscan and returns
+// the assigned device path (e.g. /dev/loop2).
+func loopAttachFile(file string) (string, error) {
+	name, args := runner.HostArgs("losetup", []string{"--find", "--partscan", "--show", file})
+	out, err := exec.Command(name, args...).Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func bootcToDiskDirect(opts Options, diskDevice, filesystem string) (string, error) {
+	bootcArgs := []string{"install", "to-disk"}
+	if opts.TargetImgref != "" {
+		bootcArgs = append(bootcArgs, "--target-imgref", opts.TargetImgref)
+	}
+	if filesystem != "" {
+		bootcArgs = append(bootcArgs, "--filesystem", filesystem)
+	}
+	if opts.ComposeFsBackend {
+		bootcArgs = append(bootcArgs, "--composefs-backend")
+	}
+	bootcArgs = append(bootcArgs,
+		"--bootloader", "systemd",
+		"--via-loopback",
+		"--wipe",
+		diskDevice,
+	)
+
+	name, args := runner.HostArgs("bootc", bootcArgs)
+	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
+	cmd := exec.Command(name, args...)
+	if err := runWithSubsteps(cmd); err != nil {
+		return "", fmt.Errorf("bootc install to-disk: %w", err)
+	}
+	return diskDevice, nil
+}
+
+
+// Using podman (rather than skopeo copy) ensures the image lands in the same
+// storage location and format that bootc will read from inside its container,
+// avoiding "file does not exist" blob errors when CONFIG_OVERLAY_FS_REDIRECT_DIR
+// is set on the host kernel.
+// layerCount is the expected number of layers from CheckImage, used for progress.
 func pullImage(image string, layerCount int) error {
 	progress.Substep("Pulling container image")
 	if layerCount > 0 {
 		progress.Substep(fmt.Sprintf("Pulling image: %d layers to download", layerCount))
 	}
 
-	skopeoArgs := []string{"copy", "docker://" + image, "containers-storage:" + image}
-	name, args := runner.HostArgs("skopeo", skopeoArgs)
+	podmanArgs := []string{"pull", image}
+	name, args := runner.HostArgs("podman", podmanArgs)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 	cmd := exec.Command(name, args...)
 	pr, pw := io.Pipe()
@@ -171,8 +421,7 @@ func pullImage(image string, layerCount int) error {
 			fmt.Fprintln(os.Stdout, line)
 			lower := strings.ToLower(line)
 
-			// Count each blob start line — skopeo emits one per blob when piped
-			// (no "done" suffix in non-TTY output).
+			// podman pull emits "Copying blob sha256:..." lines when not on a TTY.
 			if strings.HasPrefix(lower, "copying blob sha256:") {
 				layersDone++
 				if layerCount > 0 {
@@ -193,7 +442,7 @@ func pullImage(image string, layerCount int) error {
 	<-done
 
 	if err != nil {
-		return fmt.Errorf("skopeo copy %s: %w", image, err)
+		return fmt.Errorf("podman pull %s: %w", image, err)
 	}
 	progress.Substep("Image pulled successfully")
 	return nil

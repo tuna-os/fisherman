@@ -85,6 +85,18 @@ func TestValidate(t *testing.T) {
 			name: "valid composefs_backend with xfs",
 			r:    recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ComposeFsBackend: true},
 		},
+		{
+			name: "valid bootloader empty (default grub2)",
+			r:    recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h"},
+		},
+		{
+			name: "valid bootloader grub2",
+			r:    recipe.Recipe{Disk: diskPath, Filesystem: "btrfs", Hostname: "h", Bootloader: "grub2"},
+		},
+		{
+			name: "valid bootloader systemd",
+			r:    recipe.Recipe{Disk: diskPath, Filesystem: "btrfs", Hostname: "h", Bootloader: "systemd"},
+		},
 
 		// ── Invalid: disk ─────────────────────────────────────────────────────
 		{
@@ -124,6 +136,13 @@ func TestValidate(t *testing.T) {
 			name:    "imageType unknown value",
 			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ImageType: "flatpak"},
 			wantErr: "imageType must be",
+		},
+
+		// ── Invalid: bootloader ───────────────────────────────────────────────
+		{
+			name:    "bootloader unknown value",
+			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", Bootloader: "lilo"},
+			wantErr: "bootloader must be",
 		},
 
 		// ── Invalid: encryption ───────────────────────────────────────────────

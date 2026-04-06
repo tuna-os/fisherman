@@ -197,6 +197,32 @@ func TestBuildBootcArgs_AllFlags(t *testing.T) {
 	assertContains(t, args, "--target-imgref")
 }
 
+// TestSkopeoExportOCI_CalledForComposeFsBackend is a regression test for the
+// composefs-backend OCI blob issue: podman pull does not preserve raw compressed
+// layer tarballs, so bootc --composefs-backend fails with "file does not exist".
+// The fix exports the image to an OCI layout via skopeo before invoking bootc.
+// This test verifies the SkopeoExportOCIFn hook is replaceable (used for
+// integration tests to capture the args without running real disk I/O).
+func TestSkopeoExportOCI_FnIsReplaceable(t *testing.T) {
+	var capturedImage, capturedDir string
+	install.SkopeoExportOCIFn = func(image, destDir string) error {
+		capturedImage = image
+		capturedDir = destDir
+		return nil
+	}
+	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
+
+	if err := install.SkopeoExportOCIFn("ghcr.io/projectbluefin/dakota:latest", "/var/fisherman-tmp/oci-cache"); err != nil {
+		t.Fatalf("stub returned unexpected error: %v", err)
+	}
+	if capturedImage != "ghcr.io/projectbluefin/dakota:latest" {
+		t.Errorf("image = %q, want ghcr.io/projectbluefin/dakota:latest", capturedImage)
+	}
+	if capturedDir != "/var/fisherman-tmp/oci-cache" {
+		t.Errorf("destDir = %q, want /var/fisherman-tmp/oci-cache", capturedDir)
+	}
+}
+
 // assertContains fails the test if s is not present in slice.
 func assertContains(t *testing.T, slice []string, s string) {
 	t.Helper()
