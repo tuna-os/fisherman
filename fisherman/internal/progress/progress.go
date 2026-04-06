@@ -48,8 +48,15 @@ func Step(step, total int, name string, cumulativePct, weightPct int) {
 	})
 }
 
+// SubstepFn is called by Substep in addition to writing JSON. Tests can
+// replace it to capture substep messages without parsing stdout.
+var SubstepFn func(string)
+
 // Substep emits a JSON sub-step message within the current step (e.g. bootc internal progress).
 func Substep(message string) {
+	if SubstepFn != nil {
+		SubstepFn(message)
+	}
 	write(substepEvent{Type: "substep", Message: message})
 }
 

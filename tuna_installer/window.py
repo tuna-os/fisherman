@@ -8,18 +8,18 @@ import logging
 
 from gi.repository import Adw, Gtk
 
-from tuna_installer.views.welcome import TunaWelcome
-from tuna_installer.views.disk import TunaDisk
-from tuna_installer.views.confirm import TunaConfirm
-from tuna_installer.views.progress import TunaProgress
-from tuna_installer.views.done import TunaDone
+from bootc_installer.views.welcome import TunaWelcome
+from bootc_installer.views.disk import TunaDisk
+from bootc_installer.views.confirm import TunaConfirm
+from bootc_installer.views.progress import TunaProgress
+from bootc_installer.views.done import TunaDone
 
 logger = logging.getLogger("TunaInstaller::Window")
 
 FISHERMAN_BIN = "/usr/local/bin/fisherman"
 
 
-@Gtk.Template(resource_path="/org/tunaos/Installer/gtk/window.ui")
+@Gtk.Template(resource_path="/org/bootcinstaller/Installer/gtk/window.ui")
 class TunaInstallerWindow(Adw.ApplicationWindow):
     __gtype_name__ = "TunaInstallerWindow"
 

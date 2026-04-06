@@ -14,7 +14,7 @@ import sys
 
 from gi.repository import Adw, Gio
 
-from tuna_installer.window import TunaInstallerWindow
+from bootc_installer.window import TunaInstallerWindow
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("TunaInstaller::Main")
@@ -23,7 +23,7 @@ logger = logging.getLogger("TunaInstaller::Main")
 class TunaInstallerApp(Adw.Application):
     def __init__(self):
         super().__init__(
-            application_id="org.tunaos.Installer",
+            application_id="org.bootcinstaller.Installer",
             flags=Gio.ApplicationFlags.FLAGS_NONE,
         )
         self.create_action("quit", self.close, ["<primary>q"])

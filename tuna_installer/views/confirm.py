@@ -7,7 +7,7 @@ from gettext import gettext as _
 from gi.repository import Adw, Gtk
 
 
-@Gtk.Template(resource_path="/org/tunaos/Installer/gtk/confirm.ui")
+@Gtk.Template(resource_path="/org/bootcinstaller/Installer/gtk/confirm.ui")
 class TunaConfirm(Adw.Bin):
     __gtype_name__ = "TunaConfirm"
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/post"
+	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/runner"
 )
 
@@ -217,6 +218,57 @@ func TestCopyFlatpaks_PromotesUserApps(t *testing.T) {
 	}
 	if !promoted {
 		t.Errorf("expected %s to be promoted to system, but no flatpak install call found", wanted)
+	}
+}
+
+// TestCopyFlatpaks_EmitsPerAppSubsteps verifies that a substep is emitted for
+// each wanted app that is found in the system install, so the UI can show
+// individual app names as they are copied.
+func TestCopyFlatpaks_EmitsPerAppSubsteps(t *testing.T) {
+	mock := setupMockExec(t)
+	target := t.TempDir()
+
+	apps := []string{"org.mozilla.firefox", "org.gnome.Console"}
+	refs := apps[0] + "/x86_64/stable\n" + apps[1] + "/x86_64/stable\n"
+
+	mock.responses["flatpak list --system --columns=ref --app"] = struct {
+		out []byte
+		err error
+	}{out: []byte(refs)}
+	mock.responses["flatpak list --system --columns=ref"] = struct {
+		out []byte
+		err error
+	}{out: []byte(refs)}
+	mock.responses["flatpak list --user --columns=ref --app"] = struct {
+		out []byte
+		err error
+	}{out: []byte("")}
+	mock.responses["du -sb /var/lib/flatpak"] = struct {
+		out []byte
+		err error
+	}{out: []byte("2048\t/var/lib/flatpak\n")}
+
+	var substeps []string
+	origSubstep := progress.SubstepFn
+	progress.SubstepFn = func(msg string) { substeps = append(substeps, msg) }
+	defer func() { progress.SubstepFn = origSubstep }()
+
+	if err := post.CopyFlatpaks(target, apps); err != nil {
+		t.Fatalf("CopyFlatpaks: %v", err)
+	}
+
+	// Both wanted app names must appear in substep messages.
+	for _, app := range apps {
+		found := false
+		for _, s := range substeps {
+			if strings.Contains(s, app) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("no substep message contained app name %q; substeps: %v", app, substeps)
+		}
 	}
 }
 

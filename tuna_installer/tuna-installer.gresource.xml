@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <gresources>
-  <gresource prefix="/org/tunaos/Installer">
+  <gresource prefix="/org/bootcinstaller/Installer">
     <file preprocess="xml-stripblanks">gtk/window.ui</file>
     <file preprocess="xml-stripblanks">gtk/welcome.ui</file>
     <file preprocess="xml-stripblanks">gtk/disk.ui</file>
@@ -8,7 +8,7 @@
     <file preprocess="xml-stripblanks">gtk/progress.ui</file>
     <file preprocess="xml-stripblanks">gtk/done.ui</file>
   </gresource>
-  <gresource prefix="/org/tunaos/Installer">
+  <gresource prefix="/org/bootcinstaller/Installer">
     <file alias="images.json">../data/images.json</file>
     <file alias="images/bluefin.png">../data/images/bluefin.png</file>
     <file alias="images/bluefin-lts.png">../data/images/bluefin-lts.png</file>

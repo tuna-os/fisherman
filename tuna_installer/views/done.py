@@ -8,7 +8,7 @@ from gi.repository import Adw, Gtk
 import subprocess
 
 
-@Gtk.Template(resource_path="/org/tunaos/Installer/gtk/done.ui")
+@Gtk.Template(resource_path="/org/bootcinstaller/Installer/gtk/done.ui")
 class TunaDone(Adw.Bin):
     __gtype_name__ = "TunaDone"
 
