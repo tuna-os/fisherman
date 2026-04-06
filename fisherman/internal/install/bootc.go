@@ -14,6 +14,66 @@ import (
 	"github.com/tuna-os/fisherman/internal/runner"
 )
 
+// selinuxBypassCSrc is a minimal LD_PRELOAD shim that silently succeeds
+// for security.selinux xattr writes. It is compiled at runtime and injected
+// into the bootc container when installing a cross-distro image (e.g.
+// AlmaLinux) on a host running a different SELinux policy (e.g. Fedora).
+//
+// Without the shim, two failures occur:
+//  1. bootc's imgstorage calls lsetfilecon(), which calls lsetxattr() with
+//     "security.selinux" labels from the image. The host kernel rejects
+//     unknown types (EINVAL) because they don't exist in the loaded policy.
+//  2. libostree writes raw "security.selinux" xattrs from the OCI layer
+//     metadata via fsetxattr(). Same EINVAL from the kernel.
+//
+// The shim intercepts both syscalls and returns 0, so the install proceeds
+// without SELinux labels. Since the target system has selinux=disabled, the
+// missing labels are harmless.
+const selinuxBypassCSrc = `
+#define _GNU_SOURCE
+#include <dlfcn.h>
+#include <sys/xattr.h>
+#include <string.h>
+
+int lsetxattr(const char *path, const char *name, const void *value, size_t size, int flags) {
+	if (name && strcmp(name, "security.selinux") == 0) return 0;
+	static int (*real)(const char*,const char*,const void*,size_t,int);
+	if (!real) real = dlsym(RTLD_NEXT, "lsetxattr");
+	return real(path, name, value, size, flags);
+}
+
+int fsetxattr(int fd, const char *name, const void *value, size_t size, int flags) {
+	if (name && strcmp(name, "security.selinux") == 0) return 0;
+	static int (*real)(int,const char*,const void*,size_t,int);
+	if (!real) real = dlsym(RTLD_NEXT, "fsetxattr");
+	return real(fd, name, value, size, flags);
+}
+`
+
+// BuildSelinuxBypassShim compiles selinuxBypassCSrc into a shared library
+// at /tmp/fisherman-selinux-bypass.so and returns its path.
+// Returns an error if cc is not available or compilation fails.
+func BuildSelinuxBypassShim() (string, error) {
+	const (
+		srcPath = "/tmp/fisherman-selinux-bypass.c"
+		soPath  = "/tmp/fisherman-selinux-bypass.so"
+	)
+	if err := os.WriteFile(srcPath, []byte(selinuxBypassCSrc), 0644); err != nil {
+		return "", fmt.Errorf("writing shim source: %w", err)
+	}
+	defer os.Remove(srcPath)
+
+	out, err := exec.Command("cc", "-shared", "-fPIC", "-O2", "-nostartfiles", "-ldl",
+		"-o", soPath, srcPath).CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("compiling SELinux bypass shim: %w\n%s", err, out)
+	}
+	if err := os.Chmod(soPath, 0755); err != nil {
+		return "", fmt.Errorf("chmod shim: %w", err)
+	}
+	return soPath, nil
+}
+
 // Options configures a bootc installation.
 type Options struct {
 	// SourceImgref is the OCI image to run bootc from (e.g. "quay.io/tuna-os/yellowfin:gnome-hwe").
@@ -72,6 +132,14 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	return args
 }
 
+// selinuxActive reports whether the host kernel has the SELinux security module
+// loaded and active. The presence of /sys/fs/selinux/enforce is the standard
+// indicator used by libselinux's is_selinux_enabled().
+func selinuxActive() bool {
+	_, err := os.Stat("/sys/fs/selinux/enforce")
+	return err == nil
+}
+
 // BootcInstall installs a bootc image to a pre-mounted filesystem.
 //
 // If opts.SourceImgref is set, bootc is run inside the source container via
@@ -107,7 +175,10 @@ func bootcViaContainer(opts Options) error {
 		"run", "--rm",
 		"--privileged",
 		"--pid=host",
-		"--security-opt", "label=type:unconfined_t",
+		// label=disable fully disables SELinux labeling for this container,
+		// allowing bootc to write security.selinux xattrs to the target
+		// filesystem without the host SELinux policy interfering.
+		"--security-opt", "label=disable",
 		"-v", "/dev:/dev",
 		// Required: gives bootc access to its own image layers in container storage.
 		"-v", "/var/lib/containers:/var/lib/containers",
@@ -119,6 +190,27 @@ func bootcViaContainer(opts Options) error {
 		// Use shared propagation so submounts (e.g. /boot/efi) created on the host
 		// before launching the container are visible inside it at /target.
 		"--mount", fmt.Sprintf("type=bind,src=%s,dst=/target,bind-propagation=rslave", opts.Target),
+	}
+
+	// When the target system has SELinux disabled and the host has SELinux
+	// active, the host's loaded policy may not recognise the image's label
+	// types (e.g. AlmaLinux label types on a Fedora host). Inject an
+	// LD_PRELOAD shim that silently drops security.selinux xattr writes,
+	// preventing EINVAL from the kernel during both bootc's imgstorage
+	// setup (lsetfilecon/lsetxattr) and libostree's layer deployment
+	// (fsetxattr). Since the target has selinux=disabled, missing per-file
+	// labels are harmless.
+	if opts.SelinuxDisabled && selinuxActive() {
+		shimPath, shimErr := BuildSelinuxBypassShim()
+		if shimErr != nil {
+			progress.Info(fmt.Sprintf("warning: SELinux bypass shim unavailable (%v); install may fail on cross-policy images", shimErr))
+		} else {
+			defer os.Remove(shimPath)
+			podmanArgs = append(podmanArgs,
+				"-v", shimPath+":/fisherman-selinux-bypass.so:z",
+				"-e", "LD_PRELOAD=/fisherman-selinux-bypass.so",
+			)
+		}
 	}
 
 	podmanArgs = append(podmanArgs, opts.SourceImgref)
@@ -212,7 +304,7 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 		"run", "--rm",
 		"--privileged",
 		"--pid=host",
-		"--security-opt", "label=type:unconfined_t",
+		"--security-opt", "label=disable",
 		"-v", "/dev:/dev",
 		"-v", "/var/fisherman-tmp:/var/tmp:z",
 	}

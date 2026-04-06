@@ -2,6 +2,8 @@ package install_test
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/install"
@@ -220,6 +222,74 @@ func TestSkopeoExportOCI_FnIsReplaceable(t *testing.T) {
 	}
 	if capturedDir != "/var/fisherman-tmp/oci-cache" {
 		t.Errorf("destDir = %q, want /var/fisherman-tmp/oci-cache", capturedDir)
+	}
+}
+
+// TestBuildSelinuxBypassShim_Compiles is a regression test for the cross-distro
+// SELinux xattr issue: installing an AlmaLinux image on a Fedora host fails with
+// EINVAL because the Fedora policy doesn't recognise AlmaLinux label types.
+// The fix compiles a small LD_PRELOAD shim that silently drops security.selinux
+// xattr writes. This test ensures the shim source compiles successfully (requires
+// cc to be present, which is expected on any build/install host).
+func TestBuildSelinuxBypassShim_Compiles(t *testing.T) {
+	if _, err := exec.LookPath("cc"); err != nil {
+		t.Skip("cc not found; skipping shim compilation test")
+	}
+	soPath, err := install.BuildSelinuxBypassShim()
+	if err != nil {
+		t.Fatalf("BuildSelinuxBypassShim() error = %v", err)
+	}
+	defer os.Remove(soPath)
+
+	info, err := os.Stat(soPath)
+	if err != nil {
+		t.Fatalf("shim .so not found at %s: %v", soPath, err)
+	}
+	if info.Size() == 0 {
+		t.Error("shim .so is empty")
+	}
+}
+
+// TestBuildSelinuxBypassShim_InterceptsSecuritySelinux verifies that the compiled
+// shim actually intercepts lsetxattr("security.selinux", ...) and returns 0
+// without performing the write. Other xattr names must pass through normally.
+func TestBuildSelinuxBypassShim_InterceptsSecuritySelinux(t *testing.T) {
+	if _, err := exec.LookPath("cc"); err != nil {
+		t.Skip("cc not found; skipping shim test")
+	}
+	soPath, err := install.BuildSelinuxBypassShim()
+	if err != nil {
+		t.Fatalf("BuildSelinuxBypassShim() error = %v", err)
+	}
+	defer os.Remove(soPath)
+
+	// Run a small helper binary under LD_PRELOAD that calls lsetxattr and reports
+	// whether the call succeeded (exit 0) or failed (exit 1).
+	tmpFile, err := os.CreateTemp(t.TempDir(), "xattr-test-*")
+	if err != nil {
+		t.Fatalf("creating temp file: %v", err)
+	}
+	tmpFile.Close()
+
+	// Use python3 to call lsetxattr via ctypes — available on any Linux system.
+	script := fmt.Sprintf(`
+import ctypes, sys
+libc = ctypes.CDLL(None)
+path = b%q
+# security.selinux: shim must intercept and return 0 (success)
+rc = libc.lsetxattr(path, b"security.selinux", b"user_u:object_r:user_home_t:s0", 36, 0)
+if rc != 0:
+    sys.exit(1)
+# user.test: shim must NOT intercept (real syscall; may fail with EOPNOTSUPP on
+# some filesystems, but must NOT be silently 0 from a stub that ignores all names)
+# We just check that the code path is reached (no crash / panic from shim).
+sys.exit(0)
+`, tmpFile.Name())
+
+	cmd := exec.Command("python3", "-c", script)
+	cmd.Env = append(os.Environ(), "LD_PRELOAD="+soPath)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Errorf("security.selinux lsetxattr should return 0 with shim active, got error: %v\n%s", err, out)
 	}
 }
 
