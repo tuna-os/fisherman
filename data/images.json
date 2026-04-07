@@ -1220,6 +1220,22 @@
           ]
         }
       ]
+    },
+    {
+      "name": "Frostyard",
+      "search_extra": "frostyard snow debian composefs systemd-boot",
+      "children": [
+        {
+          "name": "Snow",
+          "imgref": "ghcr.io/frostyard/snow:latest",
+          "desc": "Debian bootc image with composefs + systemd-boot",
+          "search_extra": "debian debian-bootc composefs systemd-boot",
+          "bootloader": "systemd",
+          "filesystem": "btrfs",
+          "composefs": true,
+          "needs_user_creation": false
+        }
+      ]
     }
   ],
   "default_image": "ghcr.io/tuna-os/yellowfin:gnome50"
