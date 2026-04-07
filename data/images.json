@@ -786,7 +786,7 @@
           "bootloader": "systemd",
           "filesystem": "btrfs",
           "composefs": true,
-          "needs_user_creation": true,
+          "needs_user_creation": false,
           "flatpak_var_path": "state/os/default/var"
         }
       ]
