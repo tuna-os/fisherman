@@ -71,6 +71,14 @@ images:
     selinux_disabled: false
     flatpaks: []
 
+  - name: frostyard-snow
+    image: ghcr.io/frostyard/snow:latest
+    filesystem: btrfs
+    composefs_backend: true
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+
   # frostyard-snowloaded disabled: image bundles an older libostree built without
   # composefs support, but the Ubuntu 24.04 runner has the composefs kernel module
   # loaded. libostree sees composefs available at runtime and tries to use it, then
