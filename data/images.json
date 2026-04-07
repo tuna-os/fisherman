@@ -1044,6 +1044,27 @@
               "desc": "CentOS Stream 10 testing with GDX (stream10 alias)"
             }
           ]
+        },
+        {
+          "name": "Dakota (experimental)",
+          "search_extra": "projectbluefin composefs systemd-boot centos rhel",
+          "icon": "bluefin",
+          "bootloader": "systemd",
+          "filesystem": "btrfs",
+          "composefs": true,
+          "needs_user_creation": true,
+          "children": [
+            {
+              "name": "Dakota",
+              "imgref": "ghcr.io/projectbluefin/dakota:latest",
+              "desc": "GNOME workstation on CentOS Stream (composefs + systemd-boot)"
+            },
+            {
+              "name": "Dakota DX",
+              "imgref": "ghcr.io/projectbluefin/dakota-dx:latest",
+              "desc": "Dakota with developer tools"
+            }
+          ]
         }
       ],
       "icon": "resource:///org/bootcinstaller/Installer/images/bluefin.png",
@@ -1057,27 +1078,6 @@
           "image": "resource:///org/bootcinstaller/Installer/assets/containerized.svg",
           "title": "Built on OCI Containers",
           "description": "Bluefin uses bootc for atomic, container-native OS updates from GHCR."
-        }
-      ]
-    },
-    {
-      "name": "Dakota",
-      "search_extra": "projectbluefin composefs systemd-boot centos rhel",
-      "icon": "bluefin",
-      "bootloader": "systemd",
-      "filesystem": "btrfs",
-      "composefs": true,
-      "needs_user_creation": true,
-      "children": [
-        {
-          "name": "Dakota",
-          "imgref": "ghcr.io/projectbluefin/dakota:latest",
-          "desc": "GNOME workstation on CentOS Stream (composefs + systemd-boot)"
-        },
-        {
-          "name": "Dakota DX",
-          "imgref": "ghcr.io/projectbluefin/dakota-dx:latest",
-          "desc": "Dakota with developer tools"
         }
       ]
     },
