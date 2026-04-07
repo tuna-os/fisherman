@@ -152,7 +152,7 @@ func TestCopyFlatpaks_NoLocalData(t *testing.T) {
 		err error
 	}{out: []byte("0\t/var/lib/flatpak\n")}
 
-	if err := post.CopyFlatpaks(target, nil); err != nil {
+	if err := post.CopyFlatpaks(target, nil, ""); err != nil {
 		t.Fatalf("CopyFlatpaks: %v", err)
 	}
 
@@ -201,7 +201,7 @@ func TestCopyFlatpaks_PromotesUserApps(t *testing.T) {
 		err error
 	}{out: []byte("OK")}
 
-	if err := post.CopyFlatpaks(target, []string{wanted}); err != nil {
+	if err := post.CopyFlatpaks(target, []string{wanted}, ""); err != nil {
 		t.Fatalf("CopyFlatpaks: %v", err)
 	}
 
@@ -253,7 +253,7 @@ func TestCopyFlatpaks_EmitsPerAppSubsteps(t *testing.T) {
 	progress.SubstepFn = func(msg string) { substeps = append(substeps, msg) }
 	defer func() { progress.SubstepFn = origSubstep }()
 
-	if err := post.CopyFlatpaks(target, apps); err != nil {
+	if err := post.CopyFlatpaks(target, apps, ""); err != nil {
 		t.Fatalf("CopyFlatpaks: %v", err)
 	}
 
@@ -269,6 +269,36 @@ func TestCopyFlatpaks_EmitsPerAppSubsteps(t *testing.T) {
 		if !found {
 			t.Errorf("no substep message contained app name %q; substeps: %v", app, substeps)
 		}
+	}
+}
+
+// TestCopyFlatpaks_FlatpakVarPathOverride verifies that when flatpakVarPath is
+// set (e.g. for GnomeOS/Dakota "state/os/default/var"), CopyFlatpaks writes
+// to target/<flatpakVarPath>/lib/flatpak rather than the composefs default.
+func TestCopyFlatpaks_FlatpakVarPathOverride(t *testing.T) {
+	mock := setupMockExec(t)
+	target := t.TempDir()
+
+	// Simulate no local flatpak data (nothing to copy, just verify the mkdir target).
+	mock.responses["du -sb /var/lib/flatpak"] = struct {
+		out []byte
+		err error
+	}{out: []byte("0\t/var/lib/flatpak\n")}
+
+	flatpakVarPath := "state/os/default/var"
+	if err := post.CopyFlatpaks(target, nil, flatpakVarPath); err != nil {
+		t.Fatalf("CopyFlatpaks: %v", err)
+	}
+
+	want := filepath.Join(target, flatpakVarPath, "lib", "flatpak")
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("expected flatpak dir at %s to exist, got: %v", want, err)
+	}
+
+	// Ensure the legacy top-level var/lib/flatpak was NOT created.
+	legacy := filepath.Join(target, "var", "lib", "flatpak")
+	if _, err := os.Stat(legacy); err == nil {
+		t.Errorf("legacy path %s was created — flatpakVarPath override was ignored", legacy)
 	}
 }
 

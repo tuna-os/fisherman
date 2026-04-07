@@ -394,7 +394,7 @@ func main() {
 	pi++
 	step++
 
-	if err := post.CopyFlatpaks(activeTargetMount, r.Flatpaks); err != nil {
+	if err := post.CopyFlatpaks(activeTargetMount, r.Flatpaks, r.FlatpakVarPath); err != nil {
 		// Non-fatal — the system will work without pre-installed flatpaks.
 		progress.Info(fmt.Sprintf("Warning: could not copy flatpaks: %v", err))
 	}

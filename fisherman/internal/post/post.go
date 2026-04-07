@@ -118,7 +118,12 @@ var fallbackFlatpaks = []string{
 // (downloading any that aren't cached locally). If empty, the fallback core
 // set is used. In either case, any locally-available system flatpaks matching
 // the wanted set are copied via tar rather than re-downloaded.
-func CopyFlatpaks(target string, wantedRefs []string) error {
+//
+// flatpakVarPath optionally overrides the relative path within target where
+// the writable /var lives (e.g. "state/os/default/var" for GnomeOS/Dakota).
+// When empty, auto-detection is used: composefs-native → "state/os/default/var",
+// ostree → "ostree/deploy/default/var".
+func CopyFlatpaks(target string, wantedRefs []string, flatpakVarPath string) error {
 	// Resolve wanted list: use recipe's per-image list, or fall back to defaults.
 	if len(wantedRefs) == 0 {
 		wantedRefs = fallbackFlatpaks
@@ -131,14 +136,17 @@ func CopyFlatpaks(target string, wantedRefs []string) error {
 		wantedSet[ref] = true
 	}
 
-	// Target /var/lib/flatpak: on ostree/bootc systems the runtime /var is the
-	// deployment stateroot var, not the sysroot var at {target}/var.
-	// bootc always uses "default" as the stateroot name.
-	// For composefs-native deployments the layout is flat and {target}/var is correct.
+	// Target /var/lib/flatpak: resolve the writable var path.
+	// Priority: explicit flatpakVarPath from recipe > auto-detect from layout.
+	// composefs-native (GnomeOS/Dakota): state/os/default/var
+	// ostree/bootc standard:             ostree/deploy/default/var
 	var dst string
-	if isComposeFsNative(target) {
-		dst = filepath.Join(target, "var", "lib", "flatpak")
-	} else {
+	switch {
+	case flatpakVarPath != "":
+		dst = filepath.Join(target, flatpakVarPath, "lib", "flatpak")
+	case isComposeFsNative(target):
+		dst = filepath.Join(target, "state", "os", "default", "var", "lib", "flatpak")
+	default:
 		dst = filepath.Join(target, "ostree", "deploy", "default", "var", "lib", "flatpak")
 	}
 	if err := runner.Run("mkdir", "-p", dst); err != nil {

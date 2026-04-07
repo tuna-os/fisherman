@@ -27,6 +27,12 @@ type Recipe struct {
 	// ImageType selects the install backend: "bootc" (default) or "ostree".
 	// "ostree" support is not yet implemented and will be rejected by Validate().
 	ImageType        string        `json:"imageType"`
+	// FlatpakVarPath is the path relative to the install target root where the
+	// writable /var for flatpaks lives. Defaults to "" which means fisherman
+	// auto-detects based on whether the system is ostree or composefs-native.
+	// Override in images.json for non-standard layouts, e.g. GnomeOS/Dakota:
+	//   "flatpak_var_path": "state/os/default/var"
+	FlatpakVarPath   string        `json:"flatpakVarPath,omitempty"`
 	Hostname         string        `json:"hostname"`
 	Flatpaks        []string      `json:"flatpaks"`        // flatpak app IDs to install; empty = fallback
 	User            UserSpec      `json:"user"`            // optional user account to create

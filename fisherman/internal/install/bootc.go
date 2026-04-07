@@ -179,13 +179,12 @@ func bootcViaContainer(opts Options) error {
 	// preserve in containers-storage. Export to an OCI layout first, then
 	// pass --source-imgref oci:/var/tmp/oci-cache (BuildBootcArgs adds this
 	// flag when ComposeFsBackend is true).
+	// Note: SkopeoExportOCIFn emits its own progress substeps; don't duplicate them here.
 	if opts.ComposeFsBackend {
 		ociDir := "/var/fisherman-tmp/oci-cache"
-		progress.Substep("Exporting image to OCI layout for composefs install")
 		if err := SkopeoExportOCIFn(opts.SourceImgref, ociDir); err != nil {
 			return fmt.Errorf("exporting image to OCI layout: %w", err)
 		}
-		progress.Substep("OCI export complete")
 	}
 
 	podmanArgs := []string{
@@ -673,7 +672,7 @@ func ClassifyLine(line string) string {
 	lower := strings.ToLower(line)
 	switch {
 	case strings.Contains(lower, "installing image:"):
-		return "Pulling container image"
+		return "Deploying image"
 	case strings.Contains(lower, "layers") && strings.Contains(lower, "needed"):
 		// e.g. "layers already present: 0; layers needed: 64 (3.7 GB)"
 		if i := strings.Index(lower, "layers needed:"); i >= 0 {
