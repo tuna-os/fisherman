@@ -724,30 +724,6 @@
       "name": "Bluefin",
       "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
       "search_extra": "universal blue ublue bluefin gnome developer dx",
-      "children": [
-        {
-          "name": "Stable",
-          "imgref": "ghcr.io/ublue-os/bluefin:stable",
-          "desc": "GNOME workstation on Fedora — recommended for most users",
-          "search_extra": "fedora gnome"
-        },
-        {
-          "name": "LTS",
-          "imgref": "ghcr.io/ublue-os/bluefin:lts",
-          "desc": "GNOME workstation on CentOS Stream 10 — long-term support",
-          "search_extra": "centos stream 10 lts long term support"
-        },
-        {
-          "name": "Dakota (experimental)",
-          "imgref": "ghcr.io/projectbluefin/dakota:latest",
-          "desc": "GNOME workstation on GnomeOS — composefs + systemd-boot",
-          "search_extra": "gnomeos composefs systemd-boot centos rhel",
-          "bootloader": "systemd",
-          "filesystem": "btrfs",
-          "composefs": true,
-          "needs_user_creation": false
-        }
-      ],
       "icon": "resource:///org/bootcinstaller/Installer/images/bluefin.png",
       "carousel": [
         {
@@ -759,6 +735,58 @@
           "image": "resource:///org/bootcinstaller/Installer/assets/containerized.svg",
           "title": "Built on OCI Containers",
           "description": "Bluefin uses bootc for atomic, container-native OS updates from GHCR."
+        }
+      ],
+      "children": [
+        {
+          "name": "Stable",
+          "desc": "GNOME workstation on Fedora — recommended for most users",
+          "search_extra": "fedora gnome for everyone",
+          "children": [
+            {
+              "name": "Standard",
+              "imgref": "ghcr.io/ublue-os/bluefin:stable",
+              "desc": "Standard edition with AMD or Intel graphics"
+            },
+            {
+              "name": "NVIDIA",
+              "imgref": "ghcr.io/ublue-os/bluefin-nvidia-open:stable",
+              "desc": "NVIDIA open driver edition"
+            }
+          ]
+        },
+        {
+          "name": "LTS",
+          "desc": "GNOME workstation with long-term support — for professionals and AI/ML",
+          "search_extra": "lts long term support enterprise professionals ai ml",
+          "children": [
+            {
+              "name": "Standard",
+              "imgref": "ghcr.io/ublue-os/bluefin:lts",
+              "desc": "Standard LTS edition with AMD or Intel graphics"
+            },
+            {
+              "name": "HWE Kernel",
+              "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe",
+              "desc": "Latest kernel for new hardware"
+            },
+            {
+              "name": "GDX",
+              "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts",
+              "desc": "NVIDIA edition for AI/ML professionals"
+            }
+          ]
+        },
+        {
+          "name": "Dakota",
+          "imgref": "ghcr.io/projectbluefin/dakota:latest",
+          "desc": "GNOME workstation on GnomeOS — composefs + systemd-boot",
+          "search_extra": "gnomeos composefs systemd-boot experimental",
+          "icon": "resource:///org/bootcinstaller/Installer/images/dakota.png",
+          "bootloader": "systemd",
+          "filesystem": "btrfs",
+          "composefs": true,
+          "needs_user_creation": false
         }
       ]
     },
