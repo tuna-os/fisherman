@@ -73,15 +73,52 @@ func fatal(format string, args ...any) {
 	os.Exit(1)
 }
 
+// version is set at build time via -ldflags "-X main.version=x.y.z".
+// Falls back to "dev" for local builds.
+var version = "dev"
+
+func printHelp() {
+	fmt.Printf(`fisherman — bootc disk installer backend
+
+Usage:
+  fisherman <recipe.json>          run an installation from a recipe file
+  fisherman validate <recipe.json> validate a recipe without installing
+  fisherman images [<query>]       list or search the image catalog
+  fisherman version                print version information
+  fisherman help                   show this help
+
+Options for 'images':
+  --file <path>   use a specific images.json instead of auto-detecting
+  --plain         plain text output (no ANSI color or tree characters)
+
+Examples:
+  fisherman /tmp/recipe.json
+  fisherman validate /tmp/recipe.json
+  fisherman images
+  fisherman images TunaOS
+  fisherman images "GNOME 50"
+  fisherman images --plain yellowfin
+`)
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintf(os.Stderr, "usage: fisherman <recipe.json>\n")
-		fmt.Fprintf(os.Stderr, "       fisherman images [--file <path>] [--plain]\n")
+		printHelp()
 		os.Exit(1)
 	}
 
-	if os.Args[1] == "images" {
+	switch os.Args[1] {
+	case "help", "--help", "-h":
+		printHelp()
+		return
+	case "version", "--version":
+		fmt.Printf("fisherman %s\n", version)
+		return
+	case "images":
 		runImages(os.Args[2:])
+		return
+	case "validate":
+		runValidate(os.Args[2:])
 		return
 	}
 

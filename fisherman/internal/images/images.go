@@ -6,19 +6,74 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Node is a single entry in the image catalog tree. Leaf nodes have Imgref
 // set; group nodes have Children.
 type Node struct {
-	Name     string  `json:"name"`
-	Imgref   string  `json:"imgref,omitempty"`
-	Desc     string  `json:"desc,omitempty"`
-	Children []*Node `json:"children,omitempty"`
+	Name              string  `json:"name"`
+	Imgref            string  `json:"imgref,omitempty"`
+	Desc              string  `json:"desc,omitempty"`
+	Subtitle          string  `json:"subtitle,omitempty"`
+	Icon              string  `json:"icon,omitempty"`
+	Flatpaks          string  `json:"flatpaks,omitempty"`
+	SearchExtra       string  `json:"search_extra,omitempty"`
+	Bootloader        string  `json:"bootloader,omitempty"`
+	Filesystem        string  `json:"filesystem,omitempty"`
+	ComposeFsBackend  bool    `json:"composefs,omitempty"`
+	NeedsUserCreation bool    `json:"needs_user_creation,omitempty"`
+	Children          []*Node `json:"children,omitempty"`
 }
 
-// IsLeaf returns true if this node is an installable image (has an imgref).
-func (n *Node) IsLeaf() bool { return n.Imgref != "" }
+// IsLeaf returns true if this node is an installable image (has an imgref and no children).
+func (n *Node) IsLeaf() bool { return n.Imgref != "" && len(n.Children) == 0 }
+
+// NodeResult is a matched node with its ancestor path (root-first, not including the node itself).
+type NodeResult struct {
+	Path []*Node
+	Node *Node
+}
+
+// Breadcrumb returns a human-readable "A › B › C" path string.
+func (r *NodeResult) Breadcrumb() string {
+	parts := make([]string, 0, len(r.Path)+1)
+	for _, p := range r.Path {
+		parts = append(parts, p.Name)
+	}
+	parts = append(parts, r.Node.Name)
+	return strings.Join(parts, " › ")
+}
+
+// Find searches the catalog for nodes whose name, imgref, or search_extra
+// contain query (case-insensitive). Returns all matching nodes with breadcrumbs.
+func (c *Catalog) Find(query string) []*NodeResult {
+	q := strings.ToLower(query)
+	var results []*NodeResult
+	for _, root := range c.Images {
+		findIn(root, nil, q, &results)
+	}
+	return results
+}
+
+func findIn(n *Node, path []*Node, q string, out *[]*NodeResult) {
+	if nodeMatches(n, q) {
+		cp := make([]*Node, len(path))
+		copy(cp, path)
+		*out = append(*out, &NodeResult{Path: cp, Node: n})
+		return // don't recurse into a matched group — the group itself is the result
+	}
+	for _, child := range n.Children {
+		findIn(child, append(path, n), q, out)
+	}
+}
+
+func nodeMatches(n *Node, q string) bool {
+	return strings.Contains(strings.ToLower(n.Name), q) ||
+		strings.Contains(strings.ToLower(n.Imgref), q) ||
+		strings.Contains(strings.ToLower(n.SearchExtra), q) ||
+		strings.Contains(strings.ToLower(n.Desc), q)
+}
 
 // Catalog is the top-level structure of images.json.
 type Catalog struct {
