@@ -150,6 +150,25 @@ func TestBuildBootcArgs_ComposeFsBackend(t *testing.T) {
 	assertContains(t, args, "--composefs-backend")
 }
 
+// TestBuildBootcArgs_ComposeFsBackend_SourceImgref is a regression test for the
+// composefs to-filesystem bug: bootc install to-disk was being called instead of
+// to-filesystem, failing with "Device is mounted". The fix routes all images
+// through to-filesystem and exports to an OCI layout via skopeo so bootc
+// --composefs-backend has the raw blobs it needs.
+// This verifies that --source-imgref oci:/var/tmp/oci-cache is included in the
+// bootc args when composefs-backend is true.
+func TestBuildBootcArgs_ComposeFsBackend_SourceImgref(t *testing.T) {
+	args := install.BuildBootcArgs(install.Options{ComposeFsBackend: true}, "", "/target")
+	assertContains(t, args, "--source-imgref")
+	assertContains(t, args, "oci:/var/tmp/oci-cache")
+}
+
+func TestBuildBootcArgs_NoComposeFsBackend_NoSourceImgref(t *testing.T) {
+	args := install.BuildBootcArgs(install.Options{ComposeFsBackend: false}, "", "/target")
+	assertAbsent(t, args, "--source-imgref")
+	assertAbsent(t, args, "--composefs-backend")
+}
+
 func TestBuildBootcArgs_NoComposeFsBackend(t *testing.T) {
 	args := install.BuildBootcArgs(install.Options{ComposeFsBackend: false}, "", "/target")
 	assertAbsent(t, args, "--composefs-backend")

@@ -123,6 +123,10 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	}
 	if opts.ComposeFsBackend {
 		args = append(args, "--composefs-backend")
+		// composefs-backend requires raw OCI blobs; bootcViaContainer exports
+		// the image to /var/fisherman-tmp/oci-cache (mounted at /var/tmp inside
+		// the container) and passes this as the source.
+		args = append(args, "--source-imgref", "oci:/var/tmp/oci-cache")
 	}
 	if opts.Bootloader != "" && opts.Bootloader != "grub2" {
 		args = append(args, "--bootloader", opts.Bootloader)
@@ -171,6 +175,19 @@ func bootcViaContainer(opts Options) error {
 
 	bootcArgs := BuildBootcArgs(opts, targetImgref, "/target")
 
+	// composefs-backend requires raw OCI blobs that podman pull doesn't
+	// preserve in containers-storage. Export to an OCI layout first, then
+	// pass --source-imgref oci:/var/tmp/oci-cache (BuildBootcArgs adds this
+	// flag when ComposeFsBackend is true).
+	if opts.ComposeFsBackend {
+		ociDir := "/var/fisherman-tmp/oci-cache"
+		progress.Substep("Exporting image to OCI layout for composefs install")
+		if err := SkopeoExportOCIFn(opts.SourceImgref, ociDir); err != nil {
+			return fmt.Errorf("exporting image to OCI layout: %w", err)
+		}
+		progress.Substep("OCI export complete")
+	}
+
 	podmanArgs := []string{
 		"run", "--rm",
 		"--privileged",
@@ -180,8 +197,6 @@ func bootcViaContainer(opts Options) error {
 		// filesystem without the host SELinux policy interfering.
 		"--security-opt", "label=disable",
 		"-v", "/dev:/dev",
-		// Required: gives bootc access to its own image layers in container storage.
-		"-v", "/var/lib/containers:/var/lib/containers",
 		// Ostree-based images (e.g. composefs) don't ship /var/tmp — it is created
 		// by systemd-tmpfiles on first boot. containers-image needs /var/tmp to write
 		// temp files when reconstructing layer blobs from containers-storage. Mount
@@ -190,6 +205,12 @@ func bootcViaContainer(opts Options) error {
 		// Use shared propagation so submounts (e.g. /boot/efi) created on the host
 		// before launching the container are visible inside it at /target.
 		"--mount", fmt.Sprintf("type=bind,src=%s,dst=/target,bind-propagation=rslave", opts.Target),
+	}
+
+	if !opts.ComposeFsBackend {
+		// Give bootc access to its own image layers in containers-storage.
+		// For composefs, we use the OCI layout exported above instead.
+		podmanArgs = append(podmanArgs, "-v", "/var/lib/containers:/var/lib/containers")
 	}
 
 	// When the target system has SELinux disabled and the host has SELinux
