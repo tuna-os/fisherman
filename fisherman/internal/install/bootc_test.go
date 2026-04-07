@@ -124,8 +124,8 @@ func TestClassifyLine_LayersNeededZero(t *testing.T) {
 
 func TestClassifyLine_InstallingImage(t *testing.T) {
 	got := install.ClassifyLine("Installing image: docker://ghcr.io/tuna-os/yellowfin:gnome-hwe")
-	if got != "Pulling container image" {
-		t.Errorf("got %q, want 'Pulling container image'", got)
+	if got != "Deploying image" {
+		t.Errorf("got %q, want 'Deploying image'", got)
 	}
 }
 

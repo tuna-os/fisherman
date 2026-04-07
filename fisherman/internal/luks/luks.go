@@ -55,6 +55,16 @@ func Close(mapperName string) error {
 	return runner.Run("cryptsetup", "luksClose", mapperName)
 }
 
+// UUID returns the UUID of the LUKS container on partition by running
+// cryptsetup luksUUID. Returns an empty string on any error.
+func UUID(partition string) string {
+	out, err := runner.Output("cryptsetup", "luksUUID", partition)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 // EnrollTPM2 adds a TPM2 auto-unlock token to an existing LUKS2 container,
 // authenticating with the supplied passphrase. The passphrase remains as a
 // fallback unlock method. PCR 7 (Secure Boot state) is used by default.

@@ -8,39 +8,42 @@ import (
 )
 
 // plymouthArgs are the kernel arguments required for a graphical Plymouth boot splash.
-// rhgb    — Red Hat Graphical Boot: triggers Plymouth at early userspace
-// quiet   — suppresses verbose kernel messages so the splash is visible
 var plymouthArgs = []string{"rhgb", "quiet"}
 
 // EnsurePlymouthArgs ensures the Plymouth graphical boot arguments are present
-// in every BLS (Boot Loader Specification) entry under
-// <sysroot>/boot/loader/entries/. It is non-destructive: arguments that are
-// already present are not duplicated, and entries that already contain all
-// required arguments are left untouched.
+// in every BLS loader entry. Checks both <sysroot>/boot/loader/entries/
+// (GRUB/3-partition) and <sysroot>/boot/efi/loader/entries/ (systemd-boot).
+// Non-destructive: existing arguments are not duplicated.
 //
 // Returns the number of entries modified, and any first error encountered.
-// Errors are non-fatal — Plymouth is cosmetic and the system will still boot.
 func EnsurePlymouthArgs(sysroot string) (int, error) {
-	entriesDir := filepath.Join(sysroot, "boot", "loader", "entries")
-	entries, err := filepath.Glob(filepath.Join(entriesDir, "*.conf"))
-	if err != nil {
-		return 0, fmt.Errorf("glob loader entries: %w", err)
-	}
-	if len(entries) == 0 {
-		return 0, fmt.Errorf("no BLS loader entries found under %s", entriesDir)
+	candidates := []string{
+		filepath.Join(sysroot, "boot", "loader", "entries"),
+		filepath.Join(sysroot, "boot", "efi", "loader", "entries"),
 	}
 
-	modified := 0
-	for _, entry := range entries {
-		changed, err := ensurePlymouthInEntry(entry)
-		if err != nil {
-			return modified, fmt.Errorf("patching %s: %w", entry, err)
+	total := 0
+	found := false
+	for _, dir := range candidates {
+		entries, err := filepath.Glob(filepath.Join(dir, "*.conf"))
+		if err != nil || len(entries) == 0 {
+			continue
 		}
-		if changed {
-			modified++
+		found = true
+		for _, entry := range entries {
+			changed, err := ensurePlymouthInEntry(entry)
+			if err != nil {
+				return total, fmt.Errorf("patching %s: %w", entry, err)
+			}
+			if changed {
+				total++
+			}
 		}
 	}
-	return modified, nil
+	if !found {
+		return 0, fmt.Errorf("no BLS loader entries found under %s", filepath.Join(sysroot, "boot"))
+	}
+	return total, nil
 }
 
 // ensurePlymouthInEntry modifies a single BLS entry file to include plymouthArgs
@@ -59,13 +62,10 @@ func ensurePlymouthInEntry(path string) (bool, error) {
 			continue
 		}
 		opts := line[len("options "):]
-		// Check which plymouthArgs are missing and add them.
 		toAdd := []string{}
 		for _, arg := range plymouthArgs {
-			// Match whole word: the arg must appear as a standalone token.
-			tokens := strings.Fields(opts)
 			found := false
-			for _, tok := range tokens {
+			for _, tok := range strings.Fields(opts) {
 				if tok == arg {
 					found = true
 					break
@@ -84,6 +84,5 @@ func ensurePlymouthInEntry(path string) (bool, error) {
 	if !changed {
 		return false, nil
 	}
-
 	return true, os.WriteFile(path, []byte(strings.Join(lines, "\n")), 0o644)
 }

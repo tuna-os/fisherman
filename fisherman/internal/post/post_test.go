@@ -357,3 +357,92 @@ t.Errorf("entry content:\ngot:  %q\nwant: %q", string(got), tc.wantOut)
 })
 }
 }
+
+func TestEnsureLuksArgs(t *testing.T) {
+const testUUID = "1520bba9-010e-443d-b082-2fe56abdfee1"
+const wantArg = "rd.luks.uuid=" + testUUID
+
+t.Run("injects rd.luks.uuid into grub path", func(t *testing.T) {
+dir := t.TempDir()
+entriesDir := dir + "/boot/loader/entries"
+if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+t.Fatal(err)
+}
+entryPath := entriesDir + "/test.conf"
+input := "title TunaOS\noptions root=UUID=abc rw\n"
+if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
+t.Fatal(err)
+}
+n, err := post.EnsureLuksArgs(dir, testUUID)
+if err != nil {
+t.Fatalf("EnsureLuksArgs: %v", err)
+}
+if n != 1 {
+t.Errorf("expected 1 entry modified, got %d", n)
+}
+got, _ := os.ReadFile(entryPath)
+if !strings.Contains(string(got), wantArg) {
+t.Errorf("entry missing %q:\n%s", wantArg, got)
+}
+})
+
+t.Run("injects rd.luks.uuid into systemd-boot path", func(t *testing.T) {
+dir := t.TempDir()
+entriesDir := dir + "/boot/efi/loader/entries"
+if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+t.Fatal(err)
+}
+entryPath := entriesDir + "/test.conf"
+input := "title TunaOS\noptions root=UUID=abc rw\n"
+if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
+t.Fatal(err)
+}
+n, err := post.EnsureLuksArgs(dir, testUUID)
+if err != nil {
+t.Fatalf("EnsureLuksArgs: %v", err)
+}
+if n != 1 {
+t.Errorf("expected 1 entry modified, got %d", n)
+}
+got, _ := os.ReadFile(entryPath)
+if !strings.Contains(string(got), wantArg) {
+t.Errorf("entry missing %q:\n%s", wantArg, got)
+}
+})
+
+t.Run("idempotent — does not duplicate rd.luks.uuid", func(t *testing.T) {
+dir := t.TempDir()
+entriesDir := dir + "/boot/loader/entries"
+if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+t.Fatal(err)
+}
+entryPath := entriesDir + "/test.conf"
+input := "title TunaOS\noptions root=UUID=abc rw " + wantArg + "\n"
+if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
+t.Fatal(err)
+}
+n, err := post.EnsureLuksArgs(dir, testUUID)
+if err != nil {
+t.Fatalf("EnsureLuksArgs: %v", err)
+}
+if n != 0 {
+t.Errorf("expected 0 entries modified (idempotent), got %d", n)
+}
+got, _ := os.ReadFile(entryPath)
+count := strings.Count(string(got), wantArg)
+if count != 1 {
+t.Errorf("expected arg to appear once, got %d times:\n%s", count, got)
+}
+})
+
+t.Run("empty UUID is a no-op", func(t *testing.T) {
+dir := t.TempDir()
+n, err := post.EnsureLuksArgs(dir, "")
+if err != nil {
+t.Fatalf("EnsureLuksArgs with empty UUID: %v", err)
+}
+if n != 0 {
+t.Errorf("expected 0, got %d", n)
+}
+})
+}
