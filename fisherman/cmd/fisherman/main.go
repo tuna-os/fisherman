@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 
 	"github.com/tuna-os/fisherman/internal/disk"
 	"github.com/tuna-os/fisherman/internal/install"
@@ -73,8 +75,60 @@ func fatal(format string, args ...any) {
 	os.Exit(1)
 }
 
-// version is set at build time via -ldflags "-X main.version=x.y.z".
-// Falls back to "dev" for local builds.
+// lookPath is exec.LookPath by default; replaced in tests.
+var lookPath = exec.LookPath
+
+// expandPath prepends standard sbin directories and any tools staged alongside
+// this binary to PATH.  pkexec strips the user's PATH to a minimal safe set
+// that omits /usr/sbin and /sbin on many immutable distros (e.g. GnomeOS).
+func expandPath() {
+	current := os.Getenv("PATH")
+	// Build candidate prefix: staged tools dir (sibling of this binary) first,
+	// then the standard sbin locations that pkexec commonly strips.
+	prefix := "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	if exe, err := os.Executable(); err == nil {
+		toolsDir := filepath.Join(filepath.Dir(exe), "tools")
+		if info, err := os.Stat(toolsDir); err == nil && info.IsDir() {
+			prefix = toolsDir + ":" + prefix
+		}
+	}
+	if current != "" {
+		prefix = prefix + ":" + current
+	}
+	os.Setenv("PATH", prefix)
+}
+
+// checkRequiredTools verifies that every host binary needed by this recipe
+// is reachable on PATH before we touch any disks, and returns a clear error
+// naming the missing tool and the package that provides it.
+func checkRequiredTools(r *recipe.Recipe) error {
+	type requirement struct {
+		tool string
+		pkg  string
+		when bool
+	}
+	reqs := []requirement{
+		{"sfdisk", "util-linux", true},
+		{"mkfs.fat", "dosfstools", true},
+		{"mkfs.ext4", "e2fsprogs", true},
+		{"mkfs.xfs", "xfsprogs", r.Filesystem == "xfs"},
+		{"mkfs.btrfs", "btrfs-progs", r.Filesystem == "btrfs"},
+		{"cryptsetup", "cryptsetup", r.Encryption.Type != "" && r.Encryption.Type != "none"},
+		{"skopeo", "skopeo", true},
+		{"podman", "podman", true},
+	}
+	for _, req := range reqs {
+		if !req.when {
+			continue
+		}
+		if _, err := lookPath(req.tool); err != nil {
+			return fmt.Errorf("%q not found in PATH — install the %q package on the host", req.tool, req.pkg)
+		}
+	}
+	return nil
+}
+
+
 var version = "dev"
 
 func printHelp() {
@@ -128,6 +182,18 @@ func main() {
 	}
 	if err := r.Validate(); err != nil {
 		fatal("invalid recipe: %v", err)
+	}
+
+	// Expand PATH to cover all standard sbin locations and any tools staged
+	// alongside this binary (e.g. by the tuna-installer Flatpak).  pkexec
+	// strips the calling user's PATH to a minimal safe set which often omits
+	// /usr/sbin and /sbin on some immutable distros.
+	expandPath()
+
+	// Pre-flight: verify that every host tool required for this recipe is
+	// present before we touch any disks.
+	if err := checkRequiredTools(r); err != nil {
+		fatal("missing required host tool: %v", err)
 	}
 
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
