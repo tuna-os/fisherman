@@ -2,6 +2,7 @@ package disk_test
 
 import (
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -208,4 +209,88 @@ func equalSlice(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestUnmountAll_AutomountedDisk verifies that when a target disk has
+// automounted partitions, udisksctl unmount is called before sfdisk.
+// This is the regression test for the flash-drive "disk is currently in use"
+// error: umount -l releases the kernel mount but leaves udisksd's open FD;
+// udisksctl unmount properly releases that FD.
+func TestUnmountAll_AutomountedDisk(t *testing.T) {
+// Write a fake /proc/mounts with an automounted flash-drive partition.
+mounts := "/dev/sda1 /run/media/james/MYFLASH vfat rw 0 0\n" +
+"/dev/sdb1 /run/media/james/other vfat rw 0 0\n" // unrelated disk — must not be touched
+f, err := os.CreateTemp(t.TempDir(), "mounts")
+if err != nil {
+t.Fatal(err)
+}
+if _, err := f.WriteString(mounts); err != nil {
+t.Fatal(err)
+}
+f.Close()
+
+// Point the package at our fake mounts file.
+disk.SetProcMountsPath(f.Name())
+t.Cleanup(func() { disk.SetProcMountsPath("/proc/mounts") })
+
+rec := setupRecorder(t)
+
+if err := disk.Partition("/dev/sda"); err != nil {
+t.Fatalf("Partition: %v", err)
+}
+
+// udisksctl unmount must appear before sfdisk.
+udisksIdx := -1
+sfdiskIdx := -1
+for i, c := range rec.calls {
+if c.name == "udisksctl" && udisksIdx == -1 {
+udisksIdx = i
+}
+if c.name == "sfdisk" && sfdiskIdx == -1 {
+sfdiskIdx = i
+}
+}
+if udisksIdx == -1 {
+t.Error("udisksctl not called — automounted partition lock not released")
+}
+if sfdiskIdx == -1 {
+t.Fatal("sfdisk not called")
+}
+if udisksIdx > sfdiskIdx {
+t.Errorf("udisksctl (idx %d) called after sfdisk (idx %d) — disk may still be locked when sfdisk runs", udisksIdx, sfdiskIdx)
+}
+
+// udisksctl must target /dev/sda1, not /dev/sdb1.
+udisksCall := rec.calls[udisksIdx]
+wantArgs := []string{"unmount", "--no-user-interaction", "--block-device", "/dev/sda1"}
+if !equalSlice(udisksCall.args, wantArgs) {
+t.Errorf("udisksctl args = %v, want %v", udisksCall.args, wantArgs)
+}
+}
+
+// TestUnmountAll_NoMounts verifies that Partition succeeds cleanly when
+// no partitions of the target disk are mounted (common case for NVMe install targets).
+func TestUnmountAll_NoMounts(t *testing.T) {
+mounts := "/dev/sdb1 /run/media/james/other vfat rw 0 0\n"
+f, err := os.CreateTemp(t.TempDir(), "mounts")
+if err != nil {
+t.Fatal(err)
+}
+f.WriteString(mounts)
+f.Close()
+
+disk.SetProcMountsPath(f.Name())
+t.Cleanup(func() { disk.SetProcMountsPath("/proc/mounts") })
+
+rec := setupRecorder(t)
+
+if err := disk.Partition("/dev/sda"); err != nil {
+t.Fatalf("Partition: %v", err)
+}
+
+for _, c := range rec.calls {
+if c.name == "udisksctl" || c.name == "umount" {
+t.Errorf("unexpected unmount call when disk has no mounts: %v %v", c.name, c.args)
+}
+}
 }

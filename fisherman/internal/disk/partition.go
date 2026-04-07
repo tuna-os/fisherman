@@ -14,8 +14,11 @@ import (
 	"github.com/tuna-os/fisherman/internal/runner"
 )
 
-// PartSuffix returns "p" for NVMe/MMC device names (which end in a digit),
-// or "" for all others.
+// procMountsPath is the path to the mounts file. Overridden in tests.
+var procMountsPath = "/proc/mounts"
+
+// SetProcMountsPath overrides the mounts file path. For testing only.
+func SetProcMountsPath(p string) { procMountsPath = p }
 func PartSuffix(disk string) string {
 	if len(disk) == 0 {
 		return ""
@@ -210,9 +213,16 @@ func loopRescan(disk string) error {
 	return nil
 }
 
-// unmountAll unmounts every mounted partition on disk by reading /proc/mounts.
+// unmountAll unmounts every mounted partition on disk.
+//
+// Automounted drives (USB flash drives, etc.) are managed by udisksd, which
+// holds an open file descriptor on the block device even after a lazy umount.
+// sfdisk detects that open FD and refuses to partition the disk. We therefore
+// try udisksctl unmount first — it properly releases udisksd's lock — and fall
+// back to umount -l for any mounts udisksctl doesn't know about. A udevadm
+// settle after all unmounts gives the kernel time to clear the "in-use" flag.
 func unmountAll(disk string) error {
-	data, err := os.ReadFile("/proc/mounts")
+	data, err := os.ReadFile(procMountsPath)
 	if err != nil {
 		return fmt.Errorf("reading /proc/mounts: %w", err)
 	}
@@ -225,13 +235,25 @@ func unmountAll(disk string) error {
 		dev := fields[0] // e.g. /dev/sda1
 		mp := fields[1]  // e.g. /run/media/james/Yellowfin_Live
 		devBase := filepath.Base(dev)
-		if strings.HasPrefix(devBase, base) {
-			fmt.Fprintf(os.Stdout, "+ umount %s (%s)\n", mp, dev)
+		if !strings.HasPrefix(devBase, base) {
+			continue
+		}
+		fmt.Fprintf(os.Stdout, "+ unmount %s (%s)\n", mp, dev)
+
+		// Try udisksctl first — this releases udisksd's open FD on the device,
+		// which is what sfdisk checks for "currently in use".
+		if err := runner.Run("udisksctl", "unmount", "--no-user-interaction", "--block-device", dev); err != nil {
+			// udisksctl may fail for mounts not managed by udisks (e.g. root fs,
+			// or filesystems mounted by hand). Fall back to umount -l.
+			fmt.Fprintf(os.Stdout, "+ udisksctl failed (%v), falling back to umount -l\n", err)
 			if err := runner.Run("umount", "-l", mp); err != nil {
 				return fmt.Errorf("unmounting %s: %w", mp, err)
 			}
 		}
 	}
+
+	// Give udev and udisksd time to release all device references.
+	_ = runner.Run("udevadm", "settle")
 	return nil
 }
 
