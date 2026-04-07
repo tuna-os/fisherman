@@ -76,7 +76,13 @@ func fatal(format string, args ...any) {
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "usage: fisherman <recipe.json>\n")
+		fmt.Fprintf(os.Stderr, "       fisherman images [--file <path>] [--plain]\n")
 		os.Exit(1)
+	}
+
+	if os.Args[1] == "images" {
+		runImages(os.Args[2:])
+		return
 	}
 
 	r, err := recipe.Load(os.Args[1])
