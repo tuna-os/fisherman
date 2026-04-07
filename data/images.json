@@ -23,7 +23,8 @@
         {
           "name": "Beta",
           "imgref": "ghcr.io/ublue-os/aurora:beta",
-          "desc": "Preview of next release"
+          "desc": "Preview of next release",
+          "needs_user_creation": false
         },
         {
           "name": "Latest",
@@ -57,7 +58,8 @@
             {
               "name": "Beta",
               "imgref": "ghcr.io/ublue-os/aurora-dx:beta",
-              "desc": "Preview of next release"
+              "desc": "Preview of next release",
+              "needs_user_creation": false
             },
             {
               "name": "Fedora 43",
