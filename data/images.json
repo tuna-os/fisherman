@@ -742,7 +742,8 @@
           "search_extra": "gnomeos composefs systemd-boot centos rhel",
           "bootloader": "systemd",
           "filesystem": "btrfs",
-          "composefs": true
+          "composefs": true,
+          "needs_user_creation": false
         }
       ],
       "icon": "resource:///org/bootcinstaller/Installer/images/bluefin.png",
