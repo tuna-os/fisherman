@@ -8,7 +8,7 @@ from gettext import gettext as _
 from gi.repository import Adw, Gdk, GLib, Gtk, Pango, Vte
 
 # When running as a Flatpak, fisherman lives at /app/bin/fisherman and must be
-# elevated via pkexec (polkit action: org.tunaos.Installer.install).
+# elevated via pkexec (polkit action: org.bootcinstaller.Installer.install).
 # On a live ISO or host install, fisherman is at /usr/local/bin/fisherman and
 # can be run with sudo (the live user already has passwordless sudo).
 if os.path.exists("/.flatpak-info"):
@@ -17,7 +17,7 @@ else:
     FISHERMAN_CMD = "sudo /usr/local/bin/fisherman"
 
 
-@Gtk.Template(resource_path="/org/tunaos/Installer/gtk/progress.ui")
+@Gtk.Template(resource_path="/org/bootcinstaller/Installer/gtk/progress.ui")
 class TunaProgress(Adw.Bin):
     __gtype_name__ = "TunaProgress"
 

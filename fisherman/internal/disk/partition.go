@@ -2,6 +2,7 @@ package disk
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -67,6 +68,27 @@ func PartitionEncrypted(disk string) error {
 	return Partition(disk)
 }
 
+// PartitionSystemdBoot wipes disk and creates a two-partition GPT layout for
+// systemd-boot installs:
+//
+//	Partition 1 – EFI System (1 GiB — holds bootloader binary, kernel and initrd)
+//	Partition 2 – Linux root (remaining space)
+//
+// Unlike grub2 installs, systemd-boot can only read FAT32 via UEFI firmware
+// protocols. A separate ext4 /boot would be unreadable, so everything lands
+// directly on the FAT32 ESP. 1 GiB gives headroom for multiple kernel versions.
+// This layout is used for both unencrypted and encrypted systemd-boot installs
+// (encrypted: LUKS wraps partition 2).
+func PartitionSystemdBoot(disk string) error {
+	script := strings.Join([]string{
+		"label: gpt",
+		"",
+		`size=1GiB, type=uefi, name="EFI-SYSTEM"`,
+		`type=linux, name="root"`,
+	}, "\n") + "\n"
+	return partition(disk, script)
+}
+
 // partition is the shared implementation for Partition and PartitionEncrypted.
 func partition(disk, script string) error {
 	// Unmount any mounted partitions on this disk before partitioning.
@@ -90,6 +112,71 @@ func partition(disk, script string) error {
 		}
 	}
 
+	return nil
+}
+
+// FindSystemdBootPartitions returns the EFI and root partition paths after
+// `bootc install to-disk` with systemd-boot. bootc creates a 3-partition GPT:
+//
+//	p1 = BIOS boot (1 MiB)
+//	p2 = EFI System (512 MiB, FAT32)
+//	p3 = Linux root (remainder, btrfs/xfs/ext4)
+//
+// It uses lsblk to confirm the layout rather than hardcoding partition numbers.
+func FindSystemdBootPartitions(diskDev string) (efiPart, rootPart string, err error) {
+	out, err := exec.Command("lsblk", "-J", "-p", "-o", "NAME,PARTTYPE", diskDev).Output()
+	if err != nil {
+		return "", "", fmt.Errorf("lsblk: %w", err)
+	}
+	type blockdev struct {
+		Name     string      `json:"name"`
+		Parttype string      `json:"parttype"`
+		Children []blockdev  `json:"children"`
+	}
+	type lsblkOutput struct {
+		Blockdevices []blockdev `json:"blockdevices"`
+	}
+	var parsed lsblkOutput
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return "", "", fmt.Errorf("parsing lsblk output: %w", err)
+	}
+	const (
+		efiGUID  = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+		biosGUID = "21686148-6449-6e6f-744e-656564454649"
+	)
+	for _, dev := range parsed.Blockdevices {
+		for _, part := range dev.Children {
+			switch strings.ToLower(part.Parttype) {
+			case efiGUID:
+				efiPart = part.Name
+			case biosGUID:
+				// skip
+			default:
+				if part.Name != "" {
+					rootPart = part.Name
+				}
+			}
+		}
+	}
+	if efiPart == "" || rootPart == "" {
+		return "", "", fmt.Errorf("could not identify EFI and root partitions on %s", diskDev)
+	}
+	return efiPart, rootPart, nil
+}
+
+// RescanPartitions asks the kernel to re-read the partition table on disk.
+// Used after `bootc install to-disk` which partitions the disk inside a
+// container — the host kernel may not have seen the new partition layout yet.
+// Returns nil even if the rescan is best-effort (e.g. non-loop block devices).
+func RescanPartitions(d string) error {
+	time.Sleep(200 * time.Millisecond)
+	_ = runner.Run("udevadm", "settle")
+	if strings.HasPrefix(filepath.Base(d), "loop") {
+		return loopRescan(d)
+	}
+	// For real block devices, partprobe (or partx) triggers a kernel re-read.
+	_ = runner.Run("partprobe", d)
+	_ = runner.Run("udevadm", "settle")
 	return nil
 }
 

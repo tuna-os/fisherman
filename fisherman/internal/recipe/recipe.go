@@ -21,6 +21,9 @@ type Recipe struct {
 	// Independent of UnifiedStorage — these are different bootc features.
 	// Works with any supported filesystem including xfs.
 	ComposeFsBackend bool          `json:"composeFsBackend"`
+	// Bootloader selects the bootloader: "grub2" (default) or "systemd".
+	// Use "systemd" for images that ship systemd-boot (e.g. Project Bluefin/Dakota).
+	Bootloader       string        `json:"bootloader"`
 	// ImageType selects the install backend: "bootc" (default) or "ostree".
 	// "ostree" support is not yet implemented and will be rejected by Validate().
 	ImageType        string        `json:"imageType"`
@@ -112,6 +115,12 @@ func (r *Recipe) Validate() error {
 		return fmt.Errorf("imageType \"ostree\" is not yet supported; only \"bootc\" is implemented")
 	default:
 		return fmt.Errorf("imageType must be \"bootc\" (or empty), got %q", r.ImageType)
+	}
+	switch r.Bootloader {
+	case "", "grub2", "systemd":
+		// ok
+	default:
+		return fmt.Errorf("bootloader must be \"grub2\" or \"systemd\", got %q", r.Bootloader)
 	}
 	switch r.Encryption.Type {
 	case "", "none", "tpm2-luks", "luks-passphrase", "tpm2-luks-passphrase":

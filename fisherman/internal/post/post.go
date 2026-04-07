@@ -197,7 +197,20 @@ func CopyFlatpaks(target string, wantedRefs []string) error {
 	}
 
 	allApps := flatpakList("--system", "--app")
-	progress.Substep(fmt.Sprintf("Copying %d Flatpak apps (%s)", len(allApps), humanBytes(totalBytes)))
+	// Emit a substep for each wanted app so the UI shows individual names.
+	copiedNames := make([]string, 0, len(wantedRefs))
+	for _, ref := range allApps {
+		name := flatpakAppName(ref)
+		if wantedSet[name] {
+			copiedNames = append(copiedNames, name)
+		}
+	}
+	for i, name := range copiedNames {
+		progress.Substep(fmt.Sprintf("Copying app %d/%d: %s", i+1, len(copiedNames), name))
+	}
+	if len(copiedNames) == 0 {
+		progress.Substep(fmt.Sprintf("Copying %d Flatpak apps (%s)", len(allApps), humanBytes(totalBytes)))
+	}
 	fmt.Fprintf(os.Stdout, "  copying flatpaks: %s → %s (%d bytes)\n", src, dst, totalBytes)
 
 	// tar cf → countingReader → tar xf

@@ -91,6 +91,7 @@ func main() {
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
 	hasTPM2enrolment := r.Encryption.Type == "tpm2-luks-passphrase"
 	isManual := len(r.CustomMounts) > 0
+	isSystemdBoot := r.Bootloader == "systemd"
 
 	// ── Pre-flight: check image cache ─────────────────────────────────────────
 	var imageCheck install.ImageCheck
@@ -104,6 +105,115 @@ func main() {
 		} else {
 			progress.Info("Image already up to date in local cache")
 		}
+	}
+
+	// ── systemd-boot path (to-disk) ───────────────────────────────────────────
+	// For systemd-boot images (e.g. Project Bluefin/Dakota), we use
+	// `bootc install to-disk --via-loopback` which handles partitioning,
+	// formatting, OS deployment, and bootloader installation in one shot.
+	// --via-loopback causes bootc to auto-enable --generic-image, which
+	// bypasses the bootupd presence check (required because images like Dakota
+	// don't ship bootupd). It also ensures partition nodes are visible inside
+	// the container via --partscan regardless of device type.
+	if isSystemdBoot {
+		scratchDir := "/var/fisherman-tmp"
+		if err := os.MkdirAll(scratchDir, 0o1777); err != nil {
+			fatal("creating scratch dir: %v", err)
+		}
+		if err := disk.BindMount(scratchDir, "/var/tmp"); err != nil {
+			fatal("bind-mounting scratch dir at /var/tmp: %v", err)
+		}
+		cleanup.AddMount("/var/tmp")
+		defer os.RemoveAll(scratchDir)
+
+		osWeight := 87
+		flatpakWeight := 11
+		if !imageCheck.NeedsPull {
+			osWeight = 68
+			flatpakWeight = 29
+		}
+		const sdTotalSteps = 4
+
+		// Step 1: Install OS
+		progress.Step(1, sdTotalSteps, "Installing OS", 0, osWeight)
+
+		targetImgref := r.TargetImgref
+		if targetImgref == r.Image {
+			targetImgref = ""
+		}
+		effectiveDisk, err := install.BootcToDisk(install.Options{
+			SourceImgref:     r.Image,
+			TargetImgref:     targetImgref,
+			ComposeFsBackend: r.ComposeFsBackend,
+			NeedsPull:        imageCheck.NeedsPull,
+			LayerCount:       imageCheck.LayerCount,
+		}, r.Disk, r.Filesystem)
+		if err != nil {
+			fatal("bootc install to-disk: %v", err)
+		}
+
+		// bootc creates a 3-partition layout: p1=BIOS boot, p2=EFI, p3=root.
+		// effectiveDisk may differ from r.Disk when a raw file was auto-loop-attached.
+		efiPart, rootPart, err := disk.FindSystemdBootPartitions(effectiveDisk)
+		if err != nil {
+			fatal("finding partitions after to-disk: %v", err)
+		}
+
+		if err := os.MkdirAll(targetMount, 0o755); err != nil {
+			fatal("creating mount point %s: %v", targetMount, err)
+		}
+		if err := disk.Mount(rootPart, targetMount, ""); err != nil {
+			fatal("mounting root for post-install: %v", err)
+		}
+		cleanup.AddMount(targetMount)
+
+		// Step 2: Copy system Flatpaks
+		progress.Step(2, sdTotalSteps, "Copying system Flatpaks", osWeight, flatpakWeight)
+		if err := post.CopyFlatpaks(targetMount, r.Flatpaks); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not copy flatpaks: %v", err))
+		}
+
+		// Step 3: Post-install configuration
+		progress.Step(3, sdTotalSteps, "Configuring installed system", osWeight+flatpakWeight, 0)
+		progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
+		if err := post.WriteHostname(targetMount, r.Hostname); err != nil {
+			fatal("writing hostname: %v", err)
+		}
+		if r.User.Username != "" {
+			progress.Info(fmt.Sprintf("Creating user: %s", r.User.Username))
+			if err := post.CreateUser(targetMount, post.UserConfig{
+				Username: r.User.Username,
+				Fullname: r.User.Fullname,
+				Password: r.User.Password,
+				Groups:   r.User.Groups,
+			}); err != nil {
+				fatal("creating user: %v", err)
+			}
+		}
+		n, err := post.EnsurePlymouthArgs(targetMount)
+		if err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not set Plymouth kernel args: %v", err))
+		} else if n > 0 {
+			progress.Info(fmt.Sprintf("Added Plymouth boot args to %d loader entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+		}
+
+		// Step 4: Finalize
+		progress.Step(4, sdTotalSteps, "Finalizing installation", 99, 1)
+		if err := disk.FinalizeFilesystem(targetMount); err != nil {
+			fatal("finalizing target filesystem: %v", err)
+		}
+
+		cleanup.Run()
+
+		bootID, err := post.FindBootNextID(efiPart)
+		if err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not determine EFI boot entry: %v", err))
+			bootID = ""
+		} else if bootID != "" {
+			progress.Info(fmt.Sprintf("EFI boot entry for installed system: Boot%s", bootID))
+		}
+		progress.Complete("Installation complete!", bootID)
+		return
 	}
 
 	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2enrolment)
@@ -167,13 +277,11 @@ func main() {
 			}
 		}
 
-		// All installs use a 3-partition layout: p1=EFI, p2=/boot, p3=root.
-		// The separate ext4 /boot ensures GRUB never needs to parse XFS, which
-		// is required because GRUB's built-in XFS driver does not support the
-		// newer XFS features enabled by mkfs.xfs on el10 (nrext64, exchange…).
-		efiPart := disk.PartName(r.Disk, 1)
-		bootPart := disk.PartName(r.Disk, 2)
-		rootPart := disk.PartName(r.Disk, 3)
+		var efiPart, bootPart, rootPart string
+		// 3-partition: p1=EFI, p2=/boot, p3=root.
+		efiPart = disk.PartName(r.Disk, 1)
+		bootPart = disk.PartName(r.Disk, 2)
+		rootPart = disk.PartName(r.Disk, 3)
 		rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
 		activeRootPart = rootPart
 
@@ -185,6 +293,8 @@ func main() {
 		if err := disk.FormatEFI(efiPart); err != nil {
 			fatal("formatting EFI: %v", err)
 		}
+		// grub2 installs need a separate ext4 /boot so GRUB never has to parse
+		// XFS (GRUB's built-in XFS driver lacks support for modern XFS features).
 		if err := disk.FormatBoot(bootPart); err != nil {
 			fatal("formatting /boot: %v", err)
 		}
@@ -258,7 +368,6 @@ func main() {
 		cleanup.AddMount(targetMount + "/boot")
 
 		// Mount the EFI partition at /boot/efi inside the target.
-		// bootc install to-filesystem requires this to exist before it runs.
 		if err := disk.MountEFI(targetMount, efiPart); err != nil {
 			fatal("mounting EFI: %v", err)
 		}
@@ -302,11 +411,22 @@ func main() {
 		SelinuxDisabled:  r.SelinuxDisabled,
 		UnifiedStorage:   r.UnifiedStorage,
 		ComposeFsBackend: r.ComposeFsBackend,
+		Bootloader:       r.Bootloader,
 		Target:           activeTargetMount,
 		NeedsPull:        imageCheck.NeedsPull,
 		LayerCount:       imageCheck.LayerCount,
 	}); err != nil {
 		fatal("bootc install: %v", err)
+	}
+
+	// For systemd-boot installs, if --generic-image skipped the EFI binary
+	// installation, install it manually from the ostree deployment.
+	if isSystemdBoot {
+		progress.Info("Installing systemd-boot EFI binary")
+		if err := install.InstallSystemdBoot(activeTargetMount); err != nil {
+			// Non-fatal: --generic-image may have already installed it.
+			progress.Info(fmt.Sprintf("Warning: systemd-boot EFI install: %v", err))
+		}
 	}
 
 	// ── TPM2 enrolment (tpm2-luks-passphrase only) ────────────────────────────

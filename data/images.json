@@ -1,738 +1,10 @@
 {
-  "default_image": "ghcr.io/tuna-os/yellowfin:gnome-hwe",
   "fallback_flatpaks": [
     "org.mozilla.firefox",
     "org.gnome.Console",
     "org.gnome.TextEditor"
   ],
   "images": [
-    {
-      "name": "TunaOS",
-      "search_extra": "tunaos tuna",
-      "children": [
-        {
-          "name": "Albacore",
-          "subtitle": "ghcr.io/tuna-os/albacore",
-          "children": [
-            {
-              "name": "GNOME",
-              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-              "children": [
-                {
-                  "name": "GNOME",
-                  "imgref": "ghcr.io/tuna-os/albacore:gnome",
-                  "desc": "GNOME desktop"
-                },
-                {
-                  "name": "GNOME — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/albacore:gnome-hwe",
-                  "desc": "GNOME with Hardware Enablement kernel"
-                },
-                {
-                  "name": "GNOME 50",
-                  "imgref": "ghcr.io/tuna-os/albacore:gnome50",
-                  "desc": "GNOME 50 series"
-                },
-                {
-                  "name": "GNOME — Gaming",
-                  "imgref": "ghcr.io/tuna-os/albacore:gnome-gdx",
-                  "desc": "GNOME with gaming optimisations"
-                },
-                {
-                  "name": "GNOME — Gaming & HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/albacore:gnome-gdx-hwe",
-                  "desc": "GNOME with gaming optimisations and HWE kernel"
-                }
-              ]
-            },
-            {
-              "name": "KDE Plasma",
-              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-              "children": [
-                {
-                  "name": "KDE Plasma",
-                  "imgref": "ghcr.io/tuna-os/albacore:kde",
-                  "desc": "KDE Plasma desktop"
-                },
-                {
-                  "name": "KDE Plasma — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/albacore:kde-hwe",
-                  "desc": "KDE Plasma with Hardware Enablement kernel"
-                },
-                {
-                  "name": "KDE Plasma — Gaming",
-                  "imgref": "ghcr.io/tuna-os/albacore:kde-gdx",
-                  "desc": "KDE Plasma with gaming optimisations"
-                }
-              ]
-            },
-            {
-              "name": "Niri",
-              "children": [
-                {
-                  "name": "Niri",
-                  "imgref": "ghcr.io/tuna-os/albacore:niri",
-                  "desc": "Niri scrolling Wayland compositor"
-                },
-                {
-                  "name": "Niri — Gaming",
-                  "imgref": "ghcr.io/tuna-os/albacore:niri-gdx",
-                  "desc": "Niri with gaming optimisations"
-                },
-                {
-                  "name": "Niri — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/albacore:niri-hwe",
-                  "desc": "Niri with Hardware Enablement kernel"
-                }
-              ]
-            },
-            {
-              "name": "Cosmic Desktop",
-              "children": [
-                {
-                  "name": "Cosmic Desktop",
-                  "imgref": "ghcr.io/tuna-os/albacore:cosmic",
-                  "desc": "COSMIC desktop environment"
-                },
-                {
-                  "name": "Cosmic Desktop — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/albacore:cosmic-hwe",
-                  "desc": "COSMIC with Hardware Enablement kernel"
-                },
-                {
-                  "name": "Cosmic Desktop — Gaming",
-                  "imgref": "ghcr.io/tuna-os/albacore:cosmic-gdx",
-                  "desc": "COSMIC with gaming optimisations"
-                }
-              ]
-            }
-          ],
-          "icon": "resource:///org/tunaos/Installer/images/albacore.svg"
-        },
-        {
-          "name": "Yellowfin",
-          "subtitle": "ghcr.io/tuna-os/yellowfin",
-          "children": [
-            {
-              "name": "GNOME",
-              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-              "children": [
-                {
-                  "name": "GNOME",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome",
-                  "desc": "GNOME desktop"
-                },
-                {
-                  "name": "GNOME — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome-hwe",
-                  "desc": "GNOME with Hardware Enablement kernel"
-                },
-                {
-                  "name": "GNOME 50",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome50",
-                  "desc": "GNOME 50 series"
-                },
-                {
-                  "name": "GNOME — Gaming",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome-gdx",
-                  "desc": "GNOME with gaming optimisations"
-                },
-                {
-                  "name": "GNOME — Gaming & HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome-gdx-hwe",
-                  "desc": "GNOME with gaming optimisations and HWE kernel"
-                },
-                {
-                  "name": "GNOME 50 — Gaming",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome50-gdx",
-                  "desc": "GNOME 50 with gaming optimisations"
-                },
-                {
-                  "name": "GNOME 50 — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome50-hwe",
-                  "desc": "GNOME 50 with Hardware Enablement kernel"
-                }
-              ]
-            },
-            {
-              "name": "KDE Plasma",
-              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-              "children": [
-                {
-                  "name": "KDE Plasma",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:kde",
-                  "desc": "KDE Plasma desktop"
-                },
-                {
-                  "name": "KDE Plasma — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:kde-hwe",
-                  "desc": "KDE Plasma with Hardware Enablement kernel"
-                },
-                {
-                  "name": "KDE Plasma — Gaming",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:kde-gdx",
-                  "desc": "KDE Plasma with gaming optimisations"
-                }
-              ]
-            },
-            {
-              "name": "Niri",
-              "children": [
-                {
-                  "name": "Niri",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:niri",
-                  "desc": "Niri scrolling Wayland compositor"
-                },
-                {
-                  "name": "Niri — Gaming",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:niri-gdx",
-                  "desc": "Niri with gaming optimisations"
-                },
-                {
-                  "name": "Niri — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:niri-hwe",
-                  "desc": "Niri with Hardware Enablement kernel"
-                }
-              ]
-            },
-            {
-              "name": "Cosmic Desktop",
-              "children": [
-                {
-                  "name": "Cosmic Desktop",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:cosmic",
-                  "desc": "COSMIC desktop environment"
-                },
-                {
-                  "name": "Cosmic Desktop — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:cosmic-hwe",
-                  "desc": "COSMIC with Hardware Enablement kernel"
-                },
-                {
-                  "name": "Cosmic Desktop — Gaming",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:cosmic-gdx",
-                  "desc": "COSMIC with gaming optimisations"
-                }
-              ]
-            }
-          ],
-          "icon": "resource:///org/tunaos/Installer/images/yellowfin.svg"
-        },
-        {
-          "name": "Skipjack",
-          "subtitle": "ghcr.io/tuna-os/skipjack",
-          "children": [
-            {
-              "name": "GNOME",
-              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-              "children": [
-                {
-                  "name": "GNOME",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome",
-                  "desc": "GNOME desktop"
-                },
-                {
-                  "name": "GNOME — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome-hwe",
-                  "desc": "GNOME with Hardware Enablement kernel"
-                },
-                {
-                  "name": "GNOME 50",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome50",
-                  "desc": "GNOME 50 series"
-                },
-                {
-                  "name": "GNOME — Gaming",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome-gdx",
-                  "desc": "GNOME with gaming optimisations"
-                },
-                {
-                  "name": "GNOME 50 — Gaming",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome50-gdx",
-                  "desc": "GNOME 50 with gaming optimisations"
-                },
-                {
-                  "name": "GNOME 50 — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome50-hwe",
-                  "desc": "GNOME 50 with Hardware Enablement kernel"
-                }
-              ]
-            },
-            {
-              "name": "KDE Plasma",
-              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-              "children": [
-                {
-                  "name": "KDE Plasma",
-                  "imgref": "ghcr.io/tuna-os/skipjack:kde",
-                  "desc": "KDE Plasma desktop"
-                },
-                {
-                  "name": "KDE Plasma — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/skipjack:kde-hwe",
-                  "desc": "KDE Plasma with Hardware Enablement kernel"
-                },
-                {
-                  "name": "KDE Plasma — Gaming",
-                  "imgref": "ghcr.io/tuna-os/skipjack:kde-gdx",
-                  "desc": "KDE Plasma with gaming optimisations"
-                }
-              ]
-            },
-            {
-              "name": "Niri",
-              "imgref": "ghcr.io/tuna-os/skipjack:niri",
-              "desc": "Niri scrolling Wayland compositor"
-            },
-            {
-              "name": "Cosmic Desktop",
-              "children": [
-                {
-                  "name": "Cosmic Desktop",
-                  "imgref": "ghcr.io/tuna-os/skipjack:cosmic",
-                  "desc": "COSMIC desktop environment"
-                },
-                {
-                  "name": "Cosmic Desktop — Gaming",
-                  "imgref": "ghcr.io/tuna-os/skipjack:cosmic-gdx",
-                  "desc": "COSMIC with gaming optimisations"
-                },
-                {
-                  "name": "Cosmic Desktop — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/skipjack:cosmic-hwe",
-                  "desc": "COSMIC with Hardware Enablement kernel"
-                }
-              ]
-            }
-          ],
-          "icon": "resource:///org/tunaos/Installer/images/skipjack.svg"
-        },
-        {
-          "name": "Bonito",
-          "subtitle": "ghcr.io/tuna-os/bonito",
-          "children": [
-            {
-              "name": "GNOME",
-              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-              "children": [
-                {
-                  "name": "GNOME",
-                  "imgref": "ghcr.io/tuna-os/bonito:gnome",
-                  "desc": "GNOME desktop"
-                },
-                {
-                  "name": "GNOME — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/bonito:gnome-hwe",
-                  "desc": "GNOME with Hardware Enablement kernel"
-                },
-                {
-                  "name": "GNOME 50",
-                  "imgref": "ghcr.io/tuna-os/bonito:gnome50",
-                  "desc": "GNOME 50 series"
-                },
-                {
-                  "name": "GNOME — Gaming",
-                  "imgref": "ghcr.io/tuna-os/bonito:gnome-gdx",
-                  "desc": "GNOME with gaming optimisations"
-                }
-              ]
-            },
-            {
-              "name": "KDE Plasma",
-              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-              "children": [
-                {
-                  "name": "KDE Plasma",
-                  "imgref": "ghcr.io/tuna-os/bonito:kde",
-                  "desc": "KDE Plasma desktop"
-                },
-                {
-                  "name": "KDE Plasma — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/bonito:kde-hwe",
-                  "desc": "KDE Plasma with Hardware Enablement kernel"
-                },
-                {
-                  "name": "KDE Plasma — Gaming",
-                  "imgref": "ghcr.io/tuna-os/bonito:kde-gdx",
-                  "desc": "KDE Plasma with gaming optimisations"
-                }
-              ]
-            },
-            {
-              "name": "Niri",
-              "imgref": "ghcr.io/tuna-os/bonito:niri",
-              "desc": "Niri scrolling Wayland compositor"
-            },
-            {
-              "name": "Cosmic Desktop",
-              "imgref": "ghcr.io/tuna-os/bonito:cosmic",
-              "desc": "COSMIC desktop environment"
-            }
-          ],
-          "icon": "resource:///org/tunaos/Installer/images/bonito.svg"
-        }
-      ],
-      "icon": "resource:///org/tunaos/Installer/images/tunaos.svg",
-      "carousel": [
-        {
-          "image": "resource:///org/tunaos/Installer/assets/welcome.png",
-          "title": "Installing TunaOS",
-          "description": "A modern, container-native Linux experience. This should only take a few minutes."
-        },
-        {
-          "image": "resource:///org/tunaos/Installer/assets/containerized.svg",
-          "title": "Atomic Updates",
-          "description": "Your system is updated as a whole container image — fully atomic and rollbackable."
-        },
-        {
-          "image": "resource:///org/tunaos/Installer/assets/complete.svg",
-          "title": "Ready Soon",
-          "description": "Sit back and relax. Your new system will be ready shortly."
-        }
-      ]
-    },
-    {
-      "name": "Bluefin",
-      "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-      "search_extra": "universal blue ublue bluefin gnome developer dx",
-      "children": [
-        {
-          "name": "Latest",
-          "children": [
-            {
-              "name": "Bluefin — Latest",
-              "imgref": "ghcr.io/ublue-os/bluefin:latest",
-              "desc": "Cutting-edge Fedora"
-            },
-            {
-              "name": "Bluefin — Fedora 43",
-              "imgref": "ghcr.io/ublue-os/bluefin:43",
-              "desc": "Fedora 43 base"
-            },
-            {
-              "name": "Bluefin — Fedora 42",
-              "imgref": "ghcr.io/ublue-os/bluefin:42",
-              "desc": "Fedora 42 base"
-            },
-            {
-              "name": "Bluefin DX — Latest",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:latest",
-              "desc": "Cutting-edge Fedora"
-            },
-            {
-              "name": "Bluefin DX — Fedora 43",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:43",
-              "desc": "Fedora 43 base"
-            },
-            {
-              "name": "Bluefin DX — Fedora 42",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:42",
-              "desc": "Fedora 42 base"
-            },
-            {
-              "name": "Bluefin — Beta",
-              "imgref": "ghcr.io/ublue-os/bluefin:beta",
-              "desc": "Beta preview builds"
-            },
-            {
-              "name": "Bluefin DX — Beta",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:beta",
-              "desc": "Beta preview builds"
-            }
-          ]
-        },
-        {
-          "name": "Stable",
-          "children": [
-            {
-              "name": "Bluefin — Stable",
-              "imgref": "ghcr.io/ublue-os/bluefin:stable",
-              "desc": "Latest stable Fedora release"
-            },
-            {
-              "name": "Bluefin — Stable Daily",
-              "imgref": "ghcr.io/ublue-os/bluefin:stable-daily",
-              "desc": "Daily stable builds"
-            },
-            {
-              "name": "Bluefin — GTS",
-              "imgref": "ghcr.io/ublue-os/bluefin:gts",
-              "desc": "Conservative stable"
-            },
-            {
-              "name": "Bluefin DX — Stable",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:stable",
-              "desc": "Latest stable Fedora release"
-            },
-            {
-              "name": "Bluefin DX — Stable Daily",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:stable-daily",
-              "desc": "Daily stable builds"
-            },
-            {
-              "name": "Bluefin DX — GTS",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:gts",
-              "desc": "Conservative stable"
-            }
-          ]
-        },
-        {
-          "name": "LTS",
-          "children": [
-            {
-              "name": "Bluefin — LTS",
-              "imgref": "ghcr.io/ublue-os/bluefin:lts",
-              "desc": "Long-term support (CentOS Stream 10)"
-            },
-            {
-              "name": "Bluefin — LTS — HWE",
-              "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe",
-              "desc": "LTS with Hardware Enablement kernel"
-            },
-            {
-              "name": "Bluefin — LTS Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin:lts-testing",
-              "desc": "Pre-release LTS builds"
-            },
-            {
-              "name": "Bluefin — LTS Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin:lts-testing-50",
-              "desc": "LTS testing with GNOME 50"
-            },
-            {
-              "name": "Bluefin — LTS HWE Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe-testing",
-              "desc": "LTS HWE pre-release builds"
-            },
-            {
-              "name": "Bluefin — LTS HWE Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe-testing-50",
-              "desc": "LTS HWE testing with GNOME 50"
-            },
-            {
-              "name": "Bluefin DX — LTS",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts",
-              "desc": "Long-term support (CentOS Stream 10)"
-            },
-            {
-              "name": "Bluefin DX — LTS — HWE",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-hwe",
-              "desc": "LTS with Hardware Enablement kernel"
-            },
-            {
-              "name": "Bluefin DX — LTS Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-testing",
-              "desc": "Pre-release LTS builds"
-            },
-            {
-              "name": "Bluefin DX — LTS Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-testing-50",
-              "desc": "LTS testing with GNOME 50"
-            },
-            {
-              "name": "Bluefin DX — LTS HWE Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-hwe-testing",
-              "desc": "LTS HWE pre-release builds"
-            },
-            {
-              "name": "Bluefin DX — LTS HWE Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-hwe-testing-50",
-              "desc": "LTS HWE testing with GNOME 50"
-            },
-            {
-              "name": "Bluefin — LTS Testing HWE",
-              "imgref": "ghcr.io/ublue-os/bluefin:lts-testing-hwe",
-              "desc": "LTS testing with HWE kernel"
-            },
-            {
-              "name": "Bluefin DX — LTS Testing HWE",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-testing-hwe",
-              "desc": "LTS testing with HWE kernel"
-            }
-          ],
-          "icon": "resource:///org/tunaos/Installer/images/bluefin-lts.png"
-        },
-        {
-          "name": "CentOS Stream 10",
-          "children": [
-            {
-              "name": "Bluefin — Stream 10",
-              "imgref": "ghcr.io/ublue-os/bluefin:stream10",
-              "desc": "CentOS Stream 10 base"
-            },
-            {
-              "name": "Bluefin DX — Stream 10",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10",
-              "desc": "CentOS Stream 10 base"
-            },
-            {
-              "name": "Bluefin — Stream 10 HWE",
-              "imgref": "ghcr.io/ublue-os/bluefin:stream10-hwe",
-              "desc": "CentOS Stream 10 with HWE kernel"
-            },
-            {
-              "name": "Bluefin DX — Stream 10 HWE",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10-hwe",
-              "desc": "CentOS Stream 10 with HWE kernel"
-            },
-            {
-              "name": "Bluefin — Stream 10 Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin:stream10-testing",
-              "desc": "CentOS Stream 10 pre-release builds"
-            },
-            {
-              "name": "Bluefin DX — Stream 10 Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10-testing",
-              "desc": "CentOS Stream 10 pre-release builds"
-            },
-            {
-              "name": "Bluefin — Stream 10 Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin:stream10-testing-50",
-              "desc": "CentOS Stream 10 testing with GNOME 50"
-            },
-            {
-              "name": "Bluefin DX — Stream 10 Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10-testing-50",
-              "desc": "CentOS Stream 10 testing with GNOME 50"
-            },
-            {
-              "name": "Bluefin — Stream 10 HWE Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin:stream10-hwe-testing",
-              "desc": "CentOS Stream 10 HWE pre-release builds"
-            },
-            {
-              "name": "Bluefin DX — Stream 10 HWE Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10-hwe-testing",
-              "desc": "CentOS Stream 10 HWE pre-release builds"
-            },
-            {
-              "name": "Bluefin — Stream 10 HWE Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin:stream10-hwe-testing-50",
-              "desc": "CentOS Stream 10 HWE testing with GNOME 50"
-            },
-            {
-              "name": "Bluefin DX — Stream 10 HWE Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10-hwe-testing-50",
-              "desc": "CentOS Stream 10 HWE testing with GNOME 50"
-            },
-            {
-              "name": "Bluefin — 10",
-              "imgref": "ghcr.io/ublue-os/bluefin:10",
-              "desc": "CentOS Stream 10 base (short alias)"
-            },
-            {
-              "name": "Bluefin DX — 10",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:10",
-              "desc": "CentOS Stream 10 base (short alias)"
-            },
-            {
-              "name": "Bluefin — 10 HWE",
-              "imgref": "ghcr.io/ublue-os/bluefin:10-hwe",
-              "desc": "CentOS Stream 10 with HWE kernel (short alias)"
-            },
-            {
-              "name": "Bluefin DX — 10 HWE",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:10-hwe",
-              "desc": "CentOS Stream 10 with HWE kernel (short alias)"
-            },
-            {
-              "name": "Bluefin — 10 Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin:10-testing",
-              "desc": "CentOS Stream 10 pre-release builds (short alias)"
-            },
-            {
-              "name": "Bluefin DX — 10 Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:10-testing",
-              "desc": "CentOS Stream 10 pre-release builds (short alias)"
-            },
-            {
-              "name": "Bluefin — 10 Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin:10-testing-50",
-              "desc": "CentOS Stream 10 testing with GNOME 50 (short alias)"
-            },
-            {
-              "name": "Bluefin DX — 10 Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:10-testing-50",
-              "desc": "CentOS Stream 10 testing with GNOME 50 (short alias)"
-            },
-            {
-              "name": "Bluefin — 10 HWE Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin:10-hwe-testing",
-              "desc": "CentOS Stream 10 HWE pre-release builds (short alias)"
-            },
-            {
-              "name": "Bluefin DX — 10 HWE Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:10-hwe-testing",
-              "desc": "CentOS Stream 10 HWE pre-release builds (short alias)"
-            },
-            {
-              "name": "Bluefin — 10 HWE Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin:10-hwe-testing-50",
-              "desc": "CentOS Stream 10 HWE testing with GNOME 50 (short alias)"
-            },
-            {
-              "name": "Bluefin DX — 10 HWE Testing 50",
-              "imgref": "ghcr.io/ublue-os/bluefin-dx:10-hwe-testing-50",
-              "desc": "CentOS Stream 10 HWE testing with GNOME 50 (short alias)"
-            }
-          ]
-        },
-        {
-          "name": "Bluefin GDX",
-          "subtitle": "ghcr.io/ublue-os/bluefin-gdx",
-          "children": [
-            {
-              "name": "Bluefin GDX — LTS",
-              "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts",
-              "desc": "LTS with GDX gaming enhancements"
-            },
-            {
-              "name": "Bluefin GDX — LTS Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts-testing",
-              "desc": "LTS testing with GDX gaming enhancements"
-            },
-            {
-              "name": "Bluefin GDX — LTS ZFS",
-              "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts-zfs",
-              "desc": "LTS with ZFS and GDX gaming enhancements"
-            },
-            {
-              "name": "Bluefin GDX — Stream 10",
-              "imgref": "ghcr.io/ublue-os/bluefin-gdx:10",
-              "desc": "CentOS Stream 10 with GDX gaming enhancements"
-            },
-            {
-              "name": "Bluefin GDX — Stream 10 Testing",
-              "imgref": "ghcr.io/ublue-os/bluefin-gdx:10-testing",
-              "desc": "CentOS Stream 10 testing with GDX"
-            },
-            {
-              "name": "Bluefin GDX — Stream 10 (stream10)",
-              "imgref": "ghcr.io/ublue-os/bluefin-gdx:stream10",
-              "desc": "CentOS Stream 10 with GDX (stream10 alias)"
-            },
-            {
-              "name": "Bluefin GDX — Stream 10 Testing (stream10)",
-              "imgref": "ghcr.io/ublue-os/bluefin-gdx:stream10-testing",
-              "desc": "CentOS Stream 10 testing with GDX (stream10 alias)"
-            }
-          ]
-        }
-      ],
-      "icon": "resource:///org/tunaos/Installer/images/bluefin.png",
-      "carousel": [
-        {
-          "image": "resource:///org/tunaos/Installer/assets/welcome.png",
-          "title": "Installing Bluefin",
-          "description": "A next-generation desktop for those who like to tinker. Powered by Universal Blue."
-        },
-        {
-          "image": "resource:///org/tunaos/Installer/assets/containerized.svg",
-          "title": "Built on OCI Containers",
-          "description": "Bluefin uses bootc for atomic, container-native OS updates from GHCR."
-        }
-      ]
-    },
     {
       "name": "Aurora",
       "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
@@ -795,15 +67,15 @@
           ]
         }
       ],
-      "icon": "resource:///org/tunaos/Installer/images/aurora.svg",
+      "icon": "resource:///org/bootcinstaller/Installer/images/aurora.svg",
       "carousel": [
         {
-          "image": "resource:///org/tunaos/Installer/assets/welcome.png",
+          "image": "resource:///org/bootcinstaller/Installer/assets/welcome.png",
           "title": "Installing Aurora",
           "description": "A KDE Plasma experience powered by Universal Blue and bootc."
         },
         {
-          "image": "resource:///org/tunaos/Installer/assets/containerized.svg",
+          "image": "resource:///org/bootcinstaller/Installer/assets/containerized.svg",
           "title": "Atomic KDE",
           "description": "Aurora updates are delivered as complete OCI images — safe, reliable, and reversible."
         }
@@ -1430,21 +702,769 @@
           ]
         }
       ],
-      "icon": "resource:///org/tunaos/Installer/images/bazzite.svg",
+      "icon": "resource:///org/bootcinstaller/Installer/images/bazzite.svg",
       "flatpaks": "https://raw.githubusercontent.com/ublue-os/bazzite/main/installer/kde_flatpaks/flatpaks",
       "carousel": [
         {
-          "image": "resource:///org/tunaos/Installer/assets/welcome.png",
+          "image": "resource:///org/bootcinstaller/Installer/assets/welcome.png",
           "title": "Installing Bazzite",
           "description": "A gaming-focused Linux experience. Steam, Lutris, and everything you need — ready to play."
         },
         {
-          "image": "resource:///org/tunaos/Installer/assets/containerized.svg",
+          "image": "resource:///org/bootcinstaller/Installer/assets/containerized.svg",
           "title": "Gaming-Ready",
           "description": "Bazzite is built on Universal Blue and delivers a console-like gaming experience on Linux."
         }
       ],
       "needs_user_creation": true
+    },
+    {
+      "name": "Bluefin",
+      "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+      "search_extra": "universal blue ublue bluefin gnome developer dx",
+      "children": [
+        {
+          "name": "Latest",
+          "children": [
+            {
+              "name": "Bluefin — Latest",
+              "imgref": "ghcr.io/ublue-os/bluefin:latest",
+              "desc": "Cutting-edge Fedora"
+            },
+            {
+              "name": "Bluefin — Fedora 43",
+              "imgref": "ghcr.io/ublue-os/bluefin:43",
+              "desc": "Fedora 43 base"
+            },
+            {
+              "name": "Bluefin — Fedora 42",
+              "imgref": "ghcr.io/ublue-os/bluefin:42",
+              "desc": "Fedora 42 base"
+            },
+            {
+              "name": "Bluefin DX — Latest",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:latest",
+              "desc": "Cutting-edge Fedora"
+            },
+            {
+              "name": "Bluefin DX — Fedora 43",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:43",
+              "desc": "Fedora 43 base"
+            },
+            {
+              "name": "Bluefin DX — Fedora 42",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:42",
+              "desc": "Fedora 42 base"
+            },
+            {
+              "name": "Bluefin — Beta",
+              "imgref": "ghcr.io/ublue-os/bluefin:beta",
+              "desc": "Beta preview builds"
+            },
+            {
+              "name": "Bluefin DX — Beta",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:beta",
+              "desc": "Beta preview builds"
+            }
+          ]
+        },
+        {
+          "name": "Stable",
+          "children": [
+            {
+              "name": "Bluefin — Stable",
+              "imgref": "ghcr.io/ublue-os/bluefin:stable",
+              "desc": "Latest stable Fedora release"
+            },
+            {
+              "name": "Bluefin — Stable Daily",
+              "imgref": "ghcr.io/ublue-os/bluefin:stable-daily",
+              "desc": "Daily stable builds"
+            },
+            {
+              "name": "Bluefin — GTS",
+              "imgref": "ghcr.io/ublue-os/bluefin:gts",
+              "desc": "Conservative stable"
+            },
+            {
+              "name": "Bluefin DX — Stable",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:stable",
+              "desc": "Latest stable Fedora release"
+            },
+            {
+              "name": "Bluefin DX — Stable Daily",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:stable-daily",
+              "desc": "Daily stable builds"
+            },
+            {
+              "name": "Bluefin DX — GTS",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:gts",
+              "desc": "Conservative stable"
+            }
+          ]
+        },
+        {
+          "name": "LTS",
+          "children": [
+            {
+              "name": "Bluefin — LTS",
+              "imgref": "ghcr.io/ublue-os/bluefin:lts",
+              "desc": "Long-term support (CentOS Stream 10)"
+            },
+            {
+              "name": "Bluefin — LTS — HWE",
+              "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe",
+              "desc": "LTS with Hardware Enablement kernel"
+            },
+            {
+              "name": "Bluefin — LTS Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin:lts-testing",
+              "desc": "Pre-release LTS builds"
+            },
+            {
+              "name": "Bluefin — LTS Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin:lts-testing-50",
+              "desc": "LTS testing with GNOME 50"
+            },
+            {
+              "name": "Bluefin — LTS HWE Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe-testing",
+              "desc": "LTS HWE pre-release builds"
+            },
+            {
+              "name": "Bluefin — LTS HWE Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe-testing-50",
+              "desc": "LTS HWE testing with GNOME 50"
+            },
+            {
+              "name": "Bluefin DX — LTS",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts",
+              "desc": "Long-term support (CentOS Stream 10)"
+            },
+            {
+              "name": "Bluefin DX — LTS — HWE",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-hwe",
+              "desc": "LTS with Hardware Enablement kernel"
+            },
+            {
+              "name": "Bluefin DX — LTS Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-testing",
+              "desc": "Pre-release LTS builds"
+            },
+            {
+              "name": "Bluefin DX — LTS Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-testing-50",
+              "desc": "LTS testing with GNOME 50"
+            },
+            {
+              "name": "Bluefin DX — LTS HWE Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-hwe-testing",
+              "desc": "LTS HWE pre-release builds"
+            },
+            {
+              "name": "Bluefin DX — LTS HWE Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-hwe-testing-50",
+              "desc": "LTS HWE testing with GNOME 50"
+            },
+            {
+              "name": "Bluefin — LTS Testing HWE",
+              "imgref": "ghcr.io/ublue-os/bluefin:lts-testing-hwe",
+              "desc": "LTS testing with HWE kernel"
+            },
+            {
+              "name": "Bluefin DX — LTS Testing HWE",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:lts-testing-hwe",
+              "desc": "LTS testing with HWE kernel"
+            }
+          ],
+          "icon": "resource:///org/bootcinstaller/Installer/images/bluefin-lts.png"
+        },
+        {
+          "name": "CentOS Stream 10",
+          "children": [
+            {
+              "name": "Bluefin — Stream 10",
+              "imgref": "ghcr.io/ublue-os/bluefin:stream10",
+              "desc": "CentOS Stream 10 base"
+            },
+            {
+              "name": "Bluefin DX — Stream 10",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10",
+              "desc": "CentOS Stream 10 base"
+            },
+            {
+              "name": "Bluefin — Stream 10 HWE",
+              "imgref": "ghcr.io/ublue-os/bluefin:stream10-hwe",
+              "desc": "CentOS Stream 10 with HWE kernel"
+            },
+            {
+              "name": "Bluefin DX — Stream 10 HWE",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10-hwe",
+              "desc": "CentOS Stream 10 with HWE kernel"
+            },
+            {
+              "name": "Bluefin — Stream 10 Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin:stream10-testing",
+              "desc": "CentOS Stream 10 pre-release builds"
+            },
+            {
+              "name": "Bluefin DX — Stream 10 Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10-testing",
+              "desc": "CentOS Stream 10 pre-release builds"
+            },
+            {
+              "name": "Bluefin — Stream 10 Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin:stream10-testing-50",
+              "desc": "CentOS Stream 10 testing with GNOME 50"
+            },
+            {
+              "name": "Bluefin DX — Stream 10 Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10-testing-50",
+              "desc": "CentOS Stream 10 testing with GNOME 50"
+            },
+            {
+              "name": "Bluefin — Stream 10 HWE Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin:stream10-hwe-testing",
+              "desc": "CentOS Stream 10 HWE pre-release builds"
+            },
+            {
+              "name": "Bluefin DX — Stream 10 HWE Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10-hwe-testing",
+              "desc": "CentOS Stream 10 HWE pre-release builds"
+            },
+            {
+              "name": "Bluefin — Stream 10 HWE Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin:stream10-hwe-testing-50",
+              "desc": "CentOS Stream 10 HWE testing with GNOME 50"
+            },
+            {
+              "name": "Bluefin DX — Stream 10 HWE Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:stream10-hwe-testing-50",
+              "desc": "CentOS Stream 10 HWE testing with GNOME 50"
+            },
+            {
+              "name": "Bluefin — 10",
+              "imgref": "ghcr.io/ublue-os/bluefin:10",
+              "desc": "CentOS Stream 10 base (short alias)"
+            },
+            {
+              "name": "Bluefin DX — 10",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:10",
+              "desc": "CentOS Stream 10 base (short alias)"
+            },
+            {
+              "name": "Bluefin — 10 HWE",
+              "imgref": "ghcr.io/ublue-os/bluefin:10-hwe",
+              "desc": "CentOS Stream 10 with HWE kernel (short alias)"
+            },
+            {
+              "name": "Bluefin DX — 10 HWE",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:10-hwe",
+              "desc": "CentOS Stream 10 with HWE kernel (short alias)"
+            },
+            {
+              "name": "Bluefin — 10 Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin:10-testing",
+              "desc": "CentOS Stream 10 pre-release builds (short alias)"
+            },
+            {
+              "name": "Bluefin DX — 10 Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:10-testing",
+              "desc": "CentOS Stream 10 pre-release builds (short alias)"
+            },
+            {
+              "name": "Bluefin — 10 Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin:10-testing-50",
+              "desc": "CentOS Stream 10 testing with GNOME 50 (short alias)"
+            },
+            {
+              "name": "Bluefin DX — 10 Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:10-testing-50",
+              "desc": "CentOS Stream 10 testing with GNOME 50 (short alias)"
+            },
+            {
+              "name": "Bluefin — 10 HWE Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin:10-hwe-testing",
+              "desc": "CentOS Stream 10 HWE pre-release builds (short alias)"
+            },
+            {
+              "name": "Bluefin DX — 10 HWE Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:10-hwe-testing",
+              "desc": "CentOS Stream 10 HWE pre-release builds (short alias)"
+            },
+            {
+              "name": "Bluefin — 10 HWE Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin:10-hwe-testing-50",
+              "desc": "CentOS Stream 10 HWE testing with GNOME 50 (short alias)"
+            },
+            {
+              "name": "Bluefin DX — 10 HWE Testing 50",
+              "imgref": "ghcr.io/ublue-os/bluefin-dx:10-hwe-testing-50",
+              "desc": "CentOS Stream 10 HWE testing with GNOME 50 (short alias)"
+            }
+          ]
+        },
+        {
+          "name": "Bluefin GDX",
+          "subtitle": "ghcr.io/ublue-os/bluefin-gdx",
+          "children": [
+            {
+              "name": "Bluefin GDX — LTS",
+              "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts",
+              "desc": "LTS with GDX gaming enhancements"
+            },
+            {
+              "name": "Bluefin GDX — LTS Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts-testing",
+              "desc": "LTS testing with GDX gaming enhancements"
+            },
+            {
+              "name": "Bluefin GDX — LTS ZFS",
+              "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts-zfs",
+              "desc": "LTS with ZFS and GDX gaming enhancements"
+            },
+            {
+              "name": "Bluefin GDX — Stream 10",
+              "imgref": "ghcr.io/ublue-os/bluefin-gdx:10",
+              "desc": "CentOS Stream 10 with GDX gaming enhancements"
+            },
+            {
+              "name": "Bluefin GDX — Stream 10 Testing",
+              "imgref": "ghcr.io/ublue-os/bluefin-gdx:10-testing",
+              "desc": "CentOS Stream 10 testing with GDX"
+            },
+            {
+              "name": "Bluefin GDX — Stream 10 (stream10)",
+              "imgref": "ghcr.io/ublue-os/bluefin-gdx:stream10",
+              "desc": "CentOS Stream 10 with GDX (stream10 alias)"
+            },
+            {
+              "name": "Bluefin GDX — Stream 10 Testing (stream10)",
+              "imgref": "ghcr.io/ublue-os/bluefin-gdx:stream10-testing",
+              "desc": "CentOS Stream 10 testing with GDX (stream10 alias)"
+            }
+          ]
+        },
+        {
+          "name": "Dakota (experimental)",
+          "search_extra": "projectbluefin composefs systemd-boot centos rhel",
+          "icon": "bluefin",
+          "bootloader": "systemd",
+          "filesystem": "btrfs",
+          "composefs": true,
+          "needs_user_creation": true,
+          "children": [
+            {
+              "name": "Dakota",
+              "imgref": "ghcr.io/projectbluefin/dakota:latest",
+              "desc": "GNOME workstation on CentOS Stream (composefs + systemd-boot)"
+            },
+            {
+              "name": "Dakota DX",
+              "imgref": "ghcr.io/projectbluefin/dakota-dx:latest",
+              "desc": "Dakota with developer tools"
+            }
+          ]
+        }
+      ],
+      "icon": "resource:///org/bootcinstaller/Installer/images/bluefin.png",
+      "carousel": [
+        {
+          "image": "resource:///org/bootcinstaller/Installer/assets/welcome.png",
+          "title": "Installing Bluefin",
+          "description": "A next-generation desktop for those who like to tinker. Powered by Universal Blue."
+        },
+        {
+          "image": "resource:///org/bootcinstaller/Installer/assets/containerized.svg",
+          "title": "Built on OCI Containers",
+          "description": "Bluefin uses bootc for atomic, container-native OS updates from GHCR."
+        }
+      ]
+    },
+    {
+      "name": "TunaOS",
+      "search_extra": "tunaos tuna",
+      "children": [
+        {
+          "name": "Albacore",
+          "subtitle": "ghcr.io/tuna-os/albacore",
+          "children": [
+            {
+              "name": "GNOME",
+              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "children": [
+                {
+                  "name": "GNOME",
+                  "imgref": "ghcr.io/tuna-os/albacore:gnome",
+                  "desc": "GNOME desktop"
+                },
+                {
+                  "name": "GNOME — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/albacore:gnome-hwe",
+                  "desc": "GNOME with Hardware Enablement kernel"
+                },
+                {
+                  "name": "GNOME 50",
+                  "imgref": "ghcr.io/tuna-os/albacore:gnome50",
+                  "desc": "GNOME 50 series"
+                },
+                {
+                  "name": "GNOME — Gaming",
+                  "imgref": "ghcr.io/tuna-os/albacore:gnome-gdx",
+                  "desc": "GNOME with gaming optimisations"
+                },
+                {
+                  "name": "GNOME — Gaming & HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/albacore:gnome-gdx-hwe",
+                  "desc": "GNOME with gaming optimisations and HWE kernel"
+                }
+              ]
+            },
+            {
+              "name": "KDE Plasma",
+              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "children": [
+                {
+                  "name": "KDE Plasma",
+                  "imgref": "ghcr.io/tuna-os/albacore:kde",
+                  "desc": "KDE Plasma desktop"
+                },
+                {
+                  "name": "KDE Plasma — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/albacore:kde-hwe",
+                  "desc": "KDE Plasma with Hardware Enablement kernel"
+                },
+                {
+                  "name": "KDE Plasma — Gaming",
+                  "imgref": "ghcr.io/tuna-os/albacore:kde-gdx",
+                  "desc": "KDE Plasma with gaming optimisations"
+                }
+              ]
+            },
+            {
+              "name": "Niri",
+              "children": [
+                {
+                  "name": "Niri",
+                  "imgref": "ghcr.io/tuna-os/albacore:niri",
+                  "desc": "Niri scrolling Wayland compositor"
+                },
+                {
+                  "name": "Niri — Gaming",
+                  "imgref": "ghcr.io/tuna-os/albacore:niri-gdx",
+                  "desc": "Niri with gaming optimisations"
+                },
+                {
+                  "name": "Niri — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/albacore:niri-hwe",
+                  "desc": "Niri with Hardware Enablement kernel"
+                }
+              ]
+            },
+            {
+              "name": "Cosmic Desktop",
+              "children": [
+                {
+                  "name": "Cosmic Desktop",
+                  "imgref": "ghcr.io/tuna-os/albacore:cosmic",
+                  "desc": "COSMIC desktop environment"
+                },
+                {
+                  "name": "Cosmic Desktop — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/albacore:cosmic-hwe",
+                  "desc": "COSMIC with Hardware Enablement kernel"
+                },
+                {
+                  "name": "Cosmic Desktop — Gaming",
+                  "imgref": "ghcr.io/tuna-os/albacore:cosmic-gdx",
+                  "desc": "COSMIC with gaming optimisations"
+                }
+              ]
+            }
+          ],
+          "icon": "resource:///org/bootcinstaller/Installer/images/albacore.svg"
+        },
+        {
+          "name": "Yellowfin",
+          "subtitle": "ghcr.io/tuna-os/yellowfin",
+          "children": [
+            {
+              "name": "GNOME",
+              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "children": [
+                {
+                  "name": "GNOME",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome",
+                  "desc": "GNOME desktop"
+                },
+                {
+                  "name": "GNOME — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome-hwe",
+                  "desc": "GNOME with Hardware Enablement kernel"
+                },
+                {
+                  "name": "GNOME 50",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome50",
+                  "desc": "GNOME 50 series"
+                },
+                {
+                  "name": "GNOME — Gaming",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome-gdx",
+                  "desc": "GNOME with gaming optimisations"
+                },
+                {
+                  "name": "GNOME — Gaming & HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome-gdx-hwe",
+                  "desc": "GNOME with gaming optimisations and HWE kernel"
+                },
+                {
+                  "name": "GNOME 50 — Gaming",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome50-gdx",
+                  "desc": "GNOME 50 with gaming optimisations"
+                },
+                {
+                  "name": "GNOME 50 — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome50-hwe",
+                  "desc": "GNOME 50 with Hardware Enablement kernel"
+                }
+              ]
+            },
+            {
+              "name": "KDE Plasma",
+              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "children": [
+                {
+                  "name": "KDE Plasma",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:kde",
+                  "desc": "KDE Plasma desktop"
+                },
+                {
+                  "name": "KDE Plasma — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:kde-hwe",
+                  "desc": "KDE Plasma with Hardware Enablement kernel"
+                },
+                {
+                  "name": "KDE Plasma — Gaming",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:kde-gdx",
+                  "desc": "KDE Plasma with gaming optimisations"
+                }
+              ]
+            },
+            {
+              "name": "Niri",
+              "children": [
+                {
+                  "name": "Niri",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:niri",
+                  "desc": "Niri scrolling Wayland compositor"
+                },
+                {
+                  "name": "Niri — Gaming",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:niri-gdx",
+                  "desc": "Niri with gaming optimisations"
+                },
+                {
+                  "name": "Niri — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:niri-hwe",
+                  "desc": "Niri with Hardware Enablement kernel"
+                }
+              ]
+            },
+            {
+              "name": "Cosmic Desktop",
+              "children": [
+                {
+                  "name": "Cosmic Desktop",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:cosmic",
+                  "desc": "COSMIC desktop environment"
+                },
+                {
+                  "name": "Cosmic Desktop — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:cosmic-hwe",
+                  "desc": "COSMIC with Hardware Enablement kernel"
+                },
+                {
+                  "name": "Cosmic Desktop — Gaming",
+                  "imgref": "ghcr.io/tuna-os/yellowfin:cosmic-gdx",
+                  "desc": "COSMIC with gaming optimisations"
+                }
+              ]
+            }
+          ],
+          "icon": "resource:///org/bootcinstaller/Installer/images/yellowfin.svg"
+        },
+        {
+          "name": "Skipjack",
+          "subtitle": "ghcr.io/tuna-os/skipjack",
+          "children": [
+            {
+              "name": "GNOME",
+              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "children": [
+                {
+                  "name": "GNOME",
+                  "imgref": "ghcr.io/tuna-os/skipjack:gnome",
+                  "desc": "GNOME desktop"
+                },
+                {
+                  "name": "GNOME — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/skipjack:gnome-hwe",
+                  "desc": "GNOME with Hardware Enablement kernel"
+                },
+                {
+                  "name": "GNOME 50",
+                  "imgref": "ghcr.io/tuna-os/skipjack:gnome50",
+                  "desc": "GNOME 50 series"
+                },
+                {
+                  "name": "GNOME — Gaming",
+                  "imgref": "ghcr.io/tuna-os/skipjack:gnome-gdx",
+                  "desc": "GNOME with gaming optimisations"
+                },
+                {
+                  "name": "GNOME 50 — Gaming",
+                  "imgref": "ghcr.io/tuna-os/skipjack:gnome50-gdx",
+                  "desc": "GNOME 50 with gaming optimisations"
+                },
+                {
+                  "name": "GNOME 50 — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/skipjack:gnome50-hwe",
+                  "desc": "GNOME 50 with Hardware Enablement kernel"
+                }
+              ]
+            },
+            {
+              "name": "KDE Plasma",
+              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "children": [
+                {
+                  "name": "KDE Plasma",
+                  "imgref": "ghcr.io/tuna-os/skipjack:kde",
+                  "desc": "KDE Plasma desktop"
+                },
+                {
+                  "name": "KDE Plasma — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/skipjack:kde-hwe",
+                  "desc": "KDE Plasma with Hardware Enablement kernel"
+                },
+                {
+                  "name": "KDE Plasma — Gaming",
+                  "imgref": "ghcr.io/tuna-os/skipjack:kde-gdx",
+                  "desc": "KDE Plasma with gaming optimisations"
+                }
+              ]
+            },
+            {
+              "name": "Niri",
+              "imgref": "ghcr.io/tuna-os/skipjack:niri",
+              "desc": "Niri scrolling Wayland compositor"
+            },
+            {
+              "name": "Cosmic Desktop",
+              "children": [
+                {
+                  "name": "Cosmic Desktop",
+                  "imgref": "ghcr.io/tuna-os/skipjack:cosmic",
+                  "desc": "COSMIC desktop environment"
+                },
+                {
+                  "name": "Cosmic Desktop — Gaming",
+                  "imgref": "ghcr.io/tuna-os/skipjack:cosmic-gdx",
+                  "desc": "COSMIC with gaming optimisations"
+                },
+                {
+                  "name": "Cosmic Desktop — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/skipjack:cosmic-hwe",
+                  "desc": "COSMIC with Hardware Enablement kernel"
+                }
+              ]
+            }
+          ],
+          "icon": "resource:///org/bootcinstaller/Installer/images/skipjack.svg"
+        },
+        {
+          "name": "Bonito",
+          "subtitle": "ghcr.io/tuna-os/bonito",
+          "children": [
+            {
+              "name": "GNOME",
+              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "children": [
+                {
+                  "name": "GNOME",
+                  "imgref": "ghcr.io/tuna-os/bonito:gnome",
+                  "desc": "GNOME desktop"
+                },
+                {
+                  "name": "GNOME — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/bonito:gnome-hwe",
+                  "desc": "GNOME with Hardware Enablement kernel"
+                },
+                {
+                  "name": "GNOME 50",
+                  "imgref": "ghcr.io/tuna-os/bonito:gnome50",
+                  "desc": "GNOME 50 series"
+                },
+                {
+                  "name": "GNOME — Gaming",
+                  "imgref": "ghcr.io/tuna-os/bonito:gnome-gdx",
+                  "desc": "GNOME with gaming optimisations"
+                }
+              ]
+            },
+            {
+              "name": "KDE Plasma",
+              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "children": [
+                {
+                  "name": "KDE Plasma",
+                  "imgref": "ghcr.io/tuna-os/bonito:kde",
+                  "desc": "KDE Plasma desktop"
+                },
+                {
+                  "name": "KDE Plasma — HWE Kernel",
+                  "imgref": "ghcr.io/tuna-os/bonito:kde-hwe",
+                  "desc": "KDE Plasma with Hardware Enablement kernel"
+                },
+                {
+                  "name": "KDE Plasma — Gaming",
+                  "imgref": "ghcr.io/tuna-os/bonito:kde-gdx",
+                  "desc": "KDE Plasma with gaming optimisations"
+                }
+              ]
+            },
+            {
+              "name": "Niri",
+              "imgref": "ghcr.io/tuna-os/bonito:niri",
+              "desc": "Niri scrolling Wayland compositor"
+            },
+            {
+              "name": "Cosmic Desktop",
+              "imgref": "ghcr.io/tuna-os/bonito:cosmic",
+              "desc": "COSMIC desktop environment"
+            }
+          ],
+          "icon": "resource:///org/bootcinstaller/Installer/images/bonito.svg"
+        }
+      ],
+      "icon": "resource:///org/bootcinstaller/Installer/images/tunaos.svg",
+      "carousel": [
+        {
+          "image": "resource:///org/bootcinstaller/Installer/assets/welcome.png",
+          "title": "Installing TunaOS",
+          "description": "A modern, container-native Linux experience. This should only take a few minutes."
+        },
+        {
+          "image": "resource:///org/bootcinstaller/Installer/assets/containerized.svg",
+          "title": "Atomic Updates",
+          "description": "Your system is updated as a whole container image — fully atomic and rollbackable."
+        },
+        {
+          "image": "resource:///org/bootcinstaller/Installer/assets/complete.svg",
+          "title": "Ready Soon",
+          "description": "Sit back and relax. Your new system will be ready shortly."
+        }
+      ]
     },
     {
       "name": "Zirconium",
@@ -1458,17 +1478,14 @@
             {
               "name": "Latest",
               "imgref": "ghcr.io/zirconium-dev/zirconium:latest",
-              "desc": "Latest Zirconium build",
-              "composefs": true
+              "desc": "Latest Zirconium build"
             },
             {
               "name": "Rawhide",
               "imgref": "ghcr.io/zirconium-dev/zirconium:rawhide",
-              "desc": "Fedora Rawhide based",
-              "composefs": true
+              "desc": "Fedora Rawhide based"
             }
-          ],
-          "composefs": true
+          ]
         },
         {
           "name": "Zirconium NVIDIA",
@@ -1477,11 +1494,9 @@
             {
               "name": "Latest",
               "imgref": "ghcr.io/zirconium-dev/zirconium-nvidia:latest",
-              "desc": "Latest with NVIDIA drivers",
-              "composefs": true
+              "desc": "Latest with NVIDIA drivers"
             }
-          ],
-          "composefs": true
+          ]
         },
         {
           "name": "Zirconium mkosi",
@@ -1490,11 +1505,9 @@
             {
               "name": "Latest",
               "imgref": "ghcr.io/zirconium-dev/zirconium-mkosi:latest",
-              "desc": "mkosi image",
-              "composefs": true
+              "desc": "mkosi image"
             }
-          ],
-          "composefs": true
+          ]
         }
       ]
     }

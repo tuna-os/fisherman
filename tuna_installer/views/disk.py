@@ -53,7 +53,7 @@ def _list_disks():
     return disks
 
 
-@Gtk.Template(resource_path="/org/tunaos/Installer/gtk/disk.ui")
+@Gtk.Template(resource_path="/org/bootcinstaller/Installer/gtk/disk.ui")
 class TunaDisk(Adw.Bin):
     __gtype_name__ = "TunaDisk"
 

@@ -1,9 +1,9 @@
 {
-  "app-id": "org.tunaos.Installer",
+  "app-id": "org.bootcinstaller.Installer",
   "runtime": "org.gnome.Platform",
   "runtime-version": "49",
   "sdk": "org.gnome.Sdk",
-  "command": "tuna-installer",
+  "command": "bootc-installer",
   "finish-args": [
     "--share=network",
     "--share=ipc",
@@ -18,8 +18,8 @@
   "build-options": {
     "env": {
       "PATH": "/app/go/bin:/usr/bin:/bin",
-      "GOPATH": "/run/build/tuna-installer/gopath",
-      "GOCACHE": "/run/build/tuna-installer/gocache",
+      "GOPATH": "/run/build/bootc-installer/gopath",
+      "GOCACHE": "/run/build/bootc-installer/gocache",
       "GONOSUMDB": "*",
       "GOFLAGS": "",
       "GOPROXY": "off"
@@ -62,7 +62,7 @@
       ]
     },
     {
-      "name": "tuna-installer",
+      "name": "bootc-installer",
       "buildsystem": "meson",
       "sources": [
         {
@@ -75,7 +75,7 @@
       "name": "polkit-action",
       "buildsystem": "simple",
       "build-commands": [
-        "install -Dm644 data/polkit/org.tunaos.Installer.policy /app/share/polkit-1/actions/org.tunaos.Installer.policy"
+        "install -Dm644 data/polkit/org.bootcinstaller.Installer.policy /app/share/polkit-1/actions/org.bootcinstaller.Installer.policy"
       ],
       "sources": [
         {

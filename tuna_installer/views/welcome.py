@@ -7,7 +7,7 @@ from gettext import gettext as _
 from gi.repository import Adw, Gtk
 
 
-@Gtk.Template(resource_path="/org/tunaos/Installer/gtk/welcome.ui")
+@Gtk.Template(resource_path="/org/bootcinstaller/Installer/gtk/welcome.ui")
 class TunaWelcome(Adw.Bin):
     __gtype_name__ = "TunaWelcome"
 
