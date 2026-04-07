@@ -712,7 +712,7 @@
         },
         {
           "image": "resource:///org/bootcinstaller/Installer/assets/containerized.svg",
-          "title": "Gaming-Ready",
+          "title": "Nvidia + CUDA",
           "description": "Bazzite is built on Universal Blue and delivers a console-like gaming experience on Linux."
         }
       ],
@@ -1011,22 +1011,22 @@
             {
               "name": "Bluefin GDX — LTS",
               "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts",
-              "desc": "LTS with GDX gaming enhancements"
+              "desc": "LTS with Nvidia drivers and CUDA support"
             },
             {
               "name": "Bluefin GDX — LTS Testing",
               "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts-testing",
-              "desc": "LTS testing with GDX gaming enhancements"
+              "desc": "LTS testing with Nvidia drivers and CUDA support"
             },
             {
               "name": "Bluefin GDX — LTS ZFS",
               "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts-zfs",
-              "desc": "LTS with ZFS and GDX gaming enhancements"
+              "desc": "LTS with ZFS and Nvidia drivers and CUDA support"
             },
             {
               "name": "Bluefin GDX — Stream 10",
               "imgref": "ghcr.io/ublue-os/bluefin-gdx:10",
-              "desc": "CentOS Stream 10 with GDX gaming enhancements"
+              "desc": "CentOS Stream 10 with Nvidia drivers and CUDA support"
             },
             {
               "name": "Bluefin GDX — Stream 10 Testing",
@@ -1109,14 +1109,14 @@
                   "desc": "GNOME 50 series"
                 },
                 {
-                  "name": "GNOME — Gaming",
+                  "name": "GNOME — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/albacore:gnome-gdx",
-                  "desc": "GNOME with gaming optimisations"
+                  "desc": "GNOME with Nvidia drivers and CUDA support"
                 },
                 {
-                  "name": "GNOME — Gaming & HWE Kernel",
+                  "name": "GNOME — Nvidia + CUDA + HWE Kernel",
                   "imgref": "ghcr.io/tuna-os/albacore:gnome-gdx-hwe",
-                  "desc": "GNOME with gaming optimisations and HWE kernel"
+                  "desc": "GNOME with Nvidia drivers, CUDA, and HWE kernel"
                 }
               ]
             },
@@ -1135,9 +1135,9 @@
                   "desc": "KDE Plasma with Hardware Enablement kernel"
                 },
                 {
-                  "name": "KDE Plasma — Gaming",
+                  "name": "KDE Plasma — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/albacore:kde-gdx",
-                  "desc": "KDE Plasma with gaming optimisations"
+                  "desc": "KDE Plasma with Nvidia drivers and CUDA support"
                 }
               ]
             },
@@ -1150,9 +1150,9 @@
                   "desc": "Niri scrolling Wayland compositor"
                 },
                 {
-                  "name": "Niri — Gaming",
+                  "name": "Niri — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/albacore:niri-gdx",
-                  "desc": "Niri with gaming optimisations"
+                  "desc": "Niri with Nvidia drivers and CUDA support"
                 },
                 {
                   "name": "Niri — HWE Kernel",
@@ -1175,9 +1175,9 @@
                   "desc": "COSMIC with Hardware Enablement kernel"
                 },
                 {
-                  "name": "Cosmic Desktop — Gaming",
+                  "name": "Cosmic Desktop — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/albacore:cosmic-gdx",
-                  "desc": "COSMIC with gaming optimisations"
+                  "desc": "COSMIC with Nvidia drivers and CUDA support"
                 }
               ]
             }
@@ -1208,19 +1208,19 @@
                   "desc": "GNOME 50 series"
                 },
                 {
-                  "name": "GNOME — Gaming",
+                  "name": "GNOME — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/yellowfin:gnome-gdx",
-                  "desc": "GNOME with gaming optimisations"
+                  "desc": "GNOME with Nvidia drivers and CUDA support"
                 },
                 {
-                  "name": "GNOME — Gaming & HWE Kernel",
+                  "name": "GNOME — Nvidia + CUDA + HWE Kernel",
                   "imgref": "ghcr.io/tuna-os/yellowfin:gnome-gdx-hwe",
-                  "desc": "GNOME with gaming optimisations and HWE kernel"
+                  "desc": "GNOME with Nvidia drivers, CUDA, and HWE kernel"
                 },
                 {
-                  "name": "GNOME 50 — Gaming",
+                  "name": "GNOME 50 — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/yellowfin:gnome50-gdx",
-                  "desc": "GNOME 50 with gaming optimisations"
+                  "desc": "GNOME 50 with Nvidia drivers and CUDA support"
                 },
                 {
                   "name": "GNOME 50 — HWE Kernel",
@@ -1244,9 +1244,9 @@
                   "desc": "KDE Plasma with Hardware Enablement kernel"
                 },
                 {
-                  "name": "KDE Plasma — Gaming",
+                  "name": "KDE Plasma — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/yellowfin:kde-gdx",
-                  "desc": "KDE Plasma with gaming optimisations"
+                  "desc": "KDE Plasma with Nvidia drivers and CUDA support"
                 }
               ]
             },
@@ -1259,9 +1259,9 @@
                   "desc": "Niri scrolling Wayland compositor"
                 },
                 {
-                  "name": "Niri — Gaming",
+                  "name": "Niri — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/yellowfin:niri-gdx",
-                  "desc": "Niri with gaming optimisations"
+                  "desc": "Niri with Nvidia drivers and CUDA support"
                 },
                 {
                   "name": "Niri — HWE Kernel",
@@ -1284,9 +1284,9 @@
                   "desc": "COSMIC with Hardware Enablement kernel"
                 },
                 {
-                  "name": "Cosmic Desktop — Gaming",
+                  "name": "Cosmic Desktop — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/yellowfin:cosmic-gdx",
-                  "desc": "COSMIC with gaming optimisations"
+                  "desc": "COSMIC with Nvidia drivers and CUDA support"
                 }
               ]
             }
@@ -1317,14 +1317,14 @@
                   "desc": "GNOME 50 series"
                 },
                 {
-                  "name": "GNOME — Gaming",
+                  "name": "GNOME — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/skipjack:gnome-gdx",
-                  "desc": "GNOME with gaming optimisations"
+                  "desc": "GNOME with Nvidia drivers and CUDA support"
                 },
                 {
-                  "name": "GNOME 50 — Gaming",
+                  "name": "GNOME 50 — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/skipjack:gnome50-gdx",
-                  "desc": "GNOME 50 with gaming optimisations"
+                  "desc": "GNOME 50 with Nvidia drivers and CUDA support"
                 },
                 {
                   "name": "GNOME 50 — HWE Kernel",
@@ -1348,9 +1348,9 @@
                   "desc": "KDE Plasma with Hardware Enablement kernel"
                 },
                 {
-                  "name": "KDE Plasma — Gaming",
+                  "name": "KDE Plasma — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/skipjack:kde-gdx",
-                  "desc": "KDE Plasma with gaming optimisations"
+                  "desc": "KDE Plasma with Nvidia drivers and CUDA support"
                 }
               ]
             },
@@ -1368,9 +1368,9 @@
                   "desc": "COSMIC desktop environment"
                 },
                 {
-                  "name": "Cosmic Desktop — Gaming",
+                  "name": "Cosmic Desktop — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/skipjack:cosmic-gdx",
-                  "desc": "COSMIC with gaming optimisations"
+                  "desc": "COSMIC with Nvidia drivers and CUDA support"
                 },
                 {
                   "name": "Cosmic Desktop — HWE Kernel",
@@ -1406,9 +1406,9 @@
                   "desc": "GNOME 50 series"
                 },
                 {
-                  "name": "GNOME — Gaming",
+                  "name": "GNOME — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/bonito:gnome-gdx",
-                  "desc": "GNOME with gaming optimisations"
+                  "desc": "GNOME with Nvidia drivers and CUDA support"
                 }
               ]
             },
@@ -1427,9 +1427,9 @@
                   "desc": "KDE Plasma with Hardware Enablement kernel"
                 },
                 {
-                  "name": "KDE Plasma — Gaming",
+                  "name": "KDE Plasma — Nvidia + CUDA",
                   "imgref": "ghcr.io/tuna-os/bonito:kde-gdx",
-                  "desc": "KDE Plasma with gaming optimisations"
+                  "desc": "KDE Plasma with Nvidia drivers and CUDA support"
                 }
               ]
             },
