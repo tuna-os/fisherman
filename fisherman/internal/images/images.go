@@ -11,6 +11,9 @@ import (
 
 // Node is a single entry in the image catalog tree. Leaf nodes have Imgref
 // set; group nodes have Children.
+//
+// Boolean fields use *bool so that JSON absence (nil) is distinguishable from
+// an explicit false — enabling correct inheritance when Resolve() is called.
 type Node struct {
 	Name              string  `json:"name"`
 	Imgref            string  `json:"imgref,omitempty"`
@@ -21,13 +24,64 @@ type Node struct {
 	SearchExtra       string  `json:"search_extra,omitempty"`
 	Bootloader        string  `json:"bootloader,omitempty"`
 	Filesystem        string  `json:"filesystem,omitempty"`
-	ComposeFsBackend  bool    `json:"composefs,omitempty"`
-	NeedsUserCreation bool    `json:"needs_user_creation,omitempty"`
+	ComposeFsBackend  *bool   `json:"composefs,omitempty"`
+	NeedsUserCreation *bool   `json:"needs_user_creation,omitempty"`
 	Children          []*Node `json:"children,omitempty"`
 }
 
 // IsLeaf returns true if this node is an installable image (has an imgref and no children).
 func (n *Node) IsLeaf() bool { return n.Imgref != "" && len(n.Children) == 0 }
+
+// ResolvedNode holds the effective configuration for a node after inheriting
+// fields from its ancestor group nodes (root → node). String fields inherit
+// the deepest non-empty ancestor value; boolean fields inherit the deepest
+// explicitly-set (*bool != nil) ancestor value.
+type ResolvedNode struct {
+	Name              string
+	Imgref            string
+	Desc              string
+	Subtitle          string
+	Flatpaks          string
+	Bootloader        string
+	Filesystem        string
+	ComposeFsBackend  bool
+	NeedsUserCreation bool
+	SearchExtra       string
+}
+
+// Resolve computes the effective configuration by walking ancestors root-first
+// and applying the most-specific (deepest) value for each field.
+func (r *NodeResult) Resolve() ResolvedNode {
+	all := make([]*Node, 0, len(r.Path)+1)
+	all = append(all, r.Path...)
+	all = append(all, r.Node)
+
+	res := ResolvedNode{
+		Name:        r.Node.Name,
+		Imgref:      r.Node.Imgref,
+		Desc:        r.Node.Desc,
+		Subtitle:    r.Node.Subtitle,
+		SearchExtra: r.Node.SearchExtra,
+	}
+	for _, n := range all {
+		if n.Flatpaks != "" {
+			res.Flatpaks = n.Flatpaks
+		}
+		if n.Bootloader != "" {
+			res.Bootloader = n.Bootloader
+		}
+		if n.Filesystem != "" {
+			res.Filesystem = n.Filesystem
+		}
+		if n.ComposeFsBackend != nil {
+			res.ComposeFsBackend = *n.ComposeFsBackend
+		}
+		if n.NeedsUserCreation != nil {
+			res.NeedsUserCreation = *n.NeedsUserCreation
+		}
+	}
+	return res
+}
 
 // NodeResult is a matched node with its ancestor path (root-first, not including the node itself).
 type NodeResult struct {

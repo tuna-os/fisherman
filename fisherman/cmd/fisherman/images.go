@@ -82,100 +82,109 @@ fmt.Println()
 
 // printNodeDetail shows a rich detail view for a single matched node.
 func printNodeDetail(r *images.NodeResult, defaultImg string, plain bool) {
-n := r.Node
+	n := r.Node
+	resolved := r.Resolve()
 
-if plain {
-if r.Breadcrumb() != n.Name {
-fmt.Printf("Path: %s\n", r.Breadcrumb())
-}
-fmt.Printf("Name: %s\n", n.Name)
-if n.Imgref != "" {
-marker := ""
-if n.Imgref == defaultImg {
-marker = " [default]"
-}
-fmt.Printf("Image: %s%s\n", n.Imgref, marker)
-}
-if n.Desc != "" {
-fmt.Printf("Description: %s\n", n.Desc)
-}
-if n.Subtitle != "" {
-fmt.Printf("Subtitle: %s\n", n.Subtitle)
-}
-if n.Bootloader != "" {
-fmt.Printf("Bootloader: %s\n", n.Bootloader)
-}
-if n.Filesystem != "" {
-fmt.Printf("Filesystem: %s\n", n.Filesystem)
-}
-if n.ComposeFsBackend {
-fmt.Printf("ComposFS: enabled\n")
-}
-if n.Flatpaks != "" {
-fmt.Printf("Flatpaks: %s\n", n.Flatpaks)
-}
-if n.NeedsUserCreation {
-fmt.Printf("Needs user creation: yes\n")
-}
-if n.SearchExtra != "" {
-fmt.Printf("Search keywords: %s\n", n.SearchExtra)
-}
-if len(n.Children) > 0 {
-fmt.Printf("Variants:\n")
-for _, child := range n.Children {
-printNode(child, "  ", true, defaultImg, true)
-}
-}
-return
-}
+	if plain {
+		if r.Breadcrumb() != n.Name {
+			fmt.Printf("Path: %s\n", r.Breadcrumb())
+		}
+		fmt.Printf("Name: %s\n", n.Name)
+		if n.Imgref != "" {
+			marker := ""
+			if n.Imgref == defaultImg {
+				marker = " [default]"
+			}
+			fmt.Printf("Image: %s%s\n", n.Imgref, marker)
+		}
+		if resolved.Desc != "" {
+			fmt.Printf("Description: %s\n", resolved.Desc)
+		}
+		if resolved.Subtitle != "" {
+			fmt.Printf("Subtitle: %s\n", resolved.Subtitle)
+		}
+		if resolved.Bootloader != "" {
+			fmt.Printf("Bootloader: %s\n", resolved.Bootloader)
+		}
+		if resolved.Filesystem != "" {
+			fmt.Printf("Filesystem: %s\n", resolved.Filesystem)
+		}
+		if resolved.ComposeFsBackend {
+			fmt.Printf("ComposFS: enabled\n")
+		}
+		if resolved.Flatpaks != "" {
+			fmt.Printf("Flatpaks: %s\n", resolved.Flatpaks)
+		}
+		if resolved.NeedsUserCreation {
+			fmt.Printf("Needs user creation: yes\n")
+		} else {
+			fmt.Printf("Needs user creation: no\n")
+		}
+		if resolved.SearchExtra != "" {
+			fmt.Printf("Search keywords: %s\n", resolved.SearchExtra)
+		}
+		if len(n.Children) > 0 {
+			fmt.Printf("Variants:\n")
+			for _, child := range n.Children {
+				printNode(child, "  ", true, defaultImg, true)
+			}
+		}
+		return
+	}
 
-// Coloured detail view
-if bc := r.Breadcrumb(); bc != n.Name {
-fmt.Printf("%s%s%s\n", dim, bc, reset)
-}
-fmt.Printf("%s%s%s", bold, n.Name, reset)
-if n.Subtitle != "" {
-fmt.Printf("  %s%s%s", dim, n.Subtitle, reset)
-}
-fmt.Println()
+	// Coloured detail view
+	if bc := r.Breadcrumb(); bc != n.Name {
+		fmt.Printf("%s%s%s\n", dim, bc, reset)
+	}
+	fmt.Printf("%s%s%s", bold, n.Name, reset)
+	if resolved.Subtitle != "" {
+		fmt.Printf("  %s%s%s", dim, resolved.Subtitle, reset)
+	}
+	fmt.Println()
 
-if n.Imgref != "" {
-isDefault := n.Imgref == defaultImg
-fmt.Printf("  %simage:%s   %s%s%s", dim, reset, cyan, n.Imgref, reset)
-if isDefault {
-fmt.Printf("  %s★ default%s", yellow, reset)
-}
-fmt.Println()
-}
-if n.Desc != "" {
-fmt.Printf("  %sdesc:%s    %s\n", dim, reset, n.Desc)
-}
-if n.Bootloader != "" {
-fmt.Printf("  %sboot:%s    %s\n", dim, reset, n.Bootloader)
-}
-if n.Filesystem != "" {
-fmt.Printf("  %sfs:%s      %s\n", dim, reset, n.Filesystem)
-}
-if n.ComposeFsBackend {
-fmt.Printf("  %scomposefs:%s enabled\n", dim, reset)
-}
-if n.Flatpaks != "" {
-fmt.Printf("  %sflatpaks:%s %s\n", dim, reset, n.Flatpaks)
-}
-if n.NeedsUserCreation {
-fmt.Printf("  %sneeds user creation%s\n", yellow, reset)
-}
-if n.SearchExtra != "" {
-fmt.Printf("  %skeywords:%s %s%s%s\n", dim, reset, dim, n.SearchExtra, reset)
-}
+	if n.Imgref != "" {
+		isDefault := n.Imgref == defaultImg
+		fmt.Printf("  %simage:%s   %s%s%s", dim, reset, cyan, n.Imgref, reset)
+		if isDefault {
+			fmt.Printf("  %s★ default%s", yellow, reset)
+		}
+		fmt.Println()
+	}
+	if resolved.Desc != "" {
+		fmt.Printf("  %sdesc:%s    %s\n", dim, reset, resolved.Desc)
+	}
+	if resolved.Bootloader != "" {
+		fmt.Printf("  %sboot:%s    %s\n", dim, reset, resolved.Bootloader)
+	} else {
+		fmt.Printf("  %sboot:%s    %sgrub2 (default)%s\n", dim, reset, dim, reset)
+	}
+	if resolved.Filesystem != "" {
+		fmt.Printf("  %sfs:%s      %s\n", dim, reset, resolved.Filesystem)
+	} else {
+		fmt.Printf("  %sfs:%s      %sxfs (default)%s\n", dim, reset, dim, reset)
+	}
+	if resolved.ComposeFsBackend {
+		fmt.Printf("  %scomposefs:%s %senabled%s\n", dim, reset, green, reset)
+	}
+	if resolved.NeedsUserCreation {
+		fmt.Printf("  %sneeds user creation:%s %syes%s\n", dim, reset, yellow, reset)
+	} else {
+		fmt.Printf("  %sneeds user creation:%s no\n", dim, reset)
+	}
+	if resolved.Flatpaks != "" {
+		fmt.Printf("  %sflatpaks:%s %s\n", dim, reset, resolved.Flatpaks)
+	}
+	if resolved.SearchExtra != "" {
+		fmt.Printf("  %skeywords:%s %s%s%s\n", dim, reset, dim, resolved.SearchExtra, reset)
+	}
 
-if len(n.Children) > 0 {
-fmt.Printf("\n  %sVariants:%s\n", bold, reset)
-for i, child := range n.Children {
-last := i == len(n.Children)-1
-printNode(child, "  ", last, defaultImg, false)
-}
-}
+	if len(n.Children) > 0 {
+		fmt.Printf("\n  %sVariants:%s\n", bold, reset)
+		for i, child := range n.Children {
+			last := i == len(n.Children)-1
+			printNode(child, "  ", last, defaultImg, false)
+		}
+	}
 }
 
 func printNode(n *images.Node, prefix string, last bool, defaultImg string, plain bool) {
