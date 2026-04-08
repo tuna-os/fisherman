@@ -1,7 +1,9 @@
 {
   "aliases": {
     "aurora_brew": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-    "bluefin_brew": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile"
+    "bluefin_brew": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+    "bazzite_brew_gnome": "https://raw.githubusercontent.com/ublue-os/bazzite/main/installer/gnome_flatpaks/flatpaks",
+    "bazzite_brew_kde": "https://raw.githubusercontent.com/ublue-os/bazzite/main/installer/kde_flatpaks/flatpaks"
   },
   "fallback_flatpaks": [
     "org.mozilla.firefox",
@@ -235,7 +237,7 @@
               "registry": "ghcr.io/ublue-os/bazzite-gnome"
             }
           ],
-          "flatpaks": "https://raw.githubusercontent.com/ublue-os/bazzite/main/installer/gnome_flatpaks/flatpaks"
+          "flatpaks": "@bazzite_brew_gnome"
         },
         {
           "name": "Hardware-Specific",
@@ -724,7 +726,7 @@
         }
       ],
       "icon": "resource:///org/bootcinstaller/Installer/images/bazzite.svg",
-      "flatpaks": "https://raw.githubusercontent.com/ublue-os/bazzite/main/installer/kde_flatpaks/flatpaks",
+      "flatpaks": "@bazzite_brew_kde",
       "carousel": [
         {
           "image": "resource:///org/bootcinstaller/Installer/assets/welcome.png",
@@ -888,7 +890,7 @@
             },
             {
               "name": "KDE Plasma",
-              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "flatpaks": "@aurora_brew",
               "children": [
                 {
                   "name": "KDE Plasma",
@@ -968,7 +970,7 @@
             },
             {
               "name": "KDE Plasma",
-              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "flatpaks": "@aurora_brew",
               "children": [
                 {
                   "name": "KDE Plasma",
@@ -1058,7 +1060,7 @@
             },
             {
               "name": "KDE Plasma",
-              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "flatpaks": "@aurora_brew",
               "children": [
                 {
                   "name": "KDE Plasma",
@@ -1153,7 +1155,7 @@
             },
             {
               "name": "KDE Plasma",
-              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "flatpaks": "@aurora_brew",
               "children": [
                 {
                   "name": "KDE Plasma",
