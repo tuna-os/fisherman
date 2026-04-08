@@ -99,8 +99,18 @@ func partition(disk, script string) error {
 		return fmt.Errorf("unmounting partitions: %w", err)
 	}
 
-	if err := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", disk); err != nil {
-		return fmt.Errorf("sfdisk: %w", err)
+	// First attempt without --force.
+	err := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", disk)
+	if err != nil {
+		// The disk may still be considered "in use" by the kernel even after
+		// aggressive unmounting (e.g. a race with udev re-probing). Retry once
+		// with --force --no-reread so sfdisk writes the table unconditionally.
+		fmt.Fprintf(os.Stdout, "+ sfdisk first attempt failed (%v), retrying with --force\n", err)
+		time.Sleep(500 * time.Millisecond)
+		_ = runner.Run("udevadm", "settle")
+		if err2 := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", "--force", "--no-reread", disk); err2 != nil {
+			return fmt.Errorf("sfdisk: %w", err2)
+		}
 	}
 
 	// Brief sleep then settle — mirrors bootc's approach.
@@ -213,14 +223,20 @@ func loopRescan(disk string) error {
 	return nil
 }
 
-// unmountAll unmounts every mounted partition on disk.
+// unmountAll aggressively releases all kernel and userspace references to disk
+// so that sfdisk can safely repartition it.
 //
-// Automounted drives (USB flash drives, etc.) are managed by udisksd, which
-// holds an open file descriptor on the block device even after a lazy umount.
-// sfdisk detects that open FD and refuses to partition the disk. We therefore
-// try udisksctl unmount first — it properly releases udisksd's lock — and fall
-// back to umount -l for any mounts udisksctl doesn't know about. A udevadm
-// settle after all unmounts gives the kernel time to clear the "in-use" flag.
+// Flash drives and USB disks are managed by udisksd, which holds an open FD
+// on the block device even after umount -l. sfdisk detects that FD and refuses
+// with "disk is currently in use". The sequence below is ordered from least to
+// most destructive:
+//
+//  1. udisksctl unmount — releases udisksd's lock for automounted partitions.
+//  2. umount -l         — lazy fallback for manually-mounted or non-udisks mounts.
+//  3. swapoff           — disable any active swap partitions on the disk.
+//  4. fuser -km         — SIGKILL every process with an open FD on the disk.
+//  5. blockdev --flushbufs — flush pending I/O so the kernel can drop references.
+//  6. udevadm settle    — wait for udev/udisksd to release device references.
 func unmountAll(disk string) error {
 	data, err := os.ReadFile(procMountsPath)
 	if err != nil {
@@ -238,19 +254,31 @@ func unmountAll(disk string) error {
 		if !strings.HasPrefix(devBase, base) {
 			continue
 		}
+
+		// swap entries have mount point "none" and fstype "swap".
+		if mp == "none" || (len(fields) >= 3 && fields[2] == "swap") {
+			fmt.Fprintf(os.Stdout, "+ swapoff %s\n", dev)
+			_ = runner.Run("swapoff", dev)
+			continue
+		}
+
 		fmt.Fprintf(os.Stdout, "+ unmount %s (%s)\n", mp, dev)
 
-		// Try udisksctl first — this releases udisksd's open FD on the device,
-		// which is what sfdisk checks for "currently in use".
+		// Try udisksctl first — properly releases udisksd's open FD.
 		if err := runner.Run("udisksctl", "unmount", "--no-user-interaction", "--block-device", dev); err != nil {
-			// udisksctl may fail for mounts not managed by udisks (e.g. root fs,
-			// or filesystems mounted by hand). Fall back to umount -l.
+			// Fall back to umount -l for mounts not managed by udisks.
 			fmt.Fprintf(os.Stdout, "+ udisksctl failed (%v), falling back to umount -l\n", err)
-			if err := runner.Run("umount", "-l", mp); err != nil {
-				return fmt.Errorf("unmounting %s: %w", mp, err)
-			}
+			_ = runner.Run("umount", "-l", mp)
 		}
 	}
+
+	// Kill any processes still holding FDs open on any partition of this disk.
+	// fuser exits non-zero when no processes are found — that is fine.
+	fmt.Fprintf(os.Stdout, "+ fuser -km %s (kill remaining holders)\n", disk)
+	_ = runner.Run("fuser", "-km", disk)
+
+	// Flush pending I/O so the kernel can drop its internal references.
+	_ = runner.Run("blockdev", "--flushbufs", disk)
 
 	// Give udev and udisksd time to release all device references.
 	_ = runner.Run("udevadm", "settle")
