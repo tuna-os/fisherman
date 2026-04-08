@@ -1,4 +1,8 @@
 {
+  "aliases": {
+    "aurora_brew": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+    "bluefin_brew": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile"
+  },
   "fallback_flatpaks": [
     "org.mozilla.firefox",
     "org.gnome.Console",
@@ -7,63 +11,65 @@
   "images": [
     {
       "name": "Aurora",
-      "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+      "registry": "ghcr.io/ublue-os/aurora",
+      "flatpaks": "@aurora_brew",
       "search_extra": "universal blue ublue aurora kde plasma",
       "children": [
         {
           "name": "Stable",
-          "imgref": "ghcr.io/ublue-os/aurora:stable",
+          "tag": "stable",
           "desc": "Latest stable KDE Plasma release"
         },
         {
           "name": "Stable Daily",
-          "imgref": "ghcr.io/ublue-os/aurora:stable-daily",
+          "tag": "stable-daily",
           "desc": "Daily stable builds"
         },
         {
           "name": "Beta",
-          "imgref": "ghcr.io/ublue-os/aurora:beta",
+          "tag": "beta",
           "desc": "Preview of next release",
           "needs_user_creation": false
         },
         {
           "name": "Latest",
-          "imgref": "ghcr.io/ublue-os/aurora:latest",
+          "tag": "latest",
           "desc": "Newest builds, cutting edge"
         },
         {
           "name": "Fedora 43",
-          "imgref": "ghcr.io/ublue-os/aurora:43",
+          "tag": "43",
           "desc": "Fedora 43 base"
         },
         {
           "name": "Aurora DX",
+          "registry": "ghcr.io/ublue-os/aurora-dx",
           "subtitle": "ghcr.io/ublue-os/aurora-dx",
           "children": [
             {
               "name": "Stable",
-              "imgref": "ghcr.io/ublue-os/aurora-dx:stable",
+              "tag": "stable",
               "desc": "Latest stable KDE Plasma release"
             },
             {
               "name": "Stable Daily",
-              "imgref": "ghcr.io/ublue-os/aurora-dx:stable-daily",
+              "tag": "stable-daily",
               "desc": "Daily stable builds"
             },
             {
               "name": "Latest",
-              "imgref": "ghcr.io/ublue-os/aurora-dx:latest",
+              "tag": "latest",
               "desc": "Newest builds, cutting edge"
             },
             {
               "name": "Beta",
-              "imgref": "ghcr.io/ublue-os/aurora-dx:beta",
+              "tag": "beta",
               "desc": "Preview of next release",
               "needs_user_creation": false
             },
             {
               "name": "Fedora 43",
-              "imgref": "ghcr.io/ublue-os/aurora-dx:43",
+              "tag": "43",
               "desc": "Fedora 43 base"
             }
           ]
@@ -722,7 +728,7 @@
     },
     {
       "name": "Bluefin",
-      "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+      "flatpaks": "@bluefin_brew",
       "search_extra": "universal blue ublue bluefin gnome developer dx",
       "icon": "resource:///org/bootcinstaller/Installer/images/bluefin.png",
       "carousel": [
@@ -801,7 +807,7 @@
           "children": [
             {
               "name": "GNOME",
-              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "flatpaks": "@bluefin_brew",
               "children": [
                 {
                   "name": "GNOME",
@@ -900,7 +906,7 @@
           "children": [
             {
               "name": "GNOME",
-              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "flatpaks": "@bluefin_brew",
               "children": [
                 {
                   "name": "GNOME",
@@ -1009,7 +1015,7 @@
           "children": [
             {
               "name": "GNOME",
-              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "flatpaks": "@bluefin_brew",
               "children": [
                 {
                   "name": "GNOME",
@@ -1098,7 +1104,7 @@
           "children": [
             {
               "name": "GNOME",
-              "flatpaks": "https://raw.githubusercontent.com/projectbluefin/common/refs/heads/main/system_files/bluefin/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "flatpaks": "@bluefin_brew",
               "children": [
                 {
                   "name": "GNOME",
