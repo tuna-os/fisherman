@@ -16,51 +16,10 @@
       "search_extra": "universal blue ublue aurora kde plasma",
       "children": [
         {
-          "name": "Stable",
-          "tag": "stable",
-          "desc": "Latest stable KDE Plasma release"
-        },
-        {
-          "name": "Stable Daily",
-          "tag": "stable-daily",
-          "desc": "Daily stable builds"
-        },
-        {
-          "name": "Beta",
-          "tag": "beta",
-          "desc": "Preview of next release",
-          "needs_user_creation": false
-        },
-        {
-          "name": "Latest",
-          "tag": "latest",
-          "desc": "Newest builds, cutting edge"
-        },
-        {
-          "name": "Fedora 43",
-          "tag": "43",
-          "desc": "Fedora 43 base"
-        },
-        {
           "name": "Aurora DX",
           "registry": "ghcr.io/ublue-os/aurora-dx",
           "subtitle": "ghcr.io/ublue-os/aurora-dx",
           "children": [
-            {
-              "name": "Stable",
-              "tag": "stable",
-              "desc": "Latest stable KDE Plasma release"
-            },
-            {
-              "name": "Stable Daily",
-              "tag": "stable-daily",
-              "desc": "Daily stable builds"
-            },
-            {
-              "name": "Latest",
-              "tag": "latest",
-              "desc": "Newest builds, cutting edge"
-            },
             {
               "name": "Beta",
               "tag": "beta",
@@ -71,8 +30,49 @@
               "name": "Fedora 43",
               "tag": "43",
               "desc": "Fedora 43 base"
+            },
+            {
+              "name": "Latest",
+              "tag": "latest",
+              "desc": "Newest builds, cutting edge"
+            },
+            {
+              "name": "Stable",
+              "tag": "stable",
+              "desc": "Latest stable KDE Plasma release"
+            },
+            {
+              "name": "Stable Daily",
+              "tag": "stable-daily",
+              "desc": "Daily stable builds"
             }
           ]
+        },
+        {
+          "name": "Beta",
+          "tag": "beta",
+          "desc": "Preview of next release",
+          "needs_user_creation": false
+        },
+        {
+          "name": "Fedora 43",
+          "tag": "43",
+          "desc": "Fedora 43 base"
+        },
+        {
+          "name": "Latest",
+          "tag": "latest",
+          "desc": "Newest builds, cutting edge"
+        },
+        {
+          "name": "Stable",
+          "tag": "stable",
+          "desc": "Latest stable KDE Plasma release"
+        },
+        {
+          "name": "Stable Daily",
+          "tag": "stable-daily",
+          "desc": "Daily stable builds"
         }
       ],
       "icon": "resource:///org/bootcinstaller/Installer/images/aurora.svg",
@@ -97,280 +97,439 @@
           "name": "GNOME Desktop",
           "children": [
             {
-              "name": "Standard",
-              "children": [
-                {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome:stable",
-                  "desc": "Stable gaming-focused release"
-                },
-                {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome:testing",
-                  "desc": "Pre-release testing builds"
-                },
-                {
-                  "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome:latest",
-                  "desc": "Newest builds, cutting edge"
-                },
-                {
-                  "name": "Fedora 43",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome:43",
-                  "desc": "Fedora 43 base"
-                },
-                {
-                  "name": "Unstable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome:unstable",
-                  "desc": "Unstable builds"
-                },
-                {
-                  "name": "Stable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome:stable-43",
-                  "desc": "Stable Fedora 43 build"
-                },
-                {
-                  "name": "Testing (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome:testing-43",
-                  "desc": "Testing Fedora 43 build"
-                },
-                {
-                  "name": "Unstable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome:unstable-43",
-                  "desc": "Unstable Fedora 43 build"
-                }
-              ]
-            },
-            {
               "name": "NVIDIA",
               "children": [
                 {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia:stable",
-                  "desc": "Stable gaming-focused release"
-                },
-                {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia:testing",
-                  "desc": "Pre-release testing builds"
+                  "name": "Fedora 43",
+                  "desc": "Fedora 43 base",
+                  "tag": "43"
                 },
                 {
                   "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia:latest",
-                  "desc": "Newest builds, cutting edge"
+                  "desc": "Newest builds, cutting edge",
+                  "tag": "latest"
                 },
                 {
-                  "name": "Fedora 43",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia:43",
-                  "desc": "Fedora 43 base"
-                },
-                {
-                  "name": "Unstable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia:unstable",
-                  "desc": "Unstable builds"
+                  "name": "Stable",
+                  "desc": "Stable gaming-focused release",
+                  "tag": "stable"
                 },
                 {
                   "name": "Stable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia:stable-43",
-                  "desc": "Stable Fedora 43 build"
+                  "desc": "Stable Fedora 43 build",
+                  "tag": "stable-43"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
                 },
                 {
                   "name": "Testing (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia:testing-43",
-                  "desc": "Testing Fedora 43 build"
+                  "desc": "Testing Fedora 43 build",
+                  "tag": "testing-43"
+                },
+                {
+                  "name": "Unstable",
+                  "desc": "Unstable builds",
+                  "tag": "unstable"
                 },
                 {
                   "name": "Unstable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia:unstable-43",
-                  "desc": "Unstable Fedora 43 build"
+                  "desc": "Unstable Fedora 43 build",
+                  "tag": "unstable-43"
                 }
-              ]
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-gnome-nvidia"
             },
             {
               "name": "NVIDIA Open",
               "children": [
                 {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:stable",
-                  "desc": "Stable gaming-focused release"
-                },
-                {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:testing",
-                  "desc": "Pre-release testing builds"
+                  "name": "Fedora 43",
+                  "desc": "Fedora 43 base",
+                  "tag": "43"
                 },
                 {
                   "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:latest",
-                  "desc": "Newest builds, cutting edge"
+                  "desc": "Newest builds, cutting edge",
+                  "tag": "latest"
                 },
                 {
-                  "name": "Fedora 43",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:43",
-                  "desc": "Fedora 43 base"
-                },
-                {
-                  "name": "Unstable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:unstable",
-                  "desc": "Unstable builds"
+                  "name": "Stable",
+                  "desc": "Stable gaming-focused release",
+                  "tag": "stable"
                 },
                 {
                   "name": "Stable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:stable-43",
-                  "desc": "Stable Fedora 43 build"
+                  "desc": "Stable Fedora 43 build",
+                  "tag": "stable-43"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
                 },
                 {
                   "name": "Testing (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:testing-43",
-                  "desc": "Testing Fedora 43 build"
+                  "desc": "Testing Fedora 43 build",
+                  "tag": "testing-43"
+                },
+                {
+                  "name": "Unstable",
+                  "desc": "Unstable builds",
+                  "tag": "unstable"
                 },
                 {
                   "name": "Unstable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-gnome-nvidia-open:unstable-43",
-                  "desc": "Unstable Fedora 43 build"
+                  "desc": "Unstable Fedora 43 build",
+                  "tag": "unstable-43"
                 }
-              ]
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-gnome-nvidia-open"
+            },
+            {
+              "name": "Standard",
+              "children": [
+                {
+                  "name": "Fedora 43",
+                  "desc": "Fedora 43 base",
+                  "tag": "43"
+                },
+                {
+                  "name": "Latest",
+                  "desc": "Newest builds, cutting edge",
+                  "tag": "latest"
+                },
+                {
+                  "name": "Stable",
+                  "desc": "Stable gaming-focused release",
+                  "tag": "stable"
+                },
+                {
+                  "name": "Stable (Fedora 43)",
+                  "desc": "Stable Fedora 43 build",
+                  "tag": "stable-43"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
+                },
+                {
+                  "name": "Testing (Fedora 43)",
+                  "desc": "Testing Fedora 43 build",
+                  "tag": "testing-43"
+                },
+                {
+                  "name": "Unstable",
+                  "desc": "Unstable builds",
+                  "tag": "unstable"
+                },
+                {
+                  "name": "Unstable (Fedora 43)",
+                  "desc": "Unstable Fedora 43 build",
+                  "tag": "unstable-43"
+                }
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-gnome"
             }
           ],
           "flatpaks": "https://raw.githubusercontent.com/ublue-os/bazzite/main/installer/gnome_flatpaks/flatpaks"
         },
         {
-          "name": "KDE Plasma Desktop",
+          "name": "Hardware-Specific",
           "children": [
             {
-              "name": "Standard",
+              "name": "Ally",
               "children": [
                 {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite:stable",
-                  "desc": "Stable gaming-focused release"
+                  "name": "Edge",
+                  "desc": "Edge builds",
+                  "tag": "edge"
                 },
                 {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite:testing",
-                  "desc": "Pre-release testing builds"
+                  "name": "Fedora 42",
+                  "children": [
+                    {
+                      "name": "Stable (Fedora 42)",
+                      "desc": "Stable Fedora 42 build",
+                      "tag": "stable-42"
+                    },
+                    {
+                      "name": "Testing (Fedora 42)",
+                      "desc": "Testing Fedora 42 build",
+                      "tag": "testing-42"
+                    },
+                    {
+                      "name": "Unstable (Fedora 42)",
+                      "desc": "Unstable Fedora 42 build",
+                      "tag": "unstable-42"
+                    }
+                  ]
                 },
                 {
                   "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite:latest",
-                  "desc": "Newest builds, cutting edge"
+                  "desc": "Newest builds",
+                  "tag": "latest"
                 },
                 {
-                  "name": "Fedora 43",
-                  "imgref": "ghcr.io/ublue-os/bazzite:43",
-                  "desc": "Fedora 43 base"
+                  "name": "Stable",
+                  "desc": "Stable release",
+                  "tag": "stable"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
+                },
+                {
+                  "name": "v3.6",
+                  "desc": "Version 3.6",
+                  "tag": "v3.6"
+                }
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-ally"
+            },
+            {
+              "name": "ASUS",
+              "children": [
+                {
+                  "name": "Edge",
+                  "desc": "Edge builds",
+                  "tag": "edge"
+                },
+                {
+                  "name": "Fedora 42",
+                  "children": [
+                    {
+                      "name": "Stable (Fedora 42)",
+                      "desc": "Stable Fedora 42 build",
+                      "tag": "stable-42"
+                    },
+                    {
+                      "name": "Testing (Fedora 42)",
+                      "desc": "Testing Fedora 42 build",
+                      "tag": "testing-42"
+                    },
+                    {
+                      "name": "Unstable (Fedora 42)",
+                      "desc": "Unstable Fedora 42 build",
+                      "tag": "unstable-42"
+                    }
+                  ]
+                },
+                {
+                  "name": "Latest",
+                  "desc": "Newest builds",
+                  "tag": "latest"
+                },
+                {
+                  "name": "Stable",
+                  "desc": "Stable release",
+                  "tag": "stable"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
+                },
+                {
+                  "name": "v3.6",
+                  "desc": "Version 3.6",
+                  "tag": "v3.6"
+                }
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-asus"
+            },
+            {
+              "name": "Surface",
+              "children": [
+                {
+                  "name": "Fedora 41",
+                  "children": [
+                    {
+                      "name": "Stable (Fedora 41)",
+                      "desc": "Stable Fedora 41 build",
+                      "tag": "stable-41"
+                    },
+                    {
+                      "name": "Testing (Fedora 41)",
+                      "desc": "Testing Fedora 41 build",
+                      "tag": "testing-41"
+                    },
+                    {
+                      "name": "Unstable (Fedora 41)",
+                      "desc": "Unstable Fedora 41 build",
+                      "tag": "unstable-41"
+                    }
+                  ]
+                },
+                {
+                  "name": "Latest",
+                  "desc": "Newest builds",
+                  "tag": "latest"
+                },
+                {
+                  "name": "Stable",
+                  "desc": "Stable release",
+                  "tag": "stable"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
                 },
                 {
                   "name": "Unstable",
-                  "imgref": "ghcr.io/ublue-os/bazzite:unstable",
-                  "desc": "Unstable builds"
-                },
-                {
-                  "name": "Stable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite:stable-43",
-                  "desc": "Stable Fedora 43 build"
-                },
-                {
-                  "name": "Testing (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite:testing-43",
-                  "desc": "Testing Fedora 43 build"
-                },
-                {
-                  "name": "Unstable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite:unstable-43",
-                  "desc": "Unstable Fedora 43 build"
+                  "desc": "Unstable builds",
+                  "tag": "unstable"
                 }
-              ]
-            },
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-surface"
+            }
+          ]
+        },
+        {
+          "name": "KDE Plasma Desktop",
+          "children": [
             {
               "name": "NVIDIA",
               "children": [
                 {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia:stable",
-                  "desc": "Stable gaming-focused release"
-                },
-                {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia:testing",
-                  "desc": "Pre-release testing builds"
+                  "name": "Fedora 43",
+                  "desc": "Fedora 43 base",
+                  "tag": "43"
                 },
                 {
                   "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia:latest",
-                  "desc": "Newest builds, cutting edge"
+                  "desc": "Newest builds, cutting edge",
+                  "tag": "latest"
                 },
                 {
-                  "name": "Fedora 43",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia:43",
-                  "desc": "Fedora 43 base"
-                },
-                {
-                  "name": "Unstable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia:unstable",
-                  "desc": "Unstable builds"
+                  "name": "Stable",
+                  "desc": "Stable gaming-focused release",
+                  "tag": "stable"
                 },
                 {
                   "name": "Stable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia:stable-43",
-                  "desc": "Stable Fedora 43 build"
+                  "desc": "Stable Fedora 43 build",
+                  "tag": "stable-43"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
                 },
                 {
                   "name": "Testing (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia:testing-43",
-                  "desc": "Testing Fedora 43 build"
+                  "desc": "Testing Fedora 43 build",
+                  "tag": "testing-43"
+                },
+                {
+                  "name": "Unstable",
+                  "desc": "Unstable builds",
+                  "tag": "unstable"
                 },
                 {
                   "name": "Unstable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia:unstable-43",
-                  "desc": "Unstable Fedora 43 build"
+                  "desc": "Unstable Fedora 43 build",
+                  "tag": "unstable-43"
                 }
-              ]
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-nvidia"
             },
             {
               "name": "NVIDIA Open",
               "children": [
                 {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia-open:stable",
-                  "desc": "Stable gaming-focused release"
-                },
-                {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia-open:testing",
-                  "desc": "Pre-release testing builds"
+                  "name": "Fedora 43",
+                  "desc": "Fedora 43 base",
+                  "tag": "43"
                 },
                 {
                   "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia-open:latest",
-                  "desc": "Newest builds, cutting edge"
+                  "desc": "Newest builds, cutting edge",
+                  "tag": "latest"
                 },
                 {
-                  "name": "Fedora 43",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia-open:43",
-                  "desc": "Fedora 43 base"
-                },
-                {
-                  "name": "Unstable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia-open:unstable",
-                  "desc": "Unstable builds"
+                  "name": "Stable",
+                  "desc": "Stable gaming-focused release",
+                  "tag": "stable"
                 },
                 {
                   "name": "Stable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia-open:stable-43",
-                  "desc": "Stable Fedora 43 build"
+                  "desc": "Stable Fedora 43 build",
+                  "tag": "stable-43"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
                 },
                 {
                   "name": "Testing (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia-open:testing-43",
-                  "desc": "Testing Fedora 43 build"
+                  "desc": "Testing Fedora 43 build",
+                  "tag": "testing-43"
+                },
+                {
+                  "name": "Unstable",
+                  "desc": "Unstable builds",
+                  "tag": "unstable"
                 },
                 {
                   "name": "Unstable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-nvidia-open:unstable-43",
-                  "desc": "Unstable Fedora 43 build"
+                  "desc": "Unstable Fedora 43 build",
+                  "tag": "unstable-43"
                 }
-              ]
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-nvidia-open"
+            },
+            {
+              "name": "Standard",
+              "children": [
+                {
+                  "name": "Fedora 43",
+                  "desc": "Fedora 43 base",
+                  "tag": "43"
+                },
+                {
+                  "name": "Latest",
+                  "desc": "Newest builds, cutting edge",
+                  "tag": "latest"
+                },
+                {
+                  "name": "Stable",
+                  "desc": "Stable gaming-focused release",
+                  "tag": "stable"
+                },
+                {
+                  "name": "Stable (Fedora 43)",
+                  "desc": "Stable Fedora 43 build",
+                  "tag": "stable-43"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
+                },
+                {
+                  "name": "Testing (Fedora 43)",
+                  "desc": "Testing Fedora 43 build",
+                  "tag": "testing-43"
+                },
+                {
+                  "name": "Unstable",
+                  "desc": "Unstable builds",
+                  "tag": "unstable"
+                },
+                {
+                  "name": "Unstable (Fedora 43)",
+                  "desc": "Unstable Fedora 43 build",
+                  "tag": "unstable-43"
+                }
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite"
             }
           ]
         },
@@ -378,334 +537,188 @@
           "name": "Steam Deck / Handheld",
           "children": [
             {
-              "name": "KDE",
-              "children": [
-                {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck:stable",
-                  "desc": "Stable gaming-focused release"
-                },
-                {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck:testing",
-                  "desc": "Pre-release testing builds"
-                },
-                {
-                  "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck:latest",
-                  "desc": "Newest builds, cutting edge"
-                },
-                {
-                  "name": "Fedora 43",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck:43",
-                  "desc": "Fedora 43 base"
-                },
-                {
-                  "name": "Unstable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck:unstable",
-                  "desc": "Unstable builds"
-                },
-                {
-                  "name": "Stable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck:stable-43",
-                  "desc": "Stable Fedora 43 build"
-                },
-                {
-                  "name": "Testing (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck:testing-43",
-                  "desc": "Testing Fedora 43 build"
-                },
-                {
-                  "name": "Unstable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck:unstable-43",
-                  "desc": "Unstable Fedora 43 build"
-                }
-              ]
-            },
-            {
               "name": "GNOME",
               "children": [
                 {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-gnome:stable",
-                  "desc": "Stable gaming-focused release"
-                },
-                {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-gnome:testing",
-                  "desc": "Pre-release testing builds"
+                  "name": "Fedora 43",
+                  "desc": "Fedora 43 base",
+                  "tag": "43"
                 },
                 {
                   "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-gnome:latest",
-                  "desc": "Newest builds, cutting edge"
+                  "desc": "Newest builds, cutting edge",
+                  "tag": "latest"
                 },
                 {
-                  "name": "Fedora 43",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-gnome:43",
-                  "desc": "Fedora 43 base"
-                },
-                {
-                  "name": "Unstable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-gnome:unstable",
-                  "desc": "Unstable builds"
+                  "name": "Stable",
+                  "desc": "Stable gaming-focused release",
+                  "tag": "stable"
                 },
                 {
                   "name": "Stable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-gnome:stable-43",
-                  "desc": "Stable Fedora 43 build"
-                },
-                {
-                  "name": "Testing (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-gnome:testing-43",
-                  "desc": "Testing Fedora 43 build"
-                },
-                {
-                  "name": "Unstable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-gnome:unstable-43",
-                  "desc": "Unstable Fedora 43 build"
-                }
-              ]
-            },
-            {
-              "name": "KDE + NVIDIA",
-              "children": [
-                {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia:stable",
-                  "desc": "Stable gaming-focused release"
+                  "desc": "Stable Fedora 43 build",
+                  "tag": "stable-43"
                 },
                 {
                   "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia:testing",
-                  "desc": "Pre-release testing builds"
-                },
-                {
-                  "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia:latest",
-                  "desc": "Newest builds, cutting edge"
-                },
-                {
-                  "name": "Fedora 43",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia:43",
-                  "desc": "Fedora 43 base"
-                },
-                {
-                  "name": "Unstable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia:unstable",
-                  "desc": "Unstable builds"
-                },
-                {
-                  "name": "Stable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia:stable-43",
-                  "desc": "Stable Fedora 43 build"
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
                 },
                 {
                   "name": "Testing (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia:testing-43",
-                  "desc": "Testing Fedora 43 build"
+                  "desc": "Testing Fedora 43 build",
+                  "tag": "testing-43"
+                },
+                {
+                  "name": "Unstable",
+                  "desc": "Unstable builds",
+                  "tag": "unstable"
                 },
                 {
                   "name": "Unstable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia:unstable-43",
-                  "desc": "Unstable Fedora 43 build"
+                  "desc": "Unstable Fedora 43 build",
+                  "tag": "unstable-43"
                 }
-              ]
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-deck-gnome"
             },
             {
               "name": "GNOME + NVIDIA",
               "children": [
                 {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia-gnome:stable",
-                  "desc": "Stable gaming-focused release"
-                },
-                {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia-gnome:testing",
-                  "desc": "Pre-release testing builds"
+                  "name": "Fedora 43",
+                  "desc": "Fedora 43 base",
+                  "tag": "43"
                 },
                 {
                   "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia-gnome:latest",
-                  "desc": "Newest builds, cutting edge"
+                  "desc": "Newest builds, cutting edge",
+                  "tag": "latest"
                 },
                 {
-                  "name": "Fedora 43",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia-gnome:43",
-                  "desc": "Fedora 43 base"
-                },
-                {
-                  "name": "Unstable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia-gnome:unstable",
-                  "desc": "Unstable builds"
+                  "name": "Stable",
+                  "desc": "Stable gaming-focused release",
+                  "tag": "stable"
                 },
                 {
                   "name": "Stable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia-gnome:stable-43",
-                  "desc": "Stable Fedora 43 build"
+                  "desc": "Stable Fedora 43 build",
+                  "tag": "stable-43"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
                 },
                 {
                   "name": "Testing (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia-gnome:testing-43",
-                  "desc": "Testing Fedora 43 build"
-                },
-                {
-                  "name": "Unstable (Fedora 43)",
-                  "imgref": "ghcr.io/ublue-os/bazzite-deck-nvidia-gnome:unstable-43",
-                  "desc": "Unstable Fedora 43 build"
-                }
-              ]
-            }
-          ]
-        },
-        {
-          "name": "Hardware-Specific",
-          "children": [
-            {
-              "name": "ASUS",
-              "children": [
-                {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-asus:stable",
-                  "desc": "Stable release"
-                },
-                {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-asus:testing",
-                  "desc": "Pre-release testing builds"
-                },
-                {
-                  "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-asus:latest",
-                  "desc": "Newest builds"
-                },
-                {
-                  "name": "Fedora 42",
-                  "children": [
-                    {
-                      "name": "Stable (Fedora 42)",
-                      "imgref": "ghcr.io/ublue-os/bazzite-asus:stable-42",
-                      "desc": "Stable Fedora 42 build"
-                    },
-                    {
-                      "name": "Testing (Fedora 42)",
-                      "imgref": "ghcr.io/ublue-os/bazzite-asus:testing-42",
-                      "desc": "Testing Fedora 42 build"
-                    },
-                    {
-                      "name": "Unstable (Fedora 42)",
-                      "imgref": "ghcr.io/ublue-os/bazzite-asus:unstable-42",
-                      "desc": "Unstable Fedora 42 build"
-                    }
-                  ]
-                },
-                {
-                  "name": "Edge",
-                  "imgref": "ghcr.io/ublue-os/bazzite-asus:edge",
-                  "desc": "Edge builds"
-                },
-                {
-                  "name": "v3.6",
-                  "imgref": "ghcr.io/ublue-os/bazzite-asus:v3.6",
-                  "desc": "Version 3.6"
-                }
-              ]
-            },
-            {
-              "name": "Ally",
-              "children": [
-                {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-ally:stable",
-                  "desc": "Stable release"
-                },
-                {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-ally:testing",
-                  "desc": "Pre-release testing builds"
-                },
-                {
-                  "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-ally:latest",
-                  "desc": "Newest builds"
-                },
-                {
-                  "name": "Fedora 42",
-                  "children": [
-                    {
-                      "name": "Stable (Fedora 42)",
-                      "imgref": "ghcr.io/ublue-os/bazzite-ally:stable-42",
-                      "desc": "Stable Fedora 42 build"
-                    },
-                    {
-                      "name": "Testing (Fedora 42)",
-                      "imgref": "ghcr.io/ublue-os/bazzite-ally:testing-42",
-                      "desc": "Testing Fedora 42 build"
-                    },
-                    {
-                      "name": "Unstable (Fedora 42)",
-                      "imgref": "ghcr.io/ublue-os/bazzite-ally:unstable-42",
-                      "desc": "Unstable Fedora 42 build"
-                    }
-                  ]
-                },
-                {
-                  "name": "Edge",
-                  "imgref": "ghcr.io/ublue-os/bazzite-ally:edge",
-                  "desc": "Edge builds"
-                },
-                {
-                  "name": "v3.6",
-                  "imgref": "ghcr.io/ublue-os/bazzite-ally:v3.6",
-                  "desc": "Version 3.6"
-                }
-              ]
-            },
-            {
-              "name": "Surface",
-              "children": [
-                {
-                  "name": "Stable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-surface:stable",
-                  "desc": "Stable release"
-                },
-                {
-                  "name": "Testing",
-                  "imgref": "ghcr.io/ublue-os/bazzite-surface:testing",
-                  "desc": "Pre-release testing builds"
-                },
-                {
-                  "name": "Latest",
-                  "imgref": "ghcr.io/ublue-os/bazzite-surface:latest",
-                  "desc": "Newest builds"
+                  "desc": "Testing Fedora 43 build",
+                  "tag": "testing-43"
                 },
                 {
                   "name": "Unstable",
-                  "imgref": "ghcr.io/ublue-os/bazzite-surface:unstable",
-                  "desc": "Unstable builds"
+                  "desc": "Unstable builds",
+                  "tag": "unstable"
                 },
                 {
-                  "name": "Fedora 41",
-                  "children": [
-                    {
-                      "name": "Stable (Fedora 41)",
-                      "imgref": "ghcr.io/ublue-os/bazzite-surface:stable-41",
-                      "desc": "Stable Fedora 41 build"
-                    },
-                    {
-                      "name": "Testing (Fedora 41)",
-                      "imgref": "ghcr.io/ublue-os/bazzite-surface:testing-41",
-                      "desc": "Testing Fedora 41 build"
-                    },
-                    {
-                      "name": "Unstable (Fedora 41)",
-                      "imgref": "ghcr.io/ublue-os/bazzite-surface:unstable-41",
-                      "desc": "Unstable Fedora 41 build"
-                    }
-                  ]
+                  "name": "Unstable (Fedora 43)",
+                  "desc": "Unstable Fedora 43 build",
+                  "tag": "unstable-43"
                 }
-              ]
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-deck-nvidia-gnome"
+            },
+            {
+              "name": "KDE",
+              "children": [
+                {
+                  "name": "Fedora 43",
+                  "desc": "Fedora 43 base",
+                  "tag": "43"
+                },
+                {
+                  "name": "Latest",
+                  "desc": "Newest builds, cutting edge",
+                  "tag": "latest"
+                },
+                {
+                  "name": "Stable",
+                  "desc": "Stable gaming-focused release",
+                  "tag": "stable"
+                },
+                {
+                  "name": "Stable (Fedora 43)",
+                  "desc": "Stable Fedora 43 build",
+                  "tag": "stable-43"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
+                },
+                {
+                  "name": "Testing (Fedora 43)",
+                  "desc": "Testing Fedora 43 build",
+                  "tag": "testing-43"
+                },
+                {
+                  "name": "Unstable",
+                  "desc": "Unstable builds",
+                  "tag": "unstable"
+                },
+                {
+                  "name": "Unstable (Fedora 43)",
+                  "desc": "Unstable Fedora 43 build",
+                  "tag": "unstable-43"
+                }
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-deck"
+            },
+            {
+              "name": "KDE + NVIDIA",
+              "children": [
+                {
+                  "name": "Fedora 43",
+                  "desc": "Fedora 43 base",
+                  "tag": "43"
+                },
+                {
+                  "name": "Latest",
+                  "desc": "Newest builds, cutting edge",
+                  "tag": "latest"
+                },
+                {
+                  "name": "Stable",
+                  "desc": "Stable gaming-focused release",
+                  "tag": "stable"
+                },
+                {
+                  "name": "Stable (Fedora 43)",
+                  "desc": "Stable Fedora 43 build",
+                  "tag": "stable-43"
+                },
+                {
+                  "name": "Testing",
+                  "desc": "Pre-release testing builds",
+                  "tag": "testing"
+                },
+                {
+                  "name": "Testing (Fedora 43)",
+                  "desc": "Testing Fedora 43 build",
+                  "tag": "testing-43"
+                },
+                {
+                  "name": "Unstable",
+                  "desc": "Unstable builds",
+                  "tag": "unstable"
+                },
+                {
+                  "name": "Unstable (Fedora 43)",
+                  "desc": "Unstable Fedora 43 build",
+                  "tag": "unstable-43"
+                }
+              ],
+              "registry": "ghcr.io/ublue-os/bazzite-deck-nvidia"
             }
           ]
         }
@@ -745,45 +758,6 @@
       ],
       "children": [
         {
-          "name": "Stable",
-          "desc": "GNOME workstation on Fedora — recommended for most users",
-          "search_extra": "fedora gnome for everyone",
-          "children": [
-            {
-              "name": "Standard",
-              "imgref": "ghcr.io/ublue-os/bluefin:stable",
-              "desc": "Standard edition with AMD or Intel graphics"
-            },
-            {
-              "name": "NVIDIA",
-              "imgref": "ghcr.io/ublue-os/bluefin-nvidia-open:stable",
-              "desc": "NVIDIA open driver edition"
-            }
-          ]
-        },
-        {
-          "name": "LTS",
-          "desc": "GNOME workstation with long-term support — for professionals and AI/ML",
-          "search_extra": "lts long term support enterprise professionals ai ml",
-          "children": [
-            {
-              "name": "Standard",
-              "imgref": "ghcr.io/ublue-os/bluefin:lts",
-              "desc": "Standard LTS edition with AMD or Intel graphics"
-            },
-            {
-              "name": "HWE Kernel",
-              "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe",
-              "desc": "Latest kernel for new hardware"
-            },
-            {
-              "name": "GDX",
-              "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts",
-              "desc": "NVIDIA edition for AI/ML professionals"
-            }
-          ]
-        },
-        {
           "name": "Dakota",
           "imgref": "ghcr.io/projectbluefin/dakota:latest",
           "desc": "GNOME workstation on GnomeOS — composefs + systemd-boot",
@@ -794,8 +768,64 @@
           "composefs": true,
           "needs_user_creation": false,
           "flatpak_var_path": "state/os/default/var"
+        },
+        {
+          "name": "LTS",
+          "desc": "GNOME workstation with long-term support — for professionals and AI/ML",
+          "search_extra": "lts long term support enterprise professionals ai ml",
+          "children": [
+            {
+              "name": "GDX",
+              "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts",
+              "desc": "NVIDIA edition for AI/ML professionals"
+            },
+            {
+              "name": "HWE Kernel",
+              "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe",
+              "desc": "Latest kernel for new hardware"
+            },
+            {
+              "name": "Standard",
+              "imgref": "ghcr.io/ublue-os/bluefin:lts",
+              "desc": "Standard LTS edition with AMD or Intel graphics"
+            }
+          ]
+        },
+        {
+          "name": "Stable",
+          "desc": "GNOME workstation on Fedora — recommended for most users",
+          "search_extra": "fedora gnome for everyone",
+          "children": [
+            {
+              "name": "NVIDIA",
+              "imgref": "ghcr.io/ublue-os/bluefin-nvidia-open:stable",
+              "desc": "NVIDIA open driver edition"
+            },
+            {
+              "name": "Standard",
+              "imgref": "ghcr.io/ublue-os/bluefin:stable",
+              "desc": "Standard edition with AMD or Intel graphics"
+            }
+          ]
         }
       ]
+    },
+    {
+      "name": "Frostyard",
+      "search_extra": "frostyard snow debian composefs systemd-boot",
+      "children": [
+        {
+          "name": "Snow",
+          "desc": "Debian bootc image with composefs + systemd-boot",
+          "search_extra": "debian debian-bootc composefs systemd-boot",
+          "bootloader": "systemd",
+          "filesystem": "btrfs",
+          "composefs": true,
+          "needs_user_creation": false,
+          "tag": "latest"
+        }
+      ],
+      "registry": "ghcr.io/frostyard/snow"
     },
     {
       "name": "TunaOS",
@@ -806,33 +836,53 @@
           "subtitle": "ghcr.io/tuna-os/albacore",
           "children": [
             {
+              "name": "Cosmic Desktop",
+              "children": [
+                {
+                  "name": "Cosmic Desktop",
+                  "desc": "COSMIC desktop environment",
+                  "tag": "cosmic"
+                },
+                {
+                  "name": "Cosmic Desktop — HWE Kernel",
+                  "desc": "COSMIC with Hardware Enablement kernel",
+                  "tag": "cosmic-hwe"
+                },
+                {
+                  "name": "Cosmic Desktop — Nvidia + CUDA",
+                  "desc": "COSMIC with Nvidia drivers and CUDA support",
+                  "tag": "cosmic-gdx"
+                }
+              ]
+            },
+            {
               "name": "GNOME",
               "flatpaks": "@bluefin_brew",
               "children": [
                 {
                   "name": "GNOME",
-                  "imgref": "ghcr.io/tuna-os/albacore:gnome",
-                  "desc": "GNOME desktop"
-                },
-                {
-                  "name": "GNOME — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/albacore:gnome-hwe",
-                  "desc": "GNOME with Hardware Enablement kernel"
+                  "desc": "GNOME desktop",
+                  "tag": "gnome"
                 },
                 {
                   "name": "GNOME 50",
-                  "imgref": "ghcr.io/tuna-os/albacore:gnome50",
-                  "desc": "GNOME 50 series"
+                  "desc": "GNOME 50 series",
+                  "tag": "gnome50"
+                },
+                {
+                  "name": "GNOME — HWE Kernel",
+                  "desc": "GNOME with Hardware Enablement kernel",
+                  "tag": "gnome-hwe"
                 },
                 {
                   "name": "GNOME — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/albacore:gnome-gdx",
-                  "desc": "GNOME with Nvidia drivers and CUDA support"
+                  "desc": "GNOME with Nvidia drivers and CUDA support",
+                  "tag": "gnome-gdx"
                 },
                 {
                   "name": "GNOME — Nvidia + CUDA + HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/albacore:gnome-gdx-hwe",
-                  "desc": "GNOME with Nvidia drivers, CUDA, and HWE kernel"
+                  "desc": "GNOME with Nvidia drivers, CUDA, and HWE kernel",
+                  "tag": "gnome-gdx-hwe"
                 }
               ]
             },
@@ -842,18 +892,18 @@
               "children": [
                 {
                   "name": "KDE Plasma",
-                  "imgref": "ghcr.io/tuna-os/albacore:kde",
-                  "desc": "KDE Plasma desktop"
+                  "desc": "KDE Plasma desktop",
+                  "tag": "kde"
                 },
                 {
                   "name": "KDE Plasma — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/albacore:kde-hwe",
-                  "desc": "KDE Plasma with Hardware Enablement kernel"
+                  "desc": "KDE Plasma with Hardware Enablement kernel",
+                  "tag": "kde-hwe"
                 },
                 {
                   "name": "KDE Plasma — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/albacore:kde-gdx",
-                  "desc": "KDE Plasma with Nvidia drivers and CUDA support"
+                  "desc": "KDE Plasma with Nvidia drivers and CUDA support",
+                  "tag": "kde-gdx"
                 }
               ]
             },
@@ -862,269 +912,57 @@
               "children": [
                 {
                   "name": "Niri",
-                  "imgref": "ghcr.io/tuna-os/albacore:niri",
-                  "desc": "Niri scrolling Wayland compositor"
-                },
-                {
-                  "name": "Niri — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/albacore:niri-gdx",
-                  "desc": "Niri with Nvidia drivers and CUDA support"
+                  "desc": "Niri scrolling Wayland compositor",
+                  "tag": "niri"
                 },
                 {
                   "name": "Niri — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/albacore:niri-hwe",
-                  "desc": "Niri with Hardware Enablement kernel"
-                }
-              ]
-            },
-            {
-              "name": "Cosmic Desktop",
-              "children": [
-                {
-                  "name": "Cosmic Desktop",
-                  "imgref": "ghcr.io/tuna-os/albacore:cosmic",
-                  "desc": "COSMIC desktop environment"
-                },
-                {
-                  "name": "Cosmic Desktop — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/albacore:cosmic-hwe",
-                  "desc": "COSMIC with Hardware Enablement kernel"
-                },
-                {
-                  "name": "Cosmic Desktop — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/albacore:cosmic-gdx",
-                  "desc": "COSMIC with Nvidia drivers and CUDA support"
-                }
-              ]
-            }
-          ],
-          "icon": "resource:///org/bootcinstaller/Installer/images/albacore.svg"
-        },
-        {
-          "name": "Yellowfin",
-          "subtitle": "ghcr.io/tuna-os/yellowfin",
-          "children": [
-            {
-              "name": "GNOME",
-              "flatpaks": "@bluefin_brew",
-              "children": [
-                {
-                  "name": "GNOME",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome",
-                  "desc": "GNOME desktop"
-                },
-                {
-                  "name": "GNOME — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome-hwe",
-                  "desc": "GNOME with Hardware Enablement kernel"
-                },
-                {
-                  "name": "GNOME 50",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome50",
-                  "desc": "GNOME 50 series"
-                },
-                {
-                  "name": "GNOME — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome-gdx",
-                  "desc": "GNOME with Nvidia drivers and CUDA support"
-                },
-                {
-                  "name": "GNOME — Nvidia + CUDA + HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome-gdx-hwe",
-                  "desc": "GNOME with Nvidia drivers, CUDA, and HWE kernel"
-                },
-                {
-                  "name": "GNOME 50 — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome50-gdx",
-                  "desc": "GNOME 50 with Nvidia drivers and CUDA support"
-                },
-                {
-                  "name": "GNOME 50 — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:gnome50-hwe",
-                  "desc": "GNOME 50 with Hardware Enablement kernel"
-                }
-              ]
-            },
-            {
-              "name": "KDE Plasma",
-              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-              "children": [
-                {
-                  "name": "KDE Plasma",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:kde",
-                  "desc": "KDE Plasma desktop"
-                },
-                {
-                  "name": "KDE Plasma — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:kde-hwe",
-                  "desc": "KDE Plasma with Hardware Enablement kernel"
-                },
-                {
-                  "name": "KDE Plasma — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:kde-gdx",
-                  "desc": "KDE Plasma with Nvidia drivers and CUDA support"
-                }
-              ]
-            },
-            {
-              "name": "Niri",
-              "children": [
-                {
-                  "name": "Niri",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:niri",
-                  "desc": "Niri scrolling Wayland compositor"
+                  "desc": "Niri with Hardware Enablement kernel",
+                  "tag": "niri-hwe"
                 },
                 {
                   "name": "Niri — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:niri-gdx",
-                  "desc": "Niri with Nvidia drivers and CUDA support"
-                },
-                {
-                  "name": "Niri — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:niri-hwe",
-                  "desc": "Niri with Hardware Enablement kernel"
-                }
-              ]
-            },
-            {
-              "name": "Cosmic Desktop",
-              "children": [
-                {
-                  "name": "Cosmic Desktop",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:cosmic",
-                  "desc": "COSMIC desktop environment"
-                },
-                {
-                  "name": "Cosmic Desktop — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:cosmic-hwe",
-                  "desc": "COSMIC with Hardware Enablement kernel"
-                },
-                {
-                  "name": "Cosmic Desktop — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/yellowfin:cosmic-gdx",
-                  "desc": "COSMIC with Nvidia drivers and CUDA support"
+                  "desc": "Niri with Nvidia drivers and CUDA support",
+                  "tag": "niri-gdx"
                 }
               ]
             }
           ],
-          "icon": "resource:///org/bootcinstaller/Installer/images/yellowfin.svg"
-        },
-        {
-          "name": "Skipjack",
-          "subtitle": "ghcr.io/tuna-os/skipjack",
-          "children": [
-            {
-              "name": "GNOME",
-              "flatpaks": "@bluefin_brew",
-              "children": [
-                {
-                  "name": "GNOME",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome",
-                  "desc": "GNOME desktop"
-                },
-                {
-                  "name": "GNOME — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome-hwe",
-                  "desc": "GNOME with Hardware Enablement kernel"
-                },
-                {
-                  "name": "GNOME 50",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome50",
-                  "desc": "GNOME 50 series"
-                },
-                {
-                  "name": "GNOME — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome-gdx",
-                  "desc": "GNOME with Nvidia drivers and CUDA support"
-                },
-                {
-                  "name": "GNOME 50 — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome50-gdx",
-                  "desc": "GNOME 50 with Nvidia drivers and CUDA support"
-                },
-                {
-                  "name": "GNOME 50 — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/skipjack:gnome50-hwe",
-                  "desc": "GNOME 50 with Hardware Enablement kernel"
-                }
-              ]
-            },
-            {
-              "name": "KDE Plasma",
-              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
-              "children": [
-                {
-                  "name": "KDE Plasma",
-                  "imgref": "ghcr.io/tuna-os/skipjack:kde",
-                  "desc": "KDE Plasma desktop"
-                },
-                {
-                  "name": "KDE Plasma — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/skipjack:kde-hwe",
-                  "desc": "KDE Plasma with Hardware Enablement kernel"
-                },
-                {
-                  "name": "KDE Plasma — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/skipjack:kde-gdx",
-                  "desc": "KDE Plasma with Nvidia drivers and CUDA support"
-                }
-              ]
-            },
-            {
-              "name": "Niri",
-              "imgref": "ghcr.io/tuna-os/skipjack:niri",
-              "desc": "Niri scrolling Wayland compositor"
-            },
-            {
-              "name": "Cosmic Desktop",
-              "children": [
-                {
-                  "name": "Cosmic Desktop",
-                  "imgref": "ghcr.io/tuna-os/skipjack:cosmic",
-                  "desc": "COSMIC desktop environment"
-                },
-                {
-                  "name": "Cosmic Desktop — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/skipjack:cosmic-gdx",
-                  "desc": "COSMIC with Nvidia drivers and CUDA support"
-                },
-                {
-                  "name": "Cosmic Desktop — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/skipjack:cosmic-hwe",
-                  "desc": "COSMIC with Hardware Enablement kernel"
-                }
-              ]
-            }
-          ],
-          "icon": "resource:///org/bootcinstaller/Installer/images/skipjack.svg"
+          "icon": "resource:///org/bootcinstaller/Installer/images/albacore.svg",
+          "registry": "ghcr.io/tuna-os/albacore"
         },
         {
           "name": "Bonito",
           "subtitle": "ghcr.io/tuna-os/bonito",
           "children": [
             {
+              "name": "Cosmic Desktop",
+              "desc": "COSMIC desktop environment",
+              "tag": "cosmic"
+            },
+            {
               "name": "GNOME",
               "flatpaks": "@bluefin_brew",
               "children": [
                 {
                   "name": "GNOME",
-                  "imgref": "ghcr.io/tuna-os/bonito:gnome",
-                  "desc": "GNOME desktop"
-                },
-                {
-                  "name": "GNOME — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/bonito:gnome-hwe",
-                  "desc": "GNOME with Hardware Enablement kernel"
+                  "desc": "GNOME desktop",
+                  "tag": "gnome"
                 },
                 {
                   "name": "GNOME 50",
-                  "imgref": "ghcr.io/tuna-os/bonito:gnome50",
-                  "desc": "GNOME 50 series"
+                  "desc": "GNOME 50 series",
+                  "tag": "gnome50"
+                },
+                {
+                  "name": "GNOME — HWE Kernel",
+                  "desc": "GNOME with Hardware Enablement kernel",
+                  "tag": "gnome-hwe"
                 },
                 {
                   "name": "GNOME — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/bonito:gnome-gdx",
-                  "desc": "GNOME with Nvidia drivers and CUDA support"
+                  "desc": "GNOME with Nvidia drivers and CUDA support",
+                  "tag": "gnome-gdx"
                 }
               ]
             },
@@ -1134,33 +972,229 @@
               "children": [
                 {
                   "name": "KDE Plasma",
-                  "imgref": "ghcr.io/tuna-os/bonito:kde",
-                  "desc": "KDE Plasma desktop"
+                  "desc": "KDE Plasma desktop",
+                  "tag": "kde"
                 },
                 {
                   "name": "KDE Plasma — HWE Kernel",
-                  "imgref": "ghcr.io/tuna-os/bonito:kde-hwe",
-                  "desc": "KDE Plasma with Hardware Enablement kernel"
+                  "desc": "KDE Plasma with Hardware Enablement kernel",
+                  "tag": "kde-hwe"
                 },
                 {
                   "name": "KDE Plasma — Nvidia + CUDA",
-                  "imgref": "ghcr.io/tuna-os/bonito:kde-gdx",
-                  "desc": "KDE Plasma with Nvidia drivers and CUDA support"
+                  "desc": "KDE Plasma with Nvidia drivers and CUDA support",
+                  "tag": "kde-gdx"
                 }
               ]
             },
             {
               "name": "Niri",
-              "imgref": "ghcr.io/tuna-os/bonito:niri",
-              "desc": "Niri scrolling Wayland compositor"
-            },
-            {
-              "name": "Cosmic Desktop",
-              "imgref": "ghcr.io/tuna-os/bonito:cosmic",
-              "desc": "COSMIC desktop environment"
+              "desc": "Niri scrolling Wayland compositor",
+              "tag": "niri"
             }
           ],
-          "icon": "resource:///org/bootcinstaller/Installer/images/bonito.svg"
+          "icon": "resource:///org/bootcinstaller/Installer/images/bonito.svg",
+          "registry": "ghcr.io/tuna-os/bonito"
+        },
+        {
+          "name": "Skipjack",
+          "subtitle": "ghcr.io/tuna-os/skipjack",
+          "children": [
+            {
+              "name": "Cosmic Desktop",
+              "children": [
+                {
+                  "name": "Cosmic Desktop",
+                  "desc": "COSMIC desktop environment",
+                  "tag": "cosmic"
+                },
+                {
+                  "name": "Cosmic Desktop — HWE Kernel",
+                  "desc": "COSMIC with Hardware Enablement kernel",
+                  "tag": "cosmic-hwe"
+                },
+                {
+                  "name": "Cosmic Desktop — Nvidia + CUDA",
+                  "desc": "COSMIC with Nvidia drivers and CUDA support",
+                  "tag": "cosmic-gdx"
+                }
+              ]
+            },
+            {
+              "name": "GNOME",
+              "flatpaks": "@bluefin_brew",
+              "children": [
+                {
+                  "name": "GNOME",
+                  "desc": "GNOME desktop",
+                  "tag": "gnome"
+                },
+                {
+                  "name": "GNOME 50",
+                  "desc": "GNOME 50 series",
+                  "tag": "gnome50"
+                },
+                {
+                  "name": "GNOME 50 — HWE Kernel",
+                  "desc": "GNOME 50 with Hardware Enablement kernel",
+                  "tag": "gnome50-hwe"
+                },
+                {
+                  "name": "GNOME 50 — Nvidia + CUDA",
+                  "desc": "GNOME 50 with Nvidia drivers and CUDA support",
+                  "tag": "gnome50-gdx"
+                },
+                {
+                  "name": "GNOME — HWE Kernel",
+                  "desc": "GNOME with Hardware Enablement kernel",
+                  "tag": "gnome-hwe"
+                },
+                {
+                  "name": "GNOME — Nvidia + CUDA",
+                  "desc": "GNOME with Nvidia drivers and CUDA support",
+                  "tag": "gnome-gdx"
+                }
+              ]
+            },
+            {
+              "name": "KDE Plasma",
+              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "children": [
+                {
+                  "name": "KDE Plasma",
+                  "desc": "KDE Plasma desktop",
+                  "tag": "kde"
+                },
+                {
+                  "name": "KDE Plasma — HWE Kernel",
+                  "desc": "KDE Plasma with Hardware Enablement kernel",
+                  "tag": "kde-hwe"
+                },
+                {
+                  "name": "KDE Plasma — Nvidia + CUDA",
+                  "desc": "KDE Plasma with Nvidia drivers and CUDA support",
+                  "tag": "kde-gdx"
+                }
+              ]
+            },
+            {
+              "name": "Niri",
+              "desc": "Niri scrolling Wayland compositor",
+              "tag": "niri"
+            }
+          ],
+          "icon": "resource:///org/bootcinstaller/Installer/images/skipjack.svg",
+          "registry": "ghcr.io/tuna-os/skipjack"
+        },
+        {
+          "name": "Yellowfin",
+          "subtitle": "ghcr.io/tuna-os/yellowfin",
+          "children": [
+            {
+              "name": "Cosmic Desktop",
+              "children": [
+                {
+                  "name": "Cosmic Desktop",
+                  "desc": "COSMIC desktop environment",
+                  "tag": "cosmic"
+                },
+                {
+                  "name": "Cosmic Desktop — HWE Kernel",
+                  "desc": "COSMIC with Hardware Enablement kernel",
+                  "tag": "cosmic-hwe"
+                },
+                {
+                  "name": "Cosmic Desktop — Nvidia + CUDA",
+                  "desc": "COSMIC with Nvidia drivers and CUDA support",
+                  "tag": "cosmic-gdx"
+                }
+              ]
+            },
+            {
+              "name": "GNOME",
+              "flatpaks": "@bluefin_brew",
+              "children": [
+                {
+                  "name": "GNOME",
+                  "desc": "GNOME desktop",
+                  "tag": "gnome"
+                },
+                {
+                  "name": "GNOME 50",
+                  "desc": "GNOME 50 series",
+                  "tag": "gnome50"
+                },
+                {
+                  "name": "GNOME 50 — HWE Kernel",
+                  "desc": "GNOME 50 with Hardware Enablement kernel",
+                  "tag": "gnome50-hwe"
+                },
+                {
+                  "name": "GNOME 50 — Nvidia + CUDA",
+                  "desc": "GNOME 50 with Nvidia drivers and CUDA support",
+                  "tag": "gnome50-gdx"
+                },
+                {
+                  "name": "GNOME — HWE Kernel",
+                  "desc": "GNOME with Hardware Enablement kernel",
+                  "tag": "gnome-hwe"
+                },
+                {
+                  "name": "GNOME — Nvidia + CUDA",
+                  "desc": "GNOME with Nvidia drivers and CUDA support",
+                  "tag": "gnome-gdx"
+                },
+                {
+                  "name": "GNOME — Nvidia + CUDA + HWE Kernel",
+                  "desc": "GNOME with Nvidia drivers, CUDA, and HWE kernel",
+                  "tag": "gnome-gdx-hwe"
+                }
+              ]
+            },
+            {
+              "name": "KDE Plasma",
+              "flatpaks": "https://raw.githubusercontent.com/get-aurora-dev/common/refs/heads/main/system_files/shared/usr/share/ublue-os/homebrew/system-flatpaks.Brewfile",
+              "children": [
+                {
+                  "name": "KDE Plasma",
+                  "desc": "KDE Plasma desktop",
+                  "tag": "kde"
+                },
+                {
+                  "name": "KDE Plasma — HWE Kernel",
+                  "desc": "KDE Plasma with Hardware Enablement kernel",
+                  "tag": "kde-hwe"
+                },
+                {
+                  "name": "KDE Plasma — Nvidia + CUDA",
+                  "desc": "KDE Plasma with Nvidia drivers and CUDA support",
+                  "tag": "kde-gdx"
+                }
+              ]
+            },
+            {
+              "name": "Niri",
+              "children": [
+                {
+                  "name": "Niri",
+                  "desc": "Niri scrolling Wayland compositor",
+                  "tag": "niri"
+                },
+                {
+                  "name": "Niri — HWE Kernel",
+                  "desc": "Niri with Hardware Enablement kernel",
+                  "tag": "niri-hwe"
+                },
+                {
+                  "name": "Niri — Nvidia + CUDA",
+                  "desc": "Niri with Nvidia drivers and CUDA support",
+                  "tag": "niri-gdx"
+                }
+              ]
+            }
+          ],
+          "icon": "resource:///org/bootcinstaller/Installer/images/yellowfin.svg",
+          "registry": "ghcr.io/tuna-os/yellowfin"
         }
       ],
       "icon": "resource:///org/bootcinstaller/Installer/images/tunaos.svg",
@@ -1193,26 +1227,16 @@
           "children": [
             {
               "name": "Latest",
-              "imgref": "ghcr.io/zirconium-dev/zirconium:latest",
-              "desc": "Latest Zirconium build"
+              "desc": "Latest Zirconium build",
+              "tag": "latest"
             },
             {
               "name": "Rawhide",
-              "imgref": "ghcr.io/zirconium-dev/zirconium:rawhide",
-              "desc": "Fedora Rawhide based"
+              "desc": "Fedora Rawhide based",
+              "tag": "rawhide"
             }
-          ]
-        },
-        {
-          "name": "Zirconium NVIDIA",
-          "subtitle": "ghcr.io/zirconium-dev/zirconium-nvidia",
-          "children": [
-            {
-              "name": "Latest",
-              "imgref": "ghcr.io/zirconium-dev/zirconium-nvidia:latest",
-              "desc": "Latest with NVIDIA drivers"
-            }
-          ]
+          ],
+          "registry": "ghcr.io/zirconium-dev/zirconium"
         },
         {
           "name": "Zirconium mkosi",
@@ -1220,26 +1244,23 @@
           "children": [
             {
               "name": "Latest",
-              "imgref": "ghcr.io/zirconium-dev/zirconium-mkosi:latest",
-              "desc": "mkosi image"
+              "desc": "mkosi image",
+              "tag": "latest"
             }
-          ]
-        }
-      ]
-    },
-    {
-      "name": "Frostyard",
-      "search_extra": "frostyard snow debian composefs systemd-boot",
-      "children": [
+          ],
+          "registry": "ghcr.io/zirconium-dev/zirconium-mkosi"
+        },
         {
-          "name": "Snow",
-          "imgref": "ghcr.io/frostyard/snow:latest",
-          "desc": "Debian bootc image with composefs + systemd-boot",
-          "search_extra": "debian debian-bootc composefs systemd-boot",
-          "bootloader": "systemd",
-          "filesystem": "btrfs",
-          "composefs": true,
-          "needs_user_creation": false
+          "name": "Zirconium NVIDIA",
+          "subtitle": "ghcr.io/zirconium-dev/zirconium-nvidia",
+          "children": [
+            {
+              "name": "Latest",
+              "desc": "Latest with NVIDIA drivers",
+              "tag": "latest"
+            }
+          ],
+          "registry": "ghcr.io/zirconium-dev/zirconium-nvidia"
         }
       ]
     }
