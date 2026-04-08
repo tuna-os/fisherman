@@ -1236,6 +1236,28 @@
           "needs_user_creation": false
         }
       ]
+    },
+    {
+      "name": "Ubuntu",
+      "search_extra": "ubuntu canonical resolute raccoon lts 26.04 gnome 50 kernel 7",
+      "children": [
+        {
+          "name": "Ubuntu 26.04 LTS",
+          "subtitle": "ghcr.io/hanthor/ubuntu-26.04-desktop-bootc",
+          "children": [
+            {
+              "name": "GNOME 50 Desktop",
+              "imgref": "ghcr.io/hanthor/ubuntu-26.04-desktop-bootc:latest",
+              "desc": "Ubuntu 26.04 LTS (Resolute Raccoon) — full ubuntu-desktop with GNOME 50 and kernel 7.0",
+              "search_extra": "ubuntu desktop gnome50 kernel 7.0 resolute raccoon composefs systemd-boot",
+              "bootloader": "systemd",
+              "filesystem": "xfs",
+              "composefs": true,
+              "needs_user_creation": false
+            }
+          ]
+        }
+      ]
     }
   ],
   "default_image": "ghcr.io/tuna-os/yellowfin:gnome50"

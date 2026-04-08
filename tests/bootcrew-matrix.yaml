@@ -27,6 +27,15 @@ images:
     selinux_disabled: false
     flatpaks: []
 
+  - name: ubuntu-26.04-desktop
+    image: ghcr.io/hanthor/ubuntu-26.04-desktop-bootc:latest
+    filesystem: xfs
+    composefs_backend: true
+    unified_storage: false
+    # Ubuntu uses AppArmor, not SELinux
+    selinux_disabled: true
+    flatpaks: []
+
   # gnomeos-bootc disabled: consistently fails with missing blob in containers-storage
   # (sha256:6d2d10...) — likely a broken layer in the ghcr.io/bootcrew/gnomeos-bootc image.
   # Re-enable once upstream fixes the image.
