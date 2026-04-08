@@ -111,6 +111,14 @@ func partition(disk, script string) error {
 		if err2 := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", "--force", "--no-reread", disk); err2 != nil {
 			return fmt.Errorf("sfdisk: %w", err2)
 		}
+		// --no-reread means the kernel still holds the OLD partition table.
+		// Force a re-read with partprobe so subsequent mkfs calls see the
+		// correct partition sizes. Without this, mkfs operates on stale
+		// (possibly much smaller) partition boundaries → "no space left".
+		fmt.Fprintf(os.Stdout, "+ partprobe %s (force kernel partition table re-read after --no-reread)\n", disk)
+		time.Sleep(500 * time.Millisecond)
+		_ = runner.Run("partprobe", disk)
+		_ = runner.Run("udevadm", "settle")
 	}
 
 	// Brief sleep then settle — mirrors bootc's approach.
@@ -234,9 +242,12 @@ func loopRescan(disk string) error {
 //  1. udisksctl unmount — releases udisksd's lock for automounted partitions.
 //  2. umount -l         — lazy fallback for manually-mounted or non-udisks mounts.
 //  3. swapoff           — disable any active swap partitions on the disk.
-//  4. fuser -km         — SIGKILL every process with an open FD on the disk.
-//  5. blockdev --flushbufs — flush pending I/O so the kernel can drop references.
-//  6. udevadm settle    — wait for udev/udisksd to release device references.
+//  4. deactivateLVM     — deactivate LVM VGs and DM devices (dm-crypt etc.) that
+//     hold the disk open; without this, sfdisk's BLKRRPART ioctl fails, forcing
+//     the --no-reread path and leaving the kernel with a stale partition table.
+//  5. fuser -km         — SIGKILL every process with an open FD on the disk.
+//  6. blockdev --flushbufs — flush pending I/O so the kernel can drop references.
+//  7. udevadm settle    — wait for udev/udisksd to release device references.
 func unmountAll(disk string) error {
 	data, err := os.ReadFile(procMountsPath)
 	if err != nil {
@@ -272,6 +283,12 @@ func unmountAll(disk string) error {
 		}
 	}
 
+	// Deactivate LVM volume groups and device-mapper devices backed by this
+	// disk. Without this, the LVM/dm layer holds the disk open and sfdisk's
+	// BLKRRPART ioctl fails, forcing --no-reread and leaving the kernel with
+	// a stale (potentially much smaller) partition table.
+	deactivateLVM(disk)
+
 	// Kill any processes still holding FDs open on any partition of this disk.
 	// fuser exits non-zero when no processes are found — that is fine.
 	fmt.Fprintf(os.Stdout, "+ fuser -km %s (kill remaining holders)\n", disk)
@@ -283,6 +300,52 @@ func unmountAll(disk string) error {
 	// Give udev and udisksd time to release all device references.
 	_ = runner.Run("udevadm", "settle")
 	return nil
+}
+
+// deactivateLVM removes LVM volume groups and device-mapper (dm-crypt, LUKS)
+// devices that are backed by partitions of disk. This is required before
+// repartitioning a disk that previously held LVM or LUKS — the device-mapper
+// layer keeps an open reference on the underlying block device, causing sfdisk
+// to fail with "disk is currently in use" even after all filesystems are
+// unmounted.
+func deactivateLVM(disk string) {
+	base := filepath.Base(disk) // e.g. "sda"
+
+	// Step 1: deactivate any LVM VGs that contain a PV on this disk.
+	// `pvs` lists physical volumes; we match those whose PV name starts with
+	// the disk path (e.g. /dev/sda1, /dev/sda2 ...).
+	pvOut, err := exec.Command("pvs", "--noheadings", "-o", "pv_name,vg_name").Output()
+	if err == nil {
+		for _, line := range strings.Split(string(pvOut), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) != 2 {
+				continue
+			}
+			pvName, vgName := fields[0], fields[1]
+			if strings.HasPrefix(pvName, disk) && vgName != "" {
+				fmt.Fprintf(os.Stdout, "+ vgchange -an %s (LVM VG on %s)\n", vgName, pvName)
+				_ = runner.Run("vgchange", "-an", vgName)
+			}
+		}
+	}
+
+	// Step 2: remove any device-mapper devices (LUKS, dm-crypt, LVM LVs)
+	// whose block-device dependency includes a partition of this disk.
+	// `dmsetup deps -o devname` prints the underlying devices for each mapper.
+	dmList, err := exec.Command("dmsetup", "ls").Output()
+	if err == nil {
+		for _, line := range strings.Split(string(dmList), "\n") {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			dmName := strings.Fields(line)[0]
+			deps, err := exec.Command("dmsetup", "deps", "-o", "devname", dmName).Output()
+			if err == nil && strings.Contains(string(deps), base) {
+				fmt.Fprintf(os.Stdout, "+ dmsetup remove --force %s (backed by %s)\n", dmName, disk)
+				_ = runner.Run("dmsetup", "remove", "--force", dmName)
+			}
+		}
+	}
 }
 
 // inFlatpakEnv reports whether the current process is inside a Flatpak sandbox.

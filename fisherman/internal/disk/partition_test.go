@@ -1,6 +1,7 @@
 package disk_test
 
 import (
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -320,4 +321,103 @@ func TestUnmountAll_NoMounts(t *testing.T) {
 			t.Errorf("unexpected unmount call when disk has no mounts: %v %v", c.name, c.args)
 		}
 	}
+}
+
+// sfdiskFailOnceRecorder returns an error on the FIRST sfdisk call and nil
+// for all subsequent calls (including the --force retry). This simulates the
+// "disk is currently in use" error that triggers the --force --no-reread path.
+type sfdiskFailOnceRecorder struct {
+	calls       []execCall
+	sfdiskCount int
+}
+
+func (r *sfdiskFailOnceRecorder) run(stdin io.Reader, name string, args ...string) error {
+	s := ""
+	if stdin != nil {
+		b, _ := io.ReadAll(stdin)
+		s = string(b)
+	}
+	r.calls = append(r.calls, execCall{name: name, args: args, stdin: s})
+	if name == "sfdisk" {
+		r.sfdiskCount++
+		if r.sfdiskCount == 1 {
+			return fmt.Errorf("disk is currently in use")
+		}
+	}
+	return nil
+}
+
+// TestPartition_PartprobeAfterForceReread is a regression test for the bug
+// where a disk previously used for LVM caused sfdisk to fall back to
+// --force --no-reread, leaving the kernel with the OLD (stale, potentially
+// much smaller) partition table. The next mkfs then formatted the wrong-sized
+// partition → "no space left on device" during bootc install.
+//
+// Fix: after --force --no-reread, partprobe must be called so the kernel
+// re-reads the new partition table before any mkfs operations.
+func TestPartition_PartprobeAfterForceReread(t *testing.T) {
+	// Write an empty mounts file so unmountAll doesn't try real mounts.
+	f, err := os.CreateTemp(t.TempDir(), "mounts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	disk.SetProcMountsPath(f.Name())
+	t.Cleanup(func() { disk.SetProcMountsPath("/proc/mounts") })
+
+	rec := &sfdiskFailOnceRecorder{}
+	runner.RunFn = rec.run
+	t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
+
+	if err := disk.Partition("/dev/sda"); err != nil {
+		t.Fatalf("Partition: %v", err)
+	}
+
+	// Find the indices of the second sfdisk call (--force --no-reread) and partprobe.
+	secondSfdiskIdx := -1
+	sfdiskCount := 0
+	partprobeIdx := -1
+	for i, c := range rec.calls {
+		if c.name == "sfdisk" {
+			sfdiskCount++
+			if sfdiskCount == 2 {
+				secondSfdiskIdx = i
+			}
+		}
+		if c.name == "partprobe" && partprobeIdx == -1 {
+			partprobeIdx = i
+		}
+	}
+
+	if sfdiskCount != 2 {
+		t.Fatalf("expected 2 sfdisk calls (first fails, second --force), got %d", sfdiskCount)
+	}
+
+	// Verify the retry used --force --no-reread.
+	forceCall := rec.calls[secondSfdiskIdx]
+	if !containsArg(forceCall.args, "--force") {
+		t.Errorf("second sfdisk call missing --force: %v", forceCall.args)
+	}
+	if !containsArg(forceCall.args, "--no-reread") {
+		t.Errorf("second sfdisk call missing --no-reread: %v", forceCall.args)
+	}
+
+	// Critical: partprobe must have been called after the --force sfdisk.
+	if partprobeIdx == -1 {
+		t.Fatal("partprobe not called after --force --no-reread sfdisk; " +
+			"kernel will retain stale partition table causing mkfs to format wrong-sized partitions")
+	}
+	if partprobeIdx < secondSfdiskIdx {
+		t.Errorf("partprobe (idx %d) called before --force sfdisk (idx %d); must be after",
+			partprobeIdx, secondSfdiskIdx)
+	}
+}
+
+func containsArg(args []string, target string) bool {
+	for _, a := range args {
+		if a == target {
+			return true
+		}
+	}
+	return false
 }
