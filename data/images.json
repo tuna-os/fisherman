@@ -1266,6 +1266,5 @@
         }
       ]
     }
-  ],
-  "default_image": "ghcr.io/tuna-os/yellowfin:gnome50"
+  ]
 }
