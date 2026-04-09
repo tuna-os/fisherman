@@ -98,12 +98,25 @@ type Options struct {
 	Bootloader string
 	// Target is the path to the mounted root filesystem on the host.
 	Target string
+	// ScratchDir is the host-side directory used for temporary I/O during
+	// installation (OCI exports, layer blobs, etc.). It is bind-mounted at
+	// /var/tmp by the caller. Defaults to "/var/fisherman-tmp" when empty.
+	ScratchDir string
 	// NeedsPull is the result of a pre-flight CheckImage call. When false,
 	// the image pull is skipped (image already in containers-storage).
 	NeedsPull bool
 	// LayerCount is the number of image layers from CheckImage, used to
 	// show "layer N/total" progress. 0 means unknown.
 	LayerCount int
+}
+
+// scratchDir returns the host-side scratch directory from opts, falling back
+// to the default "/var/fisherman-tmp" when unset.
+func (o Options) scratchDir() string {
+	if o.ScratchDir != "" {
+		return o.ScratchDir
+	}
+	return "/var/fisherman-tmp"
 }
 
 // BuildBootcArgs builds the argument slice for `bootc install to-filesystem`.
@@ -175,13 +188,15 @@ func bootcViaContainer(opts Options) error {
 
 	bootcArgs := BuildBootcArgs(opts, targetImgref, "/target")
 
+	scratch := opts.scratchDir()
+
 	// composefs-backend requires raw OCI blobs that podman pull doesn't
 	// preserve in containers-storage. Export to an OCI layout first, then
 	// pass --source-imgref oci:/var/tmp/oci-cache (BuildBootcArgs adds this
 	// flag when ComposeFsBackend is true).
 	// Note: SkopeoExportOCIFn emits its own progress substeps; don't duplicate them here.
 	if opts.ComposeFsBackend {
-		ociDir := "/var/fisherman-tmp/oci-cache"
+		ociDir := filepath.Join(scratch, "oci-cache")
 		if err := SkopeoExportOCIFn(opts.SourceImgref, ociDir); err != nil {
 			return fmt.Errorf("exporting image to OCI layout: %w", err)
 		}
@@ -200,7 +215,7 @@ func bootcViaContainer(opts Options) error {
 		// by systemd-tmpfiles on first boot. containers-image needs /var/tmp to write
 		// temp files when reconstructing layer blobs from containers-storage. Mount
 		// the disk-backed fisherman scratch space so there is always enough room.
-		"-v", "/var/fisherman-tmp:/var/tmp:z",
+		"-v", scratch + ":/var/tmp:z",
 		// Use shared propagation so submounts (e.g. /boot/efi) created on the host
 		// before launching the container are visible inside it at /target.
 		"--mount", fmt.Sprintf("type=bind,src=%s,dst=/target,bind-propagation=rslave", opts.Target),
@@ -320,13 +335,15 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 	isFile := !strings.HasPrefix(diskDevice, "/dev/")
 	isLoop := !isFile && strings.HasPrefix(filepath.Base(diskDevice), "loop")
 
+	scratch := opts.scratchDir()
+
 	podmanArgs := []string{
 		"run", "--rm",
 		"--privileged",
 		"--pid=host",
 		"--security-opt", "label=disable",
 		"-v", "/dev:/dev",
-		"-v", "/var/fisherman-tmp:/var/tmp:z",
+		"-v", scratch + ":/var/tmp:z",
 	}
 
 	if opts.ComposeFsBackend {
@@ -334,11 +351,11 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 		// that podman pull does not preserve in containers-storage. Export the
 		// image to an OCI directory layout via skopeo so the blobs exist on disk,
 		// then pass --source-imgref oci:/var/tmp/oci-cache to bootc.
-		ociDir := "/var/fisherman-tmp/oci-cache"
+		ociDir := filepath.Join(scratch, "oci-cache")
 		if err := SkopeoExportOCIFn(opts.SourceImgref, ociDir); err != nil {
 			return "", fmt.Errorf("exporting image to OCI layout: %w", err)
 		}
-		// Inside the container, /var/fisherman-tmp is mounted at /var/tmp.
+		// Inside the container, the scratch dir is mounted at /var/tmp.
 		bootcArgs = append(bootcArgs, "--source-imgref", "oci:/var/tmp/oci-cache")
 		bootcArgs = append(bootcArgs, diskDevice)
 		effectiveDisk = diskDevice

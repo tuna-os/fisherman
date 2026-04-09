@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 
 	"github.com/tuna-os/fisherman/internal/disk"
 	"github.com/tuna-os/fisherman/internal/install"
@@ -77,6 +78,18 @@ func fatal(format string, args ...any) {
 
 // lookPath is exec.LookPath by default; replaced in tests.
 var lookPath = exec.LookPath
+
+// isTmpfs reports whether the given path is on a tmpfs filesystem.
+// Used to detect live-ISO environments where /var is RAM-backed and
+// too small for multi-gigabyte scratch I/O.
+func isTmpfs(path string) bool {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(path, &st); err != nil {
+		return false
+	}
+	const tmpfsMagic = 0x01021994
+	return st.Type == tmpfsMagic
+}
 
 // expandPath prepends standard sbin directories and any tools staged alongside
 // this binary to PATH.  pkexec strips the user's PATH to a minimal safe set
@@ -404,12 +417,29 @@ func main() {
 	// disk-backed space for layer blobs. We deliberately use a path OUTSIDE
 	// the target tree so bootc's "empty rootfs" check doesn't find stray
 	// directories inside /mnt/fisherman-target.
-	// Use /var/fisherman-tmp (not /run/fisherman-tmp): /var is always
-	// disk-backed on ostree and conventional systems, whereas /run is a
-	// tmpfs sized at ~50% of RAM — too small for large images (e.g. 3.7 GB).
+	//
+	// On installed (ostree/conventional) systems /var is always disk-backed,
+	// so /var/fisherman-tmp gives us plenty of space. On live ISOs, however,
+	// /var lives on a tmpfs that is far too small for multi-gigabyte image
+	// blobs. Detect that case and place scratch on the already-formatted
+	// target disk instead. A self-bind mount makes bootc's empty-rootdir
+	// check see a mount point (which it tolerates) rather than a plain
+	// directory (which it rejects).
 	scratchDir := "/var/fisherman-tmp"
+	liveISO := isTmpfs("/var") && activeTargetMount != ""
+	if liveISO {
+		scratchDir = filepath.Join(activeTargetMount, ".fisherman-scratch")
+		progress.Info("Live environment detected (/var is tmpfs) — using target disk for scratch I/O")
+	}
 	if err := os.MkdirAll(scratchDir, 0o1777); err != nil {
 		fatal("creating scratch dir: %v", err)
+	}
+	if liveISO {
+		// Self-bind so bootc sees a mount point, not a plain directory.
+		if err := disk.BindMount(scratchDir, scratchDir); err != nil {
+			fatal("self-bind scratch dir: %v", err)
+		}
+		cleanup.AddMount(scratchDir)
 	}
 	if err := disk.BindMount(scratchDir, "/var/tmp"); err != nil {
 		fatal("bind-mounting scratch dir at /var/tmp: %v", err)
@@ -436,6 +466,7 @@ func main() {
 		ComposeFsBackend: r.ComposeFsBackend,
 		Bootloader:       r.Bootloader,
 		Target:           activeTargetMount,
+		ScratchDir:       scratchDir,
 		NeedsPull:        imageCheck.NeedsPull,
 		LayerCount:       imageCheck.LayerCount,
 	}); err != nil {
