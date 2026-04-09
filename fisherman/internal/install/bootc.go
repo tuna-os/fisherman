@@ -427,6 +427,23 @@ var DefaultSkopeoExportOCI = skopeoExportOCI
 // a composefs image to an OCI layout. Replace in tests to avoid disk I/O.
 var SkopeoExportOCIFn = skopeoExportOCI
 
+// bareImageRef strips any OCI transport prefix from image, returning the bare
+// registry reference. This handles both "scheme://ref" (e.g. "docker://") and
+// "scheme:ref" (e.g. "containers-storage:") styles. Live-ISO recipes may carry
+// a "containers-storage:" prefix on the Image field; the functions below must
+// not double-prepend it.
+func bareImageRef(image string) string {
+	if idx := strings.Index(image, "://"); idx >= 0 {
+		return image[idx+3:]
+	}
+	if idx := strings.Index(image, ":"); idx > 0 {
+		if transport := image[:idx]; !strings.ContainsAny(transport, "/.") {
+			return image[idx+1:]
+		}
+	}
+	return image
+}
+
 // skopeoExportOCI exports an image from containers-storage to an OCI directory
 // layout. The composefs-backend requires raw OCI blobs (compressed layer
 // tarballs) that podman pull does not preserve; skopeo reconstructs them from
@@ -440,7 +457,7 @@ func skopeoExportOCI(image, destDir string) error {
 
 	skopeoArgs := []string{
 		"copy",
-		"containers-storage:" + image,
+		"containers-storage:" + bareImageRef(image),
 		"oci:" + destDir,
 	}
 	name, args := runner.HostArgs("skopeo", skopeoArgs)
@@ -609,10 +626,10 @@ func CheckImage(image string) ImageCheck {
 	}
 
 	// 1. Fetch remote normalized manifest (resolves fat/multi-arch manifests).
-	remoteOut, remoteErr := SkopeoInspectFn("docker://" + image)
+	remoteOut, remoteErr := SkopeoInspectFn("docker://" + bareImageRef(image))
 
 	// 2. Fetch local digest from containers-storage.
-	localOut, localErr := SkopeoInspectFn("containers-storage:" + image)
+	localOut, localErr := SkopeoInspectFn("containers-storage:" + bareImageRef(image))
 
 	// If offline (remote failed), fall back to the locally cached image.
 	if remoteErr != nil {
