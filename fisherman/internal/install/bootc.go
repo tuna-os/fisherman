@@ -87,9 +87,14 @@ type Options struct {
 	TargetImgref string
 	// SelinuxDisabled passes --disable-selinux when true.
 	SelinuxDisabled bool
-	// UnifiedStorage passes --experimental-unified-storage to bootc install.
-	// The flag is hidden from bootc's --help output in ≥1.13 but remains valid.
-	// See https://bootc.dev/bootc/experimental-unified-storage.html
+	// UnifiedStorage is retained in the schema for forwards compatibility but
+	// is NOT emitted as a flag. --experimental-unified-storage requires bootc
+	// to run on bare metal; fisherman always runs bootc inside `podman run
+	// --privileged`, where bootc builds its internal storage using
+	// overlay@/run/bootc/storage+/proc/self/fd/3. The fd is not inherited by
+	// the copy subprocess bootc spawns, so the reference never resolves and
+	// the install fails. Standard containers-storage (via the /var/lib/containers
+	// bind-mount) is used instead. See: https://bootc.dev/bootc/experimental-unified-storage.html
 	UnifiedStorage bool
 	// ComposeFsBackend passes --composefs-backend when true.
 	// Required for images using the composefs-native deployment backend (e.g. ghcr.io/bootcrew/*).
@@ -132,9 +137,7 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	if opts.SelinuxDisabled {
 		args = append(args, "--disable-selinux")
 	}
-	if opts.UnifiedStorage {
-		args = append(args, "--experimental-unified-storage")
-	}
+	// UnifiedStorage is intentionally not emitted — see Options.UnifiedStorage comment.
 	if opts.ComposeFsBackend {
 		args = append(args, "--composefs-backend")
 		// composefs-backend requires raw OCI blobs; bootcViaContainer exports

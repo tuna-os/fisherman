@@ -174,12 +174,14 @@ func TestBuildBootcArgs_NoComposeFsBackend(t *testing.T) {
 	assertAbsent(t, args, "--composefs-backend")
 }
 
-// TestBuildBootcArgs_UnifiedStorage confirms that --experimental-unified-storage
-// is emitted when UnifiedStorage is true. The flag is hidden from bootc's --help
-// in ≥1.13 but remains valid; see https://bootc.dev/bootc/experimental-unified-storage.html
+// TestBuildBootcArgs_UnifiedStorage confirms --experimental-unified-storage is
+// never emitted. The flag is incompatible with fisherman's podman-run launch
+// model: bootc builds its internal storage using overlay@/run/bootc/storage+
+// /proc/self/fd/3, but that fd is not inherited by the copy subprocess bootc
+// spawns, so the reference never resolves. Standard containers-storage is used.
 func TestBuildBootcArgs_UnifiedStorage(t *testing.T) {
 	args := install.BuildBootcArgs(install.Options{UnifiedStorage: true}, "", "/target")
-	assertContains(t, args, "--experimental-unified-storage")
+	assertAbsent(t, args, "--experimental-unified-storage")
 }
 
 func TestBuildBootcArgs_NoUnifiedStorage(t *testing.T) {
@@ -216,7 +218,7 @@ func TestBuildBootcArgs_AllFlags(t *testing.T) {
 	}
 	args := install.BuildBootcArgs(opts, "img:tag", "/target")
 	assertContains(t, args, "--composefs-backend")
-	assertContains(t, args, "--experimental-unified-storage")
+	assertAbsent(t, args, "--experimental-unified-storage") // never emitted; see Options.UnifiedStorage
 	assertContains(t, args, "--disable-selinux")
 	assertContains(t, args, "--target-imgref")
 }
