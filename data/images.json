@@ -89,6 +89,11 @@
           "title": "Atomic KDE",
           "description": "Aurora updates are delivered as complete OCI images — safe, reliable, and reversible."
         }
+      ],
+      "default_hostname": "aurora",
+      "filesystems": [
+        "btrfs",
+        "xfs"
       ]
     },
     {
@@ -739,7 +744,12 @@
           "description": "Bazzite is built on Universal Blue and delivers a console-like gaming experience on Linux."
         }
       ],
-      "needs_user_creation": true
+      "needs_user_creation": true,
+      "default_hostname": "bazzite",
+      "filesystems": [
+        "btrfs",
+        "xfs"
+      ]
     },
     {
       "name": "Bluefin",
@@ -766,10 +776,10 @@
           "search_extra": "gnomeos composefs systemd-boot experimental",
           "icon": "resource:///org/bootcinstaller/Installer/images/dakota.png",
           "bootloader": "systemd",
-          "filesystem": "btrfs",
           "composefs": true,
           "needs_user_creation": false,
-          "flatpak_var_path": "state/os/default/var"
+          "flatpak_var_path": "state/os/default/var",
+          "filesystem": "btrfs"
         },
         {
           "name": "LTS",
@@ -791,6 +801,9 @@
               "imgref": "ghcr.io/ublue-os/bluefin:lts",
               "desc": "Standard LTS edition with AMD or Intel graphics"
             }
+          ],
+          "filesystems": [
+            "xfs"
           ]
         },
         {
@@ -810,6 +823,11 @@
             }
           ]
         }
+      ],
+      "default_hostname": "bluefin",
+      "filesystems": [
+        "btrfs",
+        "xfs"
       ]
     },
     {
@@ -824,7 +842,8 @@
           "filesystem": "btrfs",
           "composefs": true,
           "needs_user_creation": false,
-          "tag": "latest"
+          "tag": "latest",
+          "default_hostname": "snow"
         }
       ],
       "registry": "ghcr.io/frostyard/snow"
@@ -931,7 +950,12 @@
             }
           ],
           "icon": "resource:///org/bootcinstaller/Installer/images/albacore.svg",
-          "registry": "ghcr.io/tuna-os/albacore"
+          "registry": "ghcr.io/tuna-os/albacore",
+          "default_hostname": "albacore",
+          "filesystems": [
+            "xfs",
+            "btrfs"
+          ]
         },
         {
           "name": "Bonito",
@@ -996,7 +1020,12 @@
             }
           ],
           "icon": "resource:///org/bootcinstaller/Installer/images/bonito.svg",
-          "registry": "ghcr.io/tuna-os/bonito"
+          "registry": "ghcr.io/tuna-os/bonito",
+          "default_hostname": "bonito",
+          "filesystems": [
+            "xfs",
+            "btrfs"
+          ]
         },
         {
           "name": "Skipjack",
@@ -1086,7 +1115,12 @@
             }
           ],
           "icon": "resource:///org/bootcinstaller/Installer/images/skipjack.svg",
-          "registry": "ghcr.io/tuna-os/skipjack"
+          "registry": "ghcr.io/tuna-os/skipjack",
+          "default_hostname": "skipjack",
+          "filesystems": [
+            "xfs",
+            "btrfs"
+          ]
         },
         {
           "name": "Yellowfin",
@@ -1196,7 +1230,12 @@
             }
           ],
           "icon": "resource:///org/bootcinstaller/Installer/images/yellowfin.svg",
-          "registry": "ghcr.io/tuna-os/yellowfin"
+          "registry": "ghcr.io/tuna-os/yellowfin",
+          "default_hostname": "yellowfin",
+          "filesystems": [
+            "xfs",
+            "btrfs"
+          ]
         }
       ],
       "icon": "resource:///org/bootcinstaller/Installer/images/tunaos.svg",
@@ -1238,7 +1277,12 @@
               "tag": "rawhide"
             }
           ],
-          "registry": "ghcr.io/zirconium-dev/zirconium"
+          "registry": "ghcr.io/zirconium-dev/zirconium",
+          "default_hostname": "zirconium",
+          "filesystems": [
+            "xfs",
+            "btrfs"
+          ]
         },
         {
           "name": "Zirconium mkosi",
@@ -1264,6 +1308,11 @@
           ],
           "registry": "ghcr.io/zirconium-dev/zirconium-nvidia"
         }
+      ],
+      "default_hostname": "zirconium",
+      "filesystems": [
+        "xfs",
+        "btrfs"
       ]
     }
   ]
