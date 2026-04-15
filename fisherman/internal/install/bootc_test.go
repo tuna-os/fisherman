@@ -333,3 +333,27 @@ func assertAbsent(t *testing.T, slice []string, s string) {
 		}
 	}
 }
+
+// TestNeedsContainerStorageMount_UnifiedStorage is a regression test for the bug
+// where /var/lib/containers was always bind-mounted into the podman container,
+// including when --experimental-unified-storage was active. With unified storage
+// bootc finds the source image via /proc/self/fd/3 (the container's own storage
+// context); mounting /var/lib/containers shadows that context and causes bootc
+// to fail with "reference does not resolve to an image ID".
+func TestNeedsContainerStorageMount_UnifiedStorage(t *testing.T) {
+if install.NeedsContainerStorageMount(install.Options{UnifiedStorage: true}) {
+t.Error("should NOT mount /var/lib/containers when UnifiedStorage=true")
+}
+}
+
+func TestNeedsContainerStorageMount_Standard(t *testing.T) {
+if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: false}) {
+t.Error("should mount /var/lib/containers for standard (non-unified) installs")
+}
+}
+
+func TestNeedsContainerStorageMount_ComposeFsBackend(t *testing.T) {
+if install.NeedsContainerStorageMount(install.Options{ComposeFsBackend: true}) {
+t.Error("should NOT mount /var/lib/containers when ComposeFsBackend=true")
+}
+}

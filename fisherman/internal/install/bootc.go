@@ -157,6 +157,17 @@ func selinuxActive() bool {
 	return err == nil
 }
 
+// NeedsContainerStorageMount reports whether the podman run invocation for a
+// bootc install should bind-mount /var/lib/containers into the container.
+// Required for standard installs so bootc can find the source image layers,
+// but must be omitted for unified-storage installs (bootc finds the image via
+// /proc/self/fd/3 — the container's own storage context — and mounting
+// /var/lib/containers would shadow it) and for composefs installs (which use
+// an OCI layout exported to /var/tmp instead).
+func NeedsContainerStorageMount(opts Options) bool {
+	return !opts.ComposeFsBackend && !opts.UnifiedStorage
+}
+
 // BootcInstall installs a bootc image to a pre-mounted filesystem.
 //
 // If opts.SourceImgref is set, bootc is run inside the source container via
@@ -221,9 +232,11 @@ func bootcViaContainer(opts Options) error {
 		"--mount", fmt.Sprintf("type=bind,src=%s,dst=/target,bind-propagation=rslave", opts.Target),
 	}
 
-	if !opts.ComposeFsBackend {
+	if NeedsContainerStorageMount(opts) {
 		// Give bootc access to its own image layers in containers-storage.
-		// For composefs, we use the OCI layout exported above instead.
+		// Skipped for composefs (uses OCI layout) and unified storage (bootc
+		// finds the image via /proc/self/fd/3 — the container's own storage
+		// context — and mounting /var/lib/containers would shadow it).
 		podmanArgs = append(podmanArgs, "-v", "/var/lib/containers:/var/lib/containers")
 	}
 
