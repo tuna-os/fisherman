@@ -90,7 +90,11 @@
           "description": "Aurora updates are delivered as complete OCI images — safe, reliable, and reversible."
         }
       ],
-      "default_hostname": "aurora"
+      "default_hostname": "aurora",
+      "filesystems": [
+        "btrfs",
+        "xfs"
+      ]
     },
     {
       "name": "Bazzite",
@@ -741,7 +745,11 @@
         }
       ],
       "needs_user_creation": true,
-      "default_hostname": "bazzite"
+      "default_hostname": "bazzite",
+      "filesystems": [
+        "btrfs",
+        "xfs"
+      ]
     },
     {
       "name": "Bluefin",
@@ -768,10 +776,13 @@
           "search_extra": "gnomeos composefs systemd-boot experimental",
           "icon": "resource:///org/bootcinstaller/Installer/images/dakota.png",
           "bootloader": "systemd",
-          "filesystem": "btrfs",
           "composefs": true,
           "needs_user_creation": false,
-          "flatpak_var_path": "state/os/default/var"
+          "flatpak_var_path": "state/os/default/var",
+          "filesystems": [
+            "btrfs",
+            "xfs"
+          ]
         },
         {
           "name": "LTS",
@@ -813,7 +824,11 @@
           ]
         }
       ],
-      "default_hostname": "bluefin"
+      "default_hostname": "bluefin",
+      "filesystems": [
+        "btrfs",
+        "xfs"
+      ]
     },
     {
       "name": "Frostyard",
@@ -1006,7 +1021,11 @@
           ],
           "icon": "resource:///org/bootcinstaller/Installer/images/bonito.svg",
           "registry": "ghcr.io/tuna-os/bonito",
-          "default_hostname": "bonito"
+          "default_hostname": "bonito",
+          "filesystems": [
+            "xfs",
+            "btrfs"
+          ]
         },
         {
           "name": "Skipjack",
@@ -1097,7 +1116,11 @@
           ],
           "icon": "resource:///org/bootcinstaller/Installer/images/skipjack.svg",
           "registry": "ghcr.io/tuna-os/skipjack",
-          "default_hostname": "skipjack"
+          "default_hostname": "skipjack",
+          "filesystems": [
+            "xfs",
+            "btrfs"
+          ]
         },
         {
           "name": "Yellowfin",
@@ -1255,7 +1278,11 @@
             }
           ],
           "registry": "ghcr.io/zirconium-dev/zirconium",
-          "default_hostname": "zirconium"
+          "default_hostname": "zirconium",
+          "filesystems": [
+            "xfs",
+            "btrfs"
+          ]
         },
         {
           "name": "Zirconium mkosi",
@@ -1282,7 +1309,11 @@
           "registry": "ghcr.io/zirconium-dev/zirconium-nvidia"
         }
       ],
-      "default_hostname": "zirconium"
+      "default_hostname": "zirconium",
+      "filesystems": [
+        "xfs",
+        "btrfs"
+      ]
     }
   ]
 }
