@@ -174,6 +174,9 @@ func TestBuildBootcArgs_NoComposeFsBackend(t *testing.T) {
 	assertAbsent(t, args, "--composefs-backend")
 }
 
+// TestBuildBootcArgs_UnifiedStorage confirms that --experimental-unified-storage
+// is emitted when UnifiedStorage is true. The flag is hidden from bootc's --help
+// in ≥1.13 but remains valid; see https://bootc.dev/bootc/experimental-unified-storage.html
 func TestBuildBootcArgs_UnifiedStorage(t *testing.T) {
 	args := install.BuildBootcArgs(install.Options{UnifiedStorage: true}, "", "/target")
 	assertContains(t, args, "--experimental-unified-storage")
@@ -334,15 +337,12 @@ func assertAbsent(t *testing.T, slice []string, s string) {
 	}
 }
 
-// TestNeedsContainerStorageMount_UnifiedStorage is a regression test for the bug
-// where /var/lib/containers was always bind-mounted into the podman container,
-// including when --experimental-unified-storage was active. With unified storage
-// bootc finds the source image via /proc/self/fd/3 (the container's own storage
-// context); mounting /var/lib/containers shadows that context and causes bootc
-// to fail with "reference does not resolve to an image ID".
+// TestNeedsContainerStorageMount_UnifiedStorage confirms that /var/lib/containers
+// is still mounted when UnifiedStorage=true. Bootc needs the mount to find the
+// source image in host podman storage and copy it into bootc's own storage.
 func TestNeedsContainerStorageMount_UnifiedStorage(t *testing.T) {
-if install.NeedsContainerStorageMount(install.Options{UnifiedStorage: true}) {
-t.Error("should NOT mount /var/lib/containers when UnifiedStorage=true")
+if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: true}) {
+t.Error("should mount /var/lib/containers even when UnifiedStorage=true (bootc needs it to locate the source image)")
 }
 }
 

@@ -87,8 +87,9 @@ type Options struct {
 	TargetImgref string
 	// SelinuxDisabled passes --disable-selinux when true.
 	SelinuxDisabled bool
-	// UnifiedStorage passes --experimental-unified-storage when true.
-	// See: https://bootc-dev.github.io/bootc/unified-storage.html
+	// UnifiedStorage passes --experimental-unified-storage to bootc install.
+	// The flag is hidden from bootc's --help output in ≥1.13 but remains valid.
+	// See https://bootc.dev/bootc/experimental-unified-storage.html
 	UnifiedStorage bool
 	// ComposeFsBackend passes --composefs-backend when true.
 	// Required for images using the composefs-native deployment backend (e.g. ghcr.io/bootcrew/*).
@@ -159,13 +160,10 @@ func selinuxActive() bool {
 
 // NeedsContainerStorageMount reports whether the podman run invocation for a
 // bootc install should bind-mount /var/lib/containers into the container.
-// Required for standard installs so bootc can find the source image layers,
-// but must be omitted for unified-storage installs (bootc finds the image via
-// /proc/self/fd/3 — the container's own storage context — and mounting
-// /var/lib/containers would shadow it) and for composefs installs (which use
-// an OCI layout exported to /var/tmp instead).
+// Required for all standard installs so bootc can find the source image layers.
+// Skipped only for composefs, which uses an OCI layout exported to /var/tmp.
 func NeedsContainerStorageMount(opts Options) bool {
-	return !opts.ComposeFsBackend && !opts.UnifiedStorage
+	return !opts.ComposeFsBackend
 }
 
 // BootcInstall installs a bootc image to a pre-mounted filesystem.
