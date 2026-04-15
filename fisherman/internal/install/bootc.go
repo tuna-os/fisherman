@@ -723,15 +723,19 @@ func ClassifyLine(line string) string {
 		return "Deploying image"
 	case strings.Contains(lower, "layers") && strings.Contains(lower, "needed"):
 		// e.g. "layers already present: 0; layers needed: 64 (3.7 GB)"
+		// This line fires right before a long silent deployment phase — warn the user.
 		if i := strings.Index(lower, "layers needed:"); i >= 0 {
 			rest := strings.TrimSpace(line[i+len("layers needed:"):])
-			return "Deploying: " + rest
+			return "Writing " + rest + " to disk — this may take several minutes"
 		}
-		return "Downloading image layers"
+		return "Writing image layers to disk — this may take several minutes"
 	case strings.Contains(lower, "initializing ostree"):
 		return "Initializing ostree layout"
 	case strings.Contains(lower, "deploying container image"):
-		return "Deploying OS (this may take a while)"
+		// This line is buffered by bootc and only flushed once deployment is fully
+		// done ("Deploying container image...done (N minutes)"). It fires AFTER the
+		// long wait, so the message should reflect that the hard work is over.
+		return "OS deployed, installing bootloader"
 	case strings.Contains(lower, "bootloader:"):
 		return "Detected bootloader"
 	case strings.Contains(lower, "installing bootloader"):

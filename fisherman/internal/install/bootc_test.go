@@ -107,7 +107,7 @@ func TestCheckImage_OfflineWithLocalCache(t *testing.T) {
 func TestClassifyLine_LayersNeeded(t *testing.T) {
 	line := "layers already present: 0; layers needed: 64 (3.7\u00a0GB)"
 	got := install.ClassifyLine(line)
-	want := "Deploying: 64 (3.7\u00a0GB)"
+	want := "Writing 64 (3.7\u00a0GB) to disk — this may take several minutes"
 	if got != want {
 		t.Errorf("ClassifyLine(%q) = %q, want %q", line, got, want)
 	}
@@ -116,7 +116,7 @@ func TestClassifyLine_LayersNeeded(t *testing.T) {
 func TestClassifyLine_LayersNeededZero(t *testing.T) {
 	line := "layers already present: 64; layers needed: 0"
 	got := install.ClassifyLine(line)
-	want := "Deploying: 0"
+	want := "Writing 0 to disk — this may take several minutes"
 	if got != want {
 		t.Errorf("ClassifyLine(%q) = %q, want %q", line, got, want)
 	}
