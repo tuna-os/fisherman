@@ -801,6 +801,9 @@
               "imgref": "ghcr.io/ublue-os/bluefin:lts",
               "desc": "Standard LTS edition with AMD or Intel graphics"
             }
+          ],
+          "filesystems": [
+            "xfs"
           ]
         },
         {
