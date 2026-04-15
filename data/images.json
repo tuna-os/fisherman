@@ -89,7 +89,8 @@
           "title": "Atomic KDE",
           "description": "Aurora updates are delivered as complete OCI images — safe, reliable, and reversible."
         }
-      ]
+      ],
+      "default_hostname": "aurora"
     },
     {
       "name": "Bazzite",
@@ -739,7 +740,8 @@
           "description": "Bazzite is built on Universal Blue and delivers a console-like gaming experience on Linux."
         }
       ],
-      "needs_user_creation": true
+      "needs_user_creation": true,
+      "default_hostname": "bazzite"
     },
     {
       "name": "Bluefin",
@@ -810,7 +812,8 @@
             }
           ]
         }
-      ]
+      ],
+      "default_hostname": "bluefin"
     },
     {
       "name": "Frostyard",
@@ -824,7 +827,8 @@
           "filesystem": "btrfs",
           "composefs": true,
           "needs_user_creation": false,
-          "tag": "latest"
+          "tag": "latest",
+          "default_hostname": "snow"
         }
       ],
       "registry": "ghcr.io/frostyard/snow"
@@ -931,7 +935,12 @@
             }
           ],
           "icon": "resource:///org/bootcinstaller/Installer/images/albacore.svg",
-          "registry": "ghcr.io/tuna-os/albacore"
+          "registry": "ghcr.io/tuna-os/albacore",
+          "default_hostname": "albacore",
+          "filesystems": [
+            "xfs",
+            "btrfs"
+          ]
         },
         {
           "name": "Bonito",
@@ -996,7 +1005,8 @@
             }
           ],
           "icon": "resource:///org/bootcinstaller/Installer/images/bonito.svg",
-          "registry": "ghcr.io/tuna-os/bonito"
+          "registry": "ghcr.io/tuna-os/bonito",
+          "default_hostname": "bonito"
         },
         {
           "name": "Skipjack",
@@ -1086,7 +1096,8 @@
             }
           ],
           "icon": "resource:///org/bootcinstaller/Installer/images/skipjack.svg",
-          "registry": "ghcr.io/tuna-os/skipjack"
+          "registry": "ghcr.io/tuna-os/skipjack",
+          "default_hostname": "skipjack"
         },
         {
           "name": "Yellowfin",
@@ -1196,7 +1207,12 @@
             }
           ],
           "icon": "resource:///org/bootcinstaller/Installer/images/yellowfin.svg",
-          "registry": "ghcr.io/tuna-os/yellowfin"
+          "registry": "ghcr.io/tuna-os/yellowfin",
+          "default_hostname": "yellowfin",
+          "filesystems": [
+            "xfs",
+            "btrfs"
+          ]
         }
       ],
       "icon": "resource:///org/bootcinstaller/Installer/images/tunaos.svg",
@@ -1238,7 +1254,8 @@
               "tag": "rawhide"
             }
           ],
-          "registry": "ghcr.io/zirconium-dev/zirconium"
+          "registry": "ghcr.io/zirconium-dev/zirconium",
+          "default_hostname": "zirconium"
         },
         {
           "name": "Zirconium mkosi",
@@ -1264,7 +1281,8 @@
           ],
           "registry": "ghcr.io/zirconium-dev/zirconium-nvidia"
         }
-      ]
+      ],
+      "default_hostname": "zirconium"
     }
   ]
 }
