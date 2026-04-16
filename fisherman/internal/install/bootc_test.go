@@ -244,6 +244,43 @@ func TestSkopeoExportOCI_FnIsReplaceable(t *testing.T) {
 	}
 }
 
+func TestBootcInstall_DirectComposeFsExportsOCI(t *testing.T) {
+	tmpDir := t.TempDir()
+	bootcPath := tmpDir + "/bootc"
+	if err := os.WriteFile(bootcPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("writing fake bootc: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+":"+oldPath); err != nil {
+		t.Fatalf("setting PATH: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+
+	var capturedImage, capturedDir string
+	install.SkopeoExportOCIFn = func(image, destDir string) error {
+		capturedImage = image
+		capturedDir = destDir
+		return nil
+	}
+	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
+
+	err := install.BootcInstall(install.Options{
+		ComposeFsBackend: true,
+		TargetImgref:     "ghcr.io/projectbluefin/dakota:latest",
+		Target:           "/mnt/fisherman-target",
+	})
+	if err != nil {
+		t.Fatalf("BootcInstall() error = %v", err)
+	}
+	if capturedImage != "ghcr.io/projectbluefin/dakota:latest" {
+		t.Errorf("image = %q, want ghcr.io/projectbluefin/dakota:latest", capturedImage)
+	}
+	if capturedDir != "/var/fisherman-tmp/oci-cache" {
+		t.Errorf("destDir = %q, want /var/fisherman-tmp/oci-cache", capturedDir)
+	}
+}
+
 // TestBuildSelinuxBypassShim_Compiles is a regression test for the cross-distro
 // SELinux xattr issue: installing an AlmaLinux image on a Fedora host fails with
 // EINVAL because the Fedora policy doesn't recognise AlmaLinux label types.

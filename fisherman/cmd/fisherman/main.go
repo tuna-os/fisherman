@@ -128,7 +128,6 @@ func checkRequiredTools(r *recipe.Recipe) error {
 	return nil
 }
 
-
 var version = "dev"
 
 func printHelp() {
@@ -440,6 +439,16 @@ func main() {
 		LayerCount:       imageCheck.LayerCount,
 	}); err != nil {
 		fatal("bootc install: %v", err)
+	}
+
+	// systemd-boot composefs installs rely on GPT auto-discovery for the root
+	// filesystem. Keep the auto-partitioned root on the architecture-specific
+	// Linux root GUID so the installed system can find /sysroot on first boot.
+	if !isManual && isSystemdBoot && !hasEncryption && r.ComposeFsBackend {
+		progress.Info("Retagging root partition for systemd GPT auto-discovery")
+		if err := disk.SetPartitionType(r.Disk, 2, disk.GPTPartTypeLinuxRootX86_64); err != nil {
+			fatal("retagging root partition: %v", err)
+		}
 	}
 
 	// ── TPM2 enrolment (tpm2-luks-passphrase only) ────────────────────────────

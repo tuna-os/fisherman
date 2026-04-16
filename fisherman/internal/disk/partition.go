@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -16,6 +17,8 @@ import (
 
 // procMountsPath is the path to the mounts file. Overridden in tests.
 var procMountsPath = "/proc/mounts"
+
+const GPTPartTypeLinuxRootX86_64 = "4f68bce3-e8cd-4db1-96e7-fbcaf984b709"
 
 // SetProcMountsPath overrides the mounts file path. For testing only.
 func SetProcMountsPath(p string) { procMountsPath = p }
@@ -35,6 +38,14 @@ func PartSuffix(disk string) string {
 //	PartName("/dev/nvme0n1", 2) → "/dev/nvme0n1p2"
 func PartName(disk string, num int) string {
 	return fmt.Sprintf("%s%s%d", disk, PartSuffix(disk), num)
+}
+
+// SetPartitionType rewrites the GPT type for a single partition on disk.
+func SetPartitionType(disk string, partNum int, partType string) error {
+	if err := runner.Run("sfdisk", "--part-type", disk, strconv.Itoa(partNum), partType); err != nil {
+		return fmt.Errorf("setting partition type: %w", err)
+	}
+	return nil
 }
 
 // Partition wipes disk and creates a three-partition GPT layout using sfdisk:
@@ -150,9 +161,9 @@ func FindSystemdBootPartitions(diskDev string) (efiPart, rootPart string, err er
 		return "", "", fmt.Errorf("lsblk: %w", err)
 	}
 	type blockdev struct {
-		Name     string      `json:"name"`
-		Parttype string      `json:"parttype"`
-		Children []blockdev  `json:"children"`
+		Name     string     `json:"name"`
+		Parttype string     `json:"parttype"`
+		Children []blockdev `json:"children"`
 	}
 	type lsblkOutput struct {
 		Blockdevices []blockdev `json:"blockdevices"`

@@ -157,6 +157,21 @@ func BootcInstall(opts Options) error {
 	return bootcDirect(opts)
 }
 
+func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
+	if !opts.ComposeFsBackend {
+		return nil
+	}
+	if sourceImgref == "" {
+		return fmt.Errorf("composefs install requires a source image reference")
+	}
+
+	ociDir := filepath.Join("/var/fisherman-tmp", "oci-cache")
+	if err := SkopeoExportOCIFn(sourceImgref, ociDir); err != nil {
+		return fmt.Errorf("exporting image to OCI layout: %w", err)
+	}
+	return nil
+}
+
 // bootcViaContainer runs bootc from inside the source container image.
 // This is the required approach when not already running inside the image.
 func bootcViaContainer(opts Options) error {
@@ -180,11 +195,8 @@ func bootcViaContainer(opts Options) error {
 	// pass --source-imgref oci:/var/tmp/oci-cache (BuildBootcArgs adds this
 	// flag when ComposeFsBackend is true).
 	// Note: SkopeoExportOCIFn emits its own progress substeps; don't duplicate them here.
-	if opts.ComposeFsBackend {
-		ociDir := "/var/fisherman-tmp/oci-cache"
-		if err := SkopeoExportOCIFn(opts.SourceImgref, ociDir); err != nil {
-			return fmt.Errorf("exporting image to OCI layout: %w", err)
-		}
+	if err := exportComposefsOCIIfNeeded(opts, opts.SourceImgref); err != nil {
+		return err
 	}
 
 	podmanArgs := []string{
@@ -251,6 +263,18 @@ func bootcViaContainer(opts Options) error {
 // Only valid when fisherman is already running inside the bootc container image
 // (i.e. on the live ISO), where bootc auto-detects the source image.
 func bootcDirect(opts Options) error {
+	// In live-ISO mode bootc still needs the raw OCI layout for composefs
+	// installs, but there is no podman-run wrapper path that would export it for
+	// us. Use the target ref (falling back to SourceImgref if present) to export
+	// the embedded image into the scratch-backed OCI cache before bootc runs.
+	sourceImgref := opts.TargetImgref
+	if sourceImgref == "" {
+		sourceImgref = opts.SourceImgref
+	}
+	if err := exportComposefsOCIIfNeeded(opts, sourceImgref); err != nil {
+		return err
+	}
+
 	bargs := BuildBootcArgs(opts, opts.TargetImgref, opts.Target)
 
 	name, args := runner.HostArgs("bootc", bargs)
@@ -496,7 +520,6 @@ func bootcToDiskDirect(opts Options, diskDevice, filesystem string) (string, err
 	}
 	return diskDevice, nil
 }
-
 
 // Using podman (rather than skopeo copy) ensures the image lands in the same
 // storage location and format that bootc will read from inside its container,

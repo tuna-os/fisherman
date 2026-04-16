@@ -83,6 +83,26 @@ func TestPartName(t *testing.T) {
 	}
 }
 
+func TestSetPartitionType(t *testing.T) {
+	rec := setupRecorder(t)
+
+	if err := disk.SetPartitionType("/dev/vda", 2, disk.GPTPartTypeLinuxRootX86_64); err != nil {
+		t.Fatalf("SetPartitionType: %v", err)
+	}
+
+	if len(rec.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(rec.calls))
+	}
+	call := rec.calls[0]
+	if call.name != "sfdisk" {
+		t.Fatalf("command = %q, want sfdisk", call.name)
+	}
+	wantArgs := []string{"--part-type", "/dev/vda", "2", disk.GPTPartTypeLinuxRootX86_64}
+	if !equalSlice(call.args, wantArgs) {
+		t.Errorf("args = %v, want %v", call.args, wantArgs)
+	}
+}
+
 // ── Partition sfdisk script ────────────────────────────────────────────────
 
 // sfdiskStdin finds the sfdisk call in rec.calls and returns its stdin content.
