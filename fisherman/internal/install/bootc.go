@@ -87,8 +87,14 @@ type Options struct {
 	TargetImgref string
 	// SelinuxDisabled passes --disable-selinux when true.
 	SelinuxDisabled bool
-	// UnifiedStorage passes --experimental-unified-storage when true.
-	// See: https://bootc-dev.github.io/bootc/unified-storage.html
+	// UnifiedStorage is retained in the schema for forwards compatibility but
+	// is NOT emitted as a flag. --experimental-unified-storage requires bootc
+	// to run on bare metal; fisherman always runs bootc inside `podman run
+	// --privileged`, where bootc builds its internal storage using
+	// overlay@/run/bootc/storage+/proc/self/fd/3. The fd is not inherited by
+	// the copy subprocess bootc spawns, so the reference never resolves and
+	// the install fails. Standard containers-storage (via the /var/lib/containers
+	// bind-mount) is used instead. See: https://bootc.dev/bootc/experimental-unified-storage.html
 	UnifiedStorage bool
 	// ComposeFsBackend passes --composefs-backend when true.
 	// Required for images using the composefs-native deployment backend (e.g. ghcr.io/bootcrew/*).
@@ -98,12 +104,25 @@ type Options struct {
 	Bootloader string
 	// Target is the path to the mounted root filesystem on the host.
 	Target string
+	// ScratchDir is the host-side directory used for temporary I/O during
+	// installation (OCI exports, layer blobs, etc.). It is bind-mounted at
+	// /var/tmp by the caller. Defaults to "/var/fisherman-tmp" when empty.
+	ScratchDir string
 	// NeedsPull is the result of a pre-flight CheckImage call. When false,
 	// the image pull is skipped (image already in containers-storage).
 	NeedsPull bool
 	// LayerCount is the number of image layers from CheckImage, used to
 	// show "layer N/total" progress. 0 means unknown.
 	LayerCount int
+}
+
+// scratchDir returns the host-side scratch directory from opts, falling back
+// to the default "/var/fisherman-tmp" when unset.
+func (o Options) scratchDir() string {
+	if o.ScratchDir != "" {
+		return o.ScratchDir
+	}
+	return "/var/fisherman-tmp"
 }
 
 // BuildBootcArgs builds the argument slice for `bootc install to-filesystem`.
@@ -118,9 +137,7 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	if opts.SelinuxDisabled {
 		args = append(args, "--disable-selinux")
 	}
-	if opts.UnifiedStorage {
-		args = append(args, "--experimental-unified-storage")
-	}
+	// UnifiedStorage is intentionally not emitted — see Options.UnifiedStorage comment.
 	if opts.ComposeFsBackend {
 		args = append(args, "--composefs-backend")
 		// composefs-backend requires raw OCI blobs; bootcViaContainer exports
@@ -144,6 +161,14 @@ func selinuxActive() bool {
 	return err == nil
 }
 
+// NeedsContainerStorageMount reports whether the podman run invocation for a
+// bootc install should bind-mount /var/lib/containers into the container.
+// Required for all standard installs so bootc can find the source image layers.
+// Skipped only for composefs, which uses an OCI layout exported to /var/tmp.
+func NeedsContainerStorageMount(opts Options) bool {
+	return !opts.ComposeFsBackend
+}
+
 // BootcInstall installs a bootc image to a pre-mounted filesystem.
 //
 // If opts.SourceImgref is set, bootc is run inside the source container via
@@ -165,7 +190,7 @@ func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
 		return fmt.Errorf("composefs install requires a source image reference")
 	}
 
-	ociDir := filepath.Join("/var/fisherman-tmp", "oci-cache")
+	ociDir := filepath.Join(opts.scratchDir(), "oci-cache")
 	if err := SkopeoExportOCIFn(sourceImgref, ociDir); err != nil {
 		return fmt.Errorf("exporting image to OCI layout: %w", err)
 	}
@@ -190,6 +215,8 @@ func bootcViaContainer(opts Options) error {
 
 	bootcArgs := BuildBootcArgs(opts, targetImgref, "/target")
 
+	scratch := opts.scratchDir()
+
 	// composefs-backend requires raw OCI blobs that podman pull doesn't
 	// preserve in containers-storage. Export to an OCI layout first, then
 	// pass --source-imgref oci:/var/tmp/oci-cache (BuildBootcArgs adds this
@@ -212,15 +239,17 @@ func bootcViaContainer(opts Options) error {
 		// by systemd-tmpfiles on first boot. containers-image needs /var/tmp to write
 		// temp files when reconstructing layer blobs from containers-storage. Mount
 		// the disk-backed fisherman scratch space so there is always enough room.
-		"-v", "/var/fisherman-tmp:/var/tmp:z",
+		"-v", scratch + ":/var/tmp:z",
 		// Use shared propagation so submounts (e.g. /boot/efi) created on the host
 		// before launching the container are visible inside it at /target.
 		"--mount", fmt.Sprintf("type=bind,src=%s,dst=/target,bind-propagation=rslave", opts.Target),
 	}
 
-	if !opts.ComposeFsBackend {
+	if NeedsContainerStorageMount(opts) {
 		// Give bootc access to its own image layers in containers-storage.
-		// For composefs, we use the OCI layout exported above instead.
+		// Skipped for composefs (uses OCI layout) and unified storage (bootc
+		// finds the image via /proc/self/fd/3 — the container's own storage
+		// context — and mounting /var/lib/containers would shadow it).
 		podmanArgs = append(podmanArgs, "-v", "/var/lib/containers:/var/lib/containers")
 	}
 
@@ -344,13 +373,15 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 	isFile := !strings.HasPrefix(diskDevice, "/dev/")
 	isLoop := !isFile && strings.HasPrefix(filepath.Base(diskDevice), "loop")
 
+	scratch := opts.scratchDir()
+
 	podmanArgs := []string{
 		"run", "--rm",
 		"--privileged",
 		"--pid=host",
 		"--security-opt", "label=disable",
 		"-v", "/dev:/dev",
-		"-v", "/var/fisherman-tmp:/var/tmp:z",
+		"-v", scratch + ":/var/tmp:z",
 	}
 
 	if opts.ComposeFsBackend {
@@ -358,11 +389,11 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 		// that podman pull does not preserve in containers-storage. Export the
 		// image to an OCI directory layout via skopeo so the blobs exist on disk,
 		// then pass --source-imgref oci:/var/tmp/oci-cache to bootc.
-		ociDir := "/var/fisherman-tmp/oci-cache"
+		ociDir := filepath.Join(scratch, "oci-cache")
 		if err := SkopeoExportOCIFn(opts.SourceImgref, ociDir); err != nil {
 			return "", fmt.Errorf("exporting image to OCI layout: %w", err)
 		}
-		// Inside the container, /var/fisherman-tmp is mounted at /var/tmp.
+		// Inside the container, the scratch dir is mounted at /var/tmp.
 		bootcArgs = append(bootcArgs, "--source-imgref", "oci:/var/tmp/oci-cache")
 		bootcArgs = append(bootcArgs, diskDevice)
 		effectiveDisk = diskDevice
@@ -434,6 +465,23 @@ var DefaultSkopeoExportOCI = skopeoExportOCI
 // a composefs image to an OCI layout. Replace in tests to avoid disk I/O.
 var SkopeoExportOCIFn = skopeoExportOCI
 
+// bareImageRef strips any OCI transport prefix from image, returning the bare
+// registry reference. This handles both "scheme://ref" (e.g. "docker://") and
+// "scheme:ref" (e.g. "containers-storage:") styles. Live-ISO recipes may carry
+// a "containers-storage:" prefix on the Image field; the functions below must
+// not double-prepend it.
+func bareImageRef(image string) string {
+	if idx := strings.Index(image, "://"); idx >= 0 {
+		return image[idx+3:]
+	}
+	if idx := strings.Index(image, ":"); idx > 0 {
+		if transport := image[:idx]; !strings.ContainsAny(transport, "/.") {
+			return image[idx+1:]
+		}
+	}
+	return image
+}
+
 // skopeoExportOCI exports an image from containers-storage to an OCI directory
 // layout. The composefs-backend requires raw OCI blobs (compressed layer
 // tarballs) that podman pull does not preserve; skopeo reconstructs them from
@@ -447,7 +495,7 @@ func skopeoExportOCI(image, destDir string) error {
 
 	skopeoArgs := []string{
 		"copy",
-		"containers-storage:" + image,
+		"containers-storage:" + bareImageRef(image),
 		"oci:" + destDir,
 	}
 	name, args := runner.HostArgs("skopeo", skopeoArgs)
@@ -615,10 +663,10 @@ func CheckImage(image string) ImageCheck {
 	}
 
 	// 1. Fetch remote normalized manifest (resolves fat/multi-arch manifests).
-	remoteOut, remoteErr := SkopeoInspectFn("docker://" + image)
+	remoteOut, remoteErr := SkopeoInspectFn("docker://" + bareImageRef(image))
 
 	// 2. Fetch local digest from containers-storage.
-	localOut, localErr := SkopeoInspectFn("containers-storage:" + image)
+	localOut, localErr := SkopeoInspectFn("containers-storage:" + bareImageRef(image))
 
 	// If offline (remote failed), fall back to the locally cached image.
 	if remoteErr != nil {
@@ -698,15 +746,19 @@ func ClassifyLine(line string) string {
 		return "Deploying image"
 	case strings.Contains(lower, "layers") && strings.Contains(lower, "needed"):
 		// e.g. "layers already present: 0; layers needed: 64 (3.7 GB)"
+		// This line fires right before a long silent deployment phase — warn the user.
 		if i := strings.Index(lower, "layers needed:"); i >= 0 {
 			rest := strings.TrimSpace(line[i+len("layers needed:"):])
-			return "Deploying: " + rest
+			return "Writing " + rest + " to disk — this may take several minutes"
 		}
-		return "Downloading image layers"
+		return "Writing image layers to disk — this may take several minutes"
 	case strings.Contains(lower, "initializing ostree"):
 		return "Initializing ostree layout"
 	case strings.Contains(lower, "deploying container image"):
-		return "Deploying OS (this may take a while)"
+		// This line is buffered by bootc and only flushed once deployment is fully
+		// done ("Deploying container image...done (N minutes)"). It fires AFTER the
+		// long wait, so the message should reflect that the hard work is over.
+		return "OS deployed, installing bootloader"
 	case strings.Contains(lower, "bootloader:"):
 		return "Detected bootloader"
 	case strings.Contains(lower, "installing bootloader"):

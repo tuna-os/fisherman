@@ -1,8 +1,10 @@
 name: Bootcrew Fast (disk ops)
 
 on:
+  push:
+    branches: [prod, dev]
   pull_request:
-    branches: [main]
+    branches: [prod, dev]
 
 jobs:
   # Read the image matrix from tests/bootcrew-matrix.yaml and output JSON.

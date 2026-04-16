@@ -107,7 +107,7 @@ func TestCheckImage_OfflineWithLocalCache(t *testing.T) {
 func TestClassifyLine_LayersNeeded(t *testing.T) {
 	line := "layers already present: 0; layers needed: 64 (3.7\u00a0GB)"
 	got := install.ClassifyLine(line)
-	want := "Deploying: 64 (3.7\u00a0GB)"
+	want := "Writing 64 (3.7\u00a0GB) to disk — this may take several minutes"
 	if got != want {
 		t.Errorf("ClassifyLine(%q) = %q, want %q", line, got, want)
 	}
@@ -116,7 +116,7 @@ func TestClassifyLine_LayersNeeded(t *testing.T) {
 func TestClassifyLine_LayersNeededZero(t *testing.T) {
 	line := "layers already present: 64; layers needed: 0"
 	got := install.ClassifyLine(line)
-	want := "Deploying: 0"
+	want := "Writing 0 to disk — this may take several minutes"
 	if got != want {
 		t.Errorf("ClassifyLine(%q) = %q, want %q", line, got, want)
 	}
@@ -174,9 +174,14 @@ func TestBuildBootcArgs_NoComposeFsBackend(t *testing.T) {
 	assertAbsent(t, args, "--composefs-backend")
 }
 
+// TestBuildBootcArgs_UnifiedStorage confirms --experimental-unified-storage is
+// never emitted. The flag is incompatible with fisherman's podman-run launch
+// model: bootc builds its internal storage using overlay@/run/bootc/storage+
+// /proc/self/fd/3, but that fd is not inherited by the copy subprocess bootc
+// spawns, so the reference never resolves. Standard containers-storage is used.
 func TestBuildBootcArgs_UnifiedStorage(t *testing.T) {
 	args := install.BuildBootcArgs(install.Options{UnifiedStorage: true}, "", "/target")
-	assertContains(t, args, "--experimental-unified-storage")
+	assertAbsent(t, args, "--experimental-unified-storage")
 }
 
 func TestBuildBootcArgs_NoUnifiedStorage(t *testing.T) {
@@ -213,7 +218,7 @@ func TestBuildBootcArgs_AllFlags(t *testing.T) {
 	}
 	args := install.BuildBootcArgs(opts, "img:tag", "/target")
 	assertContains(t, args, "--composefs-backend")
-	assertContains(t, args, "--experimental-unified-storage")
+	assertAbsent(t, args, "--experimental-unified-storage") // never emitted; see Options.UnifiedStorage
 	assertContains(t, args, "--disable-selinux")
 	assertContains(t, args, "--target-imgref")
 }
@@ -278,6 +283,40 @@ func TestBootcInstall_DirectComposeFsExportsOCI(t *testing.T) {
 	}
 	if capturedDir != "/var/fisherman-tmp/oci-cache" {
 		t.Errorf("destDir = %q, want /var/fisherman-tmp/oci-cache", capturedDir)
+	}
+}
+
+func TestBootcInstall_DirectComposeFsUsesCustomScratchDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	bootcPath := tmpDir + "/bootc"
+	if err := os.WriteFile(bootcPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("writing fake bootc: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+":"+oldPath); err != nil {
+		t.Fatalf("setting PATH: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+
+	var capturedDir string
+	install.SkopeoExportOCIFn = func(image, destDir string) error {
+		capturedDir = destDir
+		return nil
+	}
+	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
+
+	err := install.BootcInstall(install.Options{
+		ComposeFsBackend: true,
+		TargetImgref:     "ghcr.io/projectbluefin/dakota:latest",
+		Target:           "/mnt/fisherman-target",
+		ScratchDir:       "/tmp/custom-scratch",
+	})
+	if err != nil {
+		t.Fatalf("BootcInstall() error = %v", err)
+	}
+	if capturedDir != "/tmp/custom-scratch/oci-cache" {
+		t.Errorf("destDir = %q, want /tmp/custom-scratch/oci-cache", capturedDir)
 	}
 }
 
@@ -369,4 +408,25 @@ func assertAbsent(t *testing.T, slice []string, s string) {
 			return
 		}
 	}
+}
+
+// TestNeedsContainerStorageMount_UnifiedStorage confirms that /var/lib/containers
+// is still mounted when UnifiedStorage=true. Bootc needs the mount to find the
+// source image in host podman storage and copy it into bootc's own storage.
+func TestNeedsContainerStorageMount_UnifiedStorage(t *testing.T) {
+if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: true}) {
+t.Error("should mount /var/lib/containers even when UnifiedStorage=true (bootc needs it to locate the source image)")
+}
+}
+
+func TestNeedsContainerStorageMount_Standard(t *testing.T) {
+if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: false}) {
+t.Error("should mount /var/lib/containers for standard (non-unified) installs")
+}
+}
+
+func TestNeedsContainerStorageMount_ComposeFsBackend(t *testing.T) {
+if install.NeedsContainerStorageMount(install.Options{ComposeFsBackend: true}) {
+t.Error("should NOT mount /var/lib/containers when ComposeFsBackend=true")
+}
 }
