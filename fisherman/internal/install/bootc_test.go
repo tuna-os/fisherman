@@ -47,20 +47,27 @@ func TestCheckImage_NoPullWhenCachedAndCurrent(t *testing.T) {
 	}
 }
 
-func TestCheckImage_NeedsPullWhenDigestDiffers(t *testing.T) {
+func TestCheckImage_LocalImagePreferredOverNewer(t *testing.T) {
+	// When the local image exists but has a different digest than the remote
+	// (i.e. remote is newer), we still use the local image.  The ISO embeds
+	// a specific image version for offline install; post-install updates are
+	// handled by `bootc update`, not by re-pulling during installation.
 	call := 0
 	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
 		call++
 		if call == 1 {
-			return []byte(`{"Digest":"sha256:remote","Layers":["sha256:l1"]}`), nil
+			return []byte(`{"Digest":"sha256:remote-newer","Layers":["sha256:l1"]}`), nil
 		}
-		return []byte(`{"Digest":"sha256:stale","Layers":["sha256:l1"]}`), nil
+		return []byte(`{"Digest":"sha256:local-embedded","Layers":["sha256:l1"]}`), nil
 	}
 	defer func() { install.SkopeoInspectFn = install.DefaultSkopeoInspect }()
 
 	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
-	if !result.NeedsPull {
-		t.Error("NeedsPull should be true when remote digest differs from local")
+	if result.NeedsPull {
+		t.Error("NeedsPull should be false when local image exists, even if remote is newer")
+	}
+	if result.Offline {
+		t.Error("Offline should be false when remote is reachable")
 	}
 }
 

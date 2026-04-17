@@ -694,9 +694,12 @@ func CheckImage(image string) ImageCheck {
 		return ImageCheck{NeedsPull: true, LayerCount: len(remote.Layers)}
 	}
 
-	// 3. Compare digests.
-	needsPull := remote.Digest == "" || remote.Digest != local.Digest
-	return ImageCheck{NeedsPull: needsPull, LayerCount: len(remote.Layers)}
+	// 3. Image is present locally — always use it.
+	// The installer's job is to deploy the embedded image; post-install
+	// updates are handled by `bootc update`.  Pulling a newer image during
+	// install would exceed the live-ISO's scratch space and defeats the
+	// purpose of embedding the image in the ISO in the first place.
+	return ImageCheck{NeedsPull: false, LayerCount: len(local.Layers)}
 }
 
 // runWithSubsteps runs a command, relays its combined stdout/stderr line-by-line
