@@ -79,16 +79,22 @@ func fatal(format string, args ...any) {
 // lookPath is exec.LookPath by default; replaced in tests.
 var lookPath = exec.LookPath
 
-// isTmpfs reports whether the given path is on a tmpfs filesystem.
-// Used to detect live-ISO environments where /var is RAM-backed and
-// too small for multi-gigabyte scratch I/O.
-func isTmpfs(path string) bool {
+// isSpaceConstrained reports whether the given path is on a filesystem that is
+// too small for multi-gigabyte scratch I/O. This covers:
+//   - tmpfs: RAM-backed, used by some live ISOs for /var
+//   - overlayfs: used by dmsquash-live (dracut) live ISOs where / and /var
+//     are an overlay on top of a squashfs; the writable upper layer has only
+//     a few GiB available
+func isSpaceConstrained(path string) bool {
 	var st syscall.Statfs_t
 	if err := syscall.Statfs(path, &st); err != nil {
 		return false
 	}
-	const tmpfsMagic = 0x01021994
-	return st.Type == tmpfsMagic
+	const (
+		tmpfsMagic   = 0x01021994
+		overlayMagic = 0x794c7630
+	)
+	return st.Type == tmpfsMagic || st.Type == overlayMagic
 }
 
 // expandPath prepends standard sbin directories and any tools staged alongside
@@ -425,10 +431,10 @@ func main() {
 	// check see a mount point (which it tolerates) rather than a plain
 	// directory (which it rejects).
 	scratchDir := "/var/fisherman-tmp"
-	liveISO := isTmpfs("/var") && activeTargetMount != ""
+	liveISO := isSpaceConstrained("/var") && activeTargetMount != ""
 	if liveISO {
 		scratchDir = filepath.Join(activeTargetMount, ".fisherman-scratch")
-		progress.Info("Live environment detected (/var is tmpfs) — using target disk for scratch I/O")
+		progress.Info("Live environment detected (/var is space-constrained) — using target disk for scratch I/O")
 	}
 	if err := os.MkdirAll(scratchDir, 0o1777); err != nil {
 		fatal("creating scratch dir: %v", err)
