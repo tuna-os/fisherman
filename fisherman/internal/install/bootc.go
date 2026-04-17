@@ -226,7 +226,29 @@ func bootcViaContainer(opts Options) error {
 		return err
 	}
 
-	podmanArgs := []string{
+	// For composefs installs the image is already exported as an OCI layout
+	// in the scratch dir. Use that directly as the podman image source and
+	// redirect podman's container storage root to scratch so that the working
+	// container layers (VFS copy of all image files, ~image size) are written
+	// to the target disk rather than to the host's /var/lib/containers —
+	// which may be on a space-constrained filesystem (e.g. the live ISO's
+	// overlayfs with only ~1.4 GiB available).
+	var podmanArgs []string
+	podmanImageRef := opts.SourceImgref
+	if opts.ComposeFsBackend {
+		ociCacheHost := filepath.Join(scratch, "oci-cache")
+		containersRoot := filepath.Join(scratch, "containers-root")
+		podmanImageRef = "oci:" + ociCacheHost
+		// --root redirects all podman container storage for this invocation.
+		// --storage-driver vfs is required because the scratch dir is btrfs
+		// (or another COW filesystem) which podman's overlay driver rejects.
+		podmanArgs = append(podmanArgs,
+			"--root", containersRoot,
+			"--storage-driver", "vfs",
+		)
+	}
+
+	podmanArgs = append(podmanArgs,
 		"run", "--rm",
 		"--privileged",
 		"--pid=host",
@@ -239,11 +261,11 @@ func bootcViaContainer(opts Options) error {
 		// by systemd-tmpfiles on first boot. containers-image needs /var/tmp to write
 		// temp files when reconstructing layer blobs from containers-storage. Mount
 		// the disk-backed fisherman scratch space so there is always enough room.
-		"-v", scratch + ":/var/tmp:z",
+		"-v", scratch+":/var/tmp:z",
 		// Use shared propagation so submounts (e.g. /boot/efi) created on the host
 		// before launching the container are visible inside it at /target.
 		"--mount", fmt.Sprintf("type=bind,src=%s,dst=/target,bind-propagation=rslave", opts.Target),
-	}
+	)
 
 	if NeedsContainerStorageMount(opts) {
 		// Give bootc access to its own image layers in containers-storage.
@@ -274,7 +296,7 @@ func bootcViaContainer(opts Options) error {
 		}
 	}
 
-	podmanArgs = append(podmanArgs, opts.SourceImgref)
+	podmanArgs = append(podmanArgs, podmanImageRef)
 	podmanArgs = append(podmanArgs, "bootc")
 	podmanArgs = append(podmanArgs, bootcArgs...)
 
