@@ -197,6 +197,51 @@ func TestPartitionEncrypted_SameLayout(t *testing.T) {
 	}
 }
 
+// TestPartitionSystemdBoot_SfdiskScript verifies that PartitionSystemdBoot()
+// produces a 2-partition GPT layout with a 2 GiB EFI partition.
+// Each kernel+initrd pair is ~200 MiB; 2 GiB accommodates booted + rollback +
+// a staged upgrade without exhausting the ESP.
+func TestPartitionSystemdBoot_SfdiskScript(t *testing.T) {
+	rec := setupRecorder(t)
+
+	if err := disk.PartitionSystemdBoot("/dev/nvme0n1"); err != nil {
+		t.Fatalf("PartitionSystemdBoot: %v", err)
+	}
+
+	script := sfdiskStdin(t, rec)
+
+	if !strings.Contains(script, "label: gpt") {
+		t.Errorf("sfdisk script missing 'label: gpt':\n%s", script)
+	}
+
+	// Count partition lines.
+	var partLines []string
+	for _, line := range strings.Split(script, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "label:") {
+			continue
+		}
+		partLines = append(partLines, line)
+	}
+	if len(partLines) != 2 {
+		t.Errorf("expected exactly 2 partition lines, got %d:\n%s", len(partLines), script)
+	}
+
+	// Partition 1: EFI System, 2 GiB.
+	if !strings.Contains(script, "size=2GiB") || !strings.Contains(script, "type=uefi") {
+		t.Errorf("EFI partition (size=2GiB, type=uefi) not found in sfdisk script:\n%s", script)
+	}
+
+	// Partition 2: root — must NOT have a size= field (fills remaining space).
+	rootLine := partLines[1]
+	if strings.Contains(rootLine, "size=") {
+		t.Errorf("root partition should have no size= (fills remaining space), got: %q", rootLine)
+	}
+	if !strings.Contains(rootLine, "type=linux") {
+		t.Errorf("root partition missing type=linux: %q", rootLine)
+	}
+}
+
 // TestPartition_SfdiskArgs verifies the command-line arguments passed to sfdisk.
 func TestPartition_SfdiskArgs(t *testing.T) {
 	rec := setupRecorder(t)
