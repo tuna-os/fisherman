@@ -545,15 +545,16 @@ func main() {
 		progress.Info(fmt.Sprintf("Added Plymouth boot args to %d loader entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
 	}
 
-	// Inject rd.luks.uuid into every BLS entry so the initrd knows to unlock
-	// the LUKS container before mounting root. bootc install to-filesystem only
-	// sees the open mapper device and never writes LUKS parameters itself.
+	// Inject rd.luks.name=<UUID>=root into every BLS entry so the initrd
+	// unlocks the LUKS container and maps it to /dev/mapper/root before
+	// mounting the root filesystem. bootc install to-filesystem only sees the
+	// open mapper device and never writes LUKS parameters itself.
 	if activeLuksUUID != "" {
 		n, err := post.EnsureLuksArgs(activeTargetMount, activeLuksUUID)
 		if err != nil {
 			progress.Info(fmt.Sprintf("Warning: could not inject LUKS boot args: %v", err))
 		} else if n > 0 {
-			progress.Info(fmt.Sprintf("Injected rd.luks.uuid into %d boot entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+			progress.Info(fmt.Sprintf("Injected rd.luks.name into %d boot entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
 		}
 	}
 

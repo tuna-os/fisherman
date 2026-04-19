@@ -360,9 +360,9 @@ t.Errorf("entry content:\ngot:  %q\nwant: %q", string(got), tc.wantOut)
 
 func TestEnsureLuksArgs(t *testing.T) {
 const testUUID = "1520bba9-010e-443d-b082-2fe56abdfee1"
-const wantArg = "rd.luks.uuid=" + testUUID
+const wantArg = "rd.luks.name=" + testUUID + "=root"
 
-t.Run("injects rd.luks.uuid into grub path", func(t *testing.T) {
+t.Run("injects rd.luks.name into grub path", func(t *testing.T) {
 dir := t.TempDir()
 entriesDir := dir + "/boot/loader/entries"
 if err := os.MkdirAll(entriesDir, 0o755); err != nil {
@@ -386,7 +386,7 @@ t.Errorf("entry missing %q:\n%s", wantArg, got)
 }
 })
 
-t.Run("injects rd.luks.uuid into systemd-boot path", func(t *testing.T) {
+t.Run("injects rd.luks.name into systemd-boot path", func(t *testing.T) {
 dir := t.TempDir()
 entriesDir := dir + "/boot/efi/loader/entries"
 if err := os.MkdirAll(entriesDir, 0o755); err != nil {
@@ -410,7 +410,7 @@ t.Errorf("entry missing %q:\n%s", wantArg, got)
 }
 })
 
-t.Run("idempotent — does not duplicate rd.luks.uuid", func(t *testing.T) {
+t.Run("idempotent — does not duplicate rd.luks.name", func(t *testing.T) {
 dir := t.TempDir()
 entriesDir := dir + "/boot/loader/entries"
 if err := os.MkdirAll(entriesDir, 0o755); err != nil {

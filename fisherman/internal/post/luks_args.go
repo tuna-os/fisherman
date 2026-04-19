@@ -7,14 +7,21 @@ import (
 	"strings"
 )
 
-// EnsureLuksArgs injects rd.luks.uuid=<luksUUID> into every BLS loader entry
-// under the installed system so the initrd knows to unlock the LUKS container
-// before mounting the root filesystem.
+// EnsureLuksArgs injects rd.luks.name=<luksUUID>=root into every BLS loader
+// entry under the installed system so the initrd unlocks the LUKS container
+// and maps it to /dev/mapper/root before mounting the root filesystem.
 //
 // bootc install to-filesystem only sees the already-opened device mapper node,
-// so it writes root=UUID=<fs-uuid> without any LUKS parameters. Without
-// rd.luks.uuid the initrd will fail to find the root device and the system
-// will not boot.
+// so it writes root=UUID=<fs-uuid> without any LUKS parameters. Without the
+// rd.luks.* argument the initrd will fail to find the root device and the
+// system will not boot.
+//
+// rd.luks.name=<UUID>=root (not rd.luks.uuid=<UUID>) is required so that the
+// LUKS container is mapped as /dev/mapper/root.  systemd-gpt-auto-generator
+// looks for the root filesystem either on a partition typed Linux root (x86-64)
+// or behind /dev/mapper/root; rd.luks.uuid maps to /dev/mapper/luks-<UUID>
+// which the generator cannot find, causing a ~90s hang before the emergency
+// shell (projectbluefin/dakota#270).
 //
 // Checks both <sysroot>/boot/loader/entries/ (GRUB/3-partition layout) and
 // <sysroot>/boot/efi/loader/entries/ (systemd-boot/2-partition layout).
@@ -25,7 +32,9 @@ func EnsureLuksArgs(sysroot, luksUUID string) (int, error) {
 	if luksUUID == "" {
 		return 0, nil
 	}
-	arg := "rd.luks.uuid=" + luksUUID
+	// rd.luks.name=<UUID>=root maps the LUKS container to /dev/mapper/root,
+	// which is required for systemd-gpt-auto-generator to locate the root fs.
+	arg := "rd.luks.name=" + luksUUID + "=root"
 
 	candidates := []string{
 		filepath.Join(sysroot, "boot", "loader", "entries"),
