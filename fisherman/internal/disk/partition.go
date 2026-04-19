@@ -85,19 +85,21 @@ func PartitionEncrypted(disk string) error {
 // PartitionSystemdBoot wipes disk and creates a two-partition GPT layout for
 // systemd-boot installs:
 //
-//	Partition 1 – EFI System (1 GiB — holds bootloader binary, kernel and initrd)
+//	Partition 1 – EFI System (2 GiB — holds bootloader binary, kernel and initrd)
 //	Partition 2 – Linux root (remaining space)
 //
 // Unlike grub2 installs, systemd-boot can only read FAT32 via UEFI firmware
 // protocols. A separate ext4 /boot would be unreadable, so everything lands
-// directly on the FAT32 ESP. 1 GiB gives headroom for multiple kernel versions.
+// directly on the FAT32 ESP. Each kernel+initrd pair is ~200 MiB; 2 GiB
+// comfortably accommodates the booted entry, rollback, and a staged upgrade
+// without running out of space even if stale entries accumulate.
 // This layout is used for both unencrypted and encrypted systemd-boot installs
 // (encrypted: LUKS wraps partition 2).
 func PartitionSystemdBoot(disk string) error {
 	script := strings.Join([]string{
 		"label: gpt",
 		"",
-		`size=1GiB, type=uefi, name="EFI-SYSTEM"`,
+		`size=2GiB, type=uefi, name="EFI-SYSTEM"`,
 		`type=linux, name="root"`,
 	}, "\n") + "\n"
 	return partition(disk, script)
