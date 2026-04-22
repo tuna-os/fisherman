@@ -132,6 +132,8 @@ func checkRequiredTools(r *recipe.Recipe) error {
 		{"mkfs.ext4", "e2fsprogs", true},
 		{"mkfs.xfs", "xfsprogs", r.Filesystem == "xfs"},
 		{"mkfs.btrfs", "btrfs-progs", r.Filesystem == "btrfs"},
+		{"zpool", "zfsutils-linux", r.Filesystem == "zfs"},
+		{"zfs", "zfsutils-linux", r.Filesystem == "zfs"},
 		{"cryptsetup", "cryptsetup", r.Encryption.Type != "" && r.Encryption.Type != "none"},
 		{"skopeo", "skopeo", true},
 		{"podman", "podman", true},
@@ -218,7 +220,7 @@ func main() {
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
 	hasTPM2enrolment := r.Encryption.Type == "tpm2-luks-passphrase"
 	isManual := len(r.CustomMounts) > 0
-	isSystemdBoot := r.Bootloader == "systemd"
+	isSystemdBoot := r.Bootloader == "systemd" || r.Filesystem == "zfs"
 
 	// ── Pre-flight: check image cache ─────────────────────────────────────────
 	var imageCheck install.ImageCheck
@@ -286,7 +288,11 @@ func main() {
 		pi++
 		step++
 
-		if isSystemdBoot {
+		if r.Filesystem == "zfs" {
+			if err := disk.PartitionZFS(r.Disk); err != nil {
+				fatal("partitioning disk for ZFS: %v", err)
+			}
+		} else if isSystemdBoot {
 			// systemd-boot always uses a 2-partition layout regardless of encryption.
 			// LUKS (if requested) wraps p2 (root); the 1 GiB FAT32 ESP stays unencrypted.
 			if err := disk.PartitionSystemdBoot(r.Disk); err != nil {
@@ -304,7 +310,7 @@ func main() {
 
 		var efiPart, bootPart, rootPart string
 		if isSystemdBoot {
-			// 2-partition layout: p1=EFI (1 GiB FAT32), p2=root.
+			// 2-partition layout: p1=EFI (1 GiB FAT32), p2=root (or ZFS pool).
 			// No separate ext4 /boot needed — systemd-boot reads directly from
 			// the FAT32 ESP. LUKS (if any) wraps p2.
 			efiPart = disk.PartName(r.Disk, 1)
@@ -318,6 +324,7 @@ func main() {
 		}
 		rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
 		activeRootPart = rootPart
+		poolName := disk.PoolName(r.ZFSPoolName) // only used when r.Filesystem == "zfs"
 
 		// ── Step 2: Format EFI ───────────────────────────────────────────────
 		progress.Step(step, totalSteps, "Formatting EFI partition", profile[pi].cumulativePct, profile[pi].weightPct)
@@ -374,8 +381,17 @@ func main() {
 		pi++
 		step++
 
-		if err := disk.FormatRoot(rootDev, r.Filesystem); err != nil {
-			fatal("formatting root filesystem: %v", err)
+		if r.Filesystem == "zfs" {
+			if err := disk.CreateZFSPool(poolName, rootPart, targetMount); err != nil {
+				fatal("creating ZFS pool: %v", err)
+			}
+			if err := disk.CreateZFSRootDataset(poolName); err != nil {
+				fatal("creating ZFS root dataset: %v", err)
+			}
+		} else {
+			if err := disk.FormatRoot(rootDev, r.Filesystem); err != nil {
+				fatal("formatting root filesystem: %v", err)
+			}
 		}
 
 		// ── Step 5: Mount filesystem ─────────────────────────────────────────
@@ -387,7 +403,14 @@ func main() {
 			fatal("creating mount point %s: %v", targetMount, err)
 		}
 
-		if r.BtrfsSubvolumes {
+		if r.Filesystem == "zfs" {
+			// Pool is already imported with -R altroot; root dataset is already
+			// mounted. Ensure the mount point exists and call MountZFSRoot in
+			// case the automount didn't fire (e.g. in a container environment).
+			if err := disk.MountZFSRoot(poolName, targetMount); err != nil {
+				fatal("mounting ZFS root: %v", err)
+			}
+		} else if r.BtrfsSubvolumes {
 			if err := disk.SetupBtrfsSubvolumes(rootDev, targetMount); err != nil {
 				fatal("setting up btrfs subvolumes: %v", err)
 			}
@@ -463,12 +486,19 @@ func main() {
 		targetImgref = ""
 	}
 
+	// ZFS installs must use composefs-backend because bootc's ostree path checks
+	// the filesystem type and rejects ZFS; composefs-native bypasses that check.
+	composeFsBackend := r.ComposeFsBackend
+	if r.Filesystem == "zfs" {
+		composeFsBackend = true
+	}
+
 	if err := install.BootcInstall(install.Options{
 		SourceImgref:     r.Image,
 		TargetImgref:     targetImgref,
 		SelinuxDisabled:  r.SelinuxDisabled,
 		UnifiedStorage:   r.UnifiedStorage,
-		ComposeFsBackend: r.ComposeFsBackend,
+		ComposeFsBackend: composeFsBackend,
 		Bootloader:       r.Bootloader,
 		Target:           activeTargetMount,
 		ScratchDir:       scratchDir,
@@ -564,9 +594,25 @@ func main() {
 	//   1. fstrim  — discard unused blocks (SSD optimization)
 	//   2. remount ro — flush writeback, lock the deployment read-only
 	//   3. fsfreeze/thaw — flush the journal for a clean first boot
+	// ZFS handles this internally; fstrim/remount-ro/fsfreeze do not apply.
 	progress.Step(step, totalSteps, "Finalizing installation", profile[pi].cumulativePct, profile[pi].weightPct)
-	if err := disk.FinalizeFilesystem(activeTargetMount); err != nil {
-		fatal("finalizing target filesystem: %v", err)
+	if r.Filesystem != "zfs" {
+		if err := disk.FinalizeFilesystem(activeTargetMount); err != nil {
+			fatal("finalizing target filesystem: %v", err)
+		}
+	}
+
+	// ZFS post-install: write host ID and zpool.cache so the installed system
+	// can import the pool at boot. Must be done before unmounting.
+	if r.Filesystem == "zfs" {
+		poolName := disk.PoolName(r.ZFSPoolName)
+		progress.Info("ZFS post-install: writing hostid and zpool.cache")
+		if err := disk.WriteHostID(activeTargetMount); err != nil {
+			progress.Info(fmt.Sprintf("Warning: ZFS host ID: %v", err))
+		}
+		if err := disk.SetZFSCachefile(poolName, activeTargetMount); err != nil {
+			progress.Info(fmt.Sprintf("Warning: ZFS cachefile: %v", err))
+		}
 	}
 
 	// Tear down mounts and LUKS before declaring success.

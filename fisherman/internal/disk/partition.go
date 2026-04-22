@@ -105,6 +105,24 @@ func PartitionSystemdBoot(disk string) error {
 	return partition(disk, script)
 }
 
+// PartitionZFS wipes disk and creates a two-partition GPT layout for
+// ZFS installs:
+//
+//	Partition 1 – EFI System (1 GiB — holds bootloader, kernel, initrd)
+//	Partition 2 – ZFS pool   (remaining space)
+//
+// ZFS installs use systemd-boot which reads directly from the FAT32 ESP.
+// The ZFS pool on p2 holds the composefs-native bootc store.
+func PartitionZFS(disk string) error {
+	script := strings.Join([]string{
+		"label: gpt",
+		"",
+		`size=1GiB, type=uefi, name="EFI-SYSTEM"`,
+		`type=linux, name="zfs-pool"`,
+	}, "\n") + "\n"
+	return partition(disk, script)
+}
+
 // partition is the shared implementation for Partition and PartitionEncrypted.
 func partition(disk, script string) error {
 	// Unmount any mounted partitions on this disk before partitioning.

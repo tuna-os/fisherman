@@ -9,7 +9,7 @@ import (
 // Recipe describes a fisherman installation.
 type Recipe struct {
 	Disk            string        `json:"disk"`            // block device, e.g. "/dev/sda" (auto-partition)
-	Filesystem      string        `json:"filesystem"`      // "xfs" or "btrfs"
+	Filesystem      string        `json:"filesystem"`      // "xfs", "btrfs", or "zfs"
 	BtrfsSubvolumes bool          `json:"btrfsSubvolumes"` // create @, @home, @snapshots
 	Encryption      Encryption    `json:"encryption"`
 	Image           string        `json:"image"`           // source OCI image reference
@@ -20,7 +20,11 @@ type Recipe struct {
 	// Required for composefs-native images (e.g. ghcr.io/bootcrew/*).
 	// Independent of UnifiedStorage — these are different bootc features.
 	// Works with any supported filesystem including xfs.
+	// Automatically forced to true when Filesystem is "zfs".
 	ComposeFsBackend bool          `json:"composeFsBackend"`
+	// ZFSPoolName is the name of the ZFS pool to create (default: "rpool").
+	// Only used when Filesystem is "zfs".
+	ZFSPoolName      string        `json:"zfsPoolName,omitempty"`
 	// Bootloader selects the bootloader: "grub2" (default) or "systemd".
 	// Use "systemd" for images that ship systemd-boot (e.g. Project Bluefin/Dakota).
 	Bootloader       string        `json:"bootloader"`
@@ -106,12 +110,15 @@ func (r *Recipe) Validate() error {
 			return fmt.Errorf("disk %s: %w", r.Disk, err)
 		}
 		switch r.Filesystem {
-		case "xfs", "btrfs":
+		case "xfs", "btrfs", "zfs":
 		default:
-			return fmt.Errorf("filesystem must be \"xfs\" or \"btrfs\", got %q", r.Filesystem)
+			return fmt.Errorf("filesystem must be \"xfs\", \"btrfs\", or \"zfs\", got %q", r.Filesystem)
 		}
 		if r.BtrfsSubvolumes && r.Filesystem != "btrfs" {
 			return fmt.Errorf("btrfsSubvolumes requires filesystem=btrfs")
+		}
+		if r.Filesystem == "zfs" && r.Encryption.Type != "" && r.Encryption.Type != "none" {
+			return fmt.Errorf("ZFS filesystem does not support LUKS encryption in this version")
 		}
 	}
 	switch r.ImageType {
