@@ -240,11 +240,12 @@ func bootcViaContainer(opts Options) error {
 		containersRoot := filepath.Join(scratch, "containers-root")
 		podmanImageRef = "oci:" + ociCacheHost
 		// --root redirects all podman container storage for this invocation.
-		// --storage-driver vfs is required because the scratch dir is btrfs
-		// (or another COW filesystem) which podman's overlay driver rejects.
+		// Select storage driver based on scratch filesystem safety and podman probe.
+		storageDriver, driverReason := selectStorageDriver(scratch, true)
+		progress.Substep(fmt.Sprintf("Using %s storage driver (%s)", storageDriver, driverReason))
 		podmanArgs = append(podmanArgs,
 			"--root", containersRoot,
-			"--storage-driver", "vfs",
+			"--storage-driver", storageDriver,
 		)
 	}
 
