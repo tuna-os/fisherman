@@ -121,7 +121,7 @@ func TestCleanup_Idempotent(t *testing.T) {
 }
 
 // TestCleanup_WithLUKS verifies that a registered LUKS mapper is closed after
-// all mounts are unmounted.
+// all mounts are unmounted, with proper I/O flushing and reference release.
 func TestCleanup_WithLUKS(t *testing.T) {
 	rec := setupRecorder(t)
 
@@ -131,9 +131,10 @@ func TestCleanup_WithLUKS(t *testing.T) {
 
 	c.Run()
 
-	// Expect: umount /mnt/target, then cryptsetup luksClose fisherman-root.
-	if len(rec.calls) < 2 {
-		t.Fatalf("expected at least 2 calls, got %d: %v", len(rec.calls), rec.calls)
+	// Expect: umount /mnt/target, fuser -km, blockdev --flushbufs, udevadm settle,
+	// then cryptsetup luksClose fisherman-root.
+	if len(rec.calls) < 5 {
+		t.Fatalf("expected at least 5 calls, got %d: %v", len(rec.calls), rec.calls)
 	}
 
 	umount := rec.calls[0]
@@ -141,12 +142,41 @@ func TestCleanup_WithLUKS(t *testing.T) {
 		t.Errorf("first call: name = %q, want umount", umount.name)
 	}
 
-	luksClose := rec.calls[len(rec.calls)-1]
-	if luksClose.name != "cryptsetup" {
-		t.Errorf("last call: name = %q, want cryptsetup", luksClose.name)
+	// Verify cleanup sequence before luksClose
+	callNames := make([]string, len(rec.calls))
+	for i, call := range rec.calls {
+		callNames[i] = call.name
 	}
+
+	// Should have fuser, blockdev, udevadm before cryptsetup
+	var fuserIdx, blockdevIdx, udevadmIdx, cryptsetupIdx int
+	for i, name := range callNames {
+		if name == "fuser" {
+			fuserIdx = i
+		}
+		if name == "blockdev" {
+			blockdevIdx = i
+		}
+		if name == "udevadm" {
+			udevadmIdx = i
+		}
+		if name == "cryptsetup" {
+			cryptsetupIdx = i
+		}
+	}
+
+	if fuserIdx == 0 || blockdevIdx == 0 || udevadmIdx == 0 || cryptsetupIdx == 0 {
+		t.Errorf("missing cleanup calls: fuser=%d blockdev=%d udevadm=%d cryptsetup=%d",
+			fuserIdx, blockdevIdx, udevadmIdx, cryptsetupIdx)
+	}
+	if fuserIdx > cryptsetupIdx || blockdevIdx > cryptsetupIdx || udevadmIdx > cryptsetupIdx {
+		t.Errorf("cleanup sequence out of order: fuser=%d blockdev=%d udevadm=%d cryptsetup=%d (cryptsetup must be last)",
+			fuserIdx, blockdevIdx, udevadmIdx, cryptsetupIdx)
+	}
+
+	luksClose := rec.calls[cryptsetupIdx]
 	if len(luksClose.args) < 2 || luksClose.args[0] != "luksClose" {
-		t.Errorf("last call: args = %v, want [luksClose fisherman-root]", luksClose.args)
+		t.Errorf("cryptsetup call: args = %v, want [luksClose fisherman-root]", luksClose.args)
 	}
 	if luksClose.args[1] != "fisherman-root" {
 		t.Errorf("luksClose mapper = %q, want fisherman-root", luksClose.args[1])

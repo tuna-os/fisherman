@@ -204,6 +204,9 @@ func main() {
 		fatal("invalid recipe: %v", err)
 	}
 
+	// Log fisherman version for CI diagnostics
+	fmt.Fprintf(os.Stderr, "[fisherman] version: %s\n", version)
+
 	// Expand PATH to cover all standard sbin locations and any tools staged
 	// alongside this binary (e.g. by the tuna-installer Flatpak).  pkexec
 	// strips the calling user's PATH to a minimal safe set which often omits
