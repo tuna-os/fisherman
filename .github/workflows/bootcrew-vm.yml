@@ -63,6 +63,10 @@ jobs:
       - name: Setup CI environment
         run: just ci-install-tools
 
+      - name: Login to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
+
       - name: Generate SSH keys
         run: just setup-ssh-keys
 
