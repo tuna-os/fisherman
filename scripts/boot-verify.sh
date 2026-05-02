@@ -102,7 +102,9 @@ if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-compose
     fi
     
     if [ "$PATCHED" -eq 0 ]; then
-      echo "⚠️  No boot configuration found or already patched"
+      echo "⚠️  No boot configuration found"
+      echo "   Checking /boot contents:"
+      sudo find "$MNTDIR/boot" -type f 2>/dev/null | head -20 | sed 's/^/     /'
     fi
     
     sudo umount "$MNTDIR"
