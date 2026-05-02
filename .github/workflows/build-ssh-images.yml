@@ -1,0 +1,63 @@
+name: Build SSH-enabled Images
+
+on:
+  push:
+    branches: [dev, prod]
+    paths:
+      - 'scripts/Containerfile.ssh-enable'
+      - '.github/workflows/build-ssh-images.yml'
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  REGISTRY_USER: ${{ github.actor }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - name: centos-bootc
+            base_image: quay.io/centos-bootc/centos-bootc:c10s
+          - name: debian-bootc
+            base_image: quay.io/debian-bootc/debian-bootc:bookworm
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push SSH-enabled image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: scripts/Containerfile.ssh-enable
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ matrix.image.base_image }}
+          tags: |
+            ${{ env.REGISTRY }}/tuna-os/fisherman/${{ matrix.image.name }}:ssh-enabled
+            ${{ env.REGISTRY }}/tuna-os/fisherman/${{ matrix.image.name }}:ssh-enabled-${{ github.sha }}
+
+      - name: Image built and pushed
+        run: |
+          echo "✅ Built and pushed: ${{ env.REGISTRY }}/tuna-os/fisherman/${{ matrix.image.name }}:ssh-enabled"
+          echo "   Base: ${{ matrix.image.base_image }}"
+          echo "   Ref: ${{ env.REGISTRY }}/tuna-os/fisherman/${{ matrix.image.name }}:ssh-enabled-${{ github.sha }}"

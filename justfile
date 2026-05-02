@@ -32,35 +32,24 @@ setup-ssh-keys:
   cat /tmp/bootcrew-ssh/id_rsa.pub
 
 # Prepare SSH-enabled container image (using podman exec)
+# SSH-enabled images are pre-built and pushed to GHCR
+# This recipe is kept for local testing if needed
 build-ssh-enabled-image IMAGE:
   #!/bin/bash
   set -e
   
-  echo "Building SSH-enabled image..."
+  echo "Building SSH-enabled image locally for testing..."
   echo "Base image: {{ IMAGE }}"
   
-  # Build to temporary tar image
-  TEMP_TAG="localhost/fisherman-ssh-temp:latest"
+  # Build temporary local image for local testing
+  TEMP_TAG="localhost/fisherman-ssh-test:latest"
   podman build \
     --build-arg BASE_IMAGE="{{ IMAGE }}" \
     --tag "$TEMP_TAG" \
     -f scripts/Containerfile.ssh-enable .
   
-  # Export tar image and convert to OCI layout
-  TEMP_TAR="/tmp/bootcrew-ssh.tar"
-  podman save -o "$TEMP_TAR" "$TEMP_TAG"
-  
-  OCI_DIR="/tmp/bootcrew-ssh-oci"
-  rm -rf "$OCI_DIR"
-  
-  # Use skopeo to convert tar to OCI (avoids containers-storage issues)
-  skopeo copy "oci-archive:$TEMP_TAR" "oci:$OCI_DIR:latest"
-  
-  # Output the oci: reference for fisherman to use
-  SSH_IMAGE="oci:$OCI_DIR:latest"
-  
-  echo "✅ Built SSH-enabled image to OCI layout"
-  echo "$SSH_IMAGE" > /tmp/bootcrew-ssh-image.txt
+  echo "✅ Built SSH-enabled image locally: $TEMP_TAG"
+  echo "For CI, SSH-enabled images are hosted at ghcr.io/tuna-os/fisherman/<image>:ssh-enabled"
 
 # Build debian-bootc with SSH pre-installed (Containerfile approach)
 build-debian-bootc-ssh:
@@ -268,10 +257,11 @@ bootcrew-ci-test IMAGE_JSON:
   
   DISK_FILE="{{ CI_ARTIFACTS }}/bootcrew-${IMAGE_NAME}-disk.img"
   
-  # Build SSH-enabled image for E2E testing
-  echo "Building SSH-enabled image..."
-  just build-ssh-enabled-image "$IMAGE"
-  SSH_IMAGE=$(cat /tmp/bootcrew-ssh-image.txt)
+  # Determine SSH-enabled image reference from GHCR
+  # SSH-enabled images are pre-built and pushed to: ghcr.io/tuna-os/fisherman/<image>:ssh-enabled
+  SSH_IMAGE="ghcr.io/tuna-os/fisherman/${IMAGE_NAME}:ssh-enabled"
+  
+  echo "Using pre-built SSH-enabled image: $SSH_IMAGE"
   
   # Build and create disk
   just setup-loop "$DISK_FILE"
