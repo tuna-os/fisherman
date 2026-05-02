@@ -232,22 +232,16 @@ bootcrew-ci-test IMAGE_JSON:
   
   DISK_FILE="{{ CI_ARTIFACTS }}/bootcrew-${IMAGE_NAME}-disk.img"
   
-  # For debian-bootc, build the SSH-enabled version from Containerfile
-  if [ "$IMAGE_NAME" = "debian-bootc" ]; then
-    echo "Building debian-bootc with SSH pre-installed..."
-    just build-debian-bootc-ssh
-    SSH_IMAGE="ghcr.io/bootcrew/debian-bootc:ci-ssh-enabled"
-  else
-    # For other images, prepare SSH using podman exec approach
-    SSH_IMAGE="${IMAGE%:*}:ci-ssh-enabled"
-    just prepare-ssh-image "$IMAGE"
-  fi
+  # Prepare SSH image (works for all distros now that dpkg is initialized)
+  # This prepares the container image with SSH for VM testing
+  just prepare-ssh-image "$IMAGE"
   
   # Build and create disk
   just setup-loop "$DISK_FILE"
   LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt)
   
-  # Generate recipe
+  # Generate recipe - use the original image (fisherman will pull from registry)
+  # The SSH setup in prepare-ssh-image is for the VM testing phase, not the installation
   cat > {{ CI_ARTIFACTS }}/recipe.json << EOF
   {
     "disk": "$LOOPDEV",
@@ -256,7 +250,7 @@ bootcrew-ci-test IMAGE_JSON:
     "unifiedStorage": $UNIFIED,
     "selinuxDisabled": $SELINUX,
     "encryption": {"type": "none"},
-    "image": "$SSH_IMAGE",
+    "image": "$IMAGE",
     "hostname": "ci-test",
     "flatpaks": []
   }
