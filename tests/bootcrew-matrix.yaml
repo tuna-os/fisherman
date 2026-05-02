@@ -1,6 +1,10 @@
 # Bootcrew CI regression test matrix.
-# Used by both bootcrew-fast.yml (PR gate) and bootcrew-nightly.yml (full install).
-# Add new images here; both workflows pick them up automatically.
+# Used by bootcrew-fast.yml (PR gate, disk-ops), bootcrew-vm.yml (PR gate, VM boot),
+# and bootcrew-nightly.yml (full install).
+# Add new images here; all workflows pick them up automatically.
+# 
+# vm_boot: true — include in bootcrew-vm.yml for E2E VM boot tests on every PR
+#          false (default) — skip in VM boot tests (reserved for nightly + disk-ops)
 images:
   - name: bluefin-lts
     image: ghcr.io/ublue-os/bluefin:lts
@@ -9,6 +13,16 @@ images:
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
+    vm_boot: false
+
+  - name: centos-bootc
+    image: ghcr.io/bootcrew/centos-bootc:latest
+    filesystem: xfs
+    composefs_backend: false
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    vm_boot: true  # ostree backend verification
 
   - name: yellowfin-gnome50
     image: ghcr.io/tuna-os/yellowfin:gnome50
@@ -18,6 +32,7 @@ images:
     selinux_disabled: true
     flatpaks:
       - org.mozilla.firefox
+    vm_boot: false
 
   - name: ubuntu-bootc
     image: ghcr.io/bootcrew/ubuntu-bootc:latest
@@ -26,6 +41,7 @@ images:
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
+    vm_boot: false
 
   # gnomeos-bootc disabled: consistently fails with missing blob in containers-storage
   # (sha256:6d2d10...) — likely a broken layer in the ghcr.io/bootcrew/gnomeos-bootc image.
@@ -44,6 +60,7 @@ images:
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
+    vm_boot: false
 
   - name: arch-bootc
     image: ghcr.io/bootcrew/arch-bootc:latest
@@ -52,6 +69,7 @@ images:
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
+    vm_boot: false
 
   # gentoo-bootc disabled: consistently fails with missing blob in containers-storage
   # (sha256:2443e8...) — likely a broken layer in the ghcr.io/bootcrew/gentoo-bootc image.
@@ -70,6 +88,7 @@ images:
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
+    vm_boot: true  # composefs backend verification
 
   - name: frostyard-snow
     image: ghcr.io/frostyard/snow:latest
@@ -78,6 +97,7 @@ images:
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
+    vm_boot: false
 
   # frostyard-snowloaded disabled: image bundles an older libostree built without
   # composefs support, but the Ubuntu 24.04 runner has the composefs kernel module
