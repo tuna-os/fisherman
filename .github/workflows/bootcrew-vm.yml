@@ -17,12 +17,25 @@ jobs:
       - name: Parse image matrix (vm_boot only)
         id: read-matrix
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y yq jq
-          MATRIX=$(cat tests/bootcrew-matrix.yaml | yq eval -o=json '.' | jq -c '.images | map(select(.vm_boot == true))')
-          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
-          echo "Matrix output:"
-          echo "$MATRIX" | jq '.'
-          echo "Testing: $(echo $MATRIX | jq -r '.[].name' | tr '\n' ' ')"
+          python3 << 'EOF'
+          import json
+          import yaml
+          
+          with open('tests/bootcrew-matrix.yaml') as f:
+              data = yaml.safe_load(f)
+          
+          images = [img for img in data['images'] if img.get('vm_boot') == True]
+          matrix = json.dumps(images)
+          
+          with open('/tmp/matrix.json', 'w') as f:
+              f.write(f'matrix={matrix}\n')
+          
+          print("Matrix output:")
+          print(json.dumps(images, indent=2))
+          print("Testing:", ' '.join(img['name'] for img in images))
+          EOF
+          
+          cat /tmp/matrix.json >> "$GITHUB_OUTPUT"
 
   vm-boot:
     name: vm-boot / ${{ matrix.image.name }}
