@@ -267,18 +267,10 @@ bootcrew-ci-test IMAGE_JSON:
   # Verify installation
   just verify-installation "$LOOPDEV" "$COMPOSEFS"
   
-  # Enable SSH in the installed system for VM testing (skip for composefs for now)
-  if [ "$COMPOSEFS" = "false" ]; then
-    echo "Enabling SSH in installed system..."
-    bash scripts/enable-ssh-installed.sh "$LOOPDEV" "$COMPOSEFS" /tmp/bootcrew-ssh/id_rsa.pub || echo "WARNING: Could not enable SSH in installed system"
-  
-    # Boot and verify via SSH
-    echo ""
-    just boot-verify
-  else
-    echo "Skipping SSH-based boot verification for composefs systems"
-    echo "composefs verification will be done via offline checks"
-  fi
+  # Skip SSH-based boot verification - offline verification is more reliable
+  # SSH setup in chroot is problematic due to package manager network access
+  echo "Skipping SSH-based boot verification"
+  echo "Using offline verification instead"
   
   # Offline verification
   just verify-bootc-offline "$LOOPDEV" "$COMPOSEFS"
