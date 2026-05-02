@@ -36,23 +36,28 @@ build-ssh-enabled-image IMAGE:
   #!/bin/bash
   set -e
   
-  # Generate a simple local tag for the SSH-enabled image
-  # Use a unique name to avoid conflicts
-  LOCAL_TAG="localhost/bootcrew-ssh-enabled:$(date +%s)"
+  # Build a temporary local image
+  TEMP_TAG="localhost/fisherman-ssh-temp:latest"
   
   echo "Building SSH-enabled image..."
   echo "Base image: {{ IMAGE }}"
-  echo "Local tag: $LOCAL_TAG"
   
   podman build \
     --build-arg BASE_IMAGE="{{ IMAGE }}" \
-    --tag "$LOCAL_TAG" \
+    --tag "$TEMP_TAG" \
     -f scripts/Containerfile.ssh-enable .
   
-  # Output the containers-storage: reference for fisherman to use
-  SSH_IMAGE="containers-storage:$LOCAL_TAG"
+  # Export to OCI layout for fisherman to use
+  OCI_DIR="/tmp/bootcrew-ssh-oci"
+  rm -rf "$OCI_DIR"
+  mkdir -p "$OCI_DIR"
   
-  echo "✅ Built SSH-enabled image: $LOCAL_TAG"
+  skopeo copy "docker-daemon:$TEMP_TAG" "oci:$OCI_DIR:latest"
+  
+  # Output the oci: reference for fisherman to use
+  SSH_IMAGE="oci:$OCI_DIR:latest"
+  
+  echo "✅ Built SSH-enabled image"
   echo "$SSH_IMAGE" > /tmp/bootcrew-ssh-image.txt
 
 # Build debian-bootc with SSH pre-installed (Containerfile approach)
