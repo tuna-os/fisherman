@@ -90,7 +90,7 @@ sudo chroot "$ROOTFS" sh -c '
 
 # Set root password
 echo "Setting root password..."
-sudo chroot "$ROOTFS" sh -c "echo 'root:bootcrew-test' | chpasswd" 2>/dev/null || true
+sudo chroot "$ROOTFS" sh -c 'echo "root:bootcrew-test" | chpasswd' 2>/dev/null || true
 
 # Create SSH directory and inject key
 echo "Injecting SSH public key..."
