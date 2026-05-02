@@ -267,6 +267,10 @@ bootcrew-ci-test IMAGE_JSON:
   # Verify installation
   just verify-installation "$LOOPDEV" "$COMPOSEFS"
   
+  # Enable SSH in the installed system for VM testing
+  echo "Enabling SSH in installed system..."
+  bash scripts/enable-ssh-installed.sh "$LOOPDEV" "$COMPOSEFS" /tmp/bootcrew-ssh/id_rsa.pub || echo "WARNING: Could not enable SSH in installed system"
+  
   # Boot and verify
   echo ""
   just boot-verify
