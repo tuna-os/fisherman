@@ -25,6 +25,12 @@ RUN if command -v dnf >/dev/null 2>&1; then \
       echo "WARNING: Unsupported distribution, SSH installation may have failed"; \
     fi
 
+# Configure SSH for password authentication and set root password
+RUN echo "PermitRootLogin yes" >> /etc/ssh/sshd_config && \
+    echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config && \
+    echo "bootcrew-test" | passwd --stdin root || \
+    echo "bootcrew-test" | passwd root
+
 # Ensure SSH is installed
 RUN test -f /usr/sbin/sshd || test -f /usr/bin/sshd || \
     (echo "ERROR: SSH installation failed" && exit 1)
