@@ -53,25 +53,33 @@ SSH_BIN=$(find_ssh) || {
 OVMF_CODE="${OVMF_PATH%:*}"
 OVMF_VARS="${OVMF_PATH#*:}"
 
-# Patch GRUB for debian-bootc (composefs) if needed
+# Patch boot loader for debian-bootc (composefs) if needed
 # composefs images expect GPT auto-discovery but fisherman creates type=linux partitions
-# So we need to add root=/dev/vda3 kernel parameter
+# So we need to add root=/dev/vda3 kernel parameter to BLS config files
 if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-composefs" ]; then
-  echo "=== Patching GRUB for debian-bootc (composefs) ==="
+  echo "=== Patching boot loader for debian-bootc (composefs) ==="
   MNTDIR="/tmp/bootcrew-grub-mnt-$$"
   mkdir -p "$MNTDIR"
   
-  # Try to mount the root partition (vda3) to access GRUB config
+  # Try to mount the root partition (vda3) to access boot loader config
   if sudo mount "$LOOPDEV"p3 "$MNTDIR" 2>/dev/null; then
-    GRUB_CONF="$MNTDIR/boot/grub2/grub.cfg"
-    if [ -f "$GRUB_CONF" ]; then
-      # Check if root= parameter is already present
-      if ! sudo grep -q "root=" "$GRUB_CONF"; then
-        echo "Adding root=/dev/vda3 kernel parameter to GRUB config..."
-        sudo sed -i 's/^[[:space:]]*linux[[:space:]]/&root=\/dev\/vda3 /' "$GRUB_CONF"
+    # Patch BLS (Boot Loader Specification) config files
+    PATCHED=0
+    for conf in "$MNTDIR"/loader/entries/*.conf; do
+      [ -f "$conf" ] || continue
+      # Add root=/dev/vda3 if missing: composefs images omit root= and rely
+      # on GPT auto-discovery (requires partition type root-x86-64), which
+      # won't work because fisherman creates type=linux partitions.
+      if ! sudo grep -q "root=" "$conf"; then
+        echo "Patching $(basename "$conf")..."
+        sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
+        PATCHED=1
       fi
-    fi
+    done
+    [ "$PATCHED" -eq 0 ] && echo "No BLS entries needed patching"
     sudo umount "$MNTDIR"
+  else
+    echo "⚠️  Could not mount partition for BLS patching (may not be available)"
   fi
   rm -rf "$MNTDIR"
   echo ""
