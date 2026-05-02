@@ -88,7 +88,7 @@ images:
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
-    vm_boot: false  # TODO: Image needs SSH pre-installed or initialized apt
+    vm_boot: true  # composefs backend verification (using pre-built SSH image)
 
   - name: frostyard-snow
     image: ghcr.io/frostyard/snow:latest

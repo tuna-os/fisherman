@@ -31,11 +31,19 @@ setup-ssh-keys:
   echo "✅ SSH keys ready at /tmp/bootcrew-ssh/"
   cat /tmp/bootcrew-ssh/id_rsa.pub
 
-# Prepare SSH-enabled container image
+# Prepare SSH-enabled container image (using podman exec)
 prepare-ssh-image IMAGE:
   #!/bin/bash
   set -e
   bash scripts/prepare-ssh-image.sh "{{ IMAGE }}" /tmp/bootcrew-ssh/id_rsa.pub
+
+# Build debian-bootc with SSH pre-installed (Containerfile approach)
+build-debian-bootc-ssh:
+  #!/bin/bash
+  set -e
+  echo "Building debian-bootc-ssh image..."
+  podman build -f Containerfile.debian-ssh -t ghcr.io/bootcrew/debian-bootc:ci-ssh-enabled .
+  echo "✅ Built: ghcr.io/bootcrew/debian-bootc:ci-ssh-enabled"
 
 # Build fisherman binary
 build:
@@ -224,9 +232,16 @@ bootcrew-ci-test IMAGE_JSON:
   
   DISK_FILE="{{ CI_ARTIFACTS }}/bootcrew-${IMAGE_NAME}-disk.img"
   
-  # Prepare SSH image
-  SSH_IMAGE="${IMAGE%:*}:ci-ssh-enabled"
-  just prepare-ssh-image "$IMAGE"
+  # For debian-bootc, build the SSH-enabled version from Containerfile
+  if [ "$IMAGE_NAME" = "debian-bootc" ]; then
+    echo "Building debian-bootc with SSH pre-installed..."
+    just build-debian-bootc-ssh
+    SSH_IMAGE="ghcr.io/bootcrew/debian-bootc:ci-ssh-enabled"
+  else
+    # For other images, prepare SSH using podman exec approach
+    SSH_IMAGE="${IMAGE%:*}:ci-ssh-enabled"
+    just prepare-ssh-image "$IMAGE"
+  fi
   
   # Build and create disk
   just setup-loop "$DISK_FILE"
