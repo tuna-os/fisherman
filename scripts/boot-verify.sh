@@ -79,13 +79,13 @@ QEMU_PID=$!
 echo "QEMU PID: $QEMU_PID"
 echo ""
 
-# Wait for SSH to be ready
+# Wait for SSH to be ready (using password auth)
 echo "Waiting for VM to boot and SSH to be ready (up to 60s)..."
 SSH_READY=0
 for i in {1..60}; do
   sleep 2
-  if "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-         -o ConnectTimeout=1 -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" \
+  if sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+         -o ConnectTimeout=1 -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" \
          "echo OK" 2>/dev/null; then
     echo "✅ SSH connection successful"
     SSH_READY=1
@@ -104,28 +104,28 @@ fi
 
 echo ""
 echo "=== System Information ==="
-"$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" "uname -a" || true
+sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "uname -a" || true
 
 echo ""
 echo "=== bootc status ==="
-"$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" "bootc status" 2>/dev/null || echo "⚠️  bootc not available"
+sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "bootc status" 2>/dev/null || echo "⚠️  bootc not available"
 
 echo ""
 echo "=== bootc status (JSON) ==="
-"$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" "bootc status --json-pretty" 2>/dev/null || echo "⚠️  json output not available"
+sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "bootc status --json-pretty" 2>/dev/null || echo "⚠️  json output not available"
 
 echo ""
 echo "=== Checking for upgrade availability ==="
-"$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" "bootc upgrade --check" 2>/dev/null || echo "⚠️  upgrade check not available"
+sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "bootc upgrade --check" 2>/dev/null || echo "⚠️  upgrade check not available"
 
 echo ""
 echo "=== Shutting down VM ==="
-"$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" "shutdown -h now" 2>/dev/null || true
+sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "shutdown -h now" 2>/dev/null || true
 
 sleep 5
 kill $QEMU_PID 2>/dev/null || true
