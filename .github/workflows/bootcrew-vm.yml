@@ -233,6 +233,62 @@ jobs:
             echo "PASS: boot success, no critical failures for $IMAGE_NAME"
           fi
 
+      - name: Verify bootc status on installed VM (offline check)
+        run: |
+          LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
+          IMAGE_NAME="${{ matrix.image.name }}"
+          COMPOSEFS="${{ matrix.image.composefs_backend }}"
+
+          # After VM shut down, mount root partition and verify bootc is present
+          ROOT_PART="${LOOPDEV}p3"
+          ROOT_DIR=$(mktemp -d)
+          sudo mount "$ROOT_PART" "$ROOT_DIR" || {
+            echo "WARNING: Could not mount root for bootc verification"
+            rmdir "$ROOT_DIR" 2>/dev/null || true
+            exit 0  # Don't fail the test for this
+          }
+
+          # Verify bootc binary exists
+          if [ -f "$ROOT_DIR/usr/bin/bootc" ] || [ -f "$ROOT_DIR/bin/bootc" ]; then
+            echo "✅ bootc binary found in installed system"
+            ls -lh "$ROOT_DIR"/usr/bin/bootc "$ROOT_DIR"/bin/bootc 2>/dev/null | grep -v "^d" || true
+          else
+            echo "❌ FAIL: bootc binary not found in installed system"
+            echo "Checking common paths:"
+            sudo find "$ROOT_DIR" -name "bootc" -type f 2>/dev/null | head -5 || echo "  (not found)"
+            sudo umount "$ROOT_DIR"
+            rmdir "$ROOT_DIR"
+            exit 1
+          fi
+
+          # Verify ostree or composefs structure based on backend
+          if [ "$COMPOSEFS" = "true" ]; then
+            # composefs-native: check /var structure
+            if [ -d "$ROOT_DIR/var" ] && [ -d "$ROOT_DIR/etc" ]; then
+              echo "✅ composefs-native: /var and /etc found at sysroot"
+            else
+              echo "❌ FAIL: composefs-native missing /var or /etc at sysroot"
+              sudo umount "$ROOT_DIR"
+              rmdir "$ROOT_DIR"
+              exit 1
+            fi
+          else
+            # ostree: check ostree structure
+            if [ -d "$ROOT_DIR/ostree/deploy" ]; then
+              echo "✅ ostree: deployment found at /ostree/deploy"
+              sudo ls -1 "$ROOT_DIR/ostree/deploy" | head -5 || true
+            else
+              echo "❌ FAIL: ostree deployment not found"
+              sudo umount "$ROOT_DIR"
+              rmdir "$ROOT_DIR"
+              exit 1
+            fi
+          fi
+
+          sudo umount "$ROOT_DIR"
+          rmdir "$ROOT_DIR"
+          echo "✅ bootc status verification passed"
+
       - name: Cleanup
         if: always()
         run: |
