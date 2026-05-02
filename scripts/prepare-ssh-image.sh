@@ -60,8 +60,12 @@ sleep 2  # Give container time to start
 echo "Installing sshd..."
 $SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c '
   if command -v apt-get >/dev/null 2>&1; then
-    mkdir -p /var/lib/apt/lists/partial
-    apt-get clean && apt-get update >/dev/null 2>&1 && apt-get install -y openssh-server 2>&1 | grep -v "^Get:" || true
+    mkdir -p /var/lib/dpkg/status.d /var/lib/apt/lists/partial /var/cache/apt/archives/partial /var/log/apt
+    touch /var/lib/dpkg/status /var/lib/apt/extended_states 2>/dev/null || true
+  fi
+  
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update >/dev/null 2>&1 && apt-get install -y openssh-server 2>&1 | grep -v "^Get:" || true
   elif command -v dnf >/dev/null 2>&1; then
     dnf install -y openssh-server openssh-clients 2>&1 | grep -v "^Installing " || true
   elif command -v zypper >/dev/null 2>&1; then
@@ -69,11 +73,10 @@ $SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c '
   elif command -v pacman >/dev/null 2>&1; then
     pacman -Sy openssh --noconfirm 2>&1 | grep -v "^Installing " || true
   fi
-  # Final fallback: check if ssh is available after install
   if ! command -v sshd >/dev/null 2>&1 && ! command -v ssh >/dev/null 2>&1; then
     echo "Warning: SSH not found, trying busybox dropbear" >&2
   fi
-' || echo "⚠️  sshd installation had issues (continuing anyway)"
+' || echo "WARNING: sshd installation had issues (continuing anyway)"
 
 # Enable sshd/ssh
 echo "Enabling SSH daemon..."
@@ -100,7 +103,10 @@ $SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c '
 # Configure SSH
 echo "Configuring SSH..."
 $SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c '
-  mkdir -p /root/.ssh && chmod 700 /root/.ssh
+  # For Debian, /root is a symlink to var/roothome which may not exist yet
+  mkdir -p /var/roothome/.ssh 2>/dev/null || true
+  mkdir -p /root/.ssh 2>/dev/null || true
+  chmod 700 /root/.ssh 2>/dev/null || true
   sed -i "s/^#PermitRootLogin .*/PermitRootLogin yes/" /etc/ssh/sshd_config 2>/dev/null || true
   sed -i "s/^#PasswordAuthentication .*/PasswordAuthentication yes/" /etc/ssh/sshd_config 2>/dev/null || true
   sed -i "s/^#PubkeyAuthentication .*/PubkeyAuthentication yes/" /etc/ssh/sshd_config 2>/dev/null || true
