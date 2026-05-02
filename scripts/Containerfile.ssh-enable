@@ -31,6 +31,13 @@ RUN echo "PermitRootLogin yes" >> /etc/ssh/sshd_config && \
     echo "bootcrew-test" | passwd --stdin root || \
     echo "bootcrew-test" | passwd root
 
+# Generate SSH host keys (required for sshd to start)
+RUN ssh-keygen -A 2>/dev/null || (mkdir -p /etc/ssh && \
+    ssh-keygen -t rsa -N "" -f /etc/ssh/ssh_host_rsa_key && \
+    ssh-keygen -t ed25519 -N "" -f /etc/ssh/ssh_host_ed25519_key && \
+    ssh-keygen -t dsa -N "" -f /etc/ssh/ssh_host_dsa_key && \
+    ssh-keygen -t ecdsa -N "" -f /etc/ssh/ssh_host_ecdsa_key)
+
 # Ensure SSH is installed
 RUN test -f /usr/sbin/sshd || test -f /usr/bin/sshd || \
     (echo "ERROR: SSH installation failed" && exit 1)
