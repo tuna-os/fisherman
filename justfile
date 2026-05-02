@@ -36,29 +36,25 @@ build-ssh-enabled-image IMAGE:
   #!/bin/bash
   set -e
   
-  # Build a temporary local image
-  TEMP_TAG="localhost/fisherman-ssh-temp:latest"
-  
   echo "Building SSH-enabled image..."
   echo "Base image: {{ IMAGE }}"
   
-  podman build \
-    --build-arg BASE_IMAGE="{{ IMAGE }}" \
-    --tag "$TEMP_TAG" \
-    -f scripts/Containerfile.ssh-enable .
-  
-  # Export to OCI layout for fisherman to use
+  # Export OCI layout directory for fisherman to use
   OCI_DIR="/tmp/bootcrew-ssh-oci"
   rm -rf "$OCI_DIR"
   mkdir -p "$OCI_DIR"
   
-  # Use containers-storage: to reference the locally built image
-  skopeo copy "containers-storage:$TEMP_TAG" "oci:$OCI_DIR:latest"
+  # Build directly to OCI layout format (avoids containers-storage: issues in CI)
+  # This requires podman 1.40+, which is available in GitHub Actions
+  podman build \
+    --output "type=oci,dest=$OCI_DIR" \
+    --build-arg BASE_IMAGE="{{ IMAGE }}" \
+    -f scripts/Containerfile.ssh-enable .
   
   # Output the oci: reference for fisherman to use
   SSH_IMAGE="oci:$OCI_DIR:latest"
   
-  echo "✅ Built SSH-enabled image"
+  echo "✅ Built SSH-enabled image to OCI layout"
   echo "$SSH_IMAGE" > /tmp/bootcrew-ssh-image.txt
 
 # Build debian-bootc with SSH pre-installed (Containerfile approach)
