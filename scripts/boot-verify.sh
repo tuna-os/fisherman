@@ -1,8 +1,14 @@
 #!/bin/bash
 # Verify system boot via SSH and query bootc status
-# Usage: ./boot-verify.sh [SSH_PORT] [SSH_KEY] [VM_TIMEOUT]
+# Usage: ./boot-verify.sh [SSH_PORT] [SSH_KEY] [VM_TIMEOUT] [VM_MEMORY] [LOOPDEV]
+# Works with dynamic tool discovery for both CI and local environments
 
 set -e
+
+# Source tool discovery helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./find-tools.sh
+source "$SCRIPT_DIR/find-tools.sh"
 
 SSH_PORT="${1:-2222}"
 SSH_KEY="${2:-/tmp/bootcrew-ssh/id_rsa}"
@@ -23,30 +29,41 @@ if [ ! -f "$SSH_KEY" ]; then
   exit 1
 fi
 
-# Find OVMF firmware
-OVMF_CODE=$(ls /usr/share/OVMF/OVMF_CODE{_4M,}.fd 2>/dev/null | head -1)
-OVMF_SUFFIX=$(basename "$OVMF_CODE" | sed 's/OVMF_CODE//;s/\.fd//')
-OVMF_VARS="/usr/share/OVMF/OVMF_VARS${OVMF_SUFFIX}.fd"
+# Find required tools
+QEMU_BIN=$(find_qemu) || {
+  echo "❌ QEMU not found. Install qemu-kvm or qemu-system-x86"
+  show_tool_info
+  exit 1
+}
 
-if [ -z "$OVMF_CODE" ] || [ ! -f "$OVMF_CODE" ]; then
-  echo "❌ OVMF_CODE not found at /usr/share/OVMF/"
+OVMF_PATH=$(find_ovmf) || {
+  echo "❌ OVMF firmware not found"
+  show_tool_info
   exit 1
-fi
-if [ ! -f "$OVMF_VARS" ]; then
-  echo "❌ OVMF_VARS not found"
+}
+
+SSH_BIN=$(find_ssh) || {
+  echo "❌ SSH client not found"
+  show_tool_info
   exit 1
-fi
+}
+
+# Parse OVMF paths (returned as code:vars)
+OVMF_CODE="${OVMF_PATH%:*}"
+OVMF_VARS="${OVMF_PATH#*:}"
 
 echo "=== Booting VM for SSH verification ==="
 echo "LOOPDEV: $LOOPDEV"
 echo "SSH Port: $SSH_PORT"
 echo "SSH Key: $SSH_KEY"
+echo "QEMU: $QEMU_BIN"
 echo "OVMF_CODE: $OVMF_CODE"
+echo "OVMF_VARS: $OVMF_VARS"
 echo ""
 
 # Start QEMU with SSH port forwarding
 echo "Starting QEMU..."
-sudo timeout "$VM_TIMEOUT" qemu-system-x86_64 \
+sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -enable-kvm \
   -cpu host \
   -m "$VM_MEMORY" \
@@ -67,7 +84,7 @@ echo "Waiting for VM to boot and SSH to be ready (up to 60s)..."
 SSH_READY=0
 for i in {1..60}; do
   sleep 2
-  if ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+  if "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
          -o ConnectTimeout=1 -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" \
          "echo OK" 2>/dev/null; then
     echo "✅ SSH connection successful"
@@ -87,27 +104,27 @@ fi
 
 echo ""
 echo "=== System Information ==="
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+"$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" "uname -a" || true
 
 echo ""
 echo "=== bootc status ==="
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+"$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" "bootc status" 2>/dev/null || echo "⚠️  bootc not available"
 
 echo ""
 echo "=== bootc status (JSON) ==="
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+"$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" "bootc status --json-pretty" 2>/dev/null || echo "⚠️  json output not available"
 
 echo ""
 echo "=== Checking for upgrade availability ==="
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+"$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" "bootc upgrade --check" 2>/dev/null || echo "⚠️  upgrade check not available"
 
 echo ""
 echo "=== Shutting down VM ==="
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+"$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
     -i "$SSH_KEY" root@127.0.0.1 -p "$SSH_PORT" "shutdown -h now" 2>/dev/null || true
 
 sleep 5

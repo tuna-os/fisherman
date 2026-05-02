@@ -1,8 +1,13 @@
 #!/bin/bash
-# Prepare SSH-enabled container image
+# Prepare SSH-enabled container image with dynamic tool discovery
 # Usage: ./prepare-ssh-image.sh IMAGE [SSH_PUBKEY_FILE]
 
 set -e
+
+# Source tool discovery helpers
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=./find-tools.sh
+source "$SCRIPT_DIR/find-tools.sh"
 
 IMAGE="${1}"
 SSH_PUBKEY_FILE="${2:-/tmp/bootcrew-ssh/id_rsa.pub}"
@@ -19,8 +24,21 @@ echo "Source image: $IMAGE"
 echo "SSH pubkey: $SSH_PUBKEY_FILE"
 echo ""
 
+# Find podman and sudo
+PODMAN_BIN=$(find_podman) || {
+  echo "❌ Podman not found"
+  show_tool_info
+  exit 1
+}
+
+SUDO_BIN=$(find_sudo) || {
+  echo "❌ Sudo not found"
+  show_tool_info
+  exit 1
+}
+
 # Try to pull pre-built SSH image first
-if sudo podman pull "$SSH_IMAGE" 2>/dev/null; then
+if $SUDO_BIN "$PODMAN_BIN" pull "$SSH_IMAGE" 2>/dev/null; then
   echo "✅ Using pre-built SSH image"
   echo "SSH_IMAGE=$SSH_IMAGE"
   exit 0
@@ -30,16 +48,16 @@ echo "Building SSH-enabled image locally..."
 
 # Pull original image
 echo "Pulling original image..."
-sudo podman pull "$IMAGE"
+$SUDO_BIN "$PODMAN_BIN" pull "$IMAGE"
 
 # Create container
 echo "Creating container..."
-CONTAINER=$(sudo podman create "$IMAGE" bash)
+CONTAINER=$($SUDO_BIN "$PODMAN_BIN" create "$IMAGE" bash)
 echo "Container: $CONTAINER"
 
 # Install sshd (detect package manager)
 echo "Installing sshd..."
-sudo podman exec "$CONTAINER" sh -c '
+$SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c '
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update && apt-get install -y openssh-server || true
   elif command -v dnf >/dev/null 2>&1; then
@@ -53,15 +71,15 @@ sudo podman exec "$CONTAINER" sh -c '
 
 # Enable sshd
 echo "Enabling sshd..."
-sudo podman exec "$CONTAINER" sh -c 'systemctl enable sshd || systemctl enable ssh || true' || true
+$SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c 'systemctl enable sshd || systemctl enable ssh || true' || true
 
 # Generate host keys
 echo "Generating SSH host keys..."
-sudo podman exec "$CONTAINER" ssh-keygen -A || true
+$SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" ssh-keygen -A || true
 
 # Configure SSH
 echo "Configuring SSH..."
-sudo podman exec "$CONTAINER" sh -c '
+$SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c '
   mkdir -p /root/.ssh && chmod 700 /root/.ssh
   sed -i "s/^#PermitRootLogin .*/PermitRootLogin yes/" /etc/ssh/sshd_config 2>/dev/null || true
   sed -i "s/^#PubkeyAuthentication .*/PubkeyAuthentication yes/" /etc/ssh/sshd_config 2>/dev/null || true
@@ -72,16 +90,16 @@ sudo podman exec "$CONTAINER" sh -c '
 # Add SSH public key
 if [ -f "$SSH_PUBKEY_FILE" ]; then
   echo "Injecting SSH public key..."
-  cat "$SSH_PUBKEY_FILE" | sudo podman exec "$CONTAINER" tee -a /root/.ssh/authorized_keys > /dev/null || true
-  sudo podman exec "$CONTAINER" chmod 600 /root/.ssh/authorized_keys || true
+  cat "$SSH_PUBKEY_FILE" | $SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" tee -a /root/.ssh/authorized_keys > /dev/null || true
+  $SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" chmod 600 /root/.ssh/authorized_keys || true
 else
   echo "⚠️  SSH public key file not found at $SSH_PUBKEY_FILE"
 fi
 
 # Commit container to new image
 echo "Committing image..."
-sudo podman commit "$CONTAINER" "$SSH_IMAGE" || exit 1
-sudo podman rm "$CONTAINER" || true
+$SUDO_BIN "$PODMAN_BIN" commit "$CONTAINER" "$SSH_IMAGE" || exit 1
+$SUDO_BIN "$PODMAN_BIN" rm "$CONTAINER" || true
 
 echo "✅ SSH-enabled image created: $SSH_IMAGE"
 echo "SSH_IMAGE=$SSH_IMAGE"
