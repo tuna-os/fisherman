@@ -7,7 +7,6 @@ on:
     branches: [prod, dev]
 
 jobs:
-  # Read the image matrix from tests/bootcrew-matrix.yaml and filter for vm_boot=true.
   setup:
     runs-on: ubuntu-latest
     outputs:
@@ -18,10 +17,25 @@ jobs:
       - name: Parse image matrix (vm_boot only)
         id: read-matrix
         run: |
-          # Extract only images where vm_boot=true for E2E boot testing
-          MATRIX=$(yq -o json tests/bootcrew-matrix.yaml | jq -c '.images | map(select(.vm_boot == true))')
-          echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
-          echo "Testing: $(echo $MATRIX | jq -r '.[].name' | tr '\n' ' ')"
+          python3 << 'EOF'
+          import json
+          import yaml
+          
+          with open('tests/bootcrew-matrix.yaml') as f:
+              data = yaml.safe_load(f)
+          
+          images = [img for img in data['images'] if img.get('vm_boot') == True]
+          matrix = json.dumps(images)
+          
+          with open('/tmp/matrix.json', 'w') as f:
+              f.write(f'matrix={matrix}\n')
+          
+          print("Matrix output:")
+          print(json.dumps(images, indent=2))
+          print("Testing:", ' '.join(img['name'] for img in images))
+          EOF
+          
+          cat /tmp/matrix.json >> "$GITHUB_OUTPUT"
 
   vm-boot:
     name: vm-boot / ${{ matrix.image.name }}
@@ -41,341 +55,21 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Install tools
+      - name: Install just
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
+          just --version
+
+      - name: Setup CI environment
+        run: just ci-install-tools
+
+      - name: Generate SSH keys
+        run: just setup-ssh-keys
 
       - name: Build fisherman
-        run: go build -o /tmp/fisherman ./cmd/fisherman/
-        working-directory: fisherman
+        run: just build
 
-      - name: Create loop device (50 GB sparse)
-        id: loopdev
+      - name: Run bootcrew test
         run: |
-          TMPFILE=$(mktemp)
-          truncate -s 50G "$TMPFILE"
-          LOOPDEV=$(sudo losetup --find --show "$TMPFILE")
-          echo "loopdev=$LOOPDEV" >> "$GITHUB_OUTPUT"
-          echo "tmpfile=$TMPFILE" >> "$GITHUB_OUTPUT"
-
-      - name: Generate recipe
-        run: |
-          cat > /tmp/recipe.json <<EOF
-          {
-            "disk": "${{ steps.loopdev.outputs.loopdev }}",
-            "filesystem": "${{ matrix.image.filesystem }}",
-            "composeFsBackend": ${{ matrix.image.composefs_backend }},
-            "unifiedStorage": ${{ matrix.image.unified_storage }},
-            "selinuxDisabled": ${{ matrix.image.selinux_disabled }},
-            "encryption": {"type": "none"},
-            "image": "${{ matrix.image.image }}",
-            "hostname": "ci-test",
-            "flatpaks": []
-          }
-          EOF
-
-      - name: Pre-pull image via podman
-        run: sudo podman pull ${{ matrix.image.image }}
-
-      - name: Run fisherman
-        run: sudo /tmp/fisherman /tmp/recipe.json
-
-      - name: Verify installation
-        run: |
-          LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
-          COMPOSEFS="${{ matrix.image.composefs_backend }}"
-
-          # 1. Check 3-partition layout.
-          LABEL_COUNT=$(sudo lsblk -o LABEL "$LOOPDEV" | grep -cE 'EFI-SYSTEM|boot|root' || true)
-          if [ "$LABEL_COUNT" -ne 3 ]; then
-            echo "FAIL: expected 3 labelled partitions, got $LABEL_COUNT"
-            sudo lsblk -o NAME,SIZE,FSTYPE,LABEL "$LOOPDEV"
-            exit 1
-          fi
-
-          # 2. Mount /boot partition (p2) and verify boot layout.
-          BOOT_PART="${LOOPDEV}p2"
-          VERIFY_DIR=$(mktemp -d)
-          sudo mount "$BOOT_PART" "$VERIFY_DIR"
-
-          # 3. Mount root partition (p3) and verify hostname and Flatpaks.
-          ROOT_PART="${LOOPDEV}p3"
-          ROOT_DIR=$(mktemp -d)
-          sudo mount "$ROOT_PART" "$ROOT_DIR"
-
-          # Debug: show root structure
-          echo "--- Root directory structure ---"
-          sudo ls -F "$ROOT_DIR"
-          if [ -d "$ROOT_DIR/ostree" ]; then
-            echo "--- Ostree structure ---"
-            sudo ls -R "$ROOT_DIR/ostree" | head -n 20
-          fi
-
-          if [ "$COMPOSEFS" = "true" ]; then
-            # Composefs-native: verify hostname in sysroot /etc.
-            if [ ! -f "$ROOT_DIR/etc/hostname" ]; then
-              echo "FAIL: $ROOT_DIR/etc/hostname not found (composefs-native)"
-              sudo umount "$ROOT_DIR" || true
-              sudo umount "$VERIFY_DIR" || true
-              exit 1
-            fi
-            echo "OK: composefs-native hostname at $ROOT_DIR/etc/hostname"
-          fi
-
-          sudo umount "$ROOT_DIR"
-          sudo rmdir "$ROOT_DIR"
-          sudo umount "$VERIFY_DIR"
-          sudo rmdir "$VERIFY_DIR"
-          echo "PASS: Installation verification"
-
-      - name: Patch serial console into bootloader entries
-        run: |
-          LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
-          patch_entries() {
-            local part="$1" label="$2"
-            local MNT
-            MNT=$(mktemp -d)
-            sudo mount "$part" "$MNT" || { echo "Cannot mount $label ($part), skipping"; rmdir "$MNT"; return; }
-            local patched=0
-            for conf in "$MNT"/loader/entries/*.conf; do
-              [ -f "$conf" ] || continue
-              # Add console=ttyS0 if missing.
-              if ! sudo grep -q "console=ttyS0" "$conf"; then
-                sudo sed -i 's/^options /options console=ttyS0,115200 /' "$conf"
-                patched=1
-              fi
-              # Add root=/dev/vda3 if missing: composefs images omit root= and rely
-              # on GPT auto-discovery (requires partition type root-x86-64), which
-              # won't work because fisherman creates type=linux partitions.
-              if ! sudo grep -q "root=" "$conf"; then
-                sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
-                patched=1
-              fi
-              if [ "$patched" -eq 1 ]; then
-                echo "Patched ($label): $(basename "$conf")"
-                sudo grep "^options" "$conf"
-              fi
-            done
-            [ "$patched" -eq 0 ] && echo "No BLS entries to patch on $label"
-            sudo umount "$MNT"
-            rmdir "$MNT"
-          }
-          patch_entries "${LOOPDEV}p1" "EFI"
-          patch_entries "${LOOPDEV}p2" "boot"
-
-      - name: Boot verification
-        run: |
-          LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
-          IMAGE_NAME="${{ matrix.image.name }}"
-          LOG="/tmp/boot-$(printf '%s' "$IMAGE_NAME" | tr -cs 'a-zA-Z0-9_-' '_').log"
-
-          OVMF_CODE=$(ls /usr/share/OVMF/OVMF_CODE{_4M,}.fd 2>/dev/null | head -1)
-          if [ -z "$OVMF_CODE" ]; then
-            echo "FAIL: OVMF_CODE.fd not found"
-            ls /usr/share/OVMF/ || true
-            exit 1
-          fi
-          OVMF_SUFFIX=$(basename "$OVMF_CODE" | sed 's/OVMF_CODE//;s/\.fd//')
-          OVMF_VARS="/usr/share/OVMF/OVMF_VARS${OVMF_SUFFIX}.fd"
-          if [ ! -f "$OVMF_VARS" ]; then
-            echo "FAIL: matched $OVMF_CODE but corresponding VARS file $OVMF_VARS not found"
-            ls /usr/share/OVMF/ || true
-            exit 1
-          fi
-
-          echo "Booting $IMAGE_NAME with QEMU+OVMF (timeout 240s)..."
-          echo "OVMF_CODE=$OVMF_CODE  OVMF_VARS=$OVMF_VARS"
-          sudo timeout 240 qemu-system-x86_64 \
-            -enable-kvm \
-            -cpu host \
-            -m 2G \
-            -drive file="$LOOPDEV",format=raw,if=virtio \
-            -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-            -drive if=pflash,format=raw,snapshot=on,file="$OVMF_VARS" \
-            -serial mon:stdio \
-            -nographic \
-            -no-reboot 2>&1 | tee "$LOG"
-          QEMU_EXIT=${PIPESTATUS[0]}
-          if [ "$QEMU_EXIT" -ne 0 ] && [ "$QEMU_EXIT" -ne 124 ]; then
-            echo "FAIL: QEMU exited with unexpected code $QEMU_EXIT"
-            tail -20 "$LOG"
-            exit 1
-          fi
-
-          # "login:" covers images with a getty on ttyS0.
-          # "Reached target.*Network" covers images that boot fully but present a
-          # firstboot OOBE wizard before a getty (e.g. arch-bootc timezone prompt).
-          # Both patterns appear only in real userspace, not in the initrd.
-          BOOT_OK=0
-          if grep -qE 'login:|Reached target.*(Network Name Lookups|multi-user|graphical)' "$LOG"; then
-            BOOT_OK=1
-          fi
-
-          # Scan for critical runtime failures even when boot appeared successful.
-          # - systemd-coredump: a process crashed and dumped core (e.g. gnome-session)
-          # - [FAILED] Failed to start: a systemd unit failed to start
-          # - Kernel panic: obvious
-          FAILURES=$(grep -E 'systemd-coredump.*dumped core|\[FAILED\] Failed to start|Kernel panic' "$LOG" || true)
-
-          if [ "$BOOT_OK" -eq 0 ]; then
-            echo "FAIL: no boot success indicator found for $IMAGE_NAME"
-            echo "--- last 50 lines of boot log ---"
-            tail -50 "$LOG"
-            exit 1
-          elif [ -n "$FAILURES" ]; then
-            echo "FAIL: boot reached userspace but critical failures detected for $IMAGE_NAME:"
-            echo "$FAILURES"
-            echo "--- last 50 lines of boot log ---"
-            tail -50 "$LOG"
-            exit 1
-          else
-            echo "PASS: boot success, no critical failures for $IMAGE_NAME"
-          fi
-
-      - name: Verify bootc status on installed VM (offline check)
-        run: |
-          LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
-          IMAGE_NAME="${{ matrix.image.name }}"
-          COMPOSEFS="${{ matrix.image.composefs_backend }}"
-
-          # After VM shut down, mount root partition and verify bootc is present
-          ROOT_PART="${LOOPDEV}p3"
-          ROOT_DIR=$(mktemp -d)
-          sudo mount "$ROOT_PART" "$ROOT_DIR" || {
-            echo "WARNING: Could not mount root for bootc verification"
-            rmdir "$ROOT_DIR" 2>/dev/null || true
-            exit 0  # Don't fail the test for this
-          }
-
-          # Verify bootc binary exists
-          if [ -f "$ROOT_DIR/usr/bin/bootc" ] || [ -f "$ROOT_DIR/bin/bootc" ]; then
-            echo "✅ bootc binary found in installed system"
-            ls -lh "$ROOT_DIR"/usr/bin/bootc "$ROOT_DIR"/bin/bootc 2>/dev/null | grep -v "^d" || true
-          else
-            echo "❌ FAIL: bootc binary not found in installed system"
-            echo "Checking common paths:"
-            sudo find "$ROOT_DIR" -name "bootc" -type f 2>/dev/null | head -5 || echo "  (not found)"
-            sudo umount "$ROOT_DIR"
-            rmdir "$ROOT_DIR"
-            exit 1
-          fi
-
-          # Verify ostree or composefs structure based on backend
-          if [ "$COMPOSEFS" = "true" ]; then
-            # composefs-native: check /var structure
-            if [ -d "$ROOT_DIR/var" ] && [ -d "$ROOT_DIR/etc" ]; then
-              echo "✅ composefs-native: /var and /etc found at sysroot"
-            else
-              echo "❌ FAIL: composefs-native missing /var or /etc at sysroot"
-              sudo umount "$ROOT_DIR"
-              rmdir "$ROOT_DIR"
-              exit 1
-            fi
-          else
-            # ostree: check ostree structure
-            if [ -d "$ROOT_DIR/ostree/deploy" ]; then
-              echo "✅ ostree: deployment found at /ostree/deploy"
-              sudo ls -1 "$ROOT_DIR/ostree/deploy" | head -5 || true
-            else
-              echo "❌ FAIL: ostree deployment not found"
-              sudo umount "$ROOT_DIR"
-              rmdir "$ROOT_DIR"
-              exit 1
-            fi
-          fi
-
-          sudo umount "$ROOT_DIR"
-          rmdir "$ROOT_DIR"
-          echo "✅ bootc status verification passed"
-
-      - name: Run bootc status inside VM
-        run: |
-          LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
-          IMAGE_NAME="${{ matrix.image.name }}"
-          LOG="/tmp/bootc-status-$(printf '%s' "$IMAGE_NAME" | tr -cs 'a-zA-Z0-9_-' '_').log"
-          BOOTC_OUTPUT="/tmp/bootc-status-output-$$.log"
-
-          OVMF_CODE=$(ls /usr/share/OVMF/OVMF_CODE{_4M,}.fd 2>/dev/null | head -1)
-          OVMF_SUFFIX=$(basename "$OVMF_CODE" | sed 's/OVMF_CODE//;s/\.fd//')
-          OVMF_VARS="/usr/share/OVMF/OVMF_VARS${OVMF_SUFFIX}.fd"
-
-          echo "=== Running 'sudo bootc status' inside $IMAGE_NAME ==="
-
-          # Create a helper script that runs bootc status on boot
-          cat > /tmp/bootc-status-runner.sh << 'BOOTC_SCRIPT_EOF'
-          #!/bin/bash
-          (
-            sleep 30  # Wait for system to be ready
-            echo "====== bootc status ======"
-            bootc status 2>&1 || echo "bootc status failed with exit code $?"
-            echo "====== bootc status --json-pretty ======"
-            bootc status --json-pretty 2>&1 || echo "bootc status --json-pretty not available"
-            echo "====== bootc upgrade check ======"
-            bootc upgrade --check 2>&1 || echo "bootc upgrade --check not available"
-            poweroff
-          ) 2>&1 | tee /dev/ttyS0
-          BOOTC_SCRIPT_EOF
-          chmod +x /tmp/bootc-status-runner.sh
-
-          # Boot the VM and let it run bootc status via the script
-          echo "Booting $IMAGE_NAME to run bootc status..."
-          sudo timeout 300 qemu-system-x86_64 \
-            -enable-kvm \
-            -cpu host \
-            -m 2G \
-            -drive file="$LOOPDEV",format=raw,if=virtio \
-            -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-            -drive if=pflash,format=raw,snapshot=on,file="$OVMF_VARS" \
-            -serial mon:stdio \
-            -serial file:"$BOOTC_OUTPUT" \
-            -nographic \
-            -no-reboot 2>&1 | tee "$LOG"
-          QEMU_EXIT=${PIPESTATUS[0]}
-
-          # Check the output
-          echo ""
-          echo "=== bootc status output ==="
-          if [ -f "$BOOTC_OUTPUT" ]; then
-            cat "$BOOTC_OUTPUT"
-            # Verify bootc ran successfully
-            if grep -q "Booted:" "$BOOTC_OUTPUT" || grep -q "Staged:" "$BOOTC_OUTPUT" || grep -q "Available:" "$BOOTC_OUTPUT"; then
-              echo ""
-              echo "✅ bootc status executed successfully in VM"
-            else
-              # Still a pass if output is captured, even if format differs
-              if [ -s "$BOOTC_OUTPUT" ]; then
-                echo ""
-                echo "✅ bootc status output captured (format may differ)"
-              fi
-            fi
-            rm -f "$BOOTC_OUTPUT"
-          else
-            # Try to extract from main log
-            if grep -q "Booted:\|Staged:\|Available:" "$LOG"; then
-              echo "✅ bootc status output found in console log"
-              grep -A 10 "bootc status" "$LOG" || true
-            else
-              echo "⚠️  Could not capture bootc status output separately"
-            fi
-          fi
-
-      - name: Cleanup
-        if: always()
-        run: |
-          sudo losetup -d "${{ steps.loopdev.outputs.loopdev }}" || true
-          rm -f "${{ steps.loopdev.outputs.tmpfile }}" || true
-
-      - name: Report result to job summary
-        if: always()
-        run: |
-          IMAGE_NAME="${{ matrix.image.name }}"
-          COMPOSEFS="${{ matrix.image.composefs_backend }}"
-          BACKEND=$([ "$COMPOSEFS" = "true" ] && echo "composefs" || echo "ostree")
-          
-          echo "## VM Boot Test: $IMAGE_NAME ($BACKEND)" >> "$GITHUB_STEP_SUMMARY"
-          if [ "${{ job.status }}" = "success" ]; then
-            echo "✅ **PASS** — Installation + boot verified" >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "❌ **FAIL** — See logs above" >> "$GITHUB_STEP_SUMMARY"
-          fi
+          IMAGE_JSON='${{ toJson(matrix.image) }}'
+          just bootcrew-ci-test "$IMAGE_JSON"
