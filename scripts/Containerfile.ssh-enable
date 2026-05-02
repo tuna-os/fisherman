@@ -1,0 +1,28 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# Install and enable SSH for all supported distributions
+RUN if command -v dnf >/dev/null 2>&1; then \
+      # RHEL/CentOS/Fedora
+      dnf install -y openssh-server openssh-clients && \
+      systemctl enable sshd; \
+    elif command -v apt-get >/dev/null 2>&1; then \
+      # Debian/Ubuntu
+      apt-get update && \
+      apt-get install -y openssh-server && \
+      systemctl enable ssh; \
+    elif command -v pacman >/dev/null 2>&1; then \
+      # Arch
+      pacman -Sy --noconfirm openssh && \
+      systemctl enable sshd; \
+    elif command -v zypper >/dev/null 2>&1; then \
+      # openSUSE
+      zypper install -y openssh && \
+      systemctl enable sshd; \
+    else \
+      echo "WARNING: Unsupported distribution, SSH installation may have failed"; \
+    fi
+
+# Ensure SSH is installed
+RUN test -f /usr/sbin/sshd || test -f /usr/bin/sshd || \
+    (echo "ERROR: SSH installation failed" && exit 1)
