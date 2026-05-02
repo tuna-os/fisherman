@@ -28,9 +28,9 @@ sudo mount "$ROOT_PART" "$MOUNT_DIR" || {
 }
 
 # Determine the rootfs directory based on storage type
-if [ "$COMPOSEFS" = "true" ]; then
-  # For composefs, the root filesystem is mounted directly
-  # It has /etc, /usr, etc. at the top level
+# For composefs, check if the mounted directory has /etc/hostname (composefs native)
+if [ "$COMPOSEFS" = "true" ] && [ -f "$MOUNT_DIR/etc/hostname" ]; then
+  # Direct composefs mount - root is mounted directly
   ROOTFS="$MOUNT_DIR"
 elif [ -d "$MOUNT_DIR/sysroot/ostree/deploy/default/deploy" ]; then
   # ostree-based (centos-bootc) with sysroot
@@ -54,9 +54,11 @@ fi
 
 echo "Root filesystem: $ROOTFS"
 
-# Verify the rootfs is valid
-if [ ! -d "$ROOTFS/usr" ]; then
-  echo "WARNING: Invalid rootfs - /usr not found at $ROOTFS"
+# Verify the rootfs is valid - check for common directories
+if [ ! -d "$ROOTFS/usr" ] && [ ! -d "$ROOTFS/bin" ] && [ ! -d "$ROOTFS/etc" ]; then
+  echo "WARNING: Invalid rootfs - essential directories not found at $ROOTFS"
+  echo "Directory contents:"
+  sudo ls -la "$ROOTFS" 2>/dev/null | head -20
   exit 1
 fi
 
@@ -91,7 +93,7 @@ sudo chroot "$ROOTFS" sh -c "echo 'root:bootcrew-test' | chpasswd" 2>/dev/null |
 # Create SSH directory and inject key
 echo "Injecting SSH public key..."
 sudo mkdir -p "$ROOTFS/root/.ssh" 2>/dev/null || true
-# For Debian composefs, handle the /root -> var/roothome symlink
+# For Debian, handle the /root -> var/roothome symlink
 if sudo test -L "$ROOTFS/root"; then
   sudo mkdir -p "$ROOTFS/var/roothome/.ssh" 2>/dev/null || true
   sudo cp "$SSH_PUBKEY_FILE" "$ROOTFS/var/roothome/.ssh/authorized_keys" || true
