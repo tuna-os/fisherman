@@ -24,28 +24,28 @@ trap "sudo umount -R '$MOUNT_DIR' 2>/dev/null || true; rmdir '$MOUNT_DIR' 2>/dev
 echo "Mounting root filesystem at $MOUNT_DIR..."
 sudo mount "$ROOT_PART" "$MOUNT_DIR" || {
   echo "WARNING: Could not mount root partition $ROOT_PART"
-  return 1
+  exit 1
 }
 
-# For composefs, we need to mount the sysroot
+# Determine the rootfs directory based on storage type
 if [ "$COMPOSEFS" = "true" ]; then
-  if [ -d "$MOUNT_DIR/sysroot/ostree/deploy/default/deploy" ]; then
-    # Get the deployment directory
-    DEPLOY_DIR=$(sudo find "$MOUNT_DIR/sysroot/ostree/deploy/default/deploy" -maxdepth 1 -type d | head -1)
-    if [ -z "$DEPLOY_DIR" ]; then
-      echo "WARNING: Could not find deployment directory"
-      return 1
-    fi
-    ROOTFS="$DEPLOY_DIR"
-  else
-    ROOTFS="$MOUNT_DIR/sysroot"
+  # For composefs, the root filesystem is mounted directly
+  # It has /etc, /usr, etc. at the top level
+  ROOTFS="$MOUNT_DIR"
+elif [ -d "$MOUNT_DIR/sysroot/ostree/deploy/default/deploy" ]; then
+  # ostree-based (centos-bootc) with sysroot
+  DEPLOY_DIR=$(sudo find "$MOUNT_DIR/sysroot/ostree/deploy/default/deploy" -maxdepth 1 -type d | head -1)
+  if [ -z "$DEPLOY_DIR" ]; then
+    echo "WARNING: Could not find deployment directory"
+    exit 1
   fi
+  ROOTFS="$DEPLOY_DIR"
 elif [ -d "$MOUNT_DIR/ostree/deploy/default/deploy" ]; then
-  # ostree-based (centos-bootc)
+  # ostree-based (centos-bootc) without sysroot
   DEPLOY_DIR=$(sudo find "$MOUNT_DIR/ostree/deploy/default/deploy" -maxdepth 1 -type d | head -1)
   if [ -z "$DEPLOY_DIR" ]; then
     echo "WARNING: Could not find deployment directory"
-    return 1
+    exit 1
   fi
   ROOTFS="$DEPLOY_DIR"
 else
@@ -53,6 +53,12 @@ else
 fi
 
 echo "Root filesystem: $ROOTFS"
+
+# Verify the rootfs is valid
+if [ ! -d "$ROOTFS/usr" ]; then
+  echo "WARNING: Invalid rootfs - /usr not found at $ROOTFS"
+  exit 1
+fi
 
 # Enable SSH in the installed system
 echo "Installing SSH in deployed system..."
@@ -85,8 +91,8 @@ sudo chroot "$ROOTFS" sh -c "echo 'root:bootcrew-test' | chpasswd" 2>/dev/null |
 # Create SSH directory and inject key
 echo "Injecting SSH public key..."
 sudo mkdir -p "$ROOTFS/root/.ssh" 2>/dev/null || true
-# For Debian, handle the /root -> var/roothome symlink
-if [ -L "$ROOTFS/root" ]; then
+# For Debian composefs, handle the /root -> var/roothome symlink
+if sudo test -L "$ROOTFS/root"; then
   sudo mkdir -p "$ROOTFS/var/roothome/.ssh" 2>/dev/null || true
   sudo cp "$SSH_PUBKEY_FILE" "$ROOTFS/var/roothome/.ssh/authorized_keys" || true
   sudo chmod 700 "$ROOTFS/var/roothome/.ssh" 2>/dev/null || true
