@@ -26,7 +26,7 @@ jobs:
           - name: centos-bootc
             base_image: quay.io/centos-bootc/centos-bootc:c10s
           - name: debian-bootc
-            base_image: quay.io/debian-bootc/debian-bootc:bookworm
+            base_image: ghcr.io/bootcrew/debian-bootc:latest
 
     steps:
       - uses: actions/checkout@v4
