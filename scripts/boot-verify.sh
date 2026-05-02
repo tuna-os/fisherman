@@ -1,6 +1,6 @@
 #!/bin/bash
 # Verify system boot via SSH and query bootc status
-# Usage: ./boot-verify.sh [SSH_PORT] [SSH_KEY] [VM_TIMEOUT] [VM_MEMORY] [LOOPDEV]
+# Usage: ./boot-verify.sh [SSH_PORT] [SSH_KEY] [VM_TIMEOUT] [VM_MEMORY] [LOOPDEV] [IMAGE_NAME]
 # Works with dynamic tool discovery for both CI and local environments
 
 set -e
@@ -15,6 +15,7 @@ SSH_KEY="${2:-/tmp/bootcrew-ssh/id_rsa}"
 VM_TIMEOUT="${3:-300}"
 VM_MEMORY="${4:-2G}"
 LOOPDEV="${5}"
+IMAGE_NAME="${6}"
 
 if [ -z "$LOOPDEV" ]; then
   LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt 2>/dev/null)
@@ -51,6 +52,30 @@ SSH_BIN=$(find_ssh) || {
 # Parse OVMF paths (returned as code:vars)
 OVMF_CODE="${OVMF_PATH%:*}"
 OVMF_VARS="${OVMF_PATH#*:}"
+
+# Patch GRUB for debian-bootc (composefs) if needed
+# composefs images expect GPT auto-discovery but fisherman creates type=linux partitions
+# So we need to add root=/dev/vda3 kernel parameter
+if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-composefs" ]; then
+  echo "=== Patching GRUB for debian-bootc (composefs) ==="
+  MNTDIR="/tmp/bootcrew-grub-mnt-$$"
+  mkdir -p "$MNTDIR"
+  
+  # Try to mount the root partition (vda3) to access GRUB config
+  if sudo mount "$LOOPDEV"p3 "$MNTDIR" 2>/dev/null; then
+    GRUB_CONF="$MNTDIR/boot/grub2/grub.cfg"
+    if [ -f "$GRUB_CONF" ]; then
+      # Check if root= parameter is already present
+      if ! sudo grep -q "root=" "$GRUB_CONF"; then
+        echo "Adding root=/dev/vda3 kernel parameter to GRUB config..."
+        sudo sed -i 's/^[[:space:]]*linux[[:space:]]/&root=\/dev\/vda3 /' "$GRUB_CONF"
+      fi
+    fi
+    sudo umount "$MNTDIR"
+  fi
+  rm -rf "$MNTDIR"
+  echo ""
+fi
 
 echo "=== Booting VM for SSH verification ==="
 echo "LOOPDEV: $LOOPDEV"

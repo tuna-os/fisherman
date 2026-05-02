@@ -136,7 +136,7 @@ install:
   echo "✅ Installation complete"
 
 # Boot VM and verify with SSH
-boot-verify LOOPDEV="":
+boot-verify LOOPDEV="" IMAGE_NAME="":
   #!/bin/bash
   set -e
   
@@ -151,7 +151,8 @@ boot-verify LOOPDEV="":
     exit 1
   fi
   
-  bash scripts/boot-verify.sh {{ SSH_PORT }} /tmp/bootcrew-ssh/id_rsa {{ VM_TIMEOUT }} {{ VM_MEMORY }} "$LOOPDEV"
+  IMAGE_NAME="{{ IMAGE_NAME }}"
+  bash scripts/boot-verify.sh {{ SSH_PORT }} /tmp/bootcrew-ssh/id_rsa {{ VM_TIMEOUT }} {{ VM_MEMORY }} "$LOOPDEV" "$IMAGE_NAME"
 
 # Full bootcrew test (debian-bootc by default)
 bootcrew-vm IMAGE="quay.io/centos-bootc/centos-bootc:c10s" FILESYSTEM="xfs" COMPOSEFS="false":
@@ -297,7 +298,7 @@ bootcrew-ci-test IMAGE_JSON:
   # Boot VM and verify bootc status
   echo ""
   echo "=== Booting VM for bootc status verification ==="
-  just boot-verify "$LOOPDEV"
+  just boot-verify "$LOOPDEV" "$IMAGE_NAME"
   
   # Cleanup
   echo ""
