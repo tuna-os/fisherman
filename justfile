@@ -52,7 +52,8 @@ build-ssh-enabled-image IMAGE:
   rm -rf "$OCI_DIR"
   mkdir -p "$OCI_DIR"
   
-  skopeo copy "docker-daemon:$TEMP_TAG" "oci:$OCI_DIR:latest"
+  # Use containers-storage: to reference the locally built image
+  skopeo copy "containers-storage:$TEMP_TAG" "oci:$OCI_DIR:latest"
   
   # Output the oci: reference for fisherman to use
   SSH_IMAGE="oci:$OCI_DIR:latest"
