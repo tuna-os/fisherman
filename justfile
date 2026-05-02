@@ -42,7 +42,7 @@ build:
   #!/bin/bash
   set -e
   echo "Building fisherman..."
-  go build -o /tmp/fisherman ./cmd/fisherman/
+  cd fisherman && go build -o /tmp/fisherman ./cmd/fisherman/
   echo "✅ Built: /tmp/fisherman"
 
 # Create a loop device for testing
