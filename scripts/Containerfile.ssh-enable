@@ -7,7 +7,9 @@ RUN if command -v dnf >/dev/null 2>&1; then \
       dnf install -y openssh-server openssh-clients && \
       systemctl enable sshd; \
     elif command -v apt-get >/dev/null 2>&1; then \
-      # Debian/Ubuntu
+      # Debian/Ubuntu - initialize dpkg/apt structure first (needed for minimal debian-bootc)
+      mkdir -p /var/lib/dpkg/status.d /var/lib/apt/lists/partial /var/cache/apt/archives/partial /var/log/apt && \
+      touch /var/lib/dpkg/status /var/lib/apt/extended_states && \
       apt-get update && \
       apt-get install -y openssh-server && \
       systemctl enable ssh; \
