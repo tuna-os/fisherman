@@ -39,17 +39,22 @@ build-ssh-enabled-image IMAGE:
   echo "Building SSH-enabled image..."
   echo "Base image: {{ IMAGE }}"
   
-  # Export OCI layout directory for fisherman to use
+  # Build to temporary tar image
+  TEMP_TAG="localhost/fisherman-ssh-temp:latest"
+  podman build \
+    --build-arg BASE_IMAGE="{{ IMAGE }}" \
+    --tag "$TEMP_TAG" \
+    -f scripts/Containerfile.ssh-enable .
+  
+  # Export tar image and convert to OCI layout
+  TEMP_TAR="/tmp/bootcrew-ssh.tar"
+  podman save -o "$TEMP_TAR" "$TEMP_TAG"
+  
   OCI_DIR="/tmp/bootcrew-ssh-oci"
   rm -rf "$OCI_DIR"
-  mkdir -p "$OCI_DIR"
   
-  # Build directly to OCI layout format (avoids containers-storage: issues in CI)
-  # This requires podman 1.40+, which is available in GitHub Actions
-  podman build \
-    --output "type=oci,dest=$OCI_DIR" \
-    --build-arg BASE_IMAGE="{{ IMAGE }}" \
-    -f scripts/Containerfile.ssh-enable .
+  # Use skopeo to convert tar to OCI (avoids containers-storage issues)
+  skopeo copy "oci-archive:$TEMP_TAR" "oci:$OCI_DIR:latest"
   
   # Output the oci: reference for fisherman to use
   SSH_IMAGE="oci:$OCI_DIR:latest"
