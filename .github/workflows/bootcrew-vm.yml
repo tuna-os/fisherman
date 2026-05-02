@@ -20,6 +20,8 @@ jobs:
           sudo apt-get update -qq && sudo apt-get install -y yq jq
           MATRIX=$(yq -o json tests/bootcrew-matrix.yaml | jq -c '.images | map(select(.vm_boot == true))')
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          echo "Matrix output:"
+          echo "$MATRIX" | jq '.'
           echo "Testing: $(echo $MATRIX | jq -r '.[].name' | tr '\n' ' ')"
 
   vm-boot:
