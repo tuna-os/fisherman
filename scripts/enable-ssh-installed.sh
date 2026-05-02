@@ -33,21 +33,23 @@ if [ "$COMPOSEFS" = "true" ] && [ -f "$MOUNT_DIR/etc/hostname" ]; then
   # Direct composefs mount - root is mounted directly
   ROOTFS="$MOUNT_DIR"
 elif [ -d "$MOUNT_DIR/sysroot/ostree/deploy/default/deploy" ]; then
-  # ostree-based (centos-bootc) with sysroot
-  DEPLOY_DIR=$(sudo find "$MOUNT_DIR/sysroot/ostree/deploy/default/deploy" -maxdepth 1 -type d | head -1)
-  if [ -z "$DEPLOY_DIR" ]; then
-    echo "WARNING: Could not find deployment directory"
+  # ostree-based (centos-bootc) with sysroot - find the hash subdirectory
+  DEPLOY_BASE="$MOUNT_DIR/sysroot/ostree/deploy/default/deploy"
+  HASH_DIR=$(sudo ls -d "$DEPLOY_BASE"/*.0 2>/dev/null | head -1)
+  if [ -z "$HASH_DIR" ]; then
+    echo "WARNING: Could not find deployment hash directory in $DEPLOY_BASE"
     exit 1
   fi
-  ROOTFS="$DEPLOY_DIR"
+  ROOTFS="$HASH_DIR"
 elif [ -d "$MOUNT_DIR/ostree/deploy/default/deploy" ]; then
-  # ostree-based (centos-bootc) without sysroot
-  DEPLOY_DIR=$(sudo find "$MOUNT_DIR/ostree/deploy/default/deploy" -maxdepth 1 -type d | head -1)
-  if [ -z "$DEPLOY_DIR" ]; then
-    echo "WARNING: Could not find deployment directory"
+  # ostree-based (centos-bootc) without sysroot - find the hash subdirectory
+  DEPLOY_BASE="$MOUNT_DIR/ostree/deploy/default/deploy"
+  HASH_DIR=$(sudo ls -d "$DEPLOY_BASE"/*.0 2>/dev/null | head -1)
+  if [ -z "$HASH_DIR" ]; then
+    echo "WARNING: Could not find deployment hash directory in $DEPLOY_BASE"
     exit 1
   fi
-  ROOTFS="$DEPLOY_DIR"
+  ROOTFS="$HASH_DIR"
 else
   ROOTFS="$MOUNT_DIR"
 fi
