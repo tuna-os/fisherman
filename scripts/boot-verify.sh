@@ -55,7 +55,7 @@ OVMF_VARS="${OVMF_PATH#*:}"
 
 # Patch boot loader for debian-bootc (composefs) if needed
 # composefs images expect GPT auto-discovery but fisherman creates type=linux partitions
-# So we need to add root=/dev/vda3 kernel parameter to BLS config files
+# So we need to add root=/dev/vda3 kernel parameter to boot configuration
 if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-composefs" ]; then
   echo "=== Patching boot loader for debian-bootc (composefs) ==="
   MNTDIR="/tmp/bootcrew-grub-mnt-$$"
@@ -65,37 +65,49 @@ if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-compose
   if sudo mount "$LOOPDEV"p3 "$MNTDIR" 2>/dev/null; then
     echo "✓ Mounted $LOOPDEV"p3" at $MNTDIR"
     
-    # Check if /loader/entries exists
+    PATCHED=0
+    
+    # First try systemd-boot/BLS format (/loader/entries)
     if [ -d "$MNTDIR/loader/entries" ]; then
-      echo "✓ Found /loader/entries directory"
-      # Patch BLS (Boot Loader Specification) config files
-      PATCHED=0
+      echo "✓ Found /loader/entries directory (systemd-boot)"
       FOUND_CONFS=0
       for conf in "$MNTDIR"/loader/entries/*.conf; do
         [ -f "$conf" ] || continue
         FOUND_CONFS=$((FOUND_CONFS+1))
-        # Add root=/dev/vda3 if missing: composefs images omit root= and rely
-        # on GPT auto-discovery (requires partition type root-x86-64), which
-        # won't work because fisherman creates type=linux partitions.
         if ! sudo grep -q "root=" "$conf"; then
           echo "Patching $(basename "$conf")..."
           sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
           PATCHED=1
         fi
       done
-      if [ "$FOUND_CONFS" -eq 0 ]; then
-        echo "⚠️  No .conf files found in /loader/entries"
-      elif [ "$PATCHED" -eq 0 ]; then
-        echo "✓ All BLS entries already have root= parameter"
-      fi
-    else
-      echo "⚠️  /loader/entries directory not found"
-      echo "  Available boot directories:"
-      sudo find "$MNTDIR" -type d -name "loader" -o -name "grub*" -o -name "boot" 2>/dev/null | head -10 | sed 's/^/    /'
+      [ "$FOUND_CONFS" -eq 0 ] && echo "⚠️  No .conf files found"
     fi
+    
+    # Otherwise try GRUB format (/boot/grub2 or /boot/grub)
+    if [ "$PATCHED" -eq 0 ]; then
+      for GRUB_DIR in "$MNTDIR/boot/grub2" "$MNTDIR/boot/grub"; do
+        if [ -f "$GRUB_DIR/grub.cfg" ]; then
+          echo "✓ Found GRUB config at $GRUB_DIR/grub.cfg"
+          if ! sudo grep -q "root=/dev/vda3" "$GRUB_DIR/grub.cfg"; then
+            echo "Patching GRUB config..."
+            # Add root=/dev/vda3 to linux lines that don't have it
+            sudo sed -i 's/^[[:space:]]*linux[[:space:]]/&root=\/dev\/vda3 /' "$GRUB_DIR/grub.cfg"
+            PATCHED=1
+          else
+            echo "✓ root=/dev/vda3 already present in GRUB config"
+          fi
+          break
+        fi
+      done
+    fi
+    
+    if [ "$PATCHED" -eq 0 ]; then
+      echo "⚠️  No boot configuration found or already patched"
+    fi
+    
     sudo umount "$MNTDIR"
   else
-    echo "⚠️  Could not mount partition for BLS patching (may not be available)"
+    echo "⚠️  Could not mount partition for boot patching"
   fi
   rm -rf "$MNTDIR"
   echo ""
