@@ -32,10 +32,29 @@ setup-ssh-keys:
   cat /tmp/bootcrew-ssh/id_rsa.pub
 
 # Prepare SSH-enabled container image (using podman exec)
-prepare-ssh-image IMAGE:
+build-ssh-enabled-image IMAGE:
   #!/bin/bash
   set -e
-  bash scripts/prepare-ssh-image.sh "{{ IMAGE }}" /tmp/bootcrew-ssh/id_rsa.pub
+  
+  # Generate SSH-enabled image tag
+  # Handle various tag formats: image:tag -> image:ci-ssh-enabled
+  if [[ "{{ IMAGE }}" == *":"* ]]; then
+    SSH_IMAGE=$(echo "{{ IMAGE }}" | sed 's/:[^:]*$/:ci-ssh-enabled/')
+  else
+    SSH_IMAGE="{{ IMAGE }}:ci-ssh-enabled"
+  fi
+  
+  echo "Building SSH-enabled image..."
+  echo "Base image: {{ IMAGE }}"
+  echo "SSH image: $SSH_IMAGE"
+  
+  podman build \
+    --build-arg BASE_IMAGE="{{ IMAGE }}" \
+    --tag "$SSH_IMAGE" \
+    -f scripts/Containerfile.ssh-enable .
+  
+  echo "✅ Built SSH-enabled image: $SSH_IMAGE"
+  echo "$SSH_IMAGE" > /tmp/bootcrew-ssh-image.txt
 
 # Build debian-bootc with SSH pre-installed (Containerfile approach)
 build-debian-bootc-ssh:
@@ -122,10 +141,21 @@ install:
   echo "✅ Installation complete"
 
 # Boot VM and verify with SSH
-boot-verify:
+boot-verify LOOPDEV="":
   #!/bin/bash
   set -e
-  LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt 2>/dev/null || true)
+  
+  if [ -z "{{ LOOPDEV }}" ]; then
+    LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt 2>/dev/null || true)
+  else
+    LOOPDEV="{{ LOOPDEV }}"
+  fi
+  
+  if [ -z "$LOOPDEV" ]; then
+    echo "ERROR: LOOPDEV not provided and not found in /tmp/bootcrew-loopdev.txt"
+    exit 1
+  fi
+  
   bash scripts/boot-verify.sh {{ SSH_PORT }} /tmp/bootcrew-ssh/id_rsa {{ VM_TIMEOUT }} {{ VM_MEMORY }} "$LOOPDEV"
 
 # Full bootcrew test (debian-bootc by default)
@@ -232,16 +262,17 @@ bootcrew-ci-test IMAGE_JSON:
   
   DISK_FILE="{{ CI_ARTIFACTS }}/bootcrew-${IMAGE_NAME}-disk.img"
   
-  # Prepare SSH image (works for all distros now that dpkg is initialized)
-  # This prepares the container image with SSH for VM testing
-  just prepare-ssh-image "$IMAGE"
+  # Build SSH-enabled image for E2E testing
+  echo "Building SSH-enabled image..."
+  just build-ssh-enabled-image "$IMAGE"
+  SSH_IMAGE=$(cat /tmp/bootcrew-ssh-image.txt)
   
   # Build and create disk
   just setup-loop "$DISK_FILE"
   LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt)
   
-  # Generate recipe - use the original image (fisherman will pull from registry)
-  # The SSH setup in prepare-ssh-image is for the VM testing phase, not the installation
+  # Generate recipe - use SSH-enabled image for installation
+  # This image has SSH pre-installed so it will work after installation
   cat > {{ CI_ARTIFACTS }}/recipe.json << EOF
   {
     "disk": "$LOOPDEV",
@@ -250,7 +281,7 @@ bootcrew-ci-test IMAGE_JSON:
     "unifiedStorage": $UNIFIED,
     "selinuxDisabled": $SELINUX,
     "encryption": {"type": "none"},
-    "image": "$IMAGE",
+    "image": "$SSH_IMAGE",
     "hostname": "ci-test",
     "flatpaks": []
   }
@@ -267,13 +298,10 @@ bootcrew-ci-test IMAGE_JSON:
   # Verify installation
   just verify-installation "$LOOPDEV" "$COMPOSEFS"
   
-  # Skip SSH-based boot verification - offline verification is more reliable
-  # SSH setup in chroot is problematic due to package manager network access
-  echo "Skipping SSH-based boot verification"
-  echo "Using offline verification instead"
-  
-  # Offline verification
-  just verify-bootc-offline "$LOOPDEV" "$COMPOSEFS"
+  # Boot VM and verify bootc status
+  echo ""
+  echo "=== Booting VM for bootc status verification ==="
+  just boot-verify "$LOOPDEV"
   
   # Cleanup
   echo ""
