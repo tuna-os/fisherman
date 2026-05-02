@@ -58,59 +58,55 @@ OVMF_VARS="${OVMF_PATH#*:}"
 # So we need to add root=/dev/vda3 kernel parameter to boot configuration
 if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-composefs" ]; then
   echo "=== Patching boot loader for debian-bootc (composefs) ==="
+  
+  PATCHED=0
   MNTDIR="/tmp/bootcrew-grub-mnt-$$"
   mkdir -p "$MNTDIR"
   
-  # Try to mount the root partition (vda3) to access boot loader config
-  if sudo mount "$LOOPDEV"p3 "$MNTDIR" 2>/dev/null; then
-    echo "✓ Mounted $LOOPDEV"p3" at $MNTDIR"
+  # Try each partition to find boot configuration
+  for PARTITION in "$LOOPDEV"p2 "$LOOPDEV"p3 "$LOOPDEV"p1; do
+    [ -b "$PARTITION" ] || continue
     
-    PATCHED=0
-    
-    # First try systemd-boot/BLS format (/loader/entries)
-    if [ -d "$MNTDIR/loader/entries" ]; then
-      echo "✓ Found /loader/entries directory (systemd-boot)"
-      FOUND_CONFS=0
-      for conf in "$MNTDIR"/loader/entries/*.conf; do
-        [ -f "$conf" ] || continue
-        FOUND_CONFS=$((FOUND_CONFS+1))
-        if ! sudo grep -q "root=" "$conf"; then
-          echo "Patching $(basename "$conf")..."
-          sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
-          PATCHED=1
-        fi
-      done
-      [ "$FOUND_CONFS" -eq 0 ] && echo "⚠️  No .conf files found"
-    fi
-    
-    # Otherwise try GRUB format (/boot/grub2 or /boot/grub)
-    if [ "$PATCHED" -eq 0 ]; then
+    if sudo mount "$PARTITION" "$MNTDIR" 2>/dev/null; then
+      echo "✓ Mounted $PARTITION"
+      
+      # Check for systemd-boot/BLS format (/loader/entries)
+      if [ -d "$MNTDIR/loader/entries" ]; then
+        echo "  ✓ Found /loader/entries (systemd-boot)"
+        for conf in "$MNTDIR"/loader/entries/*.conf; do
+          [ -f "$conf" ] || continue
+          if ! sudo grep -q "root=" "$conf"; then
+            echo "  Patching $(basename "$conf")..."
+            sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
+            PATCHED=1
+          fi
+        done
+      fi
+      
+      # Check for GRUB format (/boot/grub2 or /boot/grub)
       for GRUB_DIR in "$MNTDIR/boot/grub2" "$MNTDIR/boot/grub"; do
         if [ -f "$GRUB_DIR/grub.cfg" ]; then
-          echo "✓ Found GRUB config at $GRUB_DIR/grub.cfg"
+          echo "  ✓ Found GRUB config at $GRUB_DIR/grub.cfg"
           if ! sudo grep -q "root=/dev/vda3" "$GRUB_DIR/grub.cfg"; then
-            echo "Patching GRUB config..."
-            # Add root=/dev/vda3 to linux lines that don't have it
+            echo "  Patching GRUB config..."
             sudo sed -i 's/^[[:space:]]*linux[[:space:]]/&root=\/dev\/vda3 /' "$GRUB_DIR/grub.cfg"
             PATCHED=1
-          else
-            echo "✓ root=/dev/vda3 already present in GRUB config"
           fi
           break
         fi
       done
+      
+      sudo umount "$MNTDIR" || true
+      [ "$PATCHED" -eq 1 ] && break
     fi
-    
-    if [ "$PATCHED" -eq 0 ]; then
-      echo "⚠️  No boot configuration found"
-      echo "   Checking /boot contents:"
-      sudo find "$MNTDIR/boot" -type f 2>/dev/null | head -20 | sed 's/^/     /'
-    fi
-    
-    sudo umount "$MNTDIR"
+  done
+  
+  if [ "$PATCHED" -eq 0 ]; then
+    echo "⚠️  Boot configuration not found on any partition"
   else
-    echo "⚠️  Could not mount partition for boot patching"
+    echo "✓ Boot configuration patched successfully"
   fi
+  
   rm -rf "$MNTDIR"
   echo ""
 fi
