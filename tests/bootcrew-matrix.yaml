@@ -16,7 +16,7 @@ images:
     vm_boot: false
 
   - name: centos-bootc
-    image: ghcr.io/bootcrew/centos-bootc:latest
+    image: quay.io/centos-bootc/centos-bootc:c10s
     filesystem: xfs
     composefs_backend: false
     unified_storage: false
