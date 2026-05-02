@@ -63,20 +63,36 @@ if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-compose
   
   # Try to mount the root partition (vda3) to access boot loader config
   if sudo mount "$LOOPDEV"p3 "$MNTDIR" 2>/dev/null; then
-    # Patch BLS (Boot Loader Specification) config files
-    PATCHED=0
-    for conf in "$MNTDIR"/loader/entries/*.conf; do
-      [ -f "$conf" ] || continue
-      # Add root=/dev/vda3 if missing: composefs images omit root= and rely
-      # on GPT auto-discovery (requires partition type root-x86-64), which
-      # won't work because fisherman creates type=linux partitions.
-      if ! sudo grep -q "root=" "$conf"; then
-        echo "Patching $(basename "$conf")..."
-        sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
-        PATCHED=1
+    echo "✓ Mounted $LOOPDEV"p3" at $MNTDIR"
+    
+    # Check if /loader/entries exists
+    if [ -d "$MNTDIR/loader/entries" ]; then
+      echo "✓ Found /loader/entries directory"
+      # Patch BLS (Boot Loader Specification) config files
+      PATCHED=0
+      FOUND_CONFS=0
+      for conf in "$MNTDIR"/loader/entries/*.conf; do
+        [ -f "$conf" ] || continue
+        FOUND_CONFS=$((FOUND_CONFS+1))
+        # Add root=/dev/vda3 if missing: composefs images omit root= and rely
+        # on GPT auto-discovery (requires partition type root-x86-64), which
+        # won't work because fisherman creates type=linux partitions.
+        if ! sudo grep -q "root=" "$conf"; then
+          echo "Patching $(basename "$conf")..."
+          sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
+          PATCHED=1
+        fi
+      done
+      if [ "$FOUND_CONFS" -eq 0 ]; then
+        echo "⚠️  No .conf files found in /loader/entries"
+      elif [ "$PATCHED" -eq 0 ]; then
+        echo "✓ All BLS entries already have root= parameter"
       fi
-    done
-    [ "$PATCHED" -eq 0 ] && echo "No BLS entries needed patching"
+    else
+      echo "⚠️  /loader/entries directory not found"
+      echo "  Available boot directories:"
+      sudo find "$MNTDIR" -type d -name "loader" -o -name "grub*" -o -name "boot" 2>/dev/null | head -10 | sed 's/^/    /'
+    fi
     sudo umount "$MNTDIR"
   else
     echo "⚠️  Could not mount partition for BLS patching (may not be available)"
