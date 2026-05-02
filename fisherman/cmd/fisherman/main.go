@@ -31,12 +31,19 @@ type stepProfile struct {
 // buildProfile returns per-step weight profiles based on timing data from a
 // yellowfin gnome-hwe loop-device install (264s uncached, ~111s cached).
 // Weights sum to 100. cumulativePct is the bar position at step start.
-func buildProfile(needsPull, hasLUKS, hasTPM2enrolment bool) []stepProfile {
+func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasSnaps bool) []stepProfile {
 	osWeight := 87
 	flatpakWeight := 11
+	snapWeight := 0
 	if !needsPull {
 		osWeight = 68
 		flatpakWeight = 29
+	}
+	// Snaps are always copied from the local live environment (never downloaded),
+	// so their weight is a small fixed slice taken from the flatpak budget.
+	if hasSnaps {
+		snapWeight = 5
+		flatpakWeight -= snapWeight
 	}
 	if hasLUKS {
 		osWeight--
@@ -54,7 +61,11 @@ func buildProfile(needsPull, hasLUKS, hasTPM2enrolment bool) []stepProfile {
 	if hasTPM2enrolment {
 		weights = append(weights, 1) // TPM2 enrolment
 	}
-	weights = append(weights, flatpakWeight, 0) // flatpaks, configure
+	weights = append(weights, flatpakWeight) // flatpaks
+	if hasSnaps {
+		weights = append(weights, snapWeight) // snaps
+	}
+	weights = append(weights, 0) // configure
 	sum := 0
 	for _, w := range weights {
 		sum += w
@@ -221,6 +232,7 @@ func main() {
 	hasTPM2enrolment := r.Encryption.Type == "tpm2-luks-passphrase"
 	isManual := len(r.CustomMounts) > 0
 	isSystemdBoot := r.Bootloader == "systemd" || r.Filesystem == "zfs"
+	hasSnaps := r.Snaps != nil
 
 	// ── Pre-flight: check image cache ─────────────────────────────────────────
 	var imageCheck install.ImageCheck
@@ -236,7 +248,7 @@ func main() {
 		}
 	}
 
-	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2enrolment)
+	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2enrolment, hasSnaps)
 	pi := 0 // profile index, incremented at each progress.Step call
 
 	// Compute total step count up front so the GUI can show accurate progress.
@@ -250,6 +262,9 @@ func main() {
 	}
 	if hasTPM2 && r.Encryption.Type == "tpm2-luks-passphrase" {
 		totalSteps++ // extra step for TPM2 enrolment
+	}
+	if hasSnaps {
+		totalSteps++ // extra step for snap copy
 	}
 	step := 1
 
@@ -533,7 +548,7 @@ func main() {
 		}
 	}
 
-	// ── Step 7: Copy system flatpaks ──────────────────────────────────────────
+	// ── Step 7: Copy system Flatpaks ──────────────────────────────────────────
 	progress.Step(step, totalSteps, "Copying system Flatpaks", profile[pi].cumulativePct, profile[pi].weightPct)
 	pi++
 	step++
@@ -541,6 +556,22 @@ func main() {
 	if err := post.CopyFlatpaks(activeTargetMount, r.Flatpaks, r.FlatpakVarPath); err != nil {
 		// Non-fatal — the system will work without pre-installed flatpaks.
 		progress.Info(fmt.Sprintf("Warning: could not copy flatpaks: %v", err))
+	}
+
+	// ── Step 7b: Copy system snaps (when opted in via recipe) ─────────────────
+	// Snaps are pre-installed in the live ISO environment and copied verbatim to
+	// the installed system so they are available on first boot without network.
+	// Skipped when r.Snaps is nil (field absent from recipe).
+	if hasSnaps {
+		progress.Step(step, totalSteps, "Copying system snaps", profile[pi].cumulativePct, profile[pi].weightPct)
+		pi++
+		step++
+
+		if err := post.CopySnaps(activeTargetMount, r.SnapVarPath); err != nil {
+			// Non-fatal — the system boots fine without pre-copied snaps; snapd
+			// will install them from the store on the first connected boot.
+			progress.Info(fmt.Sprintf("Warning: could not copy snaps: %v", err))
+		}
 	}
 
 	// ── Step 8: Post-install configuration ───────────────────────────────────

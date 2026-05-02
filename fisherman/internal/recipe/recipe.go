@@ -39,6 +39,16 @@ type Recipe struct {
 	FlatpakVarPath   string        `json:"flatpakVarPath,omitempty"`
 	Hostname         string        `json:"hostname"`
 	Flatpaks        []string      `json:"flatpaks"`        // flatpak app IDs to install; empty = fallback
+	// Snaps is the list of snap names pre-installed in the live environment that
+	// should be copied to the installed system. A nil value (field absent from
+	// the recipe) disables snap copying entirely. An empty slice opts in and
+	// copies all snaps that are present in the live environment.
+	// The snap .snap files and assertions are copied verbatim; snapd reconciles
+	// mount points on first boot without needing network access.
+	Snaps           []string      `json:"snaps,omitempty"`
+	// SnapVarPath mirrors FlatpakVarPath for snap data. Leave empty for
+	// auto-detection (composefs-native or ostree standard layout).
+	SnapVarPath     string        `json:"snapVarPath,omitempty"`
 	User            UserSpec      `json:"user"`            // optional user account to create
 	// CustomMounts is set for manual partitioning. When non-empty, Disk/Filesystem/
 	// BtrfsSubvolumes and the auto-partition steps are skipped; fisherman formats and
