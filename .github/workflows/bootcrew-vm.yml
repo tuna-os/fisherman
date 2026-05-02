@@ -18,7 +18,7 @@ jobs:
         id: read-matrix
         run: |
           sudo apt-get update -qq && sudo apt-get install -y yq jq
-          MATRIX=$(yq -o json tests/bootcrew-matrix.yaml | jq -c '.images | map(select(.vm_boot == true))')
+          MATRIX=$(cat tests/bootcrew-matrix.yaml | yq eval -o=json '.' | jq -c '.images | map(select(.vm_boot == true))')
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
           echo "Matrix output:"
           echo "$MATRIX" | jq '.'
