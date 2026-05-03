@@ -93,13 +93,19 @@ cleanup-loop:
   fi
 
 # Generate fisherman recipe for installation
-generate-recipe IMAGE FILESYSTEM COMPOSEFS:
+generate-recipe IMAGE FILESYSTEM COMPOSEFS BOOTLOADER="":
   #!/bin/bash
   set -e
   IMAGE="{{ IMAGE }}"
   FILESYSTEM="{{ FILESYSTEM }}"
   COMPOSEFS="{{ COMPOSEFS }}"
+  BOOTLOADER="{{ BOOTLOADER }}"
   LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt)
+  
+  BOOTLOADER_JSON=""
+  if [ -n "$BOOTLOADER" ]; then
+    BOOTLOADER_JSON=", \"bootloader\": \"$BOOTLOADER\""
+  fi
   
   cat > /tmp/bootcrew-recipe.json << EOF
   {
@@ -111,7 +117,7 @@ generate-recipe IMAGE FILESYSTEM COMPOSEFS:
     "encryption": {"type": "none"},
     "image": "$IMAGE",
     "hostname": "bootcrew-test",
-    "flatpaks": []
+    "flatpaks": []$BOOTLOADER_JSON
   }
   EOF
   

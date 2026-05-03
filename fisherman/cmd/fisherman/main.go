@@ -516,6 +516,11 @@ func main() {
 	// Linux root GUID so the installed system can find /sysroot on first boot.
 	if !isManual && isSystemdBoot && !hasEncryption && r.ComposeFsBackend {
 		progress.Info("Retagging root partition for systemd GPT auto-discovery")
+		// Release kernel and userspace references to the root partition before
+		// modifying its GPT type. bootc install may have left active references.
+		if err := disk.UnmountPartition(r.Disk, 2); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not fully clean partition references: %v\n", err)
+		}
 		if err := disk.SetPartitionType(r.Disk, 2, disk.GPTPartTypeLinuxRootX86_64); err != nil {
 			fatal("retagging root partition: %v", err)
 		}

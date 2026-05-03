@@ -103,6 +103,71 @@ func TestSetPartitionType(t *testing.T) {
 	}
 }
 
+func TestUnmountPartition(t *testing.T) {
+	rec := setupRecorder(t)
+
+	// Mock /proc/mounts with some mounts for /dev/vda2 and other devices.
+	mounts := `/dev/vda1 /boot ext4 rw,relatime 0 0
+/dev/vda2 /mnt/target ext4 rw,relatime 0 0
+/dev/vda3 /data btrfs rw,relatime 0 0
+tmpfs /run tmpfs rw,nosuid 0 0
+`
+	tmpfile, err := os.CreateTemp("", "mounts")
+	if err != nil {
+		t.Fatalf("CreateTemp: %v", err)
+	}
+	defer os.Remove(tmpfile.Name())
+	if _, err := tmpfile.WriteString(mounts); err != nil {
+		t.Fatalf("write mounts: %v", err)
+	}
+	tmpfile.Close()
+
+	// Override procMountsPath for this test
+	oldPath := disk.GetProcMountsPath()
+	disk.SetProcMountsPath(tmpfile.Name())
+	defer disk.SetProcMountsPath(oldPath)
+
+	if err := disk.UnmountPartition("/dev/vda", 2); err != nil {
+		t.Fatalf("UnmountPartition: %v", err)
+	}
+
+	// Should unmount only /dev/vda2, then flush and settle.
+	if len(rec.calls) < 2 {
+		t.Fatalf("expected at least 2 calls (udisksctl + blockdev), got %d", len(rec.calls))
+	}
+
+	// First call should be udisksctl unmount for /dev/vda2
+	if rec.calls[0].name == "udisksctl" {
+		if !equalSlice(rec.calls[0].args, []string{"unmount", "--no-user-interaction", "--block-device", "/dev/vda2"}) {
+			t.Errorf("first call args = %v, want udisksctl unmount of /dev/vda2", rec.calls[0].args)
+		}
+	}
+
+	// Should have blockdev --flushbufs call
+	foundFlushbufs := false
+	for _, call := range rec.calls {
+		if call.name == "blockdev" && equalSlice(call.args, []string{"--flushbufs", "/dev/vda2"}) {
+			foundFlushbufs = true
+			break
+		}
+	}
+	if !foundFlushbufs {
+		t.Errorf("no blockdev --flushbufs call found for /dev/vda2")
+	}
+
+	// Should have udevadm settle call
+	foundSettle := false
+	for _, call := range rec.calls {
+		if call.name == "udevadm" && equalSlice(call.args, []string{"settle"}) {
+			foundSettle = true
+			break
+		}
+	}
+	if !foundSettle {
+		t.Errorf("no udevadm settle call found")
+	}
+}
+
 // ── Partition sfdisk script ────────────────────────────────────────────────
 
 // sfdiskStdin finds the sfdisk call in rec.calls and returns its stdin content.
