@@ -38,6 +38,19 @@ RUN ssh-keygen -A 2>/dev/null || (mkdir -p /etc/ssh && \
     ssh-keygen -t dsa -N "" -f /etc/ssh/ssh_host_dsa_key && \
     ssh-keygen -t ecdsa -N "" -f /etc/ssh/ssh_host_ecdsa_key)
 
+# For composefs-based systems, ensure sshd.socket and sshd.service are enabled
+# This is more reliable than just "systemctl enable" for non-ostree backends
+RUN mkdir -p /etc/systemd/system/sockets.target.wants && \
+    mkdir -p /etc/systemd/system/multi-user.target.wants && \
+    if [ -f /usr/lib/systemd/system/sshd.service ]; then \
+      ln -sf /usr/lib/systemd/system/sshd.service /etc/systemd/system/multi-user.target.wants/sshd.service || true; \
+    elif [ -f /usr/lib/systemd/system/ssh.service ]; then \
+      ln -sf /usr/lib/systemd/system/ssh.service /etc/systemd/system/multi-user.target.wants/ssh.service || true; \
+    fi && \
+    if [ -f /usr/lib/systemd/system/sshd.socket ]; then \
+      ln -sf /usr/lib/systemd/system/sshd.socket /etc/systemd/system/sockets.target.wants/sshd.socket || true; \
+    fi
+
 # Ensure SSH is installed
 RUN test -f /usr/sbin/sshd || test -f /usr/bin/sshd || \
     (echo "ERROR: SSH installation failed" && exit 1)
