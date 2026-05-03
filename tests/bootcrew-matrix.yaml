@@ -13,7 +13,7 @@ images:
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
-    vm_boot: true  # ostree backend verification
+    vm_boot: false
 
   - name: centos-bootc
     image: quay.io/centos-bootc/centos-bootc:c10s
@@ -69,7 +69,7 @@ images:
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
-    vm_boot: false
+    vm_boot: true  # composefs backend verification
 
   # gentoo-bootc disabled: consistently fails with missing blob in containers-storage
   # (sha256:2443e8...) — likely a broken layer in the ghcr.io/bootcrew/gentoo-bootc image.
