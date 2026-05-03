@@ -10,7 +10,7 @@ set shell := ["bash", "-c"]
 set dotenv-load := true
 
 # Default values
-DISK_SIZE := "50G"
+DISK_SIZE := "120G"
 VM_TIMEOUT := "300"
 SSH_PORT := "2222"
 VM_MEMORY := "2G"
