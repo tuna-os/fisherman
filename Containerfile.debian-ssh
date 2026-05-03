@@ -1,0 +1,30 @@
+FROM ghcr.io/bootcrew/debian-bootc:latest
+
+# Initialize dpkg/apt structure that's missing from the base image
+RUN mkdir -p /var/lib/dpkg/status.d \
+    /var/lib/apt/lists/partial \
+    /var/cache/apt/archives/partial \
+    /var/log/apt
+
+# Touch required status files
+RUN touch /var/lib/dpkg/status /var/lib/apt/extended_states
+
+# Install and configure SSH
+RUN apt-get update && \
+    apt-get install -y openssh-server openssh-client && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /var/lib/apt/lists/partial
+
+# Create SSH host keys
+RUN ssh-keygen -A
+
+# Set root password for testing
+RUN echo 'root:bootcrew-test' | chpasswd
+
+# Enable password authentication in sshd_config
+RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+
+LABEL org.opencontainers.image.title="Debian Bootc with SSH"
+LABEL org.opencontainers.image.description="Debian bootc image with OpenSSH pre-installed for testing"

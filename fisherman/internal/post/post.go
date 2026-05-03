@@ -45,6 +45,21 @@ func (c *Cleanup) Run() {
 		}
 	}
 	if c.luksMapper != "" {
+		// Before closing LUKS device, flush pending I/O and release device references
+		// to prevent "Device or resource busy" errors. Mirrors the strategy in
+		// internal/disk/partition.go:unmountAll().
+
+		// Kill any processes still holding file descriptors on the LUKS device.
+		// fuser exits non-zero when no processes are found — that is fine.
+		_ = runner.Run("fuser", "-km", luks.MapperPath(c.luksMapper))
+
+		// Flush pending I/O so the kernel can drop its internal references.
+		_ = runner.Run("blockdev", "--flushbufs", luks.MapperPath(c.luksMapper))
+
+		// Give udev and udisksd time to release all device references.
+		_ = runner.Run("udevadm", "settle")
+
+		// Now close the LUKS device.
 		if err := luks.Close(c.luksMapper); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: closing LUKS device %s: %v\n", c.luksMapper, err)
 		}

@@ -1,0 +1,43 @@
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+# Install and enable SSH for all supported distributions
+RUN if command -v dnf >/dev/null 2>&1; then \
+      # RHEL/CentOS/Fedora
+      dnf install -y openssh-server openssh-clients && \
+      systemctl enable sshd; \
+    elif command -v apt-get >/dev/null 2>&1; then \
+      # Debian/Ubuntu - initialize dpkg/apt structure first (needed for minimal debian-bootc)
+      mkdir -p /var/lib/dpkg/status.d /var/lib/apt/lists/partial /var/cache/apt/archives/partial /var/log/apt && \
+      touch /var/lib/dpkg/status /var/lib/apt/extended_states && \
+      apt-get update && \
+      apt-get install -y openssh-server && \
+      systemctl enable ssh; \
+    elif command -v pacman >/dev/null 2>&1; then \
+      # Arch
+      pacman -Sy --noconfirm openssh && \
+      systemctl enable sshd; \
+    elif command -v zypper >/dev/null 2>&1; then \
+      # openSUSE
+      zypper install -y openssh && \
+      systemctl enable sshd; \
+    else \
+      echo "WARNING: Unsupported distribution, SSH installation may have failed"; \
+    fi
+
+# Configure SSH for password authentication and set root password
+RUN echo "PermitRootLogin yes" >> /etc/ssh/sshd_config && \
+    echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config && \
+    echo "bootcrew-test" | passwd --stdin root || \
+    echo "bootcrew-test" | passwd root
+
+# Generate SSH host keys (required for sshd to start)
+RUN ssh-keygen -A 2>/dev/null || (mkdir -p /etc/ssh && \
+    ssh-keygen -t rsa -N "" -f /etc/ssh/ssh_host_rsa_key && \
+    ssh-keygen -t ed25519 -N "" -f /etc/ssh/ssh_host_ed25519_key && \
+    ssh-keygen -t dsa -N "" -f /etc/ssh/ssh_host_dsa_key && \
+    ssh-keygen -t ecdsa -N "" -f /etc/ssh/ssh_host_ecdsa_key)
+
+# Ensure SSH is installed
+RUN test -f /usr/sbin/sshd || test -f /usr/bin/sshd || \
+    (echo "ERROR: SSH installation failed" && exit 1)

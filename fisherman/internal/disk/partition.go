@@ -20,6 +20,9 @@ var procMountsPath = "/proc/mounts"
 
 const GPTPartTypeLinuxRootX86_64 = "4f68bce3-e8cd-4db1-96e7-fbcaf984b709"
 
+// GetProcMountsPath returns the current mounts file path. For testing only.
+func GetProcMountsPath() string { return procMountsPath }
+
 // SetProcMountsPath overrides the mounts file path. For testing only.
 func SetProcMountsPath(p string) { procMountsPath = p }
 func PartSuffix(disk string) string {
@@ -38,6 +41,57 @@ func PartSuffix(disk string) string {
 //	PartName("/dev/nvme0n1", 2) → "/dev/nvme0n1p2"
 func PartName(disk string, num int) string {
 	return fmt.Sprintf("%s%s%d", disk, PartSuffix(disk), num)
+}
+
+// UnmountPartition releases kernel and userspace references to a specific partition
+// in preparation for modifying its GPT attributes (e.g., retagging). This is less
+// destructive than unmountAll() — it only affects the specific partition, not the
+// entire disk. It does NOT deactivate LVM or kill processes.
+func UnmountPartition(disk string, partNum int) error {
+	partPath := PartName(disk, partNum)
+	data, err := os.ReadFile(procMountsPath)
+	if err != nil {
+		return fmt.Errorf("reading /proc/mounts: %w", err)
+	}
+
+	// Find and unmount any mounts for this specific partition.
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		dev := fields[0]
+		mp := fields[1]
+
+		// Only process mounts for this specific partition.
+		if dev != partPath {
+			continue
+		}
+
+		// swap entries have mount point "none" and fstype "swap".
+		if mp == "none" || (len(fields) >= 3 && fields[2] == "swap") {
+			fmt.Fprintf(os.Stdout, "+ swapoff %s\n", dev)
+			_ = runner.Run("swapoff", dev)
+			continue
+		}
+
+		fmt.Fprintf(os.Stdout, "+ unmount %s (%s)\n", mp, dev)
+		// Try udisksctl first — properly releases udisksd's open FD.
+		if err := runner.Run("udisksctl", "unmount", "--no-user-interaction", "--block-device", dev); err != nil {
+			// Fall back to umount -l for mounts not managed by udisks.
+			_ = runner.Run("umount", "-l", mp)
+		}
+	}
+
+	// Flush pending I/O so the kernel can drop its internal references.
+	fmt.Fprintf(os.Stdout, "+ blockdev --flushbufs %s\n", partPath)
+	_ = runner.Run("blockdev", "--flushbufs", partPath)
+
+	// Give udev and udisksd time to release all device references.
+	fmt.Fprintf(os.Stdout, "+ udevadm settle\n")
+	_ = runner.Run("udevadm", "settle")
+
+	return nil
 }
 
 // SetPartitionType rewrites the GPT type for a single partition on disk.
@@ -101,6 +155,24 @@ func PartitionSystemdBoot(disk string) error {
 		"",
 		`size=2GiB, type=uefi, name="EFI-SYSTEM"`,
 		`type=linux, name="root"`,
+	}, "\n") + "\n"
+	return partition(disk, script)
+}
+
+// PartitionZFS wipes disk and creates a two-partition GPT layout for
+// ZFS installs:
+//
+//	Partition 1 – EFI System (1 GiB — holds bootloader, kernel, initrd)
+//	Partition 2 – ZFS pool   (remaining space)
+//
+// ZFS installs use systemd-boot which reads directly from the FAT32 ESP.
+// The ZFS pool on p2 holds the composefs-native bootc store.
+func PartitionZFS(disk string) error {
+	script := strings.Join([]string{
+		"label: gpt",
+		"",
+		`size=1GiB, type=uefi, name="EFI-SYSTEM"`,
+		`type=linux, name="zfs-pool"`,
 	}, "\n") + "\n"
 	return partition(disk, script)
 }
