@@ -6,6 +6,15 @@
 # vm_boot: true — include in bootcrew-vm.yml for E2E VM boot tests on every PR
 #          false (default) — skip in VM boot tests (reserved for nightly + disk-ops)
 images:
+  - name: dakota
+    image: ghcr.io/projectbluefin/dakota:latest
+    filesystem: xfs
+    composefs_backend: true
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    vm_boot: true  # PRIMARY PRODUCTION IMAGE - critical to test on every PR
+
   - name: bluefin-lts
     image: ghcr.io/ublue-os/bluefin:lts
     filesystem: xfs
