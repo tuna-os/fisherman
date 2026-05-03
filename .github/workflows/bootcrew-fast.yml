@@ -1,10 +1,9 @@
 name: Bootcrew Fast (disk ops)
 
 on:
-  push:
-    branches: [prod, dev]
-  pull_request:
-    branches: [prod, dev]
+  # DISABLED: This workflow uses fake podman/ostree binaries and doesn't actually
+  # verify that fisherman works. Use bootcrew-vm.yml for real E2E SSH boot verification.
+  workflow_dispatch:  # Manual trigger only for debugging
 
 jobs:
   # Read the image matrix from tests/bootcrew-matrix.yaml and output JSON.
