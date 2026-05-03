@@ -151,6 +151,7 @@ sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -enable-kvm \
   -cpu host \
   -m "$VM_MEMORY" \
+  -boot order=c \
   -drive file="$LOOPDEV",format=raw,if=virtio \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
   -drive if=pflash,format=raw,snapshot=on,file="$OVMF_VARS" \
