@@ -162,6 +162,16 @@ func detectPackageManager(sysroot string) string {
 		if _, err := os.Stat(pm); err == nil {
 			return pm
 		}
+		// Debug: check if path exists at all
+		stat, statErr := os.Stat(filepath.Dir(pm))
+		if statErr == nil && stat.IsDir() {
+			// Directory exists but file doesn't — check if it's composefs
+			entries, _ := os.ReadDir(filepath.Dir(pm))
+			if entries != nil && len(entries) == 0 {
+				// Empty directory — likely composefs mount issue
+				fmt.Fprintf(os.Stderr, "DEBUG: %s exists but is empty (composefs issue?)\n", filepath.Dir(pm))
+			}
+		}
 	}
 	return ""
 }

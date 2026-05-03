@@ -276,6 +276,20 @@ bootcrew-ci-test IMAGE_JSON:
   
   # Generate recipe - use SSH-enabled image for installation
   # This image has SSH pre-installed so it will work after installation
+  
+  # Determine bootloader based on image name
+  # debian-bootc and arch-bootc use systemd-boot, CentOS uses GRUB
+  BOOTLOADER=""
+  case "$IMAGE_NAME" in
+    debian-bootc*|arch-bootc*)
+      BOOTLOADER='"bootloader": "systemd",'
+      ;;
+    *)
+      # GRUB is default (grub2), so omit the field
+      BOOTLOADER=""
+      ;;
+  esac
+  
   cat > {{ CI_ARTIFACTS }}/recipe.json << EOF
   {
     "disk": "$LOOPDEV",
@@ -286,6 +300,7 @@ bootcrew-ci-test IMAGE_JSON:
     "encryption": {"type": "none"},
     "image": "$SSH_IMAGE",
     "hostname": "ci-test",
+    $BOOTLOADER
     "flatpaks": []
   }
   EOF
