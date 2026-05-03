@@ -23,6 +23,12 @@ jobs:
       fail-fast: false
       matrix:
         image:
+          - name: dakota
+            base_image: ghcr.io/projectbluefin/dakota:latest
+          - name: arch-bootc
+            base_image: ghcr.io/bootcrew/arch-bootc:latest
+          - name: ubuntu-bootc
+            base_image: ghcr.io/bootcrew/ubuntu-bootc:latest
           - name: centos-bootc
             base_image: quay.io/centos-bootc/centos-bootc:c10s
           - name: debian-bootc
