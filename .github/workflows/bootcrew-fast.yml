@@ -56,7 +56,7 @@ jobs:
         id: loopdev
         run: |
           TMPFILE=$(mktemp)
-          truncate -s 20G "$TMPFILE"
+          truncate -s 60G "$TMPFILE"
           LOOPDEV=$(sudo losetup --find --show "$TMPFILE")
           echo "loopdev=$LOOPDEV" >> "$GITHUB_OUTPUT"
           echo "tmpfile=$TMPFILE" >> "$GITHUB_OUTPUT"
