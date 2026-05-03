@@ -85,7 +85,8 @@ sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -m "$VM_MEMORY" \
   -drive file="$LOOPDEV",format=raw,if=virtio \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-  -drive if=pflash,format=raw,snapshot=on,file="$OVMF_VARS" \
+  -drive if=pflash,format=raw,snapshot=on,file="/usr/share/edk2/ovmf/OVMF.qemuvars.fd" \
+  -boot order=dc \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22 \
   -device virtio-net-pci,netdev=net0 \
   -chardev file,path="$SERIAL_LOG",id=char0 \

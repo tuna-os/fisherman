@@ -532,6 +532,24 @@ func skopeoExportOCI(image, destDir string) error {
 	name, args := runner.HostArgs("skopeo", skopeoArgs)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 	cmd := exec.Command(name, args...)
+	// Set TMPDIR to /var/fisherman-tmp so skopeo has disk-backed space for temporary files.
+	// Use /tmp/skopeo-tmp as a fallback on systems where /var/tmp is inaccessible (e.g., SELinux).
+	// Ensure the directory exists and is writable.
+	tmpdir := "/var/fisherman-tmp"
+	if err := os.MkdirAll(tmpdir, 0o1777); err != nil {
+		tmpdir = "/tmp"
+	}
+	env := os.Environ()
+	// Remove any existing TMPDIR from the environment
+	cleanEnv := []string{}
+	for _, e := range env {
+		if !strings.HasPrefix(e, "TMPDIR=") {
+			cleanEnv = append(cleanEnv, e)
+		}
+	}
+	cleanEnv = append(cleanEnv, "TMPDIR="+tmpdir)
+	cmd.Env = cleanEnv
+	fmt.Fprintf(os.Stdout, "# TMPDIR=%s\n", tmpdir)
 	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("skopeo copy: %w", err)
 	}

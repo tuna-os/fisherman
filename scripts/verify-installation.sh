@@ -33,24 +33,36 @@ SUDO_BIN=$(find_sudo) || {
 
 echo "=== Verifying installation ==="
 
-# 1. Check 3-partition layout
-LABEL_COUNT=$($SUDO_BIN lsblk -o LABEL "$LOOPDEV" | grep -cE 'EFI-SYSTEM|boot|root' || true)
-if [ "$LABEL_COUNT" -ne 3 ]; then
-  echo "FAIL: expected 3 labelled partitions, got $LABEL_COUNT"
-  $SUDO_BIN lsblk -o NAME,SIZE,FSTYPE,LABEL "$LOOPDEV"
+# 1. Check partition layout (2 or 3 partitions depending on bootloader)
+# - Composefs systemd-boot: 2 partitions (EFI + root)
+# - GRUB: 3 partitions (EFI + /boot + root)
+PART_COUNT=$(sudo lsblk "$LOOPDEV" -o NAME -nr | grep -c "^${LOOPDEV##*/}p" || true)
+if [ "$PART_COUNT" -lt 2 ] || [ "$PART_COUNT" -gt 3 ]; then
+  echo "FAIL: expected 2-3 partitions, got $PART_COUNT"
+  sudo lsblk -o NAME,SIZE,FSTYPE,LABEL "$LOOPDEV"
   exit 1
 fi
 
-echo "✅ Partition layout correct (3 partitions)"
+echo "✅ Partition layout correct ($PART_COUNT partitions)"
 
 # 2. Mount and verify partitions
-BOOT_PART="${LOOPDEV}p2"
-VERIFY_DIR=$(mktemp -d)
-$SUDO_BIN "$MOUNT_BIN" "$BOOT_PART" "$VERIFY_DIR"
+# For 2-partition layout (systemd-boot composefs):
+#   p1 = EFI, p2 = root
+# For 3-partition layout (GRUB):
+#   p1 = EFI, p2 = /boot, p3 = root
+if [ "$PART_COUNT" -eq 2 ]; then
+  BOOT_PART="${LOOPDEV}p1"  # This is just EFI for 2-partition
+  ROOT_PART="${LOOPDEV}p2"
+else
+  BOOT_PART="${LOOPDEV}p2"
+  ROOT_PART="${LOOPDEV}p3"
+fi
 
-ROOT_PART="${LOOPDEV}p3"
+VERIFY_DIR=$(mktemp -d)
+sudo "$MOUNT_BIN" "$BOOT_PART" "$VERIFY_DIR"
+
 ROOT_DIR=$(mktemp -d)
-$SUDO_BIN "$MOUNT_BIN" "$ROOT_PART" "$ROOT_DIR"
+sudo "$MOUNT_BIN" "$ROOT_PART" "$ROOT_DIR"
 
 # Debug: show root structure
 echo "--- Root directory structure ---"

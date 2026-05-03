@@ -472,10 +472,10 @@ func main() {
 		}
 		cleanup.AddMount(scratchDir)
 	}
-	if err := disk.BindMount(scratchDir, "/var/tmp"); err != nil {
-		fatal("bind-mounting scratch dir at /var/tmp: %v", err)
-	}
-	cleanup.AddMount("/var/tmp")
+	// Note: bootc container gets this directory mounted at /var/tmp via -v flag in podman call.
+	// The container runs in its own mount namespace, so the host-level /var/tmp mount is not
+	// necessary. We skip it here to avoid conflicts when /var/tmp is already a separate
+	// filesystem on the host.
 	defer os.RemoveAll(scratchDir)
 
 	// ── Step 6: Install OS ────────────────────────────────────────────────────
@@ -523,6 +523,11 @@ func main() {
 		}
 		if err := disk.SetPartitionType(r.Disk, 2, disk.GPTPartTypeLinuxRootX86_64); err != nil {
 			fatal("retagging root partition: %v", err)
+		}
+		// Remount the partition after retagging so finalization can proceed
+		rootPart := disk.PartName(r.Disk, 2)
+		if err := disk.Mount(rootPart, activeTargetMount, ""); err != nil {
+			fatal("remounting root partition after retagging: %v", err)
 		}
 	}
 
