@@ -55,13 +55,13 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Install just
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin
-          just --version
-
       - name: Setup CI environment
-        run: just ci-install-tools
+        run: |
+          # Install just via apt (required for subsequent just commands)
+          sudo apt-get update -qq
+          sudo apt-get install -y just
+          # Now run the full CI setup
+          just ci-install-tools
 
       - name: Login to GHCR
         run: |
