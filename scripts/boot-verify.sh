@@ -53,17 +53,15 @@ SSH_BIN=$(find_ssh) || {
 OVMF_CODE="${OVMF_PATH%:*}"
 OVMF_VARS="${OVMF_PATH#*:}"
 
-# Patch boot configuration for systemd-boot images
-# These images use systemd-boot which relies on BOOTX64.EFI fallback
-# OVMF will try network boot first (with timeout), then fall back to disk
-# No patching needed - just let it timeout and boot from disk
+# For systemd-boot images, UEFI variables need to be properly initialized
+# Use a writable copy of OVMF_VARS.fd instead of the read-only template
+# This allows OVMF firmware to set up boot entries correctly
 if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-composefs" ] || \
    [ "$IMAGE_NAME" = "arch-bootc" ] || [ "$IMAGE_NAME" = "arch-bootc-composefs" ] || \
    [ "$IMAGE_NAME" = "fedora-bootc" ] || [ "$IMAGE_NAME" = "fedora-bootc-composefs" ]; then
   
   echo "=== Systemd-boot image detected (debian-bootc/arch-bootc) ==="
-  echo "Note: OVMF will try network boot first with timeout, then fall back to disk"
-  echo "      This is expected and normal behavior"
+  echo "Note: Using persistent UEFI variables for proper boot entry initialization"
   echo ""
 fi
 
@@ -79,14 +77,23 @@ echo ""
 # Start QEMU with SSH port forwarding
 echo "Starting QEMU..."
 SERIAL_LOG="/tmp/bootcrew-serial-$$.log"
+
+# Use a writable copy of OVMF_VARS.fd so UEFI variables can be initialized
+OVMF_VARS_TEMP="/tmp/ovmf-vars-$$.fd"
+cp "$OVMF_VARS" "$OVMF_VARS_TEMP"
+
+# Pre-create serial log with world-readable permissions
+touch "$SERIAL_LOG"
+chmod 666 "$SERIAL_LOG"
+
 sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -enable-kvm \
   -cpu host \
   -m "$VM_MEMORY" \
   -drive file="$LOOPDEV",format=raw,if=virtio \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-  -drive if=pflash,format=raw,snapshot=on,file="/usr/share/edk2/ovmf/OVMF.qemuvars.fd" \
-  -boot order=dc \
+  -drive if=pflash,format=raw,file="$OVMF_VARS_TEMP" \
+  -boot order=d \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22 \
   -device virtio-net-pci,netdev=net0 \
   -chardev file,path="$SERIAL_LOG",id=char0 \
@@ -97,6 +104,9 @@ sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
 QEMU_PID=$!
 echo "QEMU PID: $QEMU_PID"
 echo ""
+
+# Trap to clean up temp files on exit
+trap "rm -f '$OVMF_VARS_TEMP' '$SERIAL_LOG'" EXIT
 
 # Wait for SSH to be ready (using password auth)
 # For systemd-boot images, this may take longer due to network boot timeout
