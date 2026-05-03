@@ -28,7 +28,7 @@ jobs:
           - name: arch-bootc
             base_image: ghcr.io/bootcrew/arch-bootc:latest
           - name: ubuntu-bootc
-            base_image: ghcr.io/bootcrew/ubuntu-bootc:latest
+            base_image: ghcr.io/tuna-os/ubuntu-26.04-bootc:latest
           - name: centos-bootc
             base_image: quay.io/centos-bootc/centos-bootc:c10s
           - name: debian-bootc

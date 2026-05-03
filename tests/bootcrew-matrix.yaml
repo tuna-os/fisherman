@@ -44,13 +44,13 @@ images:
     vm_boot: false
 
   - name: ubuntu-bootc
-    image: ghcr.io/bootcrew/ubuntu-bootc:latest
+    image: ghcr.io/tuna-os/ubuntu-26.04-bootc:latest
     filesystem: xfs
     composefs_backend: true
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
-    vm_boot: true  # composefs backend verification
+    vm_boot: true  # composefs backend verification (tuna-os maintained image)
 
   # gnomeos-bootc disabled: consistently fails with missing blob in containers-storage
   # (sha256:6d2d10...) — likely a broken layer in the ghcr.io/bootcrew/gnomeos-bootc image.
