@@ -38,17 +38,24 @@ RUN ssh-keygen -A 2>/dev/null || (mkdir -p /etc/ssh && \
     ssh-keygen -t dsa -N "" -f /etc/ssh/ssh_host_dsa_key && \
     ssh-keygen -t ecdsa -N "" -f /etc/ssh/ssh_host_ecdsa_key)
 
-# For composefs-based systems, ensure sshd.socket and sshd.service are enabled
-# This is more reliable than just "systemctl enable" for non-ostree backends
-RUN mkdir -p /etc/systemd/system/sockets.target.wants && \
-    mkdir -p /etc/systemd/system/multi-user.target.wants && \
-    if [ -f /usr/lib/systemd/system/sshd.service ]; then \
+# Enable SSH service using systemctl enable (creates symlinks for bootc OSTree)
+# Also create explicit targets for composefs to ensure SSH starts
+RUN if command -v systemctl >/dev/null 2>&1; then \
+      if [ -f /usr/lib/systemd/system/sshd.service ]; then \
+        systemctl enable sshd.service || true; \
+      elif [ -f /usr/lib/systemd/system/ssh.service ]; then \
+        systemctl enable ssh.service || true; \
+      fi; \
+    fi
+
+# For composefs: also ensure service files are linked in /etc/systemd/system/
+# as a fallback in case the image's enable didn't create them
+RUN mkdir -p /etc/systemd/system/multi-user.target.wants && \
+    if [ -f /usr/lib/systemd/system/sshd.service ] && [ ! -e /etc/systemd/system/multi-user.target.wants/sshd.service ]; then \
       ln -sf /usr/lib/systemd/system/sshd.service /etc/systemd/system/multi-user.target.wants/sshd.service || true; \
-    elif [ -f /usr/lib/systemd/system/ssh.service ]; then \
-      ln -sf /usr/lib/systemd/system/ssh.service /etc/systemd/system/multi-user.target.wants/ssh.service || true; \
     fi && \
-    if [ -f /usr/lib/systemd/system/sshd.socket ]; then \
-      ln -sf /usr/lib/systemd/system/sshd.socket /etc/systemd/system/sockets.target.wants/sshd.socket || true; \
+    if [ -f /usr/lib/systemd/system/ssh.service ] && [ ! -e /etc/systemd/system/multi-user.target.wants/ssh.service ]; then \
+      ln -sf /usr/lib/systemd/system/ssh.service /etc/systemd/system/multi-user.target.wants/ssh.service || true; \
     fi
 
 # Ensure SSH is installed

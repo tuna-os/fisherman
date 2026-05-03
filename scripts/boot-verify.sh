@@ -168,6 +168,17 @@ done
 
 if [ $SSH_READY -eq 0 ]; then
   echo "❌ SSH connection failed (timeout)"
+  echo ""
+  echo "=== DEBUG: Checking systemd state on running VM ==="
+  # Try to connect anyway and check what's running
+  sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      -o ConnectTimeout=5 -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" \
+      "systemctl status ssh || systemctl status sshd || echo 'SSH service not found'" 2>&1 || echo "Cannot connect for debugging"
+  echo ""
+  sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+      -o ConnectTimeout=5 -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" \
+      "ls -la /etc/systemd/system/multi-user.target.wants/ 2>/dev/null || echo 'directory not found'" 2>&1 || echo "Cannot connect for debugging"
+  
   kill $QEMU_PID 2>/dev/null || true
   exit 1
 fi
