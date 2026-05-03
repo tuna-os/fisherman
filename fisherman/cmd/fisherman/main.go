@@ -596,6 +596,21 @@ func main() {
 		}
 	}
 
+	// Install GRUB for systemd-boot composefs systems to create proper UEFI boot
+	// entries. OVMF firmware ignores the systemd-boot fallback loader (/EFI/BOOT/
+	// BOOTX64.EFI) and tries network boot instead when no explicit UEFI boot
+	// entries exist. GRUB creates these entries via efibootmgr during installation.
+	// Must be done before FinalizeFilesystem() so the target is still writable.
+	if isSystemdBoot && r.ComposeFsBackend {
+		progress.Info("Installing GRUB for UEFI boot entry creation")
+		n, err := post.InstallGrubForSystemdBoot(activeTargetMount, activeEfiPart, r.Disk, isSystemdBoot, r.ComposeFsBackend)
+		if err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not install GRUB for boot entries: %v", err))
+		} else if n > 0 {
+			progress.Info(fmt.Sprintf("Created %d UEFI boot entr%s for GRUB", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+		}
+	}
+
 	// ── Step 9: Finalize ─────────────────────────────────────────────────────
 	// bootc's --skip-finalize kept the target writable for post-install writes.
 	// Now replicate what bootc's finalize_filesystem() does internally:
