@@ -508,6 +508,13 @@ func bareImageRef(image string) string {
 // layout. The composefs-backend requires raw OCI blobs (compressed layer
 // tarballs) that podman pull does not preserve; skopeo reconstructs them from
 // the tar-split.gz metadata stored alongside the overlay diffs.
+//
+// If image already has an "oci:" transport prefix (e.g. when the ISO embeds
+// the payload as an OCI layout at /usr/lib/bootc/storage), the copy is done
+// directly from the OCI layout, bypassing containers-storage entirely.
+// This avoids the invalid-reference error that arises when bareImageRef()
+// strips the "oci:" prefix and the remainder is not a valid containers-storage
+// image name.
 func skopeoExportOCI(image, destDir string) error {
 	progress.Substep("Exporting image to OCI layout for composefs install")
 	// Remove stale export if present.
@@ -515,9 +522,20 @@ func skopeoExportOCI(image, destDir string) error {
 		return fmt.Errorf("removing old OCI cache: %w", err)
 	}
 
+	// Choose the source transport.
+	// If the image ref already uses the oci: transport (e.g. an OCI layout
+	// embedded in the live ISO at /usr/lib/bootc/storage), copy from it
+	// directly.  Otherwise, pull from containers-storage as before.
+	var src string
+	if strings.HasPrefix(image, "oci:") {
+		src = image // already oci:/path — copy directly, no intermediate pull
+	} else {
+		src = "containers-storage:" + bareImageRef(image)
+	}
+
 	skopeoArgs := []string{
 		"copy",
-		"containers-storage:" + bareImageRef(image),
+		src,
 		"oci:" + destDir,
 	}
 	name, args := runner.HostArgs("skopeo", skopeoArgs)
