@@ -1,6 +1,22 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
+# Install GRUB/efibootmgr for UEFI boot entry creation (fixes systemd-boot composefs boot issue)
+RUN if command -v dnf >/dev/null 2>&1; then \
+      dnf install -y grub2-efi-x64 efibootmgr || dnf install -y grub2-efi efibootmgr; \
+    elif command -v apt-get >/dev/null 2>&1; then \
+      mkdir -p /var/lib/dpkg/status.d /var/lib/apt/lists/partial /var/cache/apt/archives/partial /var/log/apt 2>/dev/null || true; \
+      touch /var/lib/dpkg/status /var/lib/apt/extended_states 2>/dev/null || true; \
+      apt-get update 2>/dev/null || true; \
+      apt-get install -y grub-efi-amd64 efibootmgr; \
+    elif command -v pacman >/dev/null 2>&1; then \
+      pacman -Sy --noconfirm grub efibootmgr; \
+    elif command -v zypper >/dev/null 2>&1; then \
+      zypper install -y grub2-x86_64-efi efibootmgr; \
+    else \
+      echo "WARNING: Unsupported distribution, GRUB installation may have failed"; \
+    fi
+
 # Install and enable SSH for all supported distributions
 RUN if command -v dnf >/dev/null 2>&1; then \
       # RHEL/CentOS/Fedora

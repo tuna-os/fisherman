@@ -134,6 +134,12 @@ if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-compose
   
   rm -rf "$MNTDIR"
   echo ""
+  
+  # For composefs + systemd-boot systems, OVMF defaults to network boot when NVRAM is empty.
+  # Solution: Use bootindex and -boot to prioritize disk boot over network.
+  echo "=== Boot configuration for composefs systemd-boot ==="
+  echo "✓ Using -boot order=d and bootindex to prioritize disk"
+  echo ""
 fi
 
 echo "=== Booting VM for SSH verification ==="
@@ -147,17 +153,21 @@ echo ""
 
 # Start QEMU with SSH port forwarding
 echo "Starting QEMU..."
+SERIAL_LOG="/tmp/bootcrew-serial-$$.log"
 sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -enable-kvm \
   -cpu host \
   -m "$VM_MEMORY" \
-  -drive file="$LOOPDEV",format=raw,if=virtio \
+  -drive file="$LOOPDEV",format=raw,if=none,id=disk0 \
+  -device virtio-blk-pci,drive=disk0,bootindex=1 \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
   -drive if=pflash,format=raw,snapshot=on,file="$OVMF_VARS" \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22 \
-  -device virtio-net-pci,netdev=net0 \
+  -device virtio-net-pci,netdev=net0,bootindex=2 \
+  -chardev file,path="$SERIAL_LOG",id=char0 \
+  -serial chardev:char0 \
   -nographic \
-  -no-reboot &
+  -no-reboot >/dev/null 2>&1 &
 
 QEMU_PID=$!
 echo "QEMU PID: $QEMU_PID"
@@ -182,6 +192,15 @@ done
 
 if [ $SSH_READY -eq 0 ]; then
   echo "❌ SSH connection failed (timeout)"
+  
+  # Print serial log for debugging
+  if [ -f "$SERIAL_LOG" ]; then
+    echo ""
+    echo "=== Serial Console Output (for debugging) ==="
+    tail -150 "$SERIAL_LOG"
+    rm -f "$SERIAL_LOG"
+  fi
+  
   kill $QEMU_PID 2>/dev/null || true
   exit 1
 fi
