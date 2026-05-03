@@ -79,14 +79,28 @@ if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-compose
         for conf in "$MNTDIR"/loader/entries/*.conf; do
           [ -f "$conf" ] || continue
           CONF_COUNT=$((CONF_COUNT + 1))
+          NEEDS_ROOT=0
+          NEEDS_SSH=0
+          
+          # Check if needs root= parameter
           if ! sudo grep -q "root=" "$conf"; then
+            NEEDS_ROOT=1
+          fi
+          
+          # Check if needs systemd.wants=ssh.service for composefs systems
+          if ! sudo grep -q "systemd.wants=ssh" "$conf"; then
+            NEEDS_SSH=1
+          fi
+          
+          if [ "$NEEDS_ROOT" -eq 1 ] || [ "$NEEDS_SSH" -eq 1 ]; then
             echo "    Patching $(basename "$conf")..."
-            sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
+            [ "$NEEDS_ROOT" -eq 1 ] && sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
+            [ "$NEEDS_SSH" -eq 1 ] && sudo sed -i 's/^options /options systemd.wants=ssh.service /' "$conf"
             PATCHED=1
           fi
         done
         [ "$CONF_COUNT" -eq 0 ] && echo "    ⚠️  No .conf files found"
-        [ "$CONF_COUNT" -gt 0 ] && [ "$PATCHED" -eq 0 ] && echo "    ✓ All entries already have root= parameter"
+        [ "$CONF_COUNT" -gt 0 ] && [ "$PATCHED" -eq 0 ] && echo "    ✓ All entries already have root= and systemd parameters"
       fi
       
       # Check for GRUB format (/boot/grub2 or /boot/grub)
@@ -168,17 +182,6 @@ done
 
 if [ $SSH_READY -eq 0 ]; then
   echo "❌ SSH connection failed (timeout)"
-  echo ""
-  echo "=== DEBUG: Checking systemd state on running VM ==="
-  # Try to connect anyway and check what's running
-  sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      -o ConnectTimeout=5 -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" \
-      "systemctl status ssh || systemctl status sshd || echo 'SSH service not found'" 2>&1 || echo "Cannot connect for debugging"
-  echo ""
-  sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-      -o ConnectTimeout=5 -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" \
-      "ls -la /etc/systemd/system/multi-user.target.wants/ 2>/dev/null || echo 'directory not found'" 2>&1 || echo "Cannot connect for debugging"
-  
   kill $QEMU_PID 2>/dev/null || true
   exit 1
 fi
