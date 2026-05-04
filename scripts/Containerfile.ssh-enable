@@ -74,6 +74,16 @@ RUN mkdir -p /etc/systemd/system/multi-user.target.wants && \
       ln -sf /usr/lib/systemd/system/ssh.service /etc/systemd/system/multi-user.target.wants/ssh.service || true; \
     fi
 
+# Minimal bootc images like Debian ship systemd-networkd but no active network
+# manager, so SSH comes up without any guest NIC being configured. Provide a
+# basic DHCP config and enable networkd when NetworkManager is absent.
+RUN if [ ! -f /usr/lib/systemd/system/NetworkManager.service ] && [ -f /usr/lib/systemd/system/systemd-networkd.service ]; then \
+      mkdir -p /etc/systemd/network /etc/systemd/system/multi-user.target.wants && \
+      printf '[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\nLinkLocalAddressing=yes\nIPv6AcceptRA=yes\n' > /etc/systemd/network/20-wired.network && \
+      ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/multi-user.target.wants/systemd-networkd.service && \
+      ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/dbus-org.freedesktop.network1.service; \
+    fi
+
 # Ensure SSH is installed
 RUN test -f /usr/sbin/sshd || test -f /usr/bin/sshd || \
     (echo "ERROR: SSH installation failed" && exit 1)
