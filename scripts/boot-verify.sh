@@ -143,7 +143,7 @@ echo "QEMU PID: $QEMU_PID"
 echo ""
 
 # Trap to clean up temp files on exit
-trap "rm -f '$OVMF_VARS_TEMP' '$SERIAL_LOG'" EXIT
+trap "sudo rm -f '$OVMF_VARS_TEMP' '$SERIAL_LOG' 2>/dev/null; rm -f '$OVMF_VARS_TEMP' '$SERIAL_LOG' 2>/dev/null" EXIT
 
 # Wait for SSH to be ready (using password auth)
 # For systemd-boot images, this may take longer due to network boot timeout
@@ -170,14 +170,14 @@ if [ $SSH_READY -eq 0 ]; then
   if [ -f "$SERIAL_LOG" ]; then
     echo ""
     echo "=== Serial Console Output (for debugging) ==="
-    tail -150 "$SERIAL_LOG"
+    sudo tail -150 "$SERIAL_LOG" || tail -150 "$SERIAL_LOG" || true
     
-    # Save to persistent location for analysis
+    # Save to persistent location for analysis (use sudo for root-owned files)
     PERSISTENT_LOG="/tmp/bootcrew-serial-last.log"
-    cp "$SERIAL_LOG" "$PERSISTENT_LOG"
+    sudo cp "$SERIAL_LOG" "$PERSISTENT_LOG" 2>/dev/null || cp "$SERIAL_LOG" "$PERSISTENT_LOG" 2>/dev/null || true
     echo "(Full log saved to: $PERSISTENT_LOG)"
     
-    rm -f "$SERIAL_LOG"
+    sudo rm -f "$SERIAL_LOG" 2>/dev/null || rm -f "$SERIAL_LOG" 2>/dev/null || true
   fi
   
   kill $QEMU_PID 2>/dev/null || true
