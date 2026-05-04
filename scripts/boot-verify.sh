@@ -120,7 +120,13 @@ fi
 
 # Pre-create serial log with proper permissions for sudo-run QEMU to write
 # Must be created as root to avoid permission issues (SELinux or kernel audit)
-sudo sh -c "rm -f '$SERIAL_LOG' 2>/dev/null; touch '$SERIAL_LOG' && chmod 666 '$SERIAL_LOG'" || true
+echo "DEBUG: SERIAL_LOG=$SERIAL_LOG"
+if sudo sh -c "rm -f \"$SERIAL_LOG\" 2>/dev/null; touch \"$SERIAL_LOG\" && chmod 666 \"$SERIAL_LOG\""; then
+  echo "DEBUG: Serial log created successfully"
+  ls -la "$SERIAL_LOG"
+else
+  echo "DEBUG: Failed to create serial log"
+fi
 
 sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -machine q35 \
@@ -133,17 +139,16 @@ sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -boot order=d \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22 \
   -device virtio-net-pci,netdev=net0 \
-  -chardev file,path="$SERIAL_LOG",id=char0 \
-  -serial chardev:char0 \
+  -serial mon:stdio \
   -nographic \
-  -no-reboot >/dev/null 2>&1 &
+  -no-reboot >"$SERIAL_LOG" 2>&1 &
 
 QEMU_PID=$!
 echo "QEMU PID: $QEMU_PID"
 echo ""
 
 # Trap to clean up temp files on exit
-trap "sudo rm -f '$OVMF_VARS_TEMP' '$SERIAL_LOG' 2>/dev/null; rm -f '$OVMF_VARS_TEMP' '$SERIAL_LOG' 2>/dev/null" EXIT
+trap "sudo rm -f '$OVMF_VARS_TEMP' '${SERIAL_LOG}.sock' 2>/dev/null; rm -f '$OVMF_VARS_TEMP' '${SERIAL_LOG}.sock' 2>/dev/null" EXIT
 
 # Wait for SSH to be ready (using password auth)
 # For systemd-boot images, this may take longer due to network boot timeout
@@ -168,6 +173,9 @@ if [ $SSH_READY -eq 0 ]; then
   
   # Print and save serial log for debugging
   if [ -f "$SERIAL_LOG" ]; then
+    echo ""
+    echo "DEBUG: Serial log file size:"
+    sudo wc "$SERIAL_LOG" || wc "$SERIAL_LOG" || true
     echo ""
     echo "=== Serial Console Output (for debugging) ==="
     sudo tail -150 "$SERIAL_LOG" || tail -150 "$SERIAL_LOG" || true
