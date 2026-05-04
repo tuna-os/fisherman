@@ -87,6 +87,7 @@ touch "$SERIAL_LOG"
 chmod 666 "$SERIAL_LOG"
 
 sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
+  -machine q35 \
   -enable-kvm \
   -cpu host \
   -m "$VM_MEMORY" \
