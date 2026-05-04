@@ -118,9 +118,8 @@ if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-compose
   echo ""
 fi
 
-# Pre-create serial log with world-readable permissions
-touch "$SERIAL_LOG"
-chmod 666 "$SERIAL_LOG"
+# Pre-create serial log with proper permissions for sudo-run QEMU to write
+sudo sh -c "touch '$SERIAL_LOG' && chmod 666 '$SERIAL_LOG'"
 
 sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -machine q35 \
