@@ -516,6 +516,22 @@ func main() {
 	// Linux root GUID so the installed system can find /sysroot on first boot.
 	if !isManual && isSystemdBoot && !hasEncryption && r.ComposeFsBackend {
 		progress.Info("Retagging root partition for systemd GPT auto-discovery")
+
+		// Ensure BOOTX64.EFI is on the ESP before we touch the mount stack.
+		// Newer bootctl (e.g. arch-bootc systemd ≥ v255) enables --graceful when
+		// running in a container and silently skips writing to the ESP. Copying
+		// directly from the ostree deployment is a reliable fallback and a no-op
+		// when bootctl ran correctly (EFI/BOOT/BOOTX64.EFI already present).
+		if err := install.InstallSystemdBoot(activeTargetMount); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not ensure systemd-boot EFI binary: %v", err))
+		}
+
+		// Unmount the EFI partition explicitly so the FAT32 state is flushed to
+		// the page cache before the root lazy-unmount below orphans the submount.
+		if err := disk.UnmountPartition(r.Disk, 1); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not unmount EFI partition before retag: %v\n", err)
+		}
+
 		// Release kernel and userspace references to the root partition before
 		// modifying its GPT type. bootc install may have left active references.
 		if err := disk.UnmountPartition(r.Disk, 2); err != nil {
@@ -524,10 +540,15 @@ func main() {
 		if err := disk.SetPartitionType(r.Disk, 2, disk.GPTPartTypeLinuxRootX86_64); err != nil {
 			fatal("retagging root partition: %v", err)
 		}
-		// Remount the partition after retagging so finalization can proceed
+		// Remount root so finalization and post-install writes can proceed.
 		rootPart := disk.PartName(r.Disk, 2)
 		if err := disk.Mount(rootPart, activeTargetMount, ""); err != nil {
 			fatal("remounting root partition after retagging: %v", err)
+		}
+		// Remount EFI so that Plymouth/LUKS arg writes land on the real ESP
+		// instead of the empty /boot/efi directory in the XFS root.
+		if err := disk.MountEFI(activeTargetMount, activeEfiPart); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not remount EFI partition after retag: %v\n", err)
 		}
 	}
 
@@ -598,21 +619,6 @@ func main() {
 			progress.Info(fmt.Sprintf("Warning: could not inject LUKS boot args: %v", err))
 		} else if n > 0 {
 			progress.Info(fmt.Sprintf("Injected rd.luks.name into %d boot entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
-		}
-	}
-
-	// Install GRUB for systemd-boot composefs systems to create proper UEFI boot
-	// entries. OVMF firmware ignores the systemd-boot fallback loader (/EFI/BOOT/
-	// BOOTX64.EFI) and tries network boot instead when no explicit UEFI boot
-	// entries exist. GRUB creates these entries via efibootmgr during installation.
-	// Must be done before FinalizeFilesystem() so the target is still writable.
-	if isSystemdBoot && r.ComposeFsBackend {
-		progress.Info("Installing GRUB for UEFI boot entry creation")
-		n, err := post.InstallGrubForSystemdBoot(activeTargetMount, activeEfiPart, r.Disk, isSystemdBoot, r.ComposeFsBackend)
-		if err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not install GRUB for boot entries: %v", err))
-		} else if n > 0 {
-			progress.Info(fmt.Sprintf("Created %d UEFI boot entr%s for GRUB", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
 		}
 	}
 

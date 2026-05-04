@@ -58,6 +58,24 @@ else
   ROOT_PART="${LOOPDEV}p3"
 fi
 
+# Always verify the EFI partition (p1) for BOOTX64.EFI, regardless of layout.
+EFI_PART="${LOOPDEV}p1"
+EFI_DIR=$(mktemp -d)
+sudo "$MOUNT_BIN" "$EFI_PART" "$EFI_DIR"
+
+if [ ! -f "$EFI_DIR/EFI/BOOT/BOOTX64.EFI" ]; then
+  echo "FAIL: EFI/BOOT/BOOTX64.EFI not found on EFI partition $EFI_PART"
+  echo "--- EFI partition contents ---"
+  find "$EFI_DIR" -type f 2>/dev/null || true
+  $SUDO_BIN umount "$EFI_DIR" || true
+  rmdir "$EFI_DIR"
+  exit 1
+fi
+echo "✅ EFI/BOOT/BOOTX64.EFI present on EFI partition"
+
+$SUDO_BIN umount "$EFI_DIR"
+rmdir "$EFI_DIR"
+
 VERIFY_DIR=$(mktemp -d)
 sudo "$MOUNT_BIN" "$BOOT_PART" "$VERIFY_DIR"
 
