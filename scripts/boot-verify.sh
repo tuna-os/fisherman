@@ -74,6 +74,30 @@ echo "OVMF_CODE: $OVMF_CODE"
 echo "OVMF_VARS: $OVMF_VARS"
 echo ""
 
+# Helper function to add UEFI boot entry for systemd-boot images
+# This is a workaround for systemd-boot not creating UEFI entries via efibootmgr
+add_uefi_boot_entry_workaround() {
+  local ovmf_vars="$1"
+  
+  # Check if efivar is available to manipulate EFI variables
+  if ! command -v efibootmgr &>/dev/null; then
+    echo "⚠️  efibootmgr not available - UEFI boot entry workaround skipped"
+    return 1
+  fi
+  
+  # For systemd-boot images, we would need to pre-create Boot0000 entry
+  # This is complex as it requires understanding UEFI variable format
+  # A proper implementation would require:
+  # 1. Parsing UEFI boot entry format (GUID, device path, attributes)
+  # 2. Writing to the OVMF_VARS.fd file's EFI variable storage
+  # 3. Ensuring proper CRC32 checksums
+  #
+  # For now, this is documented as a possible workaround
+  # Real fix: upstream images should pre-install GRUB for boot entry creation
+  
+  return 1
+}
+
 # Start QEMU with SSH port forwarding
 echo "Starting QEMU..."
 SERIAL_LOG="/tmp/bootcrew-serial-$$.log"
@@ -81,6 +105,18 @@ SERIAL_LOG="/tmp/bootcrew-serial-$$.log"
 # Use a writable copy of OVMF_VARS.fd so UEFI variables can be initialized
 OVMF_VARS_TEMP="/tmp/ovmf-vars-$$.fd"
 cp "$OVMF_VARS" "$OVMF_VARS_TEMP"
+
+# Attempt UEFI boot entry workaround for systemd-boot images
+if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-composefs" ] || \
+   [ "$IMAGE_NAME" = "arch-bootc" ] || [ "$IMAGE_NAME" = "arch-bootc-composefs" ]; then
+  echo "=== Attempting OVMF_VARS boot entry workaround for systemd-boot ==="
+  if add_uefi_boot_entry_workaround "$OVMF_VARS_TEMP"; then
+    echo "✓ Added UEFI boot entry to OVMF_VARS"
+  else
+    echo "⚠️  Could not add UEFI boot entry - will rely on BOOTX64.EFI fallback"
+  fi
+  echo ""
+fi
 
 # Pre-create serial log with world-readable permissions
 touch "$SERIAL_LOG"
@@ -130,11 +166,17 @@ done
 if [ $SSH_READY -eq 0 ]; then
   echo "❌ SSH connection failed (timeout)"
   
-  # Print serial log for debugging
+  # Print and save serial log for debugging
   if [ -f "$SERIAL_LOG" ]; then
     echo ""
     echo "=== Serial Console Output (for debugging) ==="
     tail -150 "$SERIAL_LOG"
+    
+    # Save to persistent location for analysis
+    PERSISTENT_LOG="/tmp/bootcrew-serial-last.log"
+    cp "$SERIAL_LOG" "$PERSISTENT_LOG"
+    echo "(Full log saved to: $PERSISTENT_LOG)"
+    
     rm -f "$SERIAL_LOG"
   fi
   
