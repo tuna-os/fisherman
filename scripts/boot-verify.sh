@@ -120,13 +120,7 @@ fi
 
 # Pre-create serial log with proper permissions for sudo-run QEMU to write
 # Must be created as root to avoid permission issues (SELinux or kernel audit)
-echo "DEBUG: SERIAL_LOG=$SERIAL_LOG"
-if sudo sh -c "rm -f \"$SERIAL_LOG\" 2>/dev/null; touch \"$SERIAL_LOG\" && chmod 666 \"$SERIAL_LOG\""; then
-  echo "DEBUG: Serial log created successfully"
-  ls -la "$SERIAL_LOG"
-else
-  echo "DEBUG: Failed to create serial log"
-fi
+sudo sh -c "rm -f \"$SERIAL_LOG\" 2>/dev/null; touch \"$SERIAL_LOG\" && chmod 666 \"$SERIAL_LOG\"" || true
 
 sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -machine q35 \
@@ -174,11 +168,8 @@ if [ $SSH_READY -eq 0 ]; then
   # Print and save serial log for debugging
   if [ -f "$SERIAL_LOG" ]; then
     echo ""
-    echo "DEBUG: Serial log file size:"
-    sudo wc "$SERIAL_LOG" || wc "$SERIAL_LOG" || true
-    echo ""
     echo "=== Serial Console Output (for debugging) ==="
-    sudo tail -150 "$SERIAL_LOG" || tail -150 "$SERIAL_LOG" || true
+    sudo cat "$SERIAL_LOG" || cat "$SERIAL_LOG" || true
     
     # Save to persistent location for analysis (use sudo for root-owned files)
     PERSISTENT_LOG="/tmp/bootcrew-serial-last.log"
