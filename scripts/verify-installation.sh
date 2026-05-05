@@ -33,6 +33,10 @@ SUDO_BIN=$(find_sudo) || {
 
 echo "=== Verifying installation ==="
 
+# Show partition table with type GUIDs (useful for debugging UEFI boot issues)
+echo "--- Partition table ---"
+sudo sfdisk --dump "$LOOPDEV" 2>/dev/null || sudo fdisk -l "$LOOPDEV" || true
+
 # 1. Check partition layout (2 or 3 partitions depending on bootloader)
 # - Composefs systemd-boot: 2 partitions (EFI + root)
 # - GRUB: 3 partitions (EFI + /boot + root)
@@ -72,6 +76,22 @@ if [ ! -f "$EFI_DIR/EFI/BOOT/BOOTX64.EFI" ]; then
   exit 1
 fi
 echo "✅ EFI/BOOT/BOOTX64.EFI present on EFI partition"
+
+# Show all EFI partition files so we can verify boot entries are present
+echo "--- EFI partition contents ---"
+find "$EFI_DIR" -type f | sort | while read -r f; do
+  size=$(stat -c%s "$f" 2>/dev/null || echo "?")
+  echo "  ${f#$EFI_DIR/} (${size} bytes)"
+done
+
+# Check for boot entries (UKIs in EFI/Linux/ or loader entries)
+BOOT_ENTRIES=$(find "$EFI_DIR/EFI/Linux" "$EFI_DIR/loader/entries" -name "*.efi" -o -name "*.conf" 2>/dev/null | wc -l)
+if [ "$BOOT_ENTRIES" -eq 0 ]; then
+  echo "⚠️  WARNING: No boot entries found (no UKIs in EFI/Linux/ and no loader/entries/*.conf)"
+  echo "   systemd-boot will have nothing to boot from"
+else
+  echo "✅ Found $BOOT_ENTRIES boot entry/entries"
+fi
 
 $SUDO_BIN umount "$EFI_DIR"
 rmdir "$EFI_DIR"
