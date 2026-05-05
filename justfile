@@ -279,14 +279,19 @@ bootcrew-ci-test IMAGE_JSON:
   just setup-loop "$DISK_FILE"
   LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt)
   
-  # Determine bootloader based on image name.
-  # debian-bootc and arch-bootc* use systemd-boot; everything else uses GRUB.
+  # Determine bootloader from matrix entry (preferred) or fall back to name-based detection.
+  BOOTLOADER_TYPE=$(echo "$IMAGE_JSON" | jq -r '.bootloader // ""')
+  if [ -z "$BOOTLOADER_TYPE" ]; then
+    case "$IMAGE_NAME" in
+      debian-bootc*|arch-bootc*)
+        BOOTLOADER_TYPE="systemd"
+        ;;
+    esac
+  fi
   BOOTLOADER=""
-  case "$IMAGE_NAME" in
-    debian-bootc*|arch-bootc*)
-      BOOTLOADER='"bootloader": "systemd",'
-      ;;
-  esac
+  if [ -n "$BOOTLOADER_TYPE" ]; then
+    BOOTLOADER="\"bootloader\": \"$BOOTLOADER_TYPE\","
+  fi
   
   # Build encryption block.
   if [ "$LUKS" = "true" ]; then

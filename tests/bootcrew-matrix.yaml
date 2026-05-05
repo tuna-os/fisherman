@@ -10,6 +10,7 @@ images:
     image: ghcr.io/projectbluefin/dakota:latest
     filesystem: xfs
     composefs_backend: true
+    bootloader: systemd
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
@@ -75,6 +76,7 @@ images:
     image: ghcr.io/bootcrew/arch-bootc:latest
     filesystem: xfs
     composefs_backend: true
+    bootloader: systemd
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
@@ -86,6 +88,7 @@ images:
     ssh_image_name: dakota
     filesystem: xfs
     composefs_backend: true
+    bootloader: systemd
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
@@ -95,11 +98,12 @@ images:
     nightly: false
     vm_boot: true
 
-  - name: arch-bootc-luks-ext4
+  - name: arch-bootc-luks-xfs
     image: ghcr.io/bootcrew/arch-bootc:latest
     ssh_image_name: arch-bootc
-    filesystem: ext4
+    filesystem: xfs
     composefs_backend: true
+    bootloader: systemd
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
@@ -123,6 +127,7 @@ images:
     image: ghcr.io/bootcrew/debian-bootc:latest
     filesystem: xfs
     composefs_backend: true
+    bootloader: systemd
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
