@@ -127,10 +127,10 @@ sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -enable-kvm \
   -cpu host \
   -m "$VM_MEMORY" \
-  -drive file="$LOOPDEV",format=raw,if=virtio \
+  -drive file="$LOOPDEV",format=raw,if=none,id=disk0 \
+  -device virtio-blk-pci,drive=disk0,bootindex=1 \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
   -drive if=pflash,format=raw,file="$OVMF_VARS_TEMP" \
-  -boot order=d \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22 \
   -device virtio-net-pci,netdev=net0 \
   -serial mon:stdio \
