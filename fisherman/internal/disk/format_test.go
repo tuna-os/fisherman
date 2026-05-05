@@ -45,15 +45,16 @@ func TestFormatRoot(t *testing.T) {
 			wantArgs:   []string{"-f", "-L", "root", "/dev/sda3"},
 		},
 		{
+			name:       "ext4",
+			filesystem: "ext4",
+			wantName:   "mkfs.ext4",
+			wantArgs:   []string{"-F", "-L", "root", "-O", "verity", "/dev/sda3"},
+		},
+		{
 			name:       "btrfs",
 			filesystem: "btrfs",
 			wantName:   "mkfs.btrfs",
 			wantArgs:   []string{"-f", "-L", "root", "/dev/sda3"},
-		},
-		{
-			name:       "unsupported ext4",
-			filesystem: "ext4",
-			wantErr:    true,
 		},
 		{
 			name:       "unsupported empty",

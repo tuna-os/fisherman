@@ -117,9 +117,8 @@ func TestValidate(t *testing.T) {
 			wantErr: `filesystem must be`,
 		},
 		{
-			name:    "unsupported filesystem ext4",
-			r:       recipe.Recipe{Disk: diskPath, Filesystem: "ext4", Hostname: "h"},
-			wantErr: `filesystem must be`,
+			name: "ext4 filesystem valid",
+			r:    recipe.Recipe{Disk: diskPath, Filesystem: "ext4", Hostname: "h"},
 		},
 		{
 			name:    "btrfsSubvolumes without btrfs",

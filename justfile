@@ -321,38 +321,36 @@ bootcrew-ci-test IMAGE_JSON:
   # Verify installation (opens LUKS container if passphrase is set).
   just verify-installation "$LOOPDEV" "$COMPOSEFS" "$LUKS_PASSPHRASE"
   
-  # For LUKS installs: patch BLS entries to add console=ttyS0 so that
-  # luks-unlock.py can detect the Plymouth passphrase prompt via serial log.
-  if [ "$LUKS" = "true" ]; then
-    echo ""
-    echo "=== Patching BLS entries for LUKS serial console detection ==="
-    patch_bls_console() {
-      local part="$1" label="$2"
-      local MNT
-      MNT=$(mktemp -d)
-      sudo mount "$part" "$MNT" 2>/dev/null || { rmdir "$MNT" 2>/dev/null; return; }
-      local patched=0
-      for conf in "$MNT"/loader/entries/*.conf; do
-        [ -f "$conf" ] || continue
-        if ! sudo grep -q "console=ttyS0" "$conf"; then
-          sudo sed -i 's/^options /options console=ttyS0,115200 console=tty0 /' "$conf"
-          patched=1
-          echo "  Patched ($label): $(basename "$conf")"
-          sudo grep "^options" "$conf"
-        fi
-      done
-      [ "$patched" -eq 0 ] && echo "  No BLS entries on $label (or already patched)"
-      sudo umount "$MNT"
-      rmdir "$MNT"
-    }
-    patch_bls_console "${LOOPDEV}p1" "EFI"
-    # Only attempt /boot if it's not LUKS-encrypted (it never is, but be safe).
-    BOOT_TYPE=$(sudo blkid -s TYPE -o value "${LOOPDEV}p2" 2>/dev/null || true)
-    if [ "$BOOT_TYPE" != "crypto_LUKS" ]; then
-      patch_bls_console "${LOOPDEV}p2" "boot"
-    fi
-    echo "✅ BLS console patching done"
+  # Patch BLS entries to add console=ttyS0 so that serial output is visible
+  # in CI logs and (for LUKS) luks-unlock.py can detect the Plymouth prompt.
+  echo ""
+  echo "=== Patching BLS entries for serial console ==="
+  patch_bls_console() {
+    local part="$1" label="$2"
+    local MNT
+    MNT=$(mktemp -d)
+    sudo mount "$part" "$MNT" 2>/dev/null || { rmdir "$MNT" 2>/dev/null; return; }
+    local patched=0
+    for conf in "$MNT"/loader/entries/*.conf; do
+      [ -f "$conf" ] || continue
+      if ! sudo grep -q "console=ttyS0" "$conf"; then
+        sudo sed -i 's/^options /options console=ttyS0,115200 console=tty0 /' "$conf"
+        patched=1
+        echo "  Patched ($label): $(basename "$conf")"
+        sudo grep "^options" "$conf"
+      fi
+    done
+    [ "$patched" -eq 0 ] && echo "  No BLS entries on $label (or already patched)"
+    sudo umount "$MNT"
+    rmdir "$MNT"
+  }
+  patch_bls_console "${LOOPDEV}p1" "EFI"
+  # Only attempt /boot if it's not LUKS-encrypted (it never is, but be safe).
+  BOOT_TYPE=$(sudo blkid -s TYPE -o value "${LOOPDEV}p2" 2>/dev/null || true)
+  if [ "$BOOT_TYPE" != "crypto_LUKS" ]; then
+    patch_bls_console "${LOOPDEV}p2" "boot"
   fi
+  echo "✅ BLS console patching done"
   
   # Boot VM and verify bootc status (pass LUKS passphrase for unlock).
   echo ""
