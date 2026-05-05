@@ -88,7 +88,7 @@ func filesystemType(path string) (string, error) {
 		0xf995e849: "hpfs",
 		0x9660:     "isofs",
 		0x137d:     "ext",
-		0xef53:     "ext2/ext3/ext4",
+		0xef53:     "ext4", // ext2/ext3/ext4 share this magic; modern systems are ext4
 		0xf2f52010: "ubifs",
 		0x58465342: "xfs",
 		0x794c7630: "overlayfs",
@@ -114,9 +114,9 @@ func probeOverlay(scratchPath string) error {
 	}
 	defer os.RemoveAll(probeRoot)
 
-	// Run `podman --root <probeRoot> info --format json` to check overlay support.
+	// Run `podman --root <probeRoot> --storage-driver overlay info` to check overlay support.
 	// If overlay is not available or doesn't work on this root, podman will error.
-	cmd := exec.Command("podman", "--root", probeRoot, "info", "--format", "json")
+	cmd := exec.Command("podman", "--root", probeRoot, "--storage-driver", "overlay", "info", "--format", "json")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("podman probe failed: %w (output: %s)", err, output)
 	}
