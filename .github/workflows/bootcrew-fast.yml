@@ -46,6 +46,10 @@ jobs:
         run: go build -o /tmp/fisherman ./cmd/fisherman/
         working-directory: fisherman
 
+      - name: Run unit tests
+        run: sudo go test ./...
+        working-directory: fisherman
+
       - name: Add fake bins to PATH
         run: |
           chmod +x tests/fake-bins/podman tests/fake-bins/ostree

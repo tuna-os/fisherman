@@ -33,24 +33,26 @@ func TestFilesystemType_TmpfsDetection(t *testing.T) {
 
 func TestOverlayCandidate_UnsafeFilesystems(t *testing.T) {
 	tests := []struct {
-		name         string
-		testPath     string
-		shouldReject string // if not empty, indicates a filesystem that should be rejected
+		name     string
+		testPath string
 	}{
-		{"tmpfs", "/tmp", "tmpfs"},
-		{"var_tmp", "/var/tmp", "tmpfs"}, // often tmpfs
+		{"tmpfs /tmp", "/tmp"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			candidate := overlayCandidate(tt.testPath)
-			// If the test path is on an unsafe filesystem, we expect vfs.
-			// But we can't assume the test environment matches our expectations,
-			// so we just verify the function doesn't panic and returns a valid result.
-			if candidate.driver != "vfs" && candidate.driver != "overlay" {
-				t.Errorf("invalid driver: %s", candidate.driver)
+			fsType, err := filesystemType(tt.testPath)
+			if err != nil {
+				t.Fatalf("filesystemType(%s): %v", tt.testPath, err)
 			}
-			if candidate.driver == "vfs" && candidate.reason == "" {
+			if fsType != "tmpfs" {
+				t.Skipf("/tmp is %s, not tmpfs — skipping unsafe filesystem rejection test", fsType)
+			}
+			candidate := overlayCandidate(tt.testPath)
+			if candidate.driver != "vfs" {
+				t.Errorf("overlayCandidate on tmpfs = %q, want vfs", candidate.driver)
+			}
+			if candidate.reason == "" {
 				t.Error("vfs fallback should have a reason")
 			}
 		})

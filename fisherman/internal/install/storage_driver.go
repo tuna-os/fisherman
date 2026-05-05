@@ -49,9 +49,8 @@ func overlayCandidate(scratchPath string) storageDriverCandidate {
 
 	// Filesystems where overlay should NOT be used.
 	unsafeFS := map[string]bool{
-		"btrfs":    true,
 		"overlayfs": true,
-		"tmpfs":    true,
+		"tmpfs":     true,
 	}
 
 	if unsafeFS[fsType] {
@@ -60,8 +59,9 @@ func overlayCandidate(scratchPath string) storageDriverCandidate {
 
 	// Unknown filesystem: be conservative and use vfs.
 	knownSafeFS := map[string]bool{
-		"ext4": true,
-		"xfs":  true,
+		"ext4":  true,
+		"xfs":   true,
+		"btrfs": true,
 	}
 	if !knownSafeFS[fsType] {
 		return storageDriverCandidate{"vfs", fmt.Sprintf("scratch filesystem %s is not known to be overlay-safe", fsType)}

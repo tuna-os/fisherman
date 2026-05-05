@@ -73,6 +73,10 @@ jobs:
       - name: Build fisherman
         run: just build
 
+      - name: Run unit tests
+        run: sudo go test ./...
+        working-directory: fisherman
+
       - name: Run bootcrew test
         run: |
           IMAGE_JSON='${{ toJson(matrix.image) }}'
