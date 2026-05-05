@@ -8,7 +8,7 @@
 images:
   - name: dakota
     image: ghcr.io/projectbluefin/dakota:latest
-    filesystem: xfs
+    filesystem: ext4
     composefs_backend: true
     bootloader: systemd
     unified_storage: false
@@ -86,7 +86,7 @@ images:
   - name: dakota-luks
     image: ghcr.io/projectbluefin/dakota:latest
     ssh_image_name: dakota
-    filesystem: xfs
+    filesystem: ext4
     composefs_backend: true
     bootloader: systemd
     unified_storage: false
