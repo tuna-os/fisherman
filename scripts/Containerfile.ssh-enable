@@ -84,6 +84,15 @@ RUN if [ ! -f /usr/lib/systemd/system/NetworkManager.service ] && [ -f /usr/lib/
       ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/dbus-org.freedesktop.network1.service; \
     fi
 
+# Disable systemd-firstboot: it runs interactively on /dev/console before
+# sysinit.target, blocking all other services (including sshd) until the
+# user completes the first-boot wizard. Pre-configure the minimum required
+# settings (timezone, locale) so the ConditionFirstBoot= check passes cleanly.
+RUN ln -sf /usr/share/zoneinfo/UTC /etc/localtime && \
+    echo "UTC" > /etc/timezone 2>/dev/null || true
+RUN mkdir -p /etc/systemd/system && \
+    ln -sf /dev/null /etc/systemd/system/systemd-firstboot.service
+
 # Ensure SSH is installed
 RUN test -f /usr/sbin/sshd || test -f /usr/bin/sshd || \
     (echo "ERROR: SSH installation failed" && exit 1)
