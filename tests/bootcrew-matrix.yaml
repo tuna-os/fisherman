@@ -80,6 +80,35 @@ images:
     flatpaks: []
     vm_boot: true  # composefs backend verification
 
+  # LUKS variants — vm_boot only (nightly excluded: nightly patches root=/dev/vdaX which is wrong for LUKS)
+  - name: dakota-luks
+    image: ghcr.io/projectbluefin/dakota:latest
+    ssh_image_name: dakota
+    filesystem: xfs
+    composefs_backend: true
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    luks: true
+    luks_passphrase: "bootcrew-luks-test"
+    vm_timeout: 800
+    nightly: false
+    vm_boot: true
+
+  - name: arch-bootc-luks-ext4
+    image: ghcr.io/bootcrew/arch-bootc:latest
+    ssh_image_name: arch-bootc
+    filesystem: ext4
+    composefs_backend: true
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    luks: true
+    luks_passphrase: "bootcrew-luks-test"
+    vm_timeout: 800
+    nightly: false
+    vm_boot: true
+
   # gentoo-bootc disabled: consistently fails with missing blob in containers-storage
   # (sha256:2443e8...) — likely a broken layer in the ghcr.io/bootcrew/gentoo-bootc image.
   # Re-enable once upstream fixes the image.

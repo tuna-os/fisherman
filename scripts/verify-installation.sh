@@ -12,6 +12,7 @@ source "$SCRIPT_DIR/find-tools.sh"
 
 LOOPDEV="${1}"
 COMPOSEFS="${2:-false}"
+LUKS_PASSPHRASE="${3:-}"  # optional; if set, opens the LUKS root container before mounting
 
 if [ -z "$LOOPDEV" ]; then
   echo "❌ Usage: $0 LOOPDEV [COMPOSEFS]"
@@ -51,9 +52,9 @@ echo "✅ Partition layout correct ($PART_COUNT partitions)"
 
 # 2. Mount and verify partitions
 # For 2-partition layout (systemd-boot composefs):
-#   p1 = EFI, p2 = root
+#   p1 = EFI, p2 = root (or LUKS(root))
 # For 3-partition layout (GRUB):
-#   p1 = EFI, p2 = /boot, p3 = root
+#   p1 = EFI, p2 = /boot, p3 = root (or LUKS(root))
 if [ "$PART_COUNT" -eq 2 ]; then
   BOOT_PART="${LOOPDEV}p1"  # This is just EFI for 2-partition
   ROOT_PART="${LOOPDEV}p2"
@@ -61,6 +62,23 @@ else
   BOOT_PART="${LOOPDEV}p2"
   ROOT_PART="${LOOPDEV}p3"
 fi
+
+LUKS_MAPPER="fisherman-verify-$$"
+LUKS_OPENED=0
+
+# Cleanup trap: unmount and close LUKS container on any exit.
+cleanup_verify() {
+  $SUDO_BIN umount "$ROOT_DIR"  2>/dev/null || true
+  $SUDO_BIN umount "$VERIFY_DIR" 2>/dev/null || true
+  $SUDO_BIN umount "$EFI_DIR"   2>/dev/null || true
+  if [ "$LUKS_OPENED" -eq 1 ]; then
+    $SUDO_BIN cryptsetup luksClose "$LUKS_MAPPER" 2>/dev/null || true
+  fi
+  rmdir "$ROOT_DIR"  2>/dev/null || true
+  rmdir "$VERIFY_DIR" 2>/dev/null || true
+  rmdir "$EFI_DIR"   2>/dev/null || true
+}
+trap cleanup_verify EXIT
 
 # Always verify the EFI partition (p1) for BOOTX64.EFI, regardless of layout.
 EFI_PART="${LOOPDEV}p1"
@@ -71,8 +89,6 @@ if [ ! -f "$EFI_DIR/EFI/BOOT/BOOTX64.EFI" ]; then
   echo "FAIL: EFI/BOOT/BOOTX64.EFI not found on EFI partition $EFI_PART"
   echo "--- EFI partition contents ---"
   find "$EFI_DIR" -type f 2>/dev/null || true
-  $SUDO_BIN umount "$EFI_DIR" || true
-  rmdir "$EFI_DIR"
   exit 1
 fi
 echo "✅ EFI/BOOT/BOOTX64.EFI present on EFI partition"
@@ -94,13 +110,28 @@ else
 fi
 
 $SUDO_BIN umount "$EFI_DIR"
-rmdir "$EFI_DIR"
 
 VERIFY_DIR=$(mktemp -d)
 sudo "$MOUNT_BIN" "$BOOT_PART" "$VERIFY_DIR"
 
 ROOT_DIR=$(mktemp -d)
-sudo "$MOUNT_BIN" "$ROOT_PART" "$ROOT_DIR"
+
+# Open LUKS container if passphrase is provided, otherwise mount directly.
+if [ -n "$LUKS_PASSPHRASE" ]; then
+  LUKS_TYPE=$(sudo blkid -s TYPE -o value "$ROOT_PART" 2>/dev/null || true)
+  if [ "$LUKS_TYPE" = "crypto_LUKS" ]; then
+    echo "=== Opening LUKS container on $ROOT_PART ==="
+    echo -n "$LUKS_PASSPHRASE" | $SUDO_BIN cryptsetup luksOpen "$ROOT_PART" "$LUKS_MAPPER" --key-file=-
+    LUKS_OPENED=1
+    echo "✅ LUKS container opened at /dev/mapper/$LUKS_MAPPER"
+    sudo "$MOUNT_BIN" "/dev/mapper/$LUKS_MAPPER" "$ROOT_DIR"
+  else
+    echo "⚠️  LUKS_PASSPHRASE provided but $ROOT_PART is not crypto_LUKS (type: $LUKS_TYPE) — mounting directly"
+    sudo "$MOUNT_BIN" "$ROOT_PART" "$ROOT_DIR"
+  fi
+else
+  sudo "$MOUNT_BIN" "$ROOT_PART" "$ROOT_DIR"
+fi
 
 # Debug: show root structure
 echo "--- Root directory structure ---"
@@ -114,8 +145,6 @@ fi
 if [ "$COMPOSEFS" = "true" ]; then
   if [ ! -f "$ROOT_DIR/etc/hostname" ]; then
     echo "FAIL: $ROOT_DIR/etc/hostname not found (composefs-native)"
-    $SUDO_BIN umount "$ROOT_DIR" || true
-    $SUDO_BIN umount "$VERIFY_DIR" || true
     exit 1
   fi
   echo "✅ composefs-native hostname at $ROOT_DIR/etc/hostname"
@@ -124,6 +153,10 @@ else
 fi
 
 $SUDO_BIN umount "$ROOT_DIR"
+if [ "$LUKS_OPENED" -eq 1 ]; then
+  $SUDO_BIN cryptsetup luksClose "$LUKS_MAPPER"
+  LUKS_OPENED=0
+fi
 $SUDO_BIN umount "$VERIFY_DIR"
 rmdir "$ROOT_DIR"
 rmdir "$VERIFY_DIR"

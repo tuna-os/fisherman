@@ -16,6 +16,7 @@ VM_TIMEOUT="${3:-600}"  # 10 minutes: network boot timeout + disk boot + systemd
 VM_MEMORY="${4:-2G}"
 LOOPDEV="${5}"
 IMAGE_NAME="${6}"
+LUKS_PASSPHRASE="${7:-}"  # optional; if set, run luks-unlock.py for Plymouth passphrase entry
 
 if [ -z "$LOOPDEV" ]; then
   LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt 2>/dev/null)
@@ -101,6 +102,8 @@ add_uefi_boot_entry_workaround() {
 # Start QEMU with SSH port forwarding
 echo "Starting QEMU..."
 SERIAL_LOG="/tmp/bootcrew-serial-$$.log"
+QEMU_MONITOR_SOCK="/tmp/qemu-monitor-$$.sock"
+QEMU_STDOUT_LOG="/tmp/qemu-stdout-$$.log"
 
 # Use a writable copy of OVMF_VARS.fd so UEFI variables can be initialized
 OVMF_VARS_TEMP="/tmp/ovmf-vars-$$.fd"
@@ -119,8 +122,10 @@ if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-compose
 fi
 
 # Pre-create serial log with proper permissions for sudo-run QEMU to write
-# Must be created as root to avoid permission issues (SELinux or kernel audit)
 sudo sh -c "rm -f \"$SERIAL_LOG\" 2>/dev/null; touch \"$SERIAL_LOG\" && chmod 666 \"$SERIAL_LOG\"" || true
+
+# Trap to clean up temp files on all exits
+trap "sudo rm -f '$OVMF_VARS_TEMP' '$QEMU_MONITOR_SOCK' '$QEMU_STDOUT_LOG' 2>/dev/null || true" EXIT
 
 sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -machine q35 \
@@ -134,20 +139,30 @@ sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -drive if=pflash,format=raw,file="$OVMF_VARS_TEMP" \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22 \
   -device virtio-net-pci,netdev=net0 \
-  -serial mon:stdio \
-  -nographic \
-  -no-reboot >"$SERIAL_LOG" 2>&1 &
+  -monitor "unix:$QEMU_MONITOR_SOCK,server=on,wait=off" \
+  -serial "file:$SERIAL_LOG" \
+  -display none \
+  -no-reboot >"$QEMU_STDOUT_LOG" 2>&1 &
 
 QEMU_PID=$!
 echo "QEMU PID: $QEMU_PID"
 echo ""
 
-# Trap to clean up temp files on exit
-trap "sudo rm -f '$OVMF_VARS_TEMP' '${SERIAL_LOG}.sock' 2>/dev/null; rm -f '$OVMF_VARS_TEMP' '${SERIAL_LOG}.sock' 2>/dev/null" EXIT
+LUKS_PID=""
+if [ -n "$LUKS_PASSPHRASE" ]; then
+  echo "=== LUKS mode: starting passphrase injector ==="
+  # Run as sudo so it can connect to the root-owned QEMU monitor socket.
+  sudo python3 "$SCRIPT_DIR/luks-unlock.py" qemu \
+    "$QEMU_MONITOR_SOCK" "$LUKS_PASSPHRASE" "$SERIAL_LOG" &
+  LUKS_PID=$!
+  echo "luks-unlock.py PID: $LUKS_PID"
+  echo ""
+fi
 
 # Wait for SSH to be ready (using password auth)
-# For systemd-boot images, this may take longer due to network boot timeout
-echo "Waiting for VM to boot and SSH to be ready (up to 120s)..."
+# For LUKS VMs, luks-unlock.py runs concurrently and injects the passphrase;
+# SSH becomes available once the system has fully booted after unlock.
+echo "Waiting for VM to boot and SSH to be ready (up to 240s)..."
 SSH_READY=0
 for i in {1..120}; do
   sleep 2
@@ -163,23 +178,44 @@ for i in {1..120}; do
   fi
 done
 
+# Collect luks-unlock.py exit code (if running)
+LUKS_EXIT=0
+if [ -n "$LUKS_PID" ]; then
+  wait "$LUKS_PID" 2>/dev/null && LUKS_EXIT=0 || LUKS_EXIT=$?
+  if [ "$LUKS_EXIT" -eq 2 ]; then
+    echo "❌ luks-unlock.py: passphrase sent but emergency shell detected (LUKS boot failed)"
+  elif [ "$LUKS_EXIT" -ne 0 ]; then
+    echo "❌ luks-unlock.py exited with code $LUKS_EXIT (Plymouth prompt not detected)"
+  else
+    echo "✅ luks-unlock.py: passphrase injected successfully"
+  fi
+fi
+
 if [ $SSH_READY -eq 0 ]; then
   echo "❌ SSH connection failed (timeout)"
-  
-  # Print and save serial log for debugging
+
   if [ -f "$SERIAL_LOG" ]; then
     echo ""
     echo "=== Serial Console Output (for debugging) ==="
     sudo cat "$SERIAL_LOG" || cat "$SERIAL_LOG" || true
-    
-    # Save to persistent location for analysis (use sudo for root-owned files)
     PERSISTENT_LOG="/tmp/bootcrew-serial-last.log"
     sudo cp "$SERIAL_LOG" "$PERSISTENT_LOG" 2>/dev/null || cp "$SERIAL_LOG" "$PERSISTENT_LOG" 2>/dev/null || true
     echo "(Full log saved to: $PERSISTENT_LOG)"
-    
     sudo rm -f "$SERIAL_LOG" 2>/dev/null || rm -f "$SERIAL_LOG" 2>/dev/null || true
   fi
-  
+
+  if [ -f "$QEMU_STDOUT_LOG" ]; then
+    echo ""
+    echo "=== QEMU stdout/stderr ==="
+    sudo cat "$QEMU_STDOUT_LOG" || cat "$QEMU_STDOUT_LOG" || true
+  fi
+
+  kill $QEMU_PID 2>/dev/null || true
+  exit 1
+fi
+
+if [ "$LUKS_EXIT" -ne 0 ]; then
+  echo "❌ LUKS test failed (luks-unlock.py exit code $LUKS_EXIT)"
   kill $QEMU_PID 2>/dev/null || true
   exit 1
 fi

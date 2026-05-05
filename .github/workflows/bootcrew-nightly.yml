@@ -17,7 +17,8 @@ jobs:
       - name: Parse image matrix
         id: read-matrix
         run: |
-          MATRIX=$(yq -o json tests/bootcrew-matrix.yaml | jq -c '.images')
+          # Exclude entries that have nightly: false (LUKS tests run only in VM boot tests)
+          MATRIX=$(yq -o json tests/bootcrew-matrix.yaml | jq -c '[.images[] | select(.nightly != false)]')
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
   full-install:
