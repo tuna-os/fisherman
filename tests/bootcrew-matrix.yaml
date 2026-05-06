@@ -8,12 +8,14 @@
 images:
   - name: dakota
     image: ghcr.io/projectbluefin/dakota:latest
-    filesystem: xfs
+    filesystem: ext4
     composefs_backend: true
+    bootloader: systemd
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
     vm_boot: true  # PRIMARY PRODUCTION IMAGE - critical to test on every PR
+    build_ssh_image: true
 
   - name: bluefin-lts
     image: ghcr.io/ublue-os/bluefin:lts
@@ -32,6 +34,7 @@ images:
     selinux_disabled: false
     flatpaks: []
     vm_boot: true  # ostree backend verification
+    build_ssh_image: true
 
   - name: yellowfin-gnome50
     image: ghcr.io/tuna-os/yellowfin:gnome50
@@ -75,10 +78,43 @@ images:
     image: ghcr.io/bootcrew/arch-bootc:latest
     filesystem: xfs
     composefs_backend: true
+    bootloader: systemd
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
     vm_boot: true  # composefs backend verification
+    build_ssh_image: true
+
+  # LUKS variants — vm_boot only (nightly excluded: nightly patches root=/dev/vdaX which is wrong for LUKS)
+  - name: dakota-luks
+    image: ghcr.io/projectbluefin/dakota:latest
+    ssh_image_name: dakota
+    filesystem: ext4
+    composefs_backend: true
+    bootloader: systemd
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    luks: true
+    luks_passphrase: "bootcrew-luks-test"
+    vm_timeout: 800
+    nightly: false
+    vm_boot: true
+
+  - name: arch-bootc-luks-xfs
+    image: ghcr.io/bootcrew/arch-bootc:latest
+    ssh_image_name: arch-bootc
+    filesystem: xfs
+    composefs_backend: true
+    bootloader: systemd
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    luks: true
+    luks_passphrase: "bootcrew-luks-test"
+    vm_timeout: 800
+    nightly: false
+    vm_boot: true
 
   # gentoo-bootc disabled: consistently fails with missing blob in containers-storage
   # (sha256:2443e8...) — likely a broken layer in the ghcr.io/bootcrew/gentoo-bootc image.
@@ -94,10 +130,12 @@ images:
     image: ghcr.io/bootcrew/debian-bootc:latest
     filesystem: xfs
     composefs_backend: true
+    bootloader: systemd
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
     vm_boot: true  # composefs backend verification (using pre-built SSH image)
+    build_ssh_image: true
 
   - name: frostyard-snow
     image: ghcr.io/frostyard/snow:latest

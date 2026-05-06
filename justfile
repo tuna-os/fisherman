@@ -142,7 +142,7 @@ install:
   echo "✅ Installation complete"
 
 # Boot VM and verify with SSH
-boot-verify LOOPDEV="" IMAGE_NAME="":
+boot-verify LOOPDEV="" IMAGE_NAME="" LUKS_PASSPHRASE="":
   #!/bin/bash
   set -e
   
@@ -158,7 +158,7 @@ boot-verify LOOPDEV="" IMAGE_NAME="":
   fi
   
   IMAGE_NAME="{{ IMAGE_NAME }}"
-  bash scripts/boot-verify.sh {{ SSH_PORT }} /tmp/bootcrew-ssh/id_rsa {{ VM_TIMEOUT }} {{ VM_MEMORY }} "$LOOPDEV" "$IMAGE_NAME"
+  bash scripts/boot-verify.sh {{ SSH_PORT }} /tmp/bootcrew-ssh/id_rsa {{ VM_TIMEOUT }} {{ VM_MEMORY }} "$LOOPDEV" "$IMAGE_NAME" "{{ LUKS_PASSPHRASE }}"
 
 # Full bootcrew test (debian-bootc by default)
 bootcrew-vm IMAGE="quay.io/centos-bootc/centos-bootc:c10s" FILESYSTEM="xfs" COMPOSEFS="false":
@@ -204,9 +204,9 @@ bootcrew-vm IMAGE="quay.io/centos-bootc/centos-bootc:c10s" FILESYSTEM="xfs" COMP
 # ========================================
 
 # Verify installation partitions and basic structure
-verify-installation LOOPDEV COMPOSEFS:
+verify-installation LOOPDEV COMPOSEFS LUKS_PASSPHRASE="":
   #!/bin/bash
-  bash scripts/verify-installation.sh "{{ LOOPDEV }}" "{{ COMPOSEFS }}"
+  bash scripts/verify-installation.sh "{{ LOOPDEV }}" "{{ COMPOSEFS }}" "{{ LUKS_PASSPHRASE }}"
 
 # Verify bootc status on running VM (offline check)
 verify-bootc-offline LOOPDEV COMPOSEFS:
@@ -253,20 +253,25 @@ bootcrew-ci-test IMAGE_JSON:
   UNIFIED=$(echo "$IMAGE_JSON" | jq -r '.unified_storage // false')
   SELINUX=$(echo "$IMAGE_JSON" | jq -r '.selinux_disabled // false')
   IMAGE_NAME=$(echo "$IMAGE_JSON" | jq -r '.name')
+  LUKS=$(echo "$IMAGE_JSON" | jq -r '.luks // false')
+  LUKS_PASSPHRASE=$(echo "$IMAGE_JSON" | jq -r '.luks_passphrase // ""')
+  SSH_NAME=$(echo "$IMAGE_JSON" | jq -r '.ssh_image_name // .name')
+  VM_TIMEOUT=$(echo "$IMAGE_JSON" | jq -r '.vm_timeout // 600')
   
   echo "=========================================="
   echo "Bootcrew CI Test: $IMAGE_NAME"
   echo "Image: $IMAGE"
   echo "Filesystem: $FILESYSTEM"
   echo "ComposFS Backend: $COMPOSEFS"
+  echo "LUKS: $LUKS"
   echo "=========================================="
   echo ""
   
   DISK_FILE="{{ CI_ARTIFACTS }}/bootcrew-${IMAGE_NAME}-disk.img"
   
-  # Determine SSH-enabled image reference from GHCR
   # SSH-enabled images are pre-built and pushed to: ghcr.io/tuna-os/fisherman/<image>:ssh-enabled
-  SSH_IMAGE="ghcr.io/tuna-os/fisherman/${IMAGE_NAME}:ssh-enabled"
+  # LUKS variants reuse the base image's ssh-enabled tag via ssh_image_name.
+  SSH_IMAGE="ghcr.io/tuna-os/fisherman/${SSH_NAME}:ssh-enabled"
   
   echo "Using pre-built SSH-enabled image: $SSH_IMAGE"
   
@@ -274,8 +279,27 @@ bootcrew-ci-test IMAGE_JSON:
   just setup-loop "$DISK_FILE"
   LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt)
   
-  # Generate recipe - use SSH-enabled image for installation
-  # This image has SSH pre-installed so it will work after installation
+  # Determine bootloader from matrix entry (preferred) or fall back to name-based detection.
+  BOOTLOADER_TYPE=$(echo "$IMAGE_JSON" | jq -r '.bootloader // ""')
+  if [ -z "$BOOTLOADER_TYPE" ]; then
+    case "$IMAGE_NAME" in
+      debian-bootc*|arch-bootc*)
+        BOOTLOADER_TYPE="systemd"
+        ;;
+    esac
+  fi
+  BOOTLOADER=""
+  if [ -n "$BOOTLOADER_TYPE" ]; then
+    BOOTLOADER="\"bootloader\": \"$BOOTLOADER_TYPE\","
+  fi
+  
+  # Build encryption block.
+  if [ "$LUKS" = "true" ]; then
+    ENCRYPTION="{\"type\": \"luks-passphrase\", \"passphrase\": \"$LUKS_PASSPHRASE\"}"
+  else
+    ENCRYPTION='{"type": "none"}'
+  fi
+  
   cat > {{ CI_ARTIFACTS }}/recipe.json << EOF
   {
     "disk": "$LOOPDEV",
@@ -283,9 +307,10 @@ bootcrew-ci-test IMAGE_JSON:
     "composeFsBackend": $COMPOSEFS,
     "unifiedStorage": $UNIFIED,
     "selinuxDisabled": $SELINUX,
-    "encryption": {"type": "none"},
+    "encryption": $ENCRYPTION,
     "image": "$SSH_IMAGE",
     "hostname": "ci-test",
+    $BOOTLOADER
     "flatpaks": []
   }
   EOF
@@ -298,13 +323,44 @@ bootcrew-ci-test IMAGE_JSON:
   echo "Installing system..."
   sudo /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
   
-  # Verify installation
-  just verify-installation "$LOOPDEV" "$COMPOSEFS"
+  # Verify installation (opens LUKS container if passphrase is set).
+  just verify-installation "$LOOPDEV" "$COMPOSEFS" "$LUKS_PASSPHRASE"
   
-  # Boot VM and verify bootc status
+  # Patch BLS entries to add console=ttyS0 so that serial output is visible
+  # in CI logs and (for LUKS) luks-unlock.py can detect the Plymouth prompt.
+  echo ""
+  echo "=== Patching BLS entries for serial console ==="
+  patch_bls_console() {
+    local part="$1" label="$2"
+    local MNT
+    MNT=$(mktemp -d)
+    sudo mount "$part" "$MNT" 2>/dev/null || { rmdir "$MNT" 2>/dev/null; return; }
+    local patched=0
+    for conf in "$MNT"/loader/entries/*.conf; do
+      [ -f "$conf" ] || continue
+      if ! sudo grep -q "console=ttyS0" "$conf"; then
+        sudo sed -i 's/^options /options console=ttyS0,115200 console=tty0 /' "$conf"
+        patched=1
+        echo "  Patched ($label): $(basename "$conf")"
+        sudo grep "^options" "$conf"
+      fi
+    done
+    [ "$patched" -eq 0 ] && echo "  No BLS entries on $label (or already patched)"
+    sudo umount "$MNT"
+    rmdir "$MNT"
+  }
+  patch_bls_console "${LOOPDEV}p1" "EFI"
+  # Only attempt /boot if it's not LUKS-encrypted (it never is, but be safe).
+  BOOT_TYPE=$(sudo blkid -s TYPE -o value "${LOOPDEV}p2" 2>/dev/null || true)
+  if [ "$BOOT_TYPE" != "crypto_LUKS" ]; then
+    patch_bls_console "${LOOPDEV}p2" "boot"
+  fi
+  echo "✅ BLS console patching done"
+  
+  # Boot VM and verify bootc status (pass LUKS passphrase for unlock).
   echo ""
   echo "=== Booting VM for bootc status verification ==="
-  just boot-verify "$LOOPDEV" "$IMAGE_NAME"
+  bash scripts/boot-verify.sh "2222" "/tmp/bootcrew-ssh/id_rsa" "$VM_TIMEOUT" "2G" "$LOOPDEV" "$IMAGE_NAME" "$LUKS_PASSPHRASE"
   
   # Cleanup
   echo ""
@@ -320,7 +376,7 @@ ci-install-tools:
   set -e
   echo "Installing tools..."
   sudo apt-get update -qq
-  sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq
+  sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
   echo "✅ Tools installed"
 
 # Show help

@@ -445,4 +445,95 @@ if n != 0 {
 t.Errorf("expected 0, got %d", n)
 }
 })
+
+t.Run("patches all entries in directory", func(t *testing.T) {
+	dir := t.TempDir()
+	entriesDir := filepath.Join(dir, "boot", "loader", "entries")
+	if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"entry1.conf", "entry2.conf", "entry3.conf"} {
+		input := "title TunaOS\noptions root=UUID=abc rw\n"
+		if err := os.WriteFile(filepath.Join(entriesDir, name), []byte(input), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := post.EnsureLuksArgs(dir, testUUID)
+	if err != nil {
+		t.Fatalf("EnsureLuksArgs: %v", err)
+	}
+	if n != 3 {
+		t.Errorf("expected 3 entries modified, got %d", n)
+	}
+})
+
+t.Run("patches both grub and systemd-boot paths simultaneously", func(t *testing.T) {
+	dir := t.TempDir()
+	for _, sub := range []string{"boot/loader/entries", "boot/efi/loader/entries"} {
+		entriesDir := filepath.Join(dir, sub)
+		if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		input := "title TunaOS\noptions root=UUID=abc rw\n"
+		if err := os.WriteFile(filepath.Join(entriesDir, "entry.conf"), []byte(input), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := post.EnsureLuksArgs(dir, testUUID)
+	if err != nil {
+		t.Fatalf("EnsureLuksArgs: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("expected 2 entries modified (one per path), got %d", n)
+	}
+})
+
+t.Run("uses rd.luks.name not rd.luks.uuid", func(t *testing.T) {
+	// Regression test: rd.luks.uuid maps to /dev/mapper/luks-<UUID> which
+	// systemd-gpt-auto-generator cannot find. Must use rd.luks.name=<UUID>=root.
+	dir := t.TempDir()
+	entriesDir := filepath.Join(dir, "boot", "loader", "entries")
+	if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entryPath := filepath.Join(entriesDir, "entry.conf")
+	if err := os.WriteFile(entryPath, []byte("title TunaOS\noptions root=UUID=abc rw\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := post.EnsureLuksArgs(dir, testUUID)
+	if err != nil {
+		t.Fatalf("EnsureLuksArgs: %v", err)
+	}
+	got, _ := os.ReadFile(entryPath)
+	if strings.Contains(string(got), "rd.luks.uuid=") {
+		t.Errorf("entry contains rd.luks.uuid= which is wrong; must use rd.luks.name=:\n%s", got)
+	}
+	if !strings.Contains(string(got), "rd.luks.name="+testUUID+"=root") {
+		t.Errorf("entry missing rd.luks.name=<UUID>=root:\n%s", got)
+	}
+})
+
+t.Run("does not modify entry without options line", func(t *testing.T) {
+	dir := t.TempDir()
+	entriesDir := filepath.Join(dir, "boot", "loader", "entries")
+	if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const input = "title TunaOS\n# no options line\n"
+	entryPath := filepath.Join(entriesDir, "entry.conf")
+	if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n, err := post.EnsureLuksArgs(dir, testUUID)
+	if err != nil {
+		t.Fatalf("EnsureLuksArgs: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("expected 0 modifications for entry with no options line, got %d", n)
+	}
+	got, _ := os.ReadFile(entryPath)
+	if string(got) != input {
+		t.Errorf("entry was modified unexpectedly:\n%s", got)
+	}
+})
 }

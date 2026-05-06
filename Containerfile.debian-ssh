@@ -9,6 +9,14 @@ RUN mkdir -p /var/lib/dpkg/status.d \
 # Touch required status files
 RUN touch /var/lib/dpkg/status /var/lib/apt/extended_states
 
+# Install GRUB and efibootmgr for UEFI boot entry creation
+# This fixes the systemd-boot composefs boot issue where OVMF defaults to network boot
+RUN apt-get update && \
+    apt-get install -y grub-efi-amd64 efibootmgr && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /var/lib/apt/lists/partial
+
 # Install and configure SSH
 RUN apt-get update && \
     apt-get install -y openssh-server openssh-client && \
@@ -26,5 +34,11 @@ RUN echo 'root:bootcrew-test' | chpasswd
 RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
     sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
 
-LABEL org.opencontainers.image.title="Debian Bootc with SSH"
-LABEL org.opencontainers.image.description="Debian bootc image with OpenSSH pre-installed for testing"
+# Bring up the virtio NIC in QEMU for SSH-based tests.
+RUN mkdir -p /etc/systemd/network /etc/systemd/system/multi-user.target.wants && \
+    printf '[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\nLinkLocalAddressing=yes\nIPv6AcceptRA=yes\n' > /etc/systemd/network/20-wired.network && \
+    ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/multi-user.target.wants/systemd-networkd.service && \
+    ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/dbus-org.freedesktop.network1.service
+
+LABEL org.opencontainers.image.title="Debian Bootc with SSH and GRUB"
+LABEL org.opencontainers.image.description="Debian bootc image with OpenSSH and GRUB pre-installed for testing"

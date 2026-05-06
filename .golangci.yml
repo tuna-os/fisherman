@@ -1,0 +1,28 @@
+linters:
+  enable:
+    - errcheck       # Check for unchecked errors
+    - gosimple       # Simplification suggestions
+    - govet          # Correctness checks
+    - ineffassign    # Detect ineffectual assignments
+    - staticcheck    # Go static analysis
+    - unused         # Detect unused code
+    - gofmt          # Formatting
+    - misspell       # Spelling mistakes
+    - nilerr         # Return nil with non-nil error
+    - exhaustive     # Exhaustive enum switches
+
+linters-settings:
+  govet:
+    enable-all: true
+    disable:
+      - fieldalignment  # struct padding hints are noise
+
+issues:
+  exclude-rules:
+    # Test files can use unsafe/unchecked patterns
+    - path: _test\.go
+      linters: [errcheck]
+  max-same-issues: 5
+
+run:
+  timeout: 5m

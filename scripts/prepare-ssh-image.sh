@@ -87,6 +87,17 @@ $SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c '
   true  # Always succeed even if enable fails
 ' || true
 
+# Enable DHCP networking on minimal images that lack NetworkManager.
+echo "Configuring fallback DHCP networking..."
+$SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c '
+  if [ ! -f /usr/lib/systemd/system/NetworkManager.service ] && [ -f /usr/lib/systemd/system/systemd-networkd.service ]; then
+    mkdir -p /etc/systemd/network /etc/systemd/system/multi-user.target.wants
+    printf "[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\nLinkLocalAddressing=yes\nIPv6AcceptRA=yes\n" > /etc/systemd/network/20-wired.network
+    ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/multi-user.target.wants/systemd-networkd.service
+    ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/dbus-org.freedesktop.network1.service
+  fi
+' || true
+
 # Generate host keys (must be done before system startup)
 echo "Generating SSH host keys..."
 $SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c '

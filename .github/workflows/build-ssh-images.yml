@@ -6,31 +6,55 @@ on:
     paths:
       - 'scripts/Containerfile.ssh-enable'
       - '.github/workflows/build-ssh-images.yml'
+      - 'tests/bootcrew-matrix.yaml'
+  schedule:
+    - cron: '0 3 * * 1'  # Weekly Monday rebuild to pick up upstream base image updates
   workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
 
 env:
   REGISTRY: ghcr.io
-  REGISTRY_USER: ${{ github.actor }}
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+  setup:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.read-matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
 
+      - name: Parse SSH image matrix from bootcrew-matrix.yaml
+        id: read-matrix
+        run: |
+          python3 << 'EOF'
+          import json
+          import yaml
+
+          with open('tests/bootcrew-matrix.yaml') as f:
+              data = yaml.safe_load(f)
+
+          images = [
+              {'name': img['name'], 'base_image': img['image']}
+              for img in data['images']
+              if img.get('build_ssh_image') == True
+          ]
+          print("Building SSH images for:", [i['name'] for i in images])
+          with open('/tmp/matrix.json', 'w') as f:
+              f.write('matrix=' + json.dumps(images) + '\n')
+          EOF
+          cat /tmp/matrix.json >> "$GITHUB_OUTPUT"
+
+  build:
+    name: build / ${{ matrix.image.name }}
+    needs: setup
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        image:
-          - name: dakota
-            base_image: ghcr.io/projectbluefin/dakota:latest
-          - name: arch-bootc
-            base_image: ghcr.io/bootcrew/arch-bootc:latest
-          - name: centos-bootc
-            base_image: quay.io/centos-bootc/centos-bootc:c10s
-          - name: debian-bootc
-            base_image: ghcr.io/bootcrew/debian-bootc:latest
+        image: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
       - uses: actions/checkout@v4
@@ -62,6 +86,5 @@ jobs:
 
       - name: Image built and pushed
         run: |
-          echo "✅ Built and pushed: ${{ env.REGISTRY }}/tuna-os/fisherman/${{ matrix.image.name }}:ssh-enabled"
+          echo "✅ Built: ${{ env.REGISTRY }}/tuna-os/fisherman/${{ matrix.image.name }}:ssh-enabled"
           echo "   Base: ${{ matrix.image.base_image }}"
-          echo "   Ref: ${{ env.REGISTRY }}/tuna-os/fisherman/${{ matrix.image.name }}:ssh-enabled-${{ github.sha }}"

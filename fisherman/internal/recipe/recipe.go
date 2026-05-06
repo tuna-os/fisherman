@@ -9,7 +9,7 @@ import (
 // Recipe describes a fisherman installation.
 type Recipe struct {
 	Disk            string        `json:"disk"`            // block device, e.g. "/dev/sda" (auto-partition)
-	Filesystem      string        `json:"filesystem"`      // "xfs", "btrfs", or "zfs"
+	Filesystem      string        `json:"filesystem"`      // "xfs", "ext4", "btrfs", or "zfs"
 	BtrfsSubvolumes bool          `json:"btrfsSubvolumes"` // create @, @home, @snapshots
 	Encryption      Encryption    `json:"encryption"`
 	Image           string        `json:"image"`           // source OCI image reference
@@ -110,9 +110,9 @@ func (r *Recipe) Validate() error {
 			return fmt.Errorf("disk %s: %w", r.Disk, err)
 		}
 		switch r.Filesystem {
-		case "xfs", "btrfs", "zfs":
+		case "xfs", "ext4", "btrfs", "zfs":
 		default:
-			return fmt.Errorf("filesystem must be \"xfs\", \"btrfs\", or \"zfs\", got %q", r.Filesystem)
+			return fmt.Errorf("filesystem must be \"xfs\", \"ext4\", \"btrfs\", or \"zfs\", got %q", r.Filesystem)
 		}
 		if r.BtrfsSubvolumes && r.Filesystem != "btrfs" {
 			return fmt.Errorf("btrfsSubvolumes requires filesystem=btrfs")

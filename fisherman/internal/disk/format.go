@@ -13,11 +13,16 @@ func FormatEFI(part string) error {
 	return runner.Run("mkfs.fat", "-F32", "-n", "EFI-SYSTEM", part)
 }
 
-// FormatRoot formats a device as the root filesystem (xfs or btrfs).
+// FormatRoot formats a device as the root filesystem (xfs, ext4, or btrfs).
 func FormatRoot(dev, filesystem string) error {
 	switch filesystem {
 	case "xfs":
 		return runner.Run("mkfs.xfs", "-f", "-L", "root", dev)
+	case "ext4":
+		// -O verity is required for composefs (bootc's --composefs-backend uses
+		// FS_IOC_ENABLE_VERITY on individual files; ext4 only supports this when
+		// the verity feature is enabled at format time).
+		return runner.Run("mkfs.ext4", "-F", "-L", "root", "-O", "verity", dev)
 	case "btrfs":
 		return runner.Run("mkfs.btrfs", "-f", "-L", "root", dev)
 	default:

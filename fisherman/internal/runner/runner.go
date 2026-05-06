@@ -61,14 +61,24 @@ func RunWithStdin(stdin io.Reader, name string, args ...string) error {
 	return RunFn(stdin, name, args...)
 }
 
-// Output runs a command and returns its combined stdout output as bytes.
-// Unlike Run, this does not stream output to os.Stdout. Flatpak-spawn wrapping
-// is applied when running inside a sandbox.
-func Output(name string, args ...string) ([]byte, error) {
+// DefaultOutput is the real implementation of Output. Tests can replace
+// OutputFn to intercept calls without executing them.
+func DefaultOutput(name string, args ...string) ([]byte, error) {
 	name, args = HostArgs(name, args)
 	out, err := exec.Command(name, args...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 	}
 	return out, nil
+}
+
+// OutputFn is the function invoked by Output. Tests replace it with a
+// recording function to intercept calls without executing them.
+var OutputFn = DefaultOutput
+
+// Output runs a command and returns its combined stdout output as bytes.
+// Unlike Run, this does not stream output to os.Stdout. Flatpak-spawn wrapping
+// is applied when running inside a sandbox.
+func Output(name string, args ...string) ([]byte, error) {
+	return OutputFn(name, args...)
 }

@@ -12,10 +12,11 @@ source "$SCRIPT_DIR/find-tools.sh"
 
 SSH_PORT="${1:-2222}"
 SSH_KEY="${2:-/tmp/bootcrew-ssh/id_rsa}"
-VM_TIMEOUT="${3:-300}"
+VM_TIMEOUT="${3:-600}"  # 10 minutes: network boot timeout + disk boot + systemd startup
 VM_MEMORY="${4:-2G}"
 LOOPDEV="${5}"
 IMAGE_NAME="${6}"
+LUKS_PASSPHRASE="${7:-}"  # optional; if set, run luks-unlock.py for Plymouth passphrase entry
 
 if [ -z "$LOOPDEV" ]; then
   LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt 2>/dev/null)
@@ -53,86 +54,15 @@ SSH_BIN=$(find_ssh) || {
 OVMF_CODE="${OVMF_PATH%:*}"
 OVMF_VARS="${OVMF_PATH#*:}"
 
-# Patch boot loader for debian-bootc (composefs) if needed
-# composefs images expect GPT auto-discovery but fisherman creates type=linux partitions
-# So we need to add root=/dev/vda3 kernel parameter to boot configuration
-if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-composefs" ]; then
-  echo "=== Patching boot loader for debian-bootc (composefs) ==="
+# For systemd-boot images, UEFI variables need to be properly initialized
+# Use a writable copy of OVMF_VARS.fd instead of the read-only template
+# This allows OVMF firmware to set up boot entries correctly
+if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-composefs" ] || \
+   [ "$IMAGE_NAME" = "arch-bootc" ] || [ "$IMAGE_NAME" = "arch-bootc-composefs" ] || \
+   [ "$IMAGE_NAME" = "fedora-bootc" ] || [ "$IMAGE_NAME" = "fedora-bootc-composefs" ]; then
   
-  FOUND_BOOT_CONFIG=0
-  PATCHED=0
-  MNTDIR="/tmp/bootcrew-grub-mnt-$$"
-  mkdir -p "$MNTDIR"
-  
-  # Try each partition to find boot configuration
-  for PARTITION in "$LOOPDEV"p2 "$LOOPDEV"p3 "$LOOPDEV"p1; do
-    [ -b "$PARTITION" ] || continue
-    
-    if sudo mount "$PARTITION" "$MNTDIR" 2>/dev/null; then
-      echo "✓ Mounted $PARTITION"
-      
-      # Check for systemd-boot/BLS format (/loader/entries)
-      if [ -d "$MNTDIR/loader/entries" ]; then
-        FOUND_BOOT_CONFIG=1
-        echo "  ✓ Found /loader/entries (systemd-boot)"
-        CONF_COUNT=0
-        for conf in "$MNTDIR"/loader/entries/*.conf; do
-          [ -f "$conf" ] || continue
-          CONF_COUNT=$((CONF_COUNT + 1))
-          NEEDS_ROOT=0
-          NEEDS_SSH=0
-          
-          # Check if needs root= parameter
-          if ! sudo grep -q "root=" "$conf"; then
-            NEEDS_ROOT=1
-          fi
-          
-          # Check if needs systemd.wants=ssh.service for composefs systems
-          if ! sudo grep -q "systemd.wants=ssh" "$conf"; then
-            NEEDS_SSH=1
-          fi
-          
-          if [ "$NEEDS_ROOT" -eq 1 ] || [ "$NEEDS_SSH" -eq 1 ]; then
-            echo "    Patching $(basename "$conf")..."
-            [ "$NEEDS_ROOT" -eq 1 ] && sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
-            [ "$NEEDS_SSH" -eq 1 ] && sudo sed -i 's/^options /options systemd.wants=ssh.service /' "$conf"
-            PATCHED=1
-          fi
-        done
-        [ "$CONF_COUNT" -eq 0 ] && echo "    ⚠️  No .conf files found"
-        [ "$CONF_COUNT" -gt 0 ] && [ "$PATCHED" -eq 0 ] && echo "    ✓ All entries already have root= and systemd parameters"
-      fi
-      
-      # Check for GRUB format (/boot/grub2 or /boot/grub)
-      if [ "$FOUND_BOOT_CONFIG" -eq 0 ]; then
-        for GRUB_DIR in "$MNTDIR/boot/grub2" "$MNTDIR/boot/grub"; do
-          if [ -f "$GRUB_DIR/grub.cfg" ]; then
-            FOUND_BOOT_CONFIG=1
-            echo "  ✓ Found GRUB config at $GRUB_DIR/grub.cfg"
-            if ! sudo grep -q "root=/dev/vda3" "$GRUB_DIR/grub.cfg"; then
-              echo "    Patching GRUB config..."
-              sudo sed -i 's/^[[:space:]]*linux[[:space:]]/&root=\/dev\/vda3 /' "$GRUB_DIR/grub.cfg"
-              PATCHED=1
-            else
-              echo "    ✓ root=/dev/vda3 already present"
-            fi
-            break
-          fi
-        done
-      fi
-      
-      sudo umount "$MNTDIR" || true
-      [ "$FOUND_BOOT_CONFIG" -eq 1 ] && break
-    fi
-  done
-  
-  if [ "$FOUND_BOOT_CONFIG" -eq 0 ]; then
-    echo "⚠️  Boot configuration not found"
-  elif [ "$PATCHED" -eq 1 ]; then
-    echo "✓ Boot configuration patched successfully"
-  fi
-  
-  rm -rf "$MNTDIR"
+  echo "=== Systemd-boot image detected (debian-bootc/arch-bootc) ==="
+  echo "Note: Using persistent UEFI variables for proper boot entry initialization"
   echo ""
 fi
 
@@ -145,28 +75,96 @@ echo "OVMF_CODE: $OVMF_CODE"
 echo "OVMF_VARS: $OVMF_VARS"
 echo ""
 
+# Helper function to add UEFI boot entry for systemd-boot images
+# This is a workaround for systemd-boot not creating UEFI entries via efibootmgr
+add_uefi_boot_entry_workaround() {
+  local ovmf_vars="$1"
+  
+  # Check if efivar is available to manipulate EFI variables
+  if ! command -v efibootmgr &>/dev/null; then
+    echo "⚠️  efibootmgr not available - UEFI boot entry workaround skipped"
+    return 1
+  fi
+  
+  # For systemd-boot images, we would need to pre-create Boot0000 entry
+  # This is complex as it requires understanding UEFI variable format
+  # A proper implementation would require:
+  # 1. Parsing UEFI boot entry format (GUID, device path, attributes)
+  # 2. Writing to the OVMF_VARS.fd file's EFI variable storage
+  # 3. Ensuring proper CRC32 checksums
+  #
+  # For now, this is documented as a possible workaround
+  # Real fix: upstream images should pre-install GRUB for boot entry creation
+  
+  return 1
+}
+
 # Start QEMU with SSH port forwarding
 echo "Starting QEMU..."
+SERIAL_LOG="/tmp/bootcrew-serial-$$.log"
+QEMU_MONITOR_SOCK="/tmp/qemu-monitor-$$.sock"
+QEMU_STDOUT_LOG="/tmp/qemu-stdout-$$.log"
+
+# Use a writable copy of OVMF_VARS.fd so UEFI variables can be initialized
+OVMF_VARS_TEMP="/tmp/ovmf-vars-$$.fd"
+cp "$OVMF_VARS" "$OVMF_VARS_TEMP"
+
+# Attempt UEFI boot entry workaround for systemd-boot images
+if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-composefs" ] || \
+   [ "$IMAGE_NAME" = "arch-bootc" ] || [ "$IMAGE_NAME" = "arch-bootc-composefs" ]; then
+  echo "=== Attempting OVMF_VARS boot entry workaround for systemd-boot ==="
+  if add_uefi_boot_entry_workaround "$OVMF_VARS_TEMP"; then
+    echo "✓ Added UEFI boot entry to OVMF_VARS"
+  else
+    echo "⚠️  Could not add UEFI boot entry - will rely on BOOTX64.EFI fallback"
+  fi
+  echo ""
+fi
+
+# Pre-create serial log with proper permissions for sudo-run QEMU to write
+sudo sh -c "rm -f \"$SERIAL_LOG\" 2>/dev/null; touch \"$SERIAL_LOG\" && chmod 666 \"$SERIAL_LOG\"" || true
+
+# Trap to clean up temp files on all exits
+trap "sudo rm -f '$OVMF_VARS_TEMP' '$QEMU_MONITOR_SOCK' '$QEMU_STDOUT_LOG' 2>/dev/null || true" EXIT
+
 sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
+  -machine q35 \
   -enable-kvm \
   -cpu host \
   -m "$VM_MEMORY" \
-  -drive file="$LOOPDEV",format=raw,if=virtio \
+  -device ahci,id=ahci0 \
+  -drive file="$LOOPDEV",format=raw,if=none,id=disk0 \
+  -device ide-hd,drive=disk0,bus=ahci0.0,bootindex=1 \
   -drive if=pflash,format=raw,readonly=on,file="$OVMF_CODE" \
-  -drive if=pflash,format=raw,snapshot=on,file="$OVMF_VARS" \
+  -drive if=pflash,format=raw,file="$OVMF_VARS_TEMP" \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22 \
   -device virtio-net-pci,netdev=net0 \
-  -nographic \
-  -no-reboot &
+  -monitor "unix:$QEMU_MONITOR_SOCK,server=on,wait=off" \
+  -serial "file:$SERIAL_LOG" \
+  -display none \
+  -no-reboot >"$QEMU_STDOUT_LOG" 2>&1 &
 
 QEMU_PID=$!
 echo "QEMU PID: $QEMU_PID"
 echo ""
 
+LUKS_PID=""
+if [ -n "$LUKS_PASSPHRASE" ]; then
+  echo "=== LUKS mode: starting passphrase injector ==="
+  # Run as sudo so it can connect to the root-owned QEMU monitor socket.
+  sudo python3 "$SCRIPT_DIR/luks-unlock.py" qemu \
+    "$QEMU_MONITOR_SOCK" "$LUKS_PASSPHRASE" "$SERIAL_LOG" &
+  LUKS_PID=$!
+  echo "luks-unlock.py PID: $LUKS_PID"
+  echo ""
+fi
+
 # Wait for SSH to be ready (using password auth)
-echo "Waiting for VM to boot and SSH to be ready (up to 60s)..."
+# For LUKS VMs, luks-unlock.py runs concurrently and injects the passphrase;
+# SSH becomes available once the system has fully booted after unlock.
+echo "Waiting for VM to boot and SSH to be ready (up to 240s)..."
 SSH_READY=0
-for i in {1..60}; do
+for i in {1..120}; do
   sleep 2
   if sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
          -o ConnectTimeout=1 -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" \
@@ -176,14 +174,51 @@ for i in {1..60}; do
     break
   fi
   if [ $((i % 10)) -eq 0 ]; then
-    echo "  Waiting... ($i/60)"
+    echo "  Waiting... ($i/120)"
   fi
 done
 
+# Collect luks-unlock.py exit code (if running)
+LUKS_EXIT=0
+if [ -n "$LUKS_PID" ]; then
+  wait "$LUKS_PID" 2>/dev/null && LUKS_EXIT=0 || LUKS_EXIT=$?
+  if [ "$LUKS_EXIT" -eq 2 ]; then
+    echo "❌ luks-unlock.py: passphrase sent but emergency shell detected (LUKS boot failed)"
+  elif [ "$LUKS_EXIT" -ne 0 ]; then
+    echo "❌ luks-unlock.py exited with code $LUKS_EXIT (Plymouth prompt not detected)"
+  else
+    echo "✅ luks-unlock.py: passphrase injected successfully"
+  fi
+fi
+
 if [ $SSH_READY -eq 0 ]; then
   echo "❌ SSH connection failed (timeout)"
+
+  if [ -f "$SERIAL_LOG" ]; then
+    echo ""
+    echo "=== Serial Console Output (for debugging) ==="
+    sudo cat "$SERIAL_LOG" || cat "$SERIAL_LOG" || true
+    PERSISTENT_LOG="/tmp/bootcrew-serial-last.log"
+    sudo cp "$SERIAL_LOG" "$PERSISTENT_LOG" 2>/dev/null || cp "$SERIAL_LOG" "$PERSISTENT_LOG" 2>/dev/null || true
+    echo "(Full log saved to: $PERSISTENT_LOG)"
+    sudo rm -f "$SERIAL_LOG" 2>/dev/null || rm -f "$SERIAL_LOG" 2>/dev/null || true
+  fi
+
+  if [ -f "$QEMU_STDOUT_LOG" ]; then
+    echo ""
+    echo "=== QEMU stdout/stderr ==="
+    sudo cat "$QEMU_STDOUT_LOG" || cat "$QEMU_STDOUT_LOG" || true
+  fi
+
   kill $QEMU_PID 2>/dev/null || true
   exit 1
+fi
+
+if [ "$LUKS_EXIT" -ne 0 ]; then
+  # SSH already succeeded above, so LUKS was definitely unlocked.
+  # luks-unlock.py brightness-based detection can produce false positives
+  # (e.g. Plymouth screen dims after passphrase accepted). Treat as warning only.
+  echo "⚠️  luks-unlock.py reported non-zero exit ($LUKS_EXIT), but SSH succeeded — LUKS is working"
 fi
 
 echo ""

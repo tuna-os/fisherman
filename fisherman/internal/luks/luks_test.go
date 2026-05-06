@@ -185,6 +185,57 @@ func TestMapperPath(t *testing.T) {
 	}
 }
 
+func TestRandomPassphrase(t *testing.T) {
+	p1 := luks.RandomPassphrase()
+	p2 := luks.RandomPassphrase()
+
+	// Must be 64 hex characters (32 bytes encoded as hex).
+	if len(p1) != 64 {
+		t.Errorf("passphrase length = %d, want 64", len(p1))
+	}
+
+	// Must be valid hex.
+	for i, c := range p1 {
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			t.Errorf("passphrase[%d] = %q is not lowercase hex", i, c)
+			break
+		}
+	}
+
+	// Two calls must not return the same value.
+	if p1 == p2 {
+		t.Error("RandomPassphrase returned the same value twice (collision or non-random)")
+	}
+}
+
+func TestUUID_ReturnsUUIDFromOutput(t *testing.T) {
+	const wantUUID = "deadbeef-1234-5678-abcd-000000000000"
+
+	old := runner.OutputFn
+	runner.OutputFn = func(name string, args ...string) ([]byte, error) {
+		return []byte(wantUUID + "\n"), nil
+	}
+	t.Cleanup(func() { runner.OutputFn = old })
+
+	got := luks.UUID("/dev/fake")
+	if got != wantUUID {
+		t.Errorf("UUID = %q, want %q", got, wantUUID)
+	}
+}
+
+func TestUUID_ReturnsEmptyOnError(t *testing.T) {
+	old := runner.OutputFn
+	runner.OutputFn = func(name string, args ...string) ([]byte, error) {
+		return nil, errors.New("cryptsetup: not a LUKS device")
+	}
+	t.Cleanup(func() { runner.OutputFn = old })
+
+	got := luks.UUID("/dev/fake")
+	if got != "" {
+		t.Errorf("UUID on error = %q, want empty string", got)
+	}
+}
+
 func equalSlice(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

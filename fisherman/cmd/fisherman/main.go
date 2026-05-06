@@ -472,10 +472,10 @@ func main() {
 		}
 		cleanup.AddMount(scratchDir)
 	}
-	if err := disk.BindMount(scratchDir, "/var/tmp"); err != nil {
-		fatal("bind-mounting scratch dir at /var/tmp: %v", err)
-	}
-	cleanup.AddMount("/var/tmp")
+	// Note: bootc container gets this directory mounted at /var/tmp via -v flag in podman call.
+	// The container runs in its own mount namespace, so the host-level /var/tmp mount is not
+	// necessary. We skip it here to avoid conflicts when /var/tmp is already a separate
+	// filesystem on the host.
 	defer os.RemoveAll(scratchDir)
 
 	// ── Step 6: Install OS ────────────────────────────────────────────────────
@@ -516,6 +516,22 @@ func main() {
 	// Linux root GUID so the installed system can find /sysroot on first boot.
 	if !isManual && isSystemdBoot && !hasEncryption && r.ComposeFsBackend {
 		progress.Info("Retagging root partition for systemd GPT auto-discovery")
+
+		// Ensure BOOTX64.EFI is on the ESP before we touch the mount stack.
+		// Newer bootctl (e.g. arch-bootc systemd ≥ v255) enables --graceful when
+		// running in a container and silently skips writing to the ESP. Copying
+		// directly from the ostree deployment is a reliable fallback and a no-op
+		// when bootctl ran correctly (EFI/BOOT/BOOTX64.EFI already present).
+		if err := install.InstallSystemdBoot(activeTargetMount); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not ensure systemd-boot EFI binary: %v", err))
+		}
+
+		// Unmount the EFI partition explicitly so the FAT32 state is flushed to
+		// the page cache before the root lazy-unmount below orphans the submount.
+		if err := disk.UnmountPartition(r.Disk, 1); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not unmount EFI partition before retag: %v\n", err)
+		}
+
 		// Release kernel and userspace references to the root partition before
 		// modifying its GPT type. bootc install may have left active references.
 		if err := disk.UnmountPartition(r.Disk, 2); err != nil {
@@ -523,6 +539,16 @@ func main() {
 		}
 		if err := disk.SetPartitionType(r.Disk, 2, disk.GPTPartTypeLinuxRootX86_64); err != nil {
 			fatal("retagging root partition: %v", err)
+		}
+		// Remount root so finalization and post-install writes can proceed.
+		rootPart := disk.PartName(r.Disk, 2)
+		if err := disk.Mount(rootPart, activeTargetMount, ""); err != nil {
+			fatal("remounting root partition after retagging: %v", err)
+		}
+		// Remount EFI so that Plymouth/LUKS arg writes land on the real ESP
+		// instead of the empty /boot/efi directory in the XFS root.
+		if err := disk.MountEFI(activeTargetMount, activeEfiPart); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not remount EFI partition after retag: %v\n", err)
 		}
 	}
 

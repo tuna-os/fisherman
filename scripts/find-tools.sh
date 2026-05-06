@@ -31,39 +31,54 @@ find_qemu() {
   find_executable "qemu-system-x86_64" \
     /usr/libexec/qemu-kvm \
     /usr/bin/qemu-system-x86_64 \
-    /usr/local/bin/qemu-system-x86_64 || return 1
+    /usr/local/bin/qemu-system-x86_64 \
+    /home/linuxbrew/.linuxbrew/bin/qemu-system-x86_64 || return 1
 }
 
 # Find OVMF firmware files
 find_ovmf() {
   local code_file ovmf_vars
-  
-  # Try common locations for OVMF_CODE
-  for dir in /usr/share/edk2/ovmf /usr/share/OVMF /usr/share/qemu; do
+
+  # Try common locations for OVMF_CODE (OVMF_CODE.fd + OVMF_VARS.fd)
+  for dir in \
+    /usr/share/edk2/ovmf \
+    /usr/share/OVMF \
+    /usr/share/qemu \
+    /home/linuxbrew/.linuxbrew/share/qemu; do
     if [ -f "$dir/OVMF_CODE.fd" ]; then
       code_file="$dir/OVMF_CODE.fd"
       ovmf_vars="$dir/OVMF_VARS.fd"
-      
       if [ -f "$ovmf_vars" ]; then
         echo "$code_file:$ovmf_vars"
         return 0
       fi
     fi
   done
-  
-  # Try with _4M variant
-  for dir in /usr/share/edk2/ovmf /usr/share/OVMF /usr/share/qemu; do
+
+  # Try _4M variant
+  for dir in \
+    /usr/share/edk2/ovmf \
+    /usr/share/OVMF \
+    /usr/share/qemu \
+    /home/linuxbrew/.linuxbrew/share/qemu; do
     if [ -f "$dir/OVMF_CODE_4M.fd" ]; then
       code_file="$dir/OVMF_CODE_4M.fd"
       ovmf_vars="$dir/OVMF_VARS_4M.fd"
-      
       if [ -f "$ovmf_vars" ]; then
         echo "$code_file:$ovmf_vars"
         return 0
       fi
     fi
   done
-  
+
+  # Brew qemu bundles edk2 firmware under its own share dir (edk2-x86_64-code.fd)
+  for brew_share in /home/linuxbrew/.linuxbrew/share/qemu /usr/local/share/qemu; do
+    if [ -f "$brew_share/edk2-x86_64-code.fd" ] && [ -f "$brew_share/edk2-i386-vars.fd" ]; then
+      echo "$brew_share/edk2-x86_64-code.fd:$brew_share/edk2-i386-vars.fd"
+      return 0
+    fi
+  done
+
   return 1
 }
 
