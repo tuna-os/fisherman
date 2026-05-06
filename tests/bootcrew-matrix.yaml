@@ -15,6 +15,7 @@ images:
     selinux_disabled: false
     flatpaks: []
     vm_boot: true  # PRIMARY PRODUCTION IMAGE - critical to test on every PR
+    build_ssh_image: true
 
   - name: bluefin-lts
     image: ghcr.io/ublue-os/bluefin:lts
@@ -33,6 +34,7 @@ images:
     selinux_disabled: false
     flatpaks: []
     vm_boot: true  # ostree backend verification
+    build_ssh_image: true
 
   - name: yellowfin-gnome50
     image: ghcr.io/tuna-os/yellowfin:gnome50
@@ -81,6 +83,7 @@ images:
     selinux_disabled: false
     flatpaks: []
     vm_boot: true  # composefs backend verification
+    build_ssh_image: true
 
   # LUKS variants — vm_boot only (nightly excluded: nightly patches root=/dev/vdaX which is wrong for LUKS)
   - name: dakota-luks
@@ -132,6 +135,7 @@ images:
     selinux_disabled: false
     flatpaks: []
     vm_boot: true  # composefs backend verification (using pre-built SSH image)
+    build_ssh_image: true
 
   - name: frostyard-snow
     image: ghcr.io/frostyard/snow:latest

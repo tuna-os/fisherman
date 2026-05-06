@@ -5,10 +5,13 @@ on:
     - cron: '0 2 * * 1'
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: read
+
 jobs:
-  # Read the image matrix from tests/bootcrew-matrix.yaml.
   setup:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.read-matrix.outputs.matrix }}
     steps:
@@ -17,16 +20,36 @@ jobs:
       - name: Parse image matrix
         id: read-matrix
         run: |
-          # Exclude entries that have nightly: false (LUKS tests run only in VM boot tests)
           MATRIX=$(yq -o json tests/bootcrew-matrix.yaml | jq -c '[.images[] | select(.nightly != false)]')
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
 
+      - name: Initialize job summary
+        run: |
+          echo "| Image | Result |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|-------|--------|" >> "$GITHUB_STEP_SUMMARY"
+
+  unit-tests:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: fisherman/go.mod
+          cache: true
+          cache-dependency-path: fisherman/go.sum
+
+      - name: Run unit tests
+        run: sudo go test ./...
+        working-directory: fisherman
+
   full-install:
     name: install / ${{ matrix.image.name }}
-    needs: setup
-    runs-on: ubuntu-latest
+    needs: [setup, unit-tests]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     strategy:
-      fail-fast: false          # All images run even if one fails
+      fail-fast: false
       matrix:
         image: ${{ fromJson(needs.setup.outputs.matrix) }}
 
@@ -35,9 +58,9 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: "1.22"
+          go-version-file: fisherman/go.mod
           cache: true
-          cache-dependency-path: go.sum
+          cache-dependency-path: fisherman/go.sum
 
       - name: Install tools
         run: |
@@ -77,11 +100,7 @@ jobs:
           }
           EOF
 
-
       - name: Pre-pull image via podman
-        # Pull with podman first so containers-storage is in a consistent state.
-        # skopeo copy (used by fisherman) then sees all layers already present and
-        # skips them — avoiding a known blob-missing issue on Ubuntu 24.04 runners.
         run: sudo podman pull ${{ matrix.image.image }}
 
       - name: Run fisherman
@@ -92,7 +111,6 @@ jobs:
           LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
           COMPOSEFS="${{ matrix.image.composefs_backend }}"
 
-          # 1. Check 3-partition layout.
           LABEL_COUNT=$(sudo lsblk -o LABEL "$LOOPDEV" | grep -cE 'EFI-SYSTEM|boot|root' || true)
           if [ "$LABEL_COUNT" -ne 3 ]; then
             echo "FAIL: expected 3 labelled partitions, got $LABEL_COUNT"
@@ -100,17 +118,14 @@ jobs:
             exit 1
           fi
 
-          # 2. Mount /boot partition (p2) and verify boot layout.
           BOOT_PART="${LOOPDEV}p2"
           VERIFY_DIR=$(mktemp -d)
           sudo mount "$BOOT_PART" "$VERIFY_DIR"
 
-          # 3. Mount root partition (p3) and verify hostname and Flatpaks.
           ROOT_PART="${LOOPDEV}p3"
           ROOT_DIR=$(mktemp -d)
           sudo mount "$ROOT_PART" "$ROOT_DIR"
 
-          # Debug: show root structure
           echo "--- Root directory structure ---"
           sudo ls -F "$ROOT_DIR"
           if [ -d "$ROOT_DIR/ostree" ]; then
@@ -119,7 +134,6 @@ jobs:
           fi
 
           if [ "$COMPOSEFS" = "true" ]; then
-            # Composefs-native: verify hostname in sysroot /etc.
             if [ ! -f "$ROOT_DIR/etc/hostname" ]; then
               echo "FAIL: $ROOT_DIR/etc/hostname not found (composefs-native)"
               sudo umount "$ROOT_DIR" || true
@@ -131,23 +145,17 @@ jobs:
 
           IMAGE_NAME="${{ matrix.image.name }}"
           if [[ "$IMAGE_NAME" == *"bluefin"* || "$IMAGE_NAME" == *"yellowfin"* ]]; then
-            # Find Firefox directory anywhere on the disk.
             echo "Searching for Firefox flatpak..."
             FLATPAK_APP_DIR=$(sudo find "$ROOT_DIR" -type d -path "*/var/lib/flatpak/app/org.mozilla.firefox" -print -quit)
             if [ -z "$FLATPAK_APP_DIR" ]; then
                echo "FAIL: Flatpak firefox not found anywhere on the root partition"
-               echo "--- Full find (debug) ---"
                sudo find "$ROOT_DIR" -maxdepth 6 || true
                sudo umount "$ROOT_DIR" || true
                sudo umount "$VERIFY_DIR" || true
                exit 1
             fi
             echo "OK: Flatpak found at $FLATPAK_APP_DIR"
-
-            # Extract the installation path (the directory containing 'app/')
             FLATPAK_INSTALLATION=${FLATPAK_APP_DIR%/app/org.mozilla.firefox}
-
-            # Use flatpak list --installation to verify they are correctly indexed.
             LIST_OUT=$(sudo flatpak list --installation="$FLATPAK_INSTALLATION" --columns=ref || true)
             if ! echo "$LIST_OUT" | grep -q "org.mozilla.firefox"; then
               echo "FAIL: flatpak list --installation did not show firefox"
@@ -157,8 +165,6 @@ jobs:
               exit 1
             fi
             echo "OK: Flatpaks verified in flatpak list"
-          else
-            echo "Skipping Flatpak verification for non-Fedora image: $IMAGE_NAME"
           fi
 
           sudo umount "$ROOT_DIR"
@@ -178,14 +184,10 @@ jobs:
             local patched=0
             for conf in "$MNT"/loader/entries/*.conf; do
               [ -f "$conf" ] || continue
-              # Add console=ttyS0 if missing.
               if ! sudo grep -q "console=ttyS0" "$conf"; then
                 sudo sed -i 's/^options /options console=ttyS0,115200 /' "$conf"
                 patched=1
               fi
-              # Add root=/dev/vda3 if missing: composefs images omit root= and rely
-              # on GPT auto-discovery (requires partition type root-x86-64), which
-              # won't work because fisherman creates type=linux partitions.
               if ! sudo grep -q "root=" "$conf"; then
                 sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
                 patched=1
@@ -216,14 +218,8 @@ jobs:
           fi
           OVMF_SUFFIX=$(basename "$OVMF_CODE" | sed 's/OVMF_CODE//;s/\.fd//')
           OVMF_VARS="/usr/share/OVMF/OVMF_VARS${OVMF_SUFFIX}.fd"
-          if [ ! -f "$OVMF_VARS" ]; then
-            echo "FAIL: matched $OVMF_CODE but corresponding VARS file $OVMF_VARS not found"
-            ls /usr/share/OVMF/ || true
-            exit 1
-          fi
 
           echo "Booting $IMAGE_NAME with QEMU+OVMF (timeout 240s)..."
-          echo "OVMF_CODE=$OVMF_CODE  OVMF_VARS=$OVMF_VARS"
           sudo timeout 240 qemu-system-x86_64 \
             -enable-kvm \
             -cpu host \
@@ -241,35 +237,33 @@ jobs:
             exit 1
           fi
 
-          # "login:" covers images with a getty on ttyS0.
-          # "Reached target.*Network" covers images that boot fully but present a
-          # firstboot OOBE wizard before a getty (e.g. arch-bootc timezone prompt).
-          # Both patterns appear only in real userspace, not in the initrd.
           BOOT_OK=0
           if grep -qE 'login:|Reached target.*(Network Name Lookups|multi-user|graphical)' "$LOG"; then
             BOOT_OK=1
           fi
 
-          # Scan for critical runtime failures even when boot appeared successful.
-          # - systemd-coredump: a process crashed and dumped core (e.g. gnome-session)
-          # - [FAILED] Failed to start: a systemd unit failed to start
-          # - Kernel panic: obvious
           FAILURES=$(grep -E 'systemd-coredump.*dumped core|\[FAILED\] Failed to start|Kernel panic' "$LOG" || true)
 
           if [ "$BOOT_OK" -eq 0 ]; then
             echo "FAIL: no boot success indicator found for $IMAGE_NAME"
-            echo "--- last 50 lines of boot log ---"
             tail -50 "$LOG"
             exit 1
           elif [ -n "$FAILURES" ]; then
             echo "FAIL: boot reached userspace but critical failures detected for $IMAGE_NAME:"
             echo "$FAILURES"
-            echo "--- last 50 lines of boot log ---"
             tail -50 "$LOG"
             exit 1
           else
             echo "PASS: boot success, no critical failures for $IMAGE_NAME"
           fi
+
+      - name: Upload boot logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-logs-nightly-${{ matrix.image.name }}
+          path: /tmp/boot-*.log
+          retention-days: 14
 
       - name: Cleanup
         if: always()
@@ -280,6 +274,4 @@ jobs:
       - name: Report result to job summary
         if: always()
         run: |
-          STATUS="${{ job.status }}"
-          IMAGE="${{ matrix.image.name }}"
-          echo "| $IMAGE | $STATUS |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ${{ matrix.image.name }} | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
