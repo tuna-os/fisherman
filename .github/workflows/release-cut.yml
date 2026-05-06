@@ -1,0 +1,113 @@
+name: Cut Release
+
+# Run this manually on the `dev` branch to prepare a new release.
+# It will:
+#   1. Compute the next semver from the last git tag
+#   2. Create and push the tag (this triggers release-publish.yml)
+#   3. Open a PR from dev → prod with a generated changelog
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version bump type
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: Explicit version override (e.g. 1.2.3) — leave blank to use bump
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  cut:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Use a PAT so the tag push can trigger release-publish.yml
+          # (GITHUB_TOKEN-created tags/commits don't re-trigger workflows)
+          token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Compute next version
+        id: version
+        run: |
+          LAST=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.' | head -1)
+          LAST=${LAST:-v0.0.0}
+          echo "Last tag: $LAST"
+
+          if [ -n "${{ inputs.version }}" ]; then
+            NEXT="v${{ inputs.version }}"
+          else
+            # Strip leading v, split into parts
+            IFS='.' read -r MAJOR MINOR PATCH <<< "${LAST#v}"
+            case "${{ inputs.bump }}" in
+              major) NEXT="v$((MAJOR+1)).0.0" ;;
+              minor) NEXT="v${MAJOR}.$((MINOR+1)).0" ;;
+              patch) NEXT="v${MAJOR}.${MINOR}.$((PATCH+1))" ;;
+            esac
+          fi
+
+          echo "Next version: $NEXT"
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "last=$LAST"    >> "$GITHUB_OUTPUT"
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          LAST="${{ steps.version.outputs.last }}"
+          NEXT="${{ steps.version.outputs.version }}"
+
+          if [ "$LAST" = "v0.0.0" ]; then
+            RANGE="HEAD"
+          else
+            RANGE="${LAST}..HEAD"
+          fi
+
+          COMMITS=$(git log "$RANGE" \
+            --pretty=format:"- %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" \
+            --no-merges)
+
+          # Write to a temp file to avoid quoting issues
+          {
+            echo "## What's Changed"
+            echo ""
+            echo "$COMMITS"
+            echo ""
+            echo "**Full diff**: https://github.com/${{ github.repository }}/compare/${LAST}...${NEXT}"
+          } > /tmp/changelog.md
+
+          echo "Generated changelog:"
+          cat /tmp/changelog.md
+
+      - name: Create and push tag
+        run: |
+          NEXT="${{ steps.version.outputs.version }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEXT" -m "Release $NEXT"
+          git push origin "$NEXT"
+          echo "✅ Pushed tag $NEXT"
+
+      - name: Open release PR dev → prod
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          NEXT="${{ steps.version.outputs.version }}"
+          BODY=$(cat /tmp/changelog.md)
+
+          gh pr create \
+            --base prod \
+            --head dev \
+            --title "Release $NEXT" \
+            --body "$BODY" \
+            --label "release" || echo "PR may already exist or dev is already up to date with prod"

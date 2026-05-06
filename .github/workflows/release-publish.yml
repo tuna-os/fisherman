@@ -1,0 +1,39 @@
+name: Publish Release
+
+# Triggered automatically when release-cut.yml pushes a version tag.
+# Builds fisherman binaries and creates a GitHub Release via GoReleaser.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: fisherman/go.mod
+          cache: true
+          cache-dependency-path: fisherman/go.sum
+
+      - name: Run tests before publishing
+        run: sudo go test ./...
+        working-directory: fisherman
+
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
