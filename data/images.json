@@ -985,8 +985,7 @@
           "filesystems": [
             "btrfs",
             "xfs",
-            "ext4",
-            "zfs"
+            "ext4"
           ],
           "filesystem": "btrfs"
         },
@@ -1058,8 +1057,7 @@
           "filesystems": [
             "btrfs",
             "xfs",
-            "ext4",
-            "zfs"
+            "ext4"
           ],
           "filesystem": "btrfs"
         },
@@ -1156,8 +1154,7 @@
           "filesystems": [
             "btrfs",
             "xfs",
-            "ext4",
-            "zfs"
+            "ext4"
           ],
           "filesystem": "btrfs"
         },
@@ -1274,8 +1271,7 @@
           "filesystems": [
             "btrfs",
             "xfs",
-            "ext4",
-            "zfs"
+            "ext4"
           ],
           "filesystem": "btrfs"
         }
@@ -1301,8 +1297,7 @@
       "filesystems": [
         "btrfs",
         "xfs",
-        "ext4",
-        "zfs"
+        "ext4"
       ],
       "filesystem": "btrfs"
     },
@@ -1378,6 +1373,28 @@
         "ext4"
       ],
       "filesystem": "btrfs"
+    },
+    {
+      "name": "Ubuntu",
+      "search_extra": "ubuntu canonical desktop gnome",
+      "icon": "org.gnome.Software",
+      "children": [
+        {
+          "name": "26.04 Desktop",
+          "desc": "Ubuntu 26.04 LTS with GNOME — ZFS root filesystem support",
+          "search_extra": "26.04 lts zfs",
+          "registry": "ghcr.io/canonical/ubuntu:26.04",
+          "filesystems": [
+            "btrfs",
+            "xfs",
+            "ext4",
+            "zfs"
+          ],
+          "filesystem": "ext4",
+          "default_hostname": "ubuntu",
+          "needs_user_creation": true
+        }
+      ]
     }
   ]
 }
