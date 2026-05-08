@@ -472,11 +472,6 @@ func main() {
 		}
 		cleanup.AddMount(scratchDir)
 	}
-	// Note: bootc container gets this directory mounted at /var/tmp via -v flag in podman call.
-	// The container runs in its own mount namespace, so the host-level /var/tmp mount is not
-	// necessary. We skip it here to avoid conflicts when /var/tmp is already a separate
-	// filesystem on the host.
-	defer os.RemoveAll(scratchDir)
 
 	// ── Step 6: Install OS ────────────────────────────────────────────────────
 	progress.Step(step, totalSteps, "Installing OS", profile[pi].cumulativePct, profile[pi].weightPct)
@@ -508,7 +503,15 @@ func main() {
 		NeedsPull:        imageCheck.NeedsPull,
 		LayerCount:       imageCheck.LayerCount,
 	}); err != nil {
+		// try to clean up scratch directory
+		// if error, just log so fatal can run for the real error
+		if err2 := os.RemoveAll(scratchDir); err2 != nil {
+			fmt.Fprintf(os.Stderr, "failed to clean up scratch directory: %v", err2)
+		}
 		fatal("bootc install: %v", err)
+	}
+	if err := os.RemoveAll(scratchDir); err != nil {
+		fatal("deleting scratch dir: %v", err)
 	}
 
 	// systemd-boot composefs installs rely on GPT auto-discovery for the root
