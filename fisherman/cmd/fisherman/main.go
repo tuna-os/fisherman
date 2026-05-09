@@ -23,6 +23,9 @@ const (
 // cleanup is global so fatal() can tear everything down on any error path.
 var cleanup = &post.Cleanup{}
 
+// bindMount is disk.BindMount by default; tests replace it to avoid real mounts.
+var bindMount = disk.BindMount
+
 type stepProfile struct {
 	cumulativePct int
 	weightPct     int
@@ -95,6 +98,26 @@ func isSpaceConstrained(path string) bool {
 		overlayMagic = 0x794c7630
 	)
 	return st.Type == tmpfsMagic || st.Type == overlayMagic
+}
+
+func prepareScratchDir(activeTargetMount string, liveISO bool) (string, error) {
+	scratchDir := "/var/fisherman-tmp"
+	if liveISO {
+		scratchDir = filepath.Join(activeTargetMount, ".fisherman-scratch")
+		progress.Info("Live environment detected (/var is space-constrained) — using target disk for scratch I/O")
+	}
+	if err := os.MkdirAll(scratchDir, 0o1777); err != nil {
+		return "", err
+	}
+	if liveISO {
+		// Self-bind so bootc sees a mount point, not a plain directory.
+		if err := bindMount(scratchDir, scratchDir); err != nil {
+			return "", err
+		}
+		cleanup.AddMount(scratchDir)
+		cleanup.AddRemoval(scratchDir)
+	}
+	return scratchDir, nil
 }
 
 // expandPath prepends standard sbin directories and any tools staged alongside
@@ -456,21 +479,10 @@ func main() {
 	// target disk instead. A self-bind mount makes bootc's empty-rootdir
 	// check see a mount point (which it tolerates) rather than a plain
 	// directory (which it rejects).
-	scratchDir := "/var/fisherman-tmp"
 	liveISO := isSpaceConstrained("/var") && activeTargetMount != ""
-	if liveISO {
-		scratchDir = filepath.Join(activeTargetMount, ".fisherman-scratch")
-		progress.Info("Live environment detected (/var is space-constrained) — using target disk for scratch I/O")
-	}
-	if err := os.MkdirAll(scratchDir, 0o1777); err != nil {
-		fatal("creating scratch dir: %v", err)
-	}
-	if liveISO {
-		// Self-bind so bootc sees a mount point, not a plain directory.
-		if err := disk.BindMount(scratchDir, scratchDir); err != nil {
-			fatal("self-bind scratch dir: %v", err)
-		}
-		cleanup.AddMount(scratchDir)
+	scratchDir, err := prepareScratchDir(activeTargetMount, liveISO)
+	if err != nil {
+		fatal("preparing scratch dir: %v", err)
 	}
 	// Note: bootc container gets this directory mounted at /var/tmp via -v flag in podman call.
 	// The container runs in its own mount namespace, so the host-level /var/tmp mount is not

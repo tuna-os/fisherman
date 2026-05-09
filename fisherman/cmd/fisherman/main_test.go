@@ -3,9 +3,11 @@ package main
 import (
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/recipe"
 )
 
@@ -118,5 +120,39 @@ func TestCheckRequiredTools_BtrfsNotCheckedForXfs(t *testing.T) {
 	r := &recipe.Recipe{Filesystem: "xfs"}
 	if err := checkRequiredTools(r); err != nil {
 		t.Errorf("mkfs.btrfs should not be checked for xfs recipe, got: %v", err)
+	}
+}
+
+// TestPrepareScratchDir_LiveISORegistersCleanup verifies that live ISO scratch
+// directories are bound on the target disk and registered for cleanup.
+func TestPrepareScratchDir_LiveISORegistersCleanup(t *testing.T) {
+	oldCleanup := cleanup
+	cleanup = &post.Cleanup{}
+	t.Cleanup(func() { cleanup = oldCleanup })
+
+	oldBindMount := bindMount
+	bindMount = func(src, dst string) error { return nil }
+	t.Cleanup(func() { bindMount = oldBindMount })
+
+	oldRemoveAll := post.RemoveAllFn
+	var removed []string
+	post.RemoveAllFn = func(path string) error {
+		removed = append(removed, path)
+		return nil
+	}
+	t.Cleanup(func() { post.RemoveAllFn = oldRemoveAll })
+
+	targetRoot := filepath.Join(t.TempDir(), "fisherman-target")
+	scratchDir, err := prepareScratchDir(targetRoot, true)
+	if err != nil {
+		t.Fatalf("prepareScratchDir returned error: %v", err)
+	}
+	if scratchDir != filepath.Join(targetRoot, ".fisherman-scratch") {
+		t.Fatalf("scratchDir = %q, want target-backed scratch path", scratchDir)
+	}
+
+	cleanup.Run()
+	if len(removed) != 1 || removed[0] != scratchDir {
+		t.Fatalf("removeAll calls = %v, want [%q]", removed, scratchDir)
 	}
 }

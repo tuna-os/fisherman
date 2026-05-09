@@ -31,6 +31,16 @@ func setupRecorder(t *testing.T) *recorder {
 	return rec
 }
 
+func setupRemoveAllRecorder(t *testing.T, rec *recorder) {
+	t.Helper()
+	old := post.RemoveAllFn
+	post.RemoveAllFn = func(path string) error {
+		rec.calls = append(rec.calls, execCall{name: "removeAll", args: []string{path}})
+		return nil
+	}
+	t.Cleanup(func() { post.RemoveAllFn = old })
+}
+
 // TestCleanup_Empty verifies that Cleanup.Run() with no mounts or LUKS is a no-op.
 func TestCleanup_Empty(t *testing.T) {
 	rec := setupRecorder(t)
@@ -117,6 +127,35 @@ func TestCleanup_Idempotent(t *testing.T) {
 	if len(rec.calls) != firstCount {
 		t.Errorf("second Run() emitted %d additional calls (must be idempotent)",
 			len(rec.calls)-firstCount)
+	}
+}
+
+// TestCleanup_RemovesRegisteredPathsAfterUnmount verifies that registered
+// removal paths are deleted immediately after their own unmount, before parent
+// mounts are torn down.
+func TestCleanup_RemovesRegisteredPathsAfterUnmount(t *testing.T) {
+	rec := setupRecorder(t)
+	setupRemoveAllRecorder(t, rec)
+
+	var c post.Cleanup
+	c.AddMount("/mnt/target")
+	c.AddMount("/mnt/target/.fisherman-scratch")
+	c.AddRemoval("/mnt/target/.fisherman-scratch")
+
+	c.Run()
+
+	want := []execCall{
+		{name: "umount", args: []string{"-R", "/mnt/target/.fisherman-scratch"}},
+		{name: "removeAll", args: []string{"/mnt/target/.fisherman-scratch"}},
+		{name: "umount", args: []string{"-R", "/mnt/target"}},
+	}
+	if len(rec.calls) != len(want) {
+		t.Fatalf("got %d calls, want %d: %#v", len(rec.calls), len(want), rec.calls)
+	}
+	for i, call := range rec.calls {
+		if call.name != want[i].name || len(call.args) != len(want[i].args) || call.args[0] != want[i].args[0] || call.args[len(call.args)-1] != want[i].args[len(want[i].args)-1] {
+			t.Errorf("call[%d] = %#v, want %#v", i, call, want[i])
+		}
 	}
 }
 
