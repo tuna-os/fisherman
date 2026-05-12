@@ -282,6 +282,25 @@ func bootcViaContainer(opts Options) error {
 		// finds the image via /proc/self/fd/3 — the container's own storage
 		// context — and mounting /var/lib/containers would shadow it).
 		podmanArgs = append(podmanArgs, "-v", "/var/lib/containers:/var/lib/containers")
+
+		// Live-media offline store support (SuperISO / tacklebox ISOs):
+		// On live-ISO boots the primary containers-storage is tiny (live
+		// overlay) and the actual images live in an additionalimagestores
+		// squashfs at /var/lib/superiso-store.  Bind-mount it so bootc
+		// inside the container can see the image data.
+		if _, err := os.Stat("/var/lib/superiso-store"); err == nil {
+			podmanArgs = append(podmanArgs,
+				"-v", "/var/lib/superiso-store:/var/lib/superiso-store:ro")
+		}
+		// If the caller set CONTAINERS_STORAGE_CONF (e.g. a config that lists
+		// the superiso-store as an additionalimagestores entry), forward it
+		// into the container so bootc's containers/storage library uses it.
+		if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
+			const containerConfPath = "/etc/containers/fisherman-storage.conf"
+			podmanArgs = append(podmanArgs,
+				"-v", sc+":"+containerConfPath+":ro",
+				"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
+		}
 	}
 
 	// When the target system has SELinux disabled and the host has SELinux
@@ -432,6 +451,18 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 		// Standard (grub2/ostree) path: bind containers-storage into the container
 		// so bootc can read its image layers directly.
 		podmanArgs = append(podmanArgs, "-v", "/var/lib/containers:/var/lib/containers")
+
+		// Live-media offline store support (same rationale as bootcViaContainer).
+		if _, err := os.Stat("/var/lib/superiso-store"); err == nil {
+			podmanArgs = append(podmanArgs,
+				"-v", "/var/lib/superiso-store:/var/lib/superiso-store:ro")
+		}
+		if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
+			const containerConfPath = "/etc/containers/fisherman-storage.conf"
+			podmanArgs = append(podmanArgs,
+				"-v", sc+":"+containerConfPath+":ro",
+				"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
+		}
 
 		// --via-loopback is required for loop devices (BLKRRPART ioctl fails on
 		// loop devices so partition nodes never appear inside the container).
