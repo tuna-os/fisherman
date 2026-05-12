@@ -169,29 +169,33 @@ func NeedsContainerStorageMount(opts Options) bool {
 	return !opts.ComposeFsBackend
 }
 
-// writeLiveStorageConf writes a temporary containers/storage config that adds
-// /var/lib/superiso-store as an additionalimagestores entry. Used when
-// fisherman detects it is running on live-ISO media (SuperISO / tacklebox)
-// so that bootc inside the podman run can resolve the offline image store
-// without the caller needing to set CONTAINERS_STORAGE_CONF manually.
-// The returned path must be removed by the caller when no longer needed.
-func writeLiveStorageConf() (string, error) {
+// writeLiveStorageConf writes a containers/storage config that adds
+// /var/lib/superiso-store as an additionalimagestores entry into scratchDir.
+// scratchDir is already bind-mounted as /var/tmp inside the bootc container,
+// so no additional -v flag is needed — CONTAINERS_STORAGE_CONF is set to
+// /var/tmp/<filename> inside the container env.
+//
+// Returns the host-side path (for cleanup) and the container-side path
+// (for the env var).
+func writeLiveStorageConf(scratchDir string) (hostPath, containerPath string, err error) {
 	const conf = `[storage]
 driver = "overlay"
 
 [storage.options]
 additionalimagestores = ["/var/lib/superiso-store"]
 `
-	f, err := os.CreateTemp("", "fisherman-storage-*.conf")
+	f, err := os.CreateTemp(scratchDir, "fisherman-storage-*.conf")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer f.Close()
 	if _, err := f.WriteString(conf); err != nil {
 		os.Remove(f.Name())
-		return "", err
+		return "", "", err
 	}
-	return f.Name(), nil
+	// Container sees scratchDir as /var/tmp.
+	contPath := "/var/tmp/" + filepath.Base(f.Name())
+	return f.Name(), contPath, nil
 }
 
 // BootcInstall installs a bootc image to a pre-mounted filesystem.
@@ -326,25 +330,25 @@ func bootcViaContainer(opts Options) error {
 		if _, err := os.Stat("/var/lib/superiso-store"); err == nil {
 			podmanArgs = append(podmanArgs,
 				"-v", "/var/lib/superiso-store:/var/lib/superiso-store:ro")
-			const containerConfPath = "/etc/containers/fisherman-storage.conf"
 			if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
-				// Caller-supplied config: forward as-is.
+				// Caller-supplied config: bind-mount it to /var/tmp (scratch)
+				// so it's guaranteed accessible inside the container.
+				scBase := "/var/tmp/" + filepath.Base(sc)
 				podmanArgs = append(podmanArgs,
-					"-v", sc+":"+containerConfPath+":ro",
-					"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
-			} else if conf, err := writeLiveStorageConf(); err == nil {
-				// Auto-generated config: cleaned up after the podman run.
-				defer os.Remove(conf)
+					"-v", sc+":"+scBase+":ro",
+					"-e", "CONTAINERS_STORAGE_CONF="+scBase)
+			} else if hostConf, containerConf, err := writeLiveStorageConf(scratch); err == nil {
+				// Auto-generated config lands in the scratch dir which is
+				// already mounted as /var/tmp — no extra -v needed.
+				defer os.Remove(hostConf)
 				podmanArgs = append(podmanArgs,
-					"-v", conf+":"+containerConfPath+":ro",
-					"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
+					"-e", "CONTAINERS_STORAGE_CONF="+containerConf)
 			}
 		} else if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
-			// No superiso-store, but caller provided a custom config.
-			const containerConfPath = "/etc/containers/fisherman-storage.conf"
+			scBase := "/var/tmp/" + filepath.Base(sc)
 			podmanArgs = append(podmanArgs,
-				"-v", sc+":"+containerConfPath+":ro",
-				"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
+				"-v", sc+":"+scBase+":ro",
+				"-e", "CONTAINERS_STORAGE_CONF="+scBase)
 		}
 	}
 
@@ -501,22 +505,21 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 		if _, err := os.Stat("/var/lib/superiso-store"); err == nil {
 			podmanArgs = append(podmanArgs,
 				"-v", "/var/lib/superiso-store:/var/lib/superiso-store:ro")
-			const containerConfPath = "/etc/containers/fisherman-storage.conf"
 			if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
+				scBase := "/var/tmp/" + filepath.Base(sc)
 				podmanArgs = append(podmanArgs,
-					"-v", sc+":"+containerConfPath+":ro",
-					"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
-			} else if conf, err := writeLiveStorageConf(); err == nil {
-				defer os.Remove(conf)
+					"-v", sc+":"+scBase+":ro",
+					"-e", "CONTAINERS_STORAGE_CONF="+scBase)
+			} else if hostConf, containerConf, err := writeLiveStorageConf(scratch); err == nil {
+				defer os.Remove(hostConf)
 				podmanArgs = append(podmanArgs,
-					"-v", conf+":"+containerConfPath+":ro",
-					"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
+					"-e", "CONTAINERS_STORAGE_CONF="+containerConf)
 			}
 		} else if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
-			const containerConfPath = "/etc/containers/fisherman-storage.conf"
+			scBase := "/var/tmp/" + filepath.Base(sc)
 			podmanArgs = append(podmanArgs,
-				"-v", sc+":"+containerConfPath+":ro",
-				"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
+				"-v", sc+":"+scBase+":ro",
+				"-e", "CONTAINERS_STORAGE_CONF="+scBase)
 		}
 
 		// --via-loopback is required for loop devices (BLKRRPART ioctl fails on
