@@ -169,6 +169,31 @@ func NeedsContainerStorageMount(opts Options) bool {
 	return !opts.ComposeFsBackend
 }
 
+// writeLiveStorageConf writes a temporary containers/storage config that adds
+// /var/lib/superiso-store as an additionalimagestores entry. Used when
+// fisherman detects it is running on live-ISO media (SuperISO / tacklebox)
+// so that bootc inside the podman run can resolve the offline image store
+// without the caller needing to set CONTAINERS_STORAGE_CONF manually.
+// The returned path must be removed by the caller when no longer needed.
+func writeLiveStorageConf() (string, error) {
+	const conf = `[storage]
+driver = "overlay"
+
+[storage.options]
+additionalimagestores = ["/var/lib/superiso-store"]
+`
+	f, err := os.CreateTemp("", "fisherman-storage-*.conf")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(conf); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
 // BootcInstall installs a bootc image to a pre-mounted filesystem.
 //
 // If opts.SourceImgref is set, bootc is run inside the source container via
@@ -286,16 +311,36 @@ func bootcViaContainer(opts Options) error {
 		// Live-media offline store support (SuperISO / tacklebox ISOs):
 		// On live-ISO boots the primary containers-storage is tiny (live
 		// overlay) and the actual images live in an additionalimagestores
-		// squashfs at /var/lib/superiso-store.  Bind-mount it so bootc
-		// inside the container can see the image data.
+		// squashfs at /var/lib/superiso-store.
+		//
+		// When detected:
+		//  a) Bind-mount the store read-only so the image data is visible.
+		//  b) Auto-write a storage.conf that lists it as additionalimagestores
+		//     and pass it to the container. bootc's own storage.conf only lists
+		//     /usr/lib/containers/storage (read-only system store), so without
+		//     this the image reference never resolves even though the data is
+		//     present on disk.
+		//
+		// If the caller also set CONTAINERS_STORAGE_CONF, that takes priority
+		// over the auto-generated config (opt-in override path).
 		if _, err := os.Stat("/var/lib/superiso-store"); err == nil {
 			podmanArgs = append(podmanArgs,
 				"-v", "/var/lib/superiso-store:/var/lib/superiso-store:ro")
-		}
-		// If the caller set CONTAINERS_STORAGE_CONF (e.g. a config that lists
-		// the superiso-store as an additionalimagestores entry), forward it
-		// into the container so bootc's containers/storage library uses it.
-		if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
+			const containerConfPath = "/etc/containers/fisherman-storage.conf"
+			if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
+				// Caller-supplied config: forward as-is.
+				podmanArgs = append(podmanArgs,
+					"-v", sc+":"+containerConfPath+":ro",
+					"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
+			} else if conf, err := writeLiveStorageConf(); err == nil {
+				// Auto-generated config: cleaned up after the podman run.
+				defer os.Remove(conf)
+				podmanArgs = append(podmanArgs,
+					"-v", conf+":"+containerConfPath+":ro",
+					"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
+			}
+		} else if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
+			// No superiso-store, but caller provided a custom config.
 			const containerConfPath = "/etc/containers/fisherman-storage.conf"
 			podmanArgs = append(podmanArgs,
 				"-v", sc+":"+containerConfPath+":ro",
@@ -456,8 +501,18 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 		if _, err := os.Stat("/var/lib/superiso-store"); err == nil {
 			podmanArgs = append(podmanArgs,
 				"-v", "/var/lib/superiso-store:/var/lib/superiso-store:ro")
-		}
-		if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
+			const containerConfPath = "/etc/containers/fisherman-storage.conf"
+			if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
+				podmanArgs = append(podmanArgs,
+					"-v", sc+":"+containerConfPath+":ro",
+					"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
+			} else if conf, err := writeLiveStorageConf(); err == nil {
+				defer os.Remove(conf)
+				podmanArgs = append(podmanArgs,
+					"-v", conf+":"+containerConfPath+":ro",
+					"-e", "CONTAINERS_STORAGE_CONF="+containerConfPath)
+			}
+		} else if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
 			const containerConfPath = "/etc/containers/fisherman-storage.conf"
 			podmanArgs = append(podmanArgs,
 				"-v", sc+":"+containerConfPath+":ro",
