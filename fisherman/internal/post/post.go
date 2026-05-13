@@ -20,27 +20,23 @@ import (
 // Tests replace this with a mock; restore with runner.DefaultExecutor.
 var Exec runner.Executor = runner.DefaultExecutor
 
-// RemoveAllFn removes a path after cleanup has unmounted it.
-// Tests replace this with a mock; restore with os.RemoveAll.
+// RemoveAllFn is a hook for tests to override os.RemoveAll behavior.
+// Normally set to os.RemoveAll, but tests can replace it.
+// This was previously used by cleanup.Run() to remove the scratch directory,
+// but that was removed because cleanup.Run() is called too early (during
+// unmounting), before post-install steps are complete.
 var RemoveAllFn = os.RemoveAll
 
 // Cleanup tracks mounted filesystems and an open LUKS device so they can be
 // torn down in the correct order on both success and error paths.
 type Cleanup struct {
 	mounts     []string
-	removals   map[string]struct{}
 	luksMapper string
 	done       bool
 }
 
 func (c *Cleanup) AddMount(path string) { c.mounts = append(c.mounts, path) }
-func (c *Cleanup) AddRemoval(path string) {
-	if c.removals == nil {
-		c.removals = make(map[string]struct{})
-	}
-	c.removals[path] = struct{}{}
-}
-func (c *Cleanup) SetLUKS(name string) { c.luksMapper = name }
+func (c *Cleanup) SetLUKS(name string)  { c.luksMapper = name }
 
 // Run unmounts all registered mount points in reverse order, then closes any
 // open LUKS device. It is idempotent.
@@ -53,11 +49,6 @@ func (c *Cleanup) Run() {
 		mp := c.mounts[i]
 		if err := runner.Run("umount", "-R", mp); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: unmounting %s: %v\n", mp, err)
-		}
-		if _, ok := c.removals[mp]; ok {
-			if err := RemoveAllFn(mp); err != nil {
-				fmt.Fprintf(os.Stderr, "warning: removing %s: %v\n", mp, err)
-			}
 		}
 	}
 	if c.luksMapper != "" {

@@ -115,7 +115,9 @@ func prepareScratchDir(activeTargetMount string, liveISO bool) (string, error) {
 			return "", err
 		}
 		cleanup.AddMount(scratchDir)
-		cleanup.AddRemoval(scratchDir)
+		// Note: defer os.RemoveAll() in main() handles directory removal after
+		// all post-install steps complete. Don't add cleanup.AddRemoval() here
+		// as that would remove the directory too early during the unmount phase.
 	}
 	return scratchDir, nil
 }
