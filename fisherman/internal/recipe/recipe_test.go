@@ -240,6 +240,35 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("additional image stores + mount overrides round-trip", func(t *testing.T) {
+		body := []byte(`{
+            "disk": "/dev/sda",
+            "filesystem": "xfs",
+            "hostname": "h",
+            "additionalImageStores": ["/var/lib/superiso-store", "/srv/extra"],
+            "targetMount": "/mnt/altroot",
+            "luksMapperName": "altmapper"
+        }`)
+		path := filepath.Join(dir, "stores.json")
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := recipe.Load(path)
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if got := loaded.AdditionalImageStores; len(got) != 2 ||
+			got[0] != "/var/lib/superiso-store" || got[1] != "/srv/extra" {
+			t.Errorf("AdditionalImageStores = %v, want [/var/lib/superiso-store /srv/extra]", got)
+		}
+		if loaded.TargetMount != "/mnt/altroot" {
+			t.Errorf("TargetMount = %q, want /mnt/altroot", loaded.TargetMount)
+		}
+		if loaded.LuksMapperName != "altmapper" {
+			t.Errorf("LuksMapperName = %q, want altmapper", loaded.LuksMapperName)
+		}
+	})
+
 	t.Run("malformed JSON", func(t *testing.T) {
 		path := filepath.Join(dir, "bad.json")
 		if err := os.WriteFile(path, []byte("{not valid json"), 0o600); err != nil {

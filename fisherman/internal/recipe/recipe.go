@@ -44,6 +44,27 @@ type Recipe struct {
 	// BtrfsSubvolumes and the auto-partition steps are skipped; fisherman formats and
 	// mounts the listed partitions directly.
 	CustomMounts    []CustomMount `json:"customMounts,omitempty"`
+	// AdditionalImageStores lists host paths to be exposed to the bootc
+	// container as containers/storage additionalimagestores. Each path is
+	// bind-mounted read-only into the container at the same location and added
+	// to a fisherman-generated storage.conf passed as CONTAINERS_STORAGE_CONF.
+	//
+	// Use this for live-media offline image stores (e.g. a squashfs of an OCI
+	// store baked into an installer ISO). When the caller provides their own
+	// CONTAINERS_STORAGE_CONF env var, that takes priority and this field is
+	// ignored.
+	AdditionalImageStores []string `json:"additionalImageStores,omitempty"`
+	// TargetMount overrides the host path where fisherman assembles the
+	// target filesystem hierarchy. Defaults to "/mnt/fisherman-target".
+	// Use this to run multiple installs in parallel on the same host
+	// (e.g. CI matrix on a single runner) without colliding mount points.
+	TargetMount string `json:"targetMount,omitempty"`
+	// LuksMapperName overrides the cryptsetup mapper name used for the
+	// LUKS root device. Defaults to "fisherman-root". Like TargetMount,
+	// this is intended primarily for parallel test runs — production
+	// installs should leave it at the default since the same name is
+	// hard-coded into installed system kernel cmdlines (rd.luks.name).
+	LuksMapperName string `json:"luksMapperName,omitempty"`
 }
 
 // UserSpec describes a user account to create during installation.

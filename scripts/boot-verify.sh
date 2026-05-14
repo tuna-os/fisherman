@@ -99,11 +99,28 @@ add_uefi_boot_entry_workaround() {
   return 1
 }
 
+# Artifact collection.
+#
+# ARTIFACTS_DIR (env, optional): directory where the serial log, qemu
+#   stdout/stderr, and any post-mortem captures are persisted. Defaults to
+#   /tmp/bootcrew-artifacts. The directory is created if it doesn't exist.
+#   CI should point this at $GITHUB_WORKSPACE/artifacts so the upload step
+#   can grab everything.
+#
+# BOOTCREW_KEEP_VM (env, optional): when set to "1" and the SSH probe
+#   fails, the QEMU process and serial log are left running so a maintainer
+#   can attach (e.g. via the QEMU monitor socket) and poke the guest.
+#   Useful for local debugging. Always-off in CI.
+ARTIFACTS_DIR="${ARTIFACTS_DIR:-/tmp/bootcrew-artifacts}"
+mkdir -p "$ARTIFACTS_DIR" 2>/dev/null || true
+RUN_TAG="${IMAGE_NAME:-vm}-$$"
+
 # Start QEMU with SSH port forwarding
 echo "Starting QEMU..."
-SERIAL_LOG="/tmp/bootcrew-serial-$$.log"
+SERIAL_LOG="$ARTIFACTS_DIR/serial-$RUN_TAG.log"
 QEMU_MONITOR_SOCK="/tmp/qemu-monitor-$$.sock"
-QEMU_STDOUT_LOG="/tmp/qemu-stdout-$$.log"
+QEMU_STDOUT_LOG="$ARTIFACTS_DIR/qemu-stdout-$RUN_TAG.log"
+echo "Artifacts dir: $ARTIFACTS_DIR (serial=$SERIAL_LOG)"
 
 # Use a writable copy of OVMF_VARS.fd so UEFI variables can be initialized
 OVMF_VARS_TEMP="/tmp/ovmf-vars-$$.fd"
@@ -124,8 +141,18 @@ fi
 # Pre-create serial log with proper permissions for sudo-run QEMU to write
 sudo sh -c "rm -f \"$SERIAL_LOG\" 2>/dev/null; touch \"$SERIAL_LOG\" && chmod 666 \"$SERIAL_LOG\"" || true
 
-# Trap to clean up temp files on all exits
-trap "sudo rm -f '$OVMF_VARS_TEMP' '$QEMU_MONITOR_SOCK' '$QEMU_STDOUT_LOG' 2>/dev/null || true" EXIT
+# Clean up temp files (but never the artifacts: serial log + qemu stdout log).
+# When BOOTCREW_KEEP_VM=1 and we hit a failure we leave the QEMU monitor
+# socket alone too so an operator can attach to the still-running guest.
+cleanup_temp() {
+  if [ "$BOOTCREW_KEEP_VM" = "1" ] && [ -n "$FAIL_PATH" ]; then
+    echo "BOOTCREW_KEEP_VM=1: leaving QEMU monitor socket at $QEMU_MONITOR_SOCK for inspection"
+    sudo rm -f "$OVMF_VARS_TEMP" 2>/dev/null || true
+    return
+  fi
+  sudo rm -f "$OVMF_VARS_TEMP" "$QEMU_MONITOR_SOCK" 2>/dev/null || true
+}
+trap cleanup_temp EXIT
 
 sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -machine q35 \
@@ -171,6 +198,12 @@ for i in {1..120}; do
          "echo OK" 2>/dev/null; then
     echo "✅ SSH connection successful"
     SSH_READY=1
+    # Capture a screendump as visual evidence the guest reached login.
+    # Pattern adapted from projectbluefin/dakota-iso E2E flow.
+    if [ -S "$QEMU_MONITOR_SOCK" ] && command -v socat >/dev/null 2>&1; then
+      sudo sh -c "echo 'screendump $ARTIFACTS_DIR/screen-ready-$RUN_TAG.ppm' \
+        | socat - UNIX-CONNECT:$QEMU_MONITOR_SOCK" 2>/dev/null || true
+    fi
     break
   fi
   if [ $((i % 10)) -eq 0 ]; then
@@ -193,21 +226,44 @@ fi
 
 if [ $SSH_READY -eq 0 ]; then
   echo "❌ SSH connection failed (timeout)"
+  FAIL_PATH=1
 
   if [ -f "$SERIAL_LOG" ]; then
     echo ""
     echo "=== Serial Console Output (for debugging) ==="
     sudo cat "$SERIAL_LOG" || cat "$SERIAL_LOG" || true
-    PERSISTENT_LOG="/tmp/bootcrew-serial-last.log"
-    sudo cp "$SERIAL_LOG" "$PERSISTENT_LOG" 2>/dev/null || cp "$SERIAL_LOG" "$PERSISTENT_LOG" 2>/dev/null || true
-    echo "(Full log saved to: $PERSISTENT_LOG)"
-    sudo rm -f "$SERIAL_LOG" 2>/dev/null || rm -f "$SERIAL_LOG" 2>/dev/null || true
+    echo "(Full log: $SERIAL_LOG — kept in artifacts dir)"
   fi
 
   if [ -f "$QEMU_STDOUT_LOG" ]; then
     echo ""
     echo "=== QEMU stdout/stderr ==="
     sudo cat "$QEMU_STDOUT_LOG" || cat "$QEMU_STDOUT_LOG" || true
+  fi
+
+  # The guest may have got far enough that the kernel is alive but SSH
+  # never came up (e.g. failed initramfs, getty crash). Try a last-ditch
+  # capture via the QEMU monitor: info status + a screendump of the
+  # current display. Both no-ops if the monitor socket is gone.
+  if [ -S "$QEMU_MONITOR_SOCK" ] && command -v socat >/dev/null 2>&1; then
+    echo ""
+    echo "=== QEMU monitor: info status ==="
+    sudo sh -c "echo 'info status' | socat - UNIX-CONNECT:$QEMU_MONITOR_SOCK" 2>/dev/null \
+      | tee "$ARTIFACTS_DIR/qemu-info-status-$RUN_TAG.log" || true
+    # Capture the current framebuffer — often the only evidence we have when
+    # the guest is wedged at the Plymouth prompt or an emergency shell.
+    sudo sh -c "echo 'screendump $ARTIFACTS_DIR/screen-fail-$RUN_TAG.ppm' \
+      | socat - UNIX-CONNECT:$QEMU_MONITOR_SOCK" 2>/dev/null || true
+  fi
+
+  if [ "$BOOTCREW_KEEP_VM" = "1" ]; then
+    echo ""
+    echo "BOOTCREW_KEEP_VM=1: leaving QEMU PID $QEMU_PID running for inspection."
+    echo "  Serial:  $SERIAL_LOG"
+    echo "  Stdout:  $QEMU_STDOUT_LOG"
+    echo "  Monitor: $QEMU_MONITOR_SOCK"
+    echo "  Kill with: sudo kill $QEMU_PID"
+    exit 1
   fi
 
   kill $QEMU_PID 2>/dev/null || true
@@ -229,7 +285,25 @@ sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHo
 echo ""
 echo "=== bootc status ==="
 sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "bootc status" 2>/dev/null || echo "⚠️  bootc not available"
+    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "bootc status" 2>/dev/null \
+    | tee "$ARTIFACTS_DIR/bootc-status-$RUN_TAG.log" || echo "⚠️  bootc not available"
+
+echo ""
+echo "=== bootctl status ==="
+sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "bootctl status" 2>/dev/null \
+    | tee "$ARTIFACTS_DIR/bootctl-status-$RUN_TAG.log" || echo "⚠️  bootctl not available"
+
+echo ""
+echo "=== journalctl -b (last boot) ==="
+# Capture into artifacts always (cheap; ~1-2 MB) but only echo the tail to
+# the CI log so we don't drown the rest of the workflow output.
+sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "journalctl -b --no-pager" 2>/dev/null \
+    > "$ARTIFACTS_DIR/journal-$RUN_TAG.log" \
+    && echo "(saved to $ARTIFACTS_DIR/journal-$RUN_TAG.log; tail follows)" \
+    && tail -80 "$ARTIFACTS_DIR/journal-$RUN_TAG.log" \
+    || echo "⚠️  journalctl capture failed"
 
 echo ""
 echo "=== bootc status (JSON) ==="

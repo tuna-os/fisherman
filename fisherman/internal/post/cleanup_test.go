@@ -196,6 +196,70 @@ func TestCleanup_WithLUKS(t *testing.T) {
 	}
 }
 
+// TestCleanup_PostRemovalsHappenAfterUnmountsAndLUKS verifies the new
+// post-removal contract: paths registered via AddPostRemoval must be deleted
+// *after* every unmount and after the LUKS device is closed, never interleaved
+// with them. This is the safety property fisherman relies on so that the
+// scratch directory (which is itself bind-mounted at /var/tmp inside the bootc
+// container and may host the OCI cache) stays accessible until the very end
+// of teardown — including the fatal()/os.Exit(1) error path.
+func TestCleanup_PostRemovalsHappenAfterUnmountsAndLUKS(t *testing.T) {
+	rec := setupRecorder(t)
+	setupRemoveAllRecorder(t, rec)
+
+	var c post.Cleanup
+	c.AddMount("/mnt/target")
+	c.AddMount("/mnt/target/.fisherman-scratch")
+	c.SetLUKS("fisherman-root")
+	c.AddPostRemoval("/mnt/target/.fisherman-scratch")
+
+	c.Run()
+
+	// Locate the first removeAll and the last umount / cryptsetup luksClose.
+	lastTeardownIdx := -1
+	firstRemoveIdx := -1
+	for i, call := range rec.calls {
+		switch call.name {
+		case "umount", "cryptsetup", "fuser", "blockdev", "udevadm":
+			if i > lastTeardownIdx {
+				lastTeardownIdx = i
+			}
+		case "removeAll":
+			if firstRemoveIdx == -1 {
+				firstRemoveIdx = i
+			}
+		}
+	}
+	if firstRemoveIdx == -1 {
+		t.Fatalf("no removeAll call recorded; got calls: %v", rec.calls)
+	}
+	if firstRemoveIdx < lastTeardownIdx {
+		t.Errorf("post-removal at idx %d ran before final teardown call at idx %d: %v",
+			firstRemoveIdx, lastTeardownIdx, rec.calls)
+	}
+	if rec.calls[firstRemoveIdx].args[0] != "/mnt/target/.fisherman-scratch" {
+		t.Errorf("removeAll target = %q, want /mnt/target/.fisherman-scratch",
+			rec.calls[firstRemoveIdx].args[0])
+	}
+}
+
+// TestCleanup_NoPostRemovalWhenNotRegistered ensures we don't blindly remove
+// the mount paths themselves — only paths explicitly registered.
+func TestCleanup_NoPostRemovalWhenNotRegistered(t *testing.T) {
+	rec := setupRecorder(t)
+	setupRemoveAllRecorder(t, rec)
+
+	var c post.Cleanup
+	c.AddMount("/mnt/target")
+	c.Run()
+
+	for _, call := range rec.calls {
+		if call.name == "removeAll" {
+			t.Errorf("unexpected removeAll call: %v", call)
+		}
+	}
+}
+
 // TestCleanup_NoLUKS verifies that no cryptsetup call is made when SetLUKS was
 // not called.
 func TestCleanup_NoLUKS(t *testing.T) {

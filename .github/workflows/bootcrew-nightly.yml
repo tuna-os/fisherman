@@ -40,7 +40,7 @@ jobs:
           cache-dependency-path: fisherman/go.sum
 
       - name: Run unit tests
-        run: sudo go test ./...
+        run: sudo go test -race ./...
         working-directory: fisherman
 
   full-install:

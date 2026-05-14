@@ -16,8 +16,17 @@ import (
 )
 
 const (
-	targetMount = "/mnt/fisherman-target"
-	luksMapper  = "fisherman-root"
+	defaultTargetMount = "/mnt/fisherman-target"
+	defaultLuksMapper  = "fisherman-root"
+)
+
+// These are resolved from the recipe in main(); package-level vars rather than
+// constants so the rest of this file (which references them by short name)
+// stays readable. Tests don't touch these directly — they exercise the helper
+// functions in disk/, luks/, post/ which take the paths as arguments.
+var (
+	targetMount = defaultTargetMount
+	luksMapper  = defaultLuksMapper
 )
 
 // cleanup is global so fatal() can tear everything down on any error path.
@@ -115,9 +124,11 @@ func prepareScratchDir(activeTargetMount string, liveISO bool) (string, error) {
 			return "", err
 		}
 		cleanup.AddMount(scratchDir)
-		// Note: defer os.RemoveAll() in main() handles directory removal after
-		// all post-install steps complete. Don't add cleanup.AddRemoval() here
-		// as that would remove the directory too early during the unmount phase.
+		// Removal is registered as a post-removal so it runs *after* the
+		// unmount above and after the LUKS close — and crucially it still
+		// fires on the fatal() error path, where os.Exit(1) would otherwise
+		// skip a deferred RemoveAll and leak the OCI cache on the target disk.
+		cleanup.AddPostRemoval(scratchDir)
 	}
 	return scratchDir, nil
 }
@@ -227,6 +238,15 @@ func main() {
 	}
 	if err := r.Validate(); err != nil {
 		fatal("invalid recipe: %v", err)
+	}
+
+	// Recipe-level overrides for the otherwise-shared global mount paths.
+	// Keeps two parallel installs on the same host from colliding.
+	if r.TargetMount != "" {
+		targetMount = r.TargetMount
+	}
+	if r.LuksMapperName != "" {
+		luksMapper = r.LuksMapperName
 	}
 
 	// Log fisherman version for CI diagnostics
@@ -490,7 +510,14 @@ func main() {
 	// The container runs in its own mount namespace, so the host-level /var/tmp mount is not
 	// necessary. We skip it here to avoid conflicts when /var/tmp is already a separate
 	// filesystem on the host.
-	defer os.RemoveAll(scratchDir)
+	//
+	// For the live-ISO path scratchDir is on the target disk and removal is
+	// handled by cleanup.AddPostRemoval (registered in prepareScratchDir),
+	// which also fires on the fatal() error path. For the non-live path the
+	// directory is /var/fisherman-tmp on the host and is cleaned up here.
+	if !liveISO {
+		defer os.RemoveAll(scratchDir)
+	}
 
 	// ── Step 6: Install OS ────────────────────────────────────────────────────
 	progress.Step(step, totalSteps, "Installing OS", profile[pi].cumulativePct, profile[pi].weightPct)
@@ -511,16 +538,17 @@ func main() {
 	}
 
 	if err := install.BootcInstall(install.Options{
-		SourceImgref:     r.Image,
-		TargetImgref:     targetImgref,
-		SelinuxDisabled:  r.SelinuxDisabled,
-		UnifiedStorage:   r.UnifiedStorage,
-		ComposeFsBackend: composeFsBackend,
-		Bootloader:       r.Bootloader,
-		Target:           activeTargetMount,
-		ScratchDir:       scratchDir,
-		NeedsPull:        imageCheck.NeedsPull,
-		LayerCount:       imageCheck.LayerCount,
+		SourceImgref:          r.Image,
+		TargetImgref:          targetImgref,
+		SelinuxDisabled:       r.SelinuxDisabled,
+		UnifiedStorage:        r.UnifiedStorage,
+		ComposeFsBackend:      composeFsBackend,
+		Bootloader:            r.Bootloader,
+		Target:                activeTargetMount,
+		ScratchDir:            scratchDir,
+		NeedsPull:             imageCheck.NeedsPull,
+		LayerCount:            imageCheck.LayerCount,
+		AdditionalImageStores: r.AdditionalImageStores,
 	}); err != nil {
 		fatal("bootc install: %v", err)
 	}

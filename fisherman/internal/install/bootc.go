@@ -114,6 +114,12 @@ type Options struct {
 	// LayerCount is the number of image layers from CheckImage, used to
 	// show "layer N/total" progress. 0 means unknown.
 	LayerCount int
+	// AdditionalImageStores is a list of host paths to expose to the bootc
+	// container as containers/storage additionalimagestores. Used for
+	// offline image stores (e.g. squashfs on a live ISO). When the caller has
+	// already set CONTAINERS_STORAGE_CONF, that takes priority and this list
+	// is ignored.
+	AdditionalImageStores []string
 }
 
 // scratchDir returns the host-side scratch directory from opts, falling back
@@ -169,22 +175,26 @@ func NeedsContainerStorageMount(opts Options) bool {
 	return !opts.ComposeFsBackend
 }
 
-// writeLiveStorageConf writes a containers/storage config that adds
-// /var/lib/superiso-store as an additionalimagestores entry into scratchDir.
-// scratchDir is already bind-mounted as /var/tmp inside the bootc container,
-// so no additional -v flag is needed — CONTAINERS_STORAGE_CONF is set to
-// /var/tmp/<filename> inside the container env.
+// writeAdditionalStoresConf writes a containers/storage config that lists
+// every path in stores under additionalimagestores. The file is created under
+// scratchDir/fisherman-conf/ (not at scratchDir root, where it would be mixed
+// in with the OCI cache). scratchDir is bind-mounted as /var/tmp inside the
+// bootc container, so the container-side path is /var/tmp/fisherman-conf/<name>.
 //
 // Returns the host-side path (for cleanup) and the container-side path
-// (for the env var).
-func writeLiveStorageConf(scratchDir string) (hostPath, containerPath string, err error) {
-	const conf = `[storage]
-driver = "overlay"
-
-[storage.options]
-additionalimagestores = ["/var/lib/superiso-store"]
-`
-	f, err := os.CreateTemp(scratchDir, "fisherman-storage-*.conf")
+// (for the CONTAINERS_STORAGE_CONF env var).
+func writeAdditionalStoresConf(scratchDir string, stores []string) (hostPath, containerPath string, err error) {
+	confDir := filepath.Join(scratchDir, "fisherman-conf")
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		return "", "", err
+	}
+	quoted := make([]string, len(stores))
+	for i, s := range stores {
+		quoted[i] = `"` + s + `"`
+	}
+	conf := "[storage]\ndriver = \"overlay\"\n\n[storage.options]\nadditionalimagestores = [" +
+		strings.Join(quoted, ", ") + "]\n"
+	f, err := os.CreateTemp(confDir, "storage-*.conf")
 	if err != nil {
 		return "", "", err
 	}
@@ -193,9 +203,57 @@ additionalimagestores = ["/var/lib/superiso-store"]
 		os.Remove(f.Name())
 		return "", "", err
 	}
-	// Container sees scratchDir as /var/tmp.
-	contPath := "/var/tmp/" + filepath.Base(f.Name())
+	contPath := "/var/tmp/fisherman-conf/" + filepath.Base(f.Name())
 	return f.Name(), contPath, nil
+}
+
+// appendImageStoreArgs adds the podman flags needed to make additional OCI
+// image stores visible inside the bootc container:
+//
+//   - Each host path in opts.AdditionalImageStores is bind-mounted read-only
+//     at the same path inside the container so paths in storage.conf resolve.
+//   - A fisherman-generated storage.conf listing those paths under
+//     additionalimagestores is written into scratch and passed via
+//     CONTAINERS_STORAGE_CONF.
+//
+// If the caller has already set CONTAINERS_STORAGE_CONF in the environment,
+// it takes priority: the file is bind-mounted into scratch and the env var is
+// forwarded unchanged. This is the explicit escape hatch for callers who want
+// full control over storage.conf.
+//
+// Returns the new args slice and a cleanup function that removes any
+// temporary file created. The cleanup function is always non-nil and safe to
+// defer immediately.
+func appendImageStoreArgs(podmanArgs []string, scratch string, opts Options) ([]string, func()) {
+	noop := func() {}
+	// Bind-mount each additional store read-only at its host path so any
+	// storage.conf entries (caller-supplied or auto-generated) resolve.
+	for _, store := range opts.AdditionalImageStores {
+		podmanArgs = append(podmanArgs, "-v", store+":"+store+":ro")
+	}
+
+	// Caller-supplied CONTAINERS_STORAGE_CONF always wins.
+	if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
+		scBase := "/var/tmp/" + filepath.Base(sc)
+		podmanArgs = append(podmanArgs,
+			"-v", sc+":"+scBase+":ro",
+			"-e", "CONTAINERS_STORAGE_CONF="+scBase)
+		return podmanArgs, noop
+	}
+
+	// No caller env override: auto-generate a storage.conf when the recipe
+	// declared at least one additional store.
+	if len(opts.AdditionalImageStores) == 0 {
+		return podmanArgs, noop
+	}
+	hostConf, containerConf, err := writeAdditionalStoresConf(scratch, opts.AdditionalImageStores)
+	if err != nil {
+		progress.Info(fmt.Sprintf("warning: writing additional-stores storage.conf: %v", err))
+		return podmanArgs, noop
+	}
+	podmanArgs = append(podmanArgs, "-e", "CONTAINERS_STORAGE_CONF="+containerConf)
+	cleanup := func() { os.Remove(hostConf) }
+	return podmanArgs, cleanup
 }
 
 // BootcInstall installs a bootc image to a pre-mounted filesystem.
@@ -220,7 +278,7 @@ func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
 	}
 
 	ociDir := filepath.Join(opts.scratchDir(), "oci-cache")
-	if err := SkopeoExportOCIFn(sourceImgref, ociDir); err != nil {
+	if err := SkopeoExportOCIFn(sourceImgref, ociDir, opts.scratchDir()); err != nil {
 		return fmt.Errorf("exporting image to OCI layout: %w", err)
 	}
 	return nil
@@ -312,44 +370,13 @@ func bootcViaContainer(opts Options) error {
 		// context — and mounting /var/lib/containers would shadow it).
 		podmanArgs = append(podmanArgs, "-v", "/var/lib/containers:/var/lib/containers")
 
-		// Live-media offline store support (SuperISO / tacklebox ISOs):
-		// On live-ISO boots the primary containers-storage is tiny (live
-		// overlay) and the actual images live in an additionalimagestores
-		// squashfs at /var/lib/superiso-store.
-		//
-		// When detected:
-		//  a) Bind-mount the store read-only so the image data is visible.
-		//  b) Auto-write a storage.conf that lists it as additionalimagestores
-		//     and pass it to the container. bootc's own storage.conf only lists
-		//     /usr/lib/containers/storage (read-only system store), so without
-		//     this the image reference never resolves even though the data is
-		//     present on disk.
-		//
-		// If the caller also set CONTAINERS_STORAGE_CONF, that takes priority
-		// over the auto-generated config (opt-in override path).
-		if _, err := os.Stat("/var/lib/superiso-store"); err == nil {
-			podmanArgs = append(podmanArgs,
-				"-v", "/var/lib/superiso-store:/var/lib/superiso-store:ro")
-			if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
-				// Caller-supplied config: bind-mount it to /var/tmp (scratch)
-				// so it's guaranteed accessible inside the container.
-				scBase := "/var/tmp/" + filepath.Base(sc)
-				podmanArgs = append(podmanArgs,
-					"-v", sc+":"+scBase+":ro",
-					"-e", "CONTAINERS_STORAGE_CONF="+scBase)
-			} else if hostConf, containerConf, err := writeLiveStorageConf(scratch); err == nil {
-				// Auto-generated config lands in the scratch dir which is
-				// already mounted as /var/tmp — no extra -v needed.
-				defer os.Remove(hostConf)
-				podmanArgs = append(podmanArgs,
-					"-e", "CONTAINERS_STORAGE_CONF="+containerConf)
-			}
-		} else if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
-			scBase := "/var/tmp/" + filepath.Base(sc)
-			podmanArgs = append(podmanArgs,
-				"-v", sc+":"+scBase+":ro",
-				"-e", "CONTAINERS_STORAGE_CONF="+scBase)
-		}
+		// Additional image stores (e.g. an offline OCI squashfs baked into a
+		// live ISO). bootc's own storage.conf only lists
+		// /usr/lib/containers/storage; without merging in extra stores the
+		// image reference never resolves even when the data is present.
+		var cleanupConf func()
+		podmanArgs, cleanupConf = appendImageStoreArgs(podmanArgs, scratch, opts)
+		defer cleanupConf()
 	}
 
 	// When the target system has SELinux disabled and the host has SELinux
@@ -489,7 +516,7 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 		// image to an OCI directory layout via skopeo so the blobs exist on disk,
 		// then pass --source-imgref oci:/var/tmp/oci-cache to bootc.
 		ociDir := filepath.Join(scratch, "oci-cache")
-		if err := SkopeoExportOCIFn(opts.SourceImgref, ociDir); err != nil {
+		if err := SkopeoExportOCIFn(opts.SourceImgref, ociDir, scratch); err != nil {
 			return "", fmt.Errorf("exporting image to OCI layout: %w", err)
 		}
 		// Inside the container, the scratch dir is mounted at /var/tmp.
@@ -501,26 +528,10 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 		// so bootc can read its image layers directly.
 		podmanArgs = append(podmanArgs, "-v", "/var/lib/containers:/var/lib/containers")
 
-		// Live-media offline store support (same rationale as bootcViaContainer).
-		if _, err := os.Stat("/var/lib/superiso-store"); err == nil {
-			podmanArgs = append(podmanArgs,
-				"-v", "/var/lib/superiso-store:/var/lib/superiso-store:ro")
-			if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
-				scBase := "/var/tmp/" + filepath.Base(sc)
-				podmanArgs = append(podmanArgs,
-					"-v", sc+":"+scBase+":ro",
-					"-e", "CONTAINERS_STORAGE_CONF="+scBase)
-			} else if hostConf, containerConf, err := writeLiveStorageConf(scratch); err == nil {
-				defer os.Remove(hostConf)
-				podmanArgs = append(podmanArgs,
-					"-e", "CONTAINERS_STORAGE_CONF="+containerConf)
-			}
-		} else if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
-			scBase := "/var/tmp/" + filepath.Base(sc)
-			podmanArgs = append(podmanArgs,
-				"-v", sc+":"+scBase+":ro",
-				"-e", "CONTAINERS_STORAGE_CONF="+scBase)
-		}
+		// Additional image stores (same rationale as bootcViaContainer).
+		var cleanupConf func()
+		podmanArgs, cleanupConf = appendImageStoreArgs(podmanArgs, scratch, opts)
+		defer cleanupConf()
 
 		// --via-loopback is required for loop devices (BLKRRPART ioctl fails on
 		// loop devices so partition nodes never appear inside the container).
@@ -579,11 +590,17 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 }
 
 // DefaultSkopeoExportOCI is the default implementation of SkopeoExportOCIFn.
-var DefaultSkopeoExportOCI = skopeoExportOCI
+var DefaultSkopeoExportOCI SkopeoExportFunc = skopeoExportOCI
+
+// SkopeoExportFunc exports an image from containers-storage to an OCI layout
+// under destDir, using tmpdir as TMPDIR for skopeo (so multi-gigabyte
+// intermediate files land on disk-backed scratch instead of a tmpfs/overlay
+// on live ISOs).
+type SkopeoExportFunc func(image, destDir, tmpdir string) error
 
 // SkopeoExportOCIFn is the function used by bootcToDiskViaContainer to export
 // a composefs image to an OCI layout. Replace in tests to avoid disk I/O.
-var SkopeoExportOCIFn = skopeoExportOCI
+var SkopeoExportOCIFn SkopeoExportFunc = skopeoExportOCI
 
 // bareImageRef strips any OCI transport prefix from image, returning the bare
 // registry reference. This handles both "scheme://ref" (e.g. "docker://") and
@@ -606,7 +623,7 @@ func bareImageRef(image string) string {
 // layout. The composefs-backend requires raw OCI blobs (compressed layer
 // tarballs) that podman pull does not preserve; skopeo reconstructs them from
 // the tar-split.gz metadata stored alongside the overlay diffs.
-func skopeoExportOCI(image, destDir string) error {
+func skopeoExportOCI(image, destDir, tmpdir string) error {
 	progress.Substep("Exporting image to OCI layout for composefs install")
 	// Remove stale export if present.
 	if err := os.RemoveAll(destDir); err != nil {
@@ -621,10 +638,14 @@ func skopeoExportOCI(image, destDir string) error {
 	name, args := runner.HostArgs("skopeo", skopeoArgs)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 	cmd := exec.Command(name, args...)
-	// Set TMPDIR to /var/fisherman-tmp so skopeo has disk-backed space for temporary files.
-	// Use /tmp/skopeo-tmp as a fallback on systems where /var/tmp is inaccessible (e.g., SELinux).
-	// Ensure the directory exists and is writable.
-	tmpdir := "/var/fisherman-tmp"
+	// tmpdir must be disk-backed for multi-gigabyte intermediate files. The
+	// caller picks the right location — on live ISOs that's a path on the
+	// target disk (since /var/tmp is on a constrained overlay/tmpfs there);
+	// on installed systems it's typically /var/fisherman-tmp. Fall back to
+	// /tmp only if even the caller-supplied path can't be created.
+	if tmpdir == "" {
+		tmpdir = "/var/fisherman-tmp"
+	}
 	if err := os.MkdirAll(tmpdir, 0o1777); err != nil {
 		tmpdir = "/tmp"
 	}

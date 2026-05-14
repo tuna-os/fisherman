@@ -27,7 +27,7 @@ jobs:
           cache-dependency-path: fisherman/go.sum
 
       - name: Run tests before publishing
-        run: sudo go test ./...
+        run: sudo go test -race ./...
         working-directory: fisherman
 
       - name: Run GoReleaser

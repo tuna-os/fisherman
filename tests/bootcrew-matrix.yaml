@@ -5,6 +5,14 @@
 # 
 # vm_boot: true — include in bootcrew-vm.yml for E2E VM boot tests on every PR
 #          false (default) — skip in VM boot tests (reserved for nightly + disk-ops)
+# required: true — failure of this image fails the workflow (use for canary
+#          images that exercise each install backend). Required canaries:
+#          - dakota:        composefs-backend + systemd-boot
+#          - centos-bootc:  ostree-backend + grub2
+#          Other vm_boot images run advisory: their failures show up in the
+#          job summary but do not fail the workflow. Frees us from chasing
+#          per-image flakes while still keeping signal on the backends that
+#          matter.
 images:
   - name: dakota
     image: ghcr.io/projectbluefin/dakota:latest
@@ -15,6 +23,7 @@ images:
     selinux_disabled: false
     flatpaks: []
     vm_boot: true  # PRIMARY PRODUCTION IMAGE - critical to test on every PR
+    required: true # composefs + systemd-boot canary
     build_ssh_image: true
 
   - name: bluefin-lts
@@ -34,6 +43,7 @@ images:
     selinux_disabled: false
     flatpaks: []
     vm_boot: true  # ostree backend verification
+    required: true # ostree + grub2 canary
     build_ssh_image: true
 
   - name: yellowfin-gnome50

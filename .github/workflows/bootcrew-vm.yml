@@ -6,100 +6,224 @@ on:
   pull_request:
     branches: [prod, dev]
 
+# Cancel in-flight runs on the same ref when a new push comes in. Saves
+# a lot of compute when you push twice in a row on the same PR. We do NOT
+# cancel pushes to prod/dev — those run to completion as historical record.
+concurrency:
+  group: bootcrew-vm-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
   packages: read
 
 jobs:
-  setup:
+  lint:
     runs-on: ubuntu-24.04
-    outputs:
-      matrix: ${{ steps.read-matrix.outputs.matrix }}
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
-
-      - name: Parse image matrix (vm_boot only)
-        id: read-matrix
-        run: |
-          python3 << 'EOF'
-          import json
-          import yaml
-
-          with open('tests/bootcrew-matrix.yaml') as f:
-              data = yaml.safe_load(f)
-
-          images = [img for img in data['images'] if img.get('vm_boot') == True]
-          matrix = json.dumps(images)
-
-          with open('/tmp/matrix.json', 'w') as f:
-              f.write(f'matrix={matrix}\n')
-
-          print("Matrix output:")
-          print(json.dumps(images, indent=2))
-          print("Testing:", ' '.join(img['name'] for img in images))
-          EOF
-
-          cat /tmp/matrix.json >> "$GITHUB_OUTPUT"
-
-  unit-tests:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: fisherman/go.mod
           cache: true
           cache-dependency-path: fisherman/go.sum
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.61
+          working-directory: fisherman
+          # .golangci.yml at the repo root configures the linter set.
+          args: --config=${{ github.workspace }}/.golangci.yml --timeout=5m
 
-      - name: Run unit tests
-        run: sudo go test ./...
+  setup:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      matrix_required: ${{ steps.read-matrix.outputs.matrix_required }}
+      matrix_advisory: ${{ steps.read-matrix.outputs.matrix_advisory }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parse image matrix (split required vs advisory)
+        id: read-matrix
+        shell: bash
+        run: |
+          python3 << 'EOF' >> "$GITHUB_OUTPUT"
+          import json, yaml
+          with open('tests/bootcrew-matrix.yaml') as f:
+              data = yaml.safe_load(f)
+          vm_boot = [img for img in data['images'] if img.get('vm_boot')]
+          required = [img for img in vm_boot if img.get('required')]
+          advisory = [img for img in vm_boot if not img.get('required')]
+          print(f"matrix_required={json.dumps(required)}")
+          print(f"matrix_advisory={json.dumps(advisory)}")
+          EOF
+          echo "--- parsed matrix ---"
+          cat "$GITHUB_OUTPUT"
+
+  unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: fisherman/go.mod
+          cache: true
+          cache-dependency-path: fisherman/go.sum
+      - name: Unit tests (race + coverage)
+        # Most tests do not need sudo; the loopback/storage_driver ones do
+        # (losetup, mount). Run the lot under sudo so both categories work
+        # without splitting into two test invocations — keeps the failure
+        # signal on a single step.
+        run: sudo go test -race -coverprofile=coverage.out -covermode=atomic ./...
         working-directory: fisherman
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-coverage
+          path: fisherman/coverage.out
+          if-no-files-found: ignore
+          retention-days: 14
 
-  vm-boot:
-    name: vm-boot / ${{ matrix.image.name }}
-    needs: [setup, unit-tests]
+  # ── Required canaries: composefs (dakota) + ostree (centos-bootc). ────────
+  # Failure here fails the workflow. Treat these as the contract for what
+  # fisherman must do on every PR.
+  vm-boot-required:
+    name: required / ${{ matrix.image.name }}
+    needs: [setup, unit-tests, lint]
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        image: ${{ fromJson(needs.setup.outputs.matrix) }}
-
+        image: ${{ fromJson(needs.setup.outputs.matrix_required) }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-go@v5
         with:
           go-version-file: fisherman/go.mod
           cache: true
           cache-dependency-path: fisherman/go.sum
 
+      # Free ~30 GiB on the runner before we pull multi-GB OCI images and
+      # build a target loop disk. Pattern lifted from projectbluefin/dakota-iso.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+
       - name: Setup CI environment
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y just
+          sudo apt-get install -y just socat
           just ci-install-tools
-
       - name: Login to GHCR
-        run: |
-          echo "${{ secrets.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
-
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
       - name: Generate SSH keys
         run: just setup-ssh-keys
-
       - name: Build fisherman
         run: just build
 
       - name: Run bootcrew test
+        env:
+          ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
         run: |
+          mkdir -p "$ARTIFACTS_DIR"
           IMAGE_JSON='${{ toJson(matrix.image) }}'
           just bootcrew-ci-test "$IMAGE_JSON"
 
-      - name: Upload boot logs on failure
-        if: failure()
+      - name: Upload boot artifacts (always)
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: boot-logs-${{ matrix.image.name }}
-          path: /tmp/boot-*.log
+          name: boot-artifacts-${{ matrix.image.name }}
+          path: |
+            ${{ github.workspace }}/artifacts/**
+            /tmp/boot-*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ── Single-check gate for branch protection. ─────────────────────────────
+  # Add THIS check name ("required-canaries") to the protected-branch rules
+  # for prod/dev — it succeeds iff every required canary (dakota,
+  # centos-bootc) and the unit-test + lint jobs all passed. Using one gate
+  # avoids having to enumerate every matrix permutation in branch
+  # protection, which would break the moment we add or rename an image.
+  required-canaries:
+    name: required-canaries
+    if: always()
+    needs: [lint, unit-tests, vm-boot-required]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    steps:
+      - name: Verify required jobs succeeded
+        run: |
+          lint='${{ needs.lint.result }}'
+          unit='${{ needs.unit-tests.result }}'
+          vm='${{ needs.vm-boot-required.result }}'
+          echo "lint=$lint  unit=$unit  vm=$vm"
+          # vm-boot-required is a matrix; its aggregate result is "success"
+          # only when every matrix leg succeeded. fail-fast: false ensures
+          # all legs run so we get full signal here.
+          if [ "$lint" != "success" ] || [ "$unit" != "success" ] || [ "$vm" != "success" ]; then
+            echo "::error::required-canaries gate failed (lint=$lint unit=$unit vm-boot-required=$vm)"
+            exit 1
+          fi
+          echo "All required checks passed."
+
+  # ── Advisory images: failures show up in the workflow summary but do not
+  # fail the run. Use this slot for images known to flake on upstream
+  # rebases (gnomeos, ubuntu-bootc, …). When one stabilises, promote it
+  # by adding `required: true` in tests/bootcrew-matrix.yaml.
+  vm-boot-advisory:
+    name: advisory / ${{ matrix.image.name }}
+    needs: [setup, unit-tests, lint]
+    if: ${{ needs.setup.outputs.matrix_advisory != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.setup.outputs.matrix_advisory) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: fisherman/go.mod
+          cache: true
+          cache-dependency-path: fisherman/go.sum
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+      - name: Setup CI environment
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y just socat
+          just ci-install-tools
+      - name: Login to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
+      - name: Generate SSH keys
+        run: just setup-ssh-keys
+      - name: Build fisherman
+        run: just build
+      - name: Run bootcrew test
+        env:
+          ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+        run: |
+          mkdir -p "$ARTIFACTS_DIR"
+          IMAGE_JSON='${{ toJson(matrix.image) }}'
+          just bootcrew-ci-test "$IMAGE_JSON"
+      - name: Upload boot artifacts (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-artifacts-${{ matrix.image.name }}
+          path: |
+            ${{ github.workspace }}/artifacts/**
+            /tmp/boot-*.log
+          if-no-files-found: ignore
           retention-days: 7

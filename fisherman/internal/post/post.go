@@ -22,24 +22,32 @@ var Exec runner.Executor = runner.DefaultExecutor
 
 // RemoveAllFn is a hook for tests to override os.RemoveAll behavior.
 // Normally set to os.RemoveAll, but tests can replace it.
-// This was previously used by cleanup.Run() to remove the scratch directory,
-// but that was removed because cleanup.Run() is called too early (during
-// unmounting), before post-install steps are complete.
 var RemoveAllFn = os.RemoveAll
 
 // Cleanup tracks mounted filesystems and an open LUKS device so they can be
 // torn down in the correct order on both success and error paths.
 type Cleanup struct {
-	mounts     []string
-	luksMapper string
-	done       bool
+	mounts        []string
+	postRemovals  []string
+	luksMapper    string
+	done          bool
 }
 
 func (c *Cleanup) AddMount(path string) { c.mounts = append(c.mounts, path) }
 func (c *Cleanup) SetLUKS(name string)  { c.luksMapper = name }
 
+// AddPostRemoval registers a path to be removed after all unmounts and the
+// LUKS device close have completed. Use this for scratch directories whose
+// contents (e.g. bind mounts, OCI caches) must remain accessible until every
+// post-install step has run — including the fatal-error path, where
+// os.Exit(1) would otherwise skip a deferred RemoveAll.
+func (c *Cleanup) AddPostRemoval(path string) {
+	c.postRemovals = append(c.postRemovals, path)
+}
+
 // Run unmounts all registered mount points in reverse order, then closes any
-// open LUKS device. It is idempotent.
+// open LUKS device, then deletes any registered post-removal paths. It is
+// idempotent.
 func (c *Cleanup) Run() {
 	if c.done {
 		return
@@ -69,6 +77,13 @@ func (c *Cleanup) Run() {
 		// Now close the LUKS device.
 		if err := luks.Close(c.luksMapper); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: closing LUKS device %s: %v\n", c.luksMapper, err)
+		}
+	}
+	// Post-removals run last so any path that was bind-mounted into the target
+	// (and thus depended on the unmount above) can now be safely deleted.
+	for _, p := range c.postRemovals {
+		if err := RemoveAllFn(p); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: removing %s: %v\n", p, err)
 		}
 	}
 }

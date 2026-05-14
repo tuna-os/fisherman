@@ -238,14 +238,15 @@ func TestBuildBootcArgs_AllFlags(t *testing.T) {
 // integration tests to capture the args without running real disk I/O).
 func TestSkopeoExportOCI_FnIsReplaceable(t *testing.T) {
 	var capturedImage, capturedDir string
-	install.SkopeoExportOCIFn = func(image, destDir string) error {
+	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
 		capturedImage = image
 		capturedDir = destDir
+		_ = tmpdir
 		return nil
 	}
 	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
 
-	if err := install.SkopeoExportOCIFn("ghcr.io/projectbluefin/dakota:latest", "/var/fisherman-tmp/oci-cache"); err != nil {
+	if err := install.SkopeoExportOCIFn("ghcr.io/projectbluefin/dakota:latest", "/var/fisherman-tmp/oci-cache", "/var/fisherman-tmp"); err != nil {
 		t.Fatalf("stub returned unexpected error: %v", err)
 	}
 	if capturedImage != "ghcr.io/projectbluefin/dakota:latest" {
@@ -270,9 +271,10 @@ func TestBootcInstall_DirectComposeFsExportsOCI(t *testing.T) {
 	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
 
 	var capturedImage, capturedDir string
-	install.SkopeoExportOCIFn = func(image, destDir string) error {
+	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
 		capturedImage = image
 		capturedDir = destDir
+		_ = tmpdir
 		return nil
 	}
 	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
@@ -307,8 +309,10 @@ func TestBootcInstall_DirectComposeFsUsesCustomScratchDir(t *testing.T) {
 	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
 
 	var capturedDir string
-	install.SkopeoExportOCIFn = func(image, destDir string) error {
+	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
 		capturedDir = destDir
+		_ = image
+		_ = tmpdir
 		return nil
 	}
 	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()

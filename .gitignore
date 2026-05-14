@@ -3,6 +3,7 @@ builddir/
 __pycache__/
 *.pyc
 fisherman/fisherman
+fisherman/fisherman-*
 flatpak/repo/
 org.tunaos.Installer.flatpak
 flatpak/build/
