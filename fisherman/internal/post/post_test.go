@@ -57,11 +57,10 @@ func (e *mockExecutor) Command(name string, args ...string) runner.Command {
 	// Try exact match first, then prefix match for things like 'du -sb /var/lib/flatpak'
 	res, ok := e.responses[full]
 	if !ok {
-		// Fallback for du/flatpak list calls which might have dynamic paths in tests
+		// Fallback for du/flatpak list calls which might have dynamic paths in tests.
 		for k, v := range e.responses {
 			if strings.HasPrefix(full, k) {
 				res = v
-				ok = true
 				break
 			}
 		}
@@ -303,237 +302,237 @@ func TestCopyFlatpaks_FlatpakVarPathOverride(t *testing.T) {
 }
 
 func TestEnsurePlymouthArgs(t *testing.T) {
-tests := []struct {
-name     string
-input    string
-wantOut  string
-wantMod  bool
-}{
-{
-name:    "adds rhgb and quiet when absent",
-input:   "title TunaOS\noptions root=UUID=abc rw\n",
-wantOut: "title TunaOS\noptions root=UUID=abc rw rhgb quiet\n",
-wantMod: true,
-},
-{
-name:    "adds only missing arg",
-input:   "options root=UUID=abc rw rhgb\n",
-wantOut: "options root=UUID=abc rw rhgb quiet\n",
-wantMod: true,
-},
-{
-name:    "no change when args already present",
-input:   "options root=UUID=abc rw rhgb quiet\n",
-wantOut: "options root=UUID=abc rw rhgb quiet\n",
-wantMod: false,
-},
-}
+	tests := []struct {
+		name    string
+		input   string
+		wantOut string
+		wantMod bool
+	}{
+		{
+			name:    "adds rhgb and quiet when absent",
+			input:   "title TunaOS\noptions root=UUID=abc rw\n",
+			wantOut: "title TunaOS\noptions root=UUID=abc rw rhgb quiet\n",
+			wantMod: true,
+		},
+		{
+			name:    "adds only missing arg",
+			input:   "options root=UUID=abc rw rhgb\n",
+			wantOut: "options root=UUID=abc rw rhgb quiet\n",
+			wantMod: true,
+		},
+		{
+			name:    "no change when args already present",
+			input:   "options root=UUID=abc rw rhgb quiet\n",
+			wantOut: "options root=UUID=abc rw rhgb quiet\n",
+			wantMod: false,
+		},
+	}
 
-for _, tc := range tests {
-t.Run(tc.name, func(t *testing.T) {
-dir := t.TempDir()
-entriesDir := dir + "/boot/loader/entries"
-if err := os.MkdirAll(entriesDir, 0o755); err != nil {
-t.Fatal(err)
-}
-entryPath := entriesDir + "/test.conf"
-if err := os.WriteFile(entryPath, []byte(tc.input), 0o644); err != nil {
-t.Fatal(err)
-}
-n, err := post.EnsurePlymouthArgs(dir)
-if err != nil {
-t.Fatalf("EnsurePlymouthArgs: %v", err)
-}
-if tc.wantMod && n == 0 {
-t.Error("expected entry to be modified, but it was not")
-}
-if !tc.wantMod && n != 0 {
-t.Error("expected no modification, but entry was changed")
-}
-got, _ := os.ReadFile(entryPath)
-if string(got) != tc.wantOut {
-t.Errorf("entry content:\ngot:  %q\nwant: %q", string(got), tc.wantOut)
-}
-})
-}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			entriesDir := dir + "/boot/loader/entries"
+			if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			entryPath := entriesDir + "/test.conf"
+			if err := os.WriteFile(entryPath, []byte(tc.input), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			n, err := post.EnsurePlymouthArgs(dir)
+			if err != nil {
+				t.Fatalf("EnsurePlymouthArgs: %v", err)
+			}
+			if tc.wantMod && n == 0 {
+				t.Error("expected entry to be modified, but it was not")
+			}
+			if !tc.wantMod && n != 0 {
+				t.Error("expected no modification, but entry was changed")
+			}
+			got, _ := os.ReadFile(entryPath)
+			if string(got) != tc.wantOut {
+				t.Errorf("entry content:\ngot:  %q\nwant: %q", string(got), tc.wantOut)
+			}
+		})
+	}
 }
 
 func TestEnsureLuksArgs(t *testing.T) {
-const testUUID = "1520bba9-010e-443d-b082-2fe56abdfee1"
-const wantArg = "rd.luks.name=" + testUUID + "=root"
+	const testUUID = "1520bba9-010e-443d-b082-2fe56abdfee1"
+	const wantArg = "rd.luks.name=" + testUUID + "=root"
 
-t.Run("injects rd.luks.name into grub path", func(t *testing.T) {
-dir := t.TempDir()
-entriesDir := dir + "/boot/loader/entries"
-if err := os.MkdirAll(entriesDir, 0o755); err != nil {
-t.Fatal(err)
-}
-entryPath := entriesDir + "/test.conf"
-input := "title TunaOS\noptions root=UUID=abc rw\n"
-if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
-t.Fatal(err)
-}
-n, err := post.EnsureLuksArgs(dir, testUUID)
-if err != nil {
-t.Fatalf("EnsureLuksArgs: %v", err)
-}
-if n != 1 {
-t.Errorf("expected 1 entry modified, got %d", n)
-}
-got, _ := os.ReadFile(entryPath)
-if !strings.Contains(string(got), wantArg) {
-t.Errorf("entry missing %q:\n%s", wantArg, got)
-}
-})
-
-t.Run("injects rd.luks.name into systemd-boot path", func(t *testing.T) {
-dir := t.TempDir()
-entriesDir := dir + "/boot/efi/loader/entries"
-if err := os.MkdirAll(entriesDir, 0o755); err != nil {
-t.Fatal(err)
-}
-entryPath := entriesDir + "/test.conf"
-input := "title TunaOS\noptions root=UUID=abc rw\n"
-if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
-t.Fatal(err)
-}
-n, err := post.EnsureLuksArgs(dir, testUUID)
-if err != nil {
-t.Fatalf("EnsureLuksArgs: %v", err)
-}
-if n != 1 {
-t.Errorf("expected 1 entry modified, got %d", n)
-}
-got, _ := os.ReadFile(entryPath)
-if !strings.Contains(string(got), wantArg) {
-t.Errorf("entry missing %q:\n%s", wantArg, got)
-}
-})
-
-t.Run("idempotent — does not duplicate rd.luks.name", func(t *testing.T) {
-dir := t.TempDir()
-entriesDir := dir + "/boot/loader/entries"
-if err := os.MkdirAll(entriesDir, 0o755); err != nil {
-t.Fatal(err)
-}
-entryPath := entriesDir + "/test.conf"
-input := "title TunaOS\noptions root=UUID=abc rw " + wantArg + "\n"
-if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
-t.Fatal(err)
-}
-n, err := post.EnsureLuksArgs(dir, testUUID)
-if err != nil {
-t.Fatalf("EnsureLuksArgs: %v", err)
-}
-if n != 0 {
-t.Errorf("expected 0 entries modified (idempotent), got %d", n)
-}
-got, _ := os.ReadFile(entryPath)
-count := strings.Count(string(got), wantArg)
-if count != 1 {
-t.Errorf("expected arg to appear once, got %d times:\n%s", count, got)
-}
-})
-
-t.Run("empty UUID is a no-op", func(t *testing.T) {
-dir := t.TempDir()
-n, err := post.EnsureLuksArgs(dir, "")
-if err != nil {
-t.Fatalf("EnsureLuksArgs with empty UUID: %v", err)
-}
-if n != 0 {
-t.Errorf("expected 0, got %d", n)
-}
-})
-
-t.Run("patches all entries in directory", func(t *testing.T) {
-	dir := t.TempDir()
-	entriesDir := filepath.Join(dir, "boot", "loader", "entries")
-	if err := os.MkdirAll(entriesDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	for _, name := range []string{"entry1.conf", "entry2.conf", "entry3.conf"} {
-		input := "title TunaOS\noptions root=UUID=abc rw\n"
-		if err := os.WriteFile(filepath.Join(entriesDir, name), []byte(input), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	n, err := post.EnsureLuksArgs(dir, testUUID)
-	if err != nil {
-		t.Fatalf("EnsureLuksArgs: %v", err)
-	}
-	if n != 3 {
-		t.Errorf("expected 3 entries modified, got %d", n)
-	}
-})
-
-t.Run("patches both grub and systemd-boot paths simultaneously", func(t *testing.T) {
-	dir := t.TempDir()
-	for _, sub := range []string{"boot/loader/entries", "boot/efi/loader/entries"} {
-		entriesDir := filepath.Join(dir, sub)
+	t.Run("injects rd.luks.name into grub path", func(t *testing.T) {
+		dir := t.TempDir()
+		entriesDir := dir + "/boot/loader/entries"
 		if err := os.MkdirAll(entriesDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
+		entryPath := entriesDir + "/test.conf"
 		input := "title TunaOS\noptions root=UUID=abc rw\n"
-		if err := os.WriteFile(filepath.Join(entriesDir, "entry.conf"), []byte(input), 0o644); err != nil {
+		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
 			t.Fatal(err)
 		}
-	}
-	n, err := post.EnsureLuksArgs(dir, testUUID)
-	if err != nil {
-		t.Fatalf("EnsureLuksArgs: %v", err)
-	}
-	if n != 2 {
-		t.Errorf("expected 2 entries modified (one per path), got %d", n)
-	}
-})
+		n, err := post.EnsureLuksArgs(dir, testUUID)
+		if err != nil {
+			t.Fatalf("EnsureLuksArgs: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("expected 1 entry modified, got %d", n)
+		}
+		got, _ := os.ReadFile(entryPath)
+		if !strings.Contains(string(got), wantArg) {
+			t.Errorf("entry missing %q:\n%s", wantArg, got)
+		}
+	})
 
-t.Run("uses rd.luks.name not rd.luks.uuid", func(t *testing.T) {
-	// Regression test: rd.luks.uuid maps to /dev/mapper/luks-<UUID> which
-	// systemd-gpt-auto-generator cannot find. Must use rd.luks.name=<UUID>=root.
-	dir := t.TempDir()
-	entriesDir := filepath.Join(dir, "boot", "loader", "entries")
-	if err := os.MkdirAll(entriesDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	entryPath := filepath.Join(entriesDir, "entry.conf")
-	if err := os.WriteFile(entryPath, []byte("title TunaOS\noptions root=UUID=abc rw\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	_, err := post.EnsureLuksArgs(dir, testUUID)
-	if err != nil {
-		t.Fatalf("EnsureLuksArgs: %v", err)
-	}
-	got, _ := os.ReadFile(entryPath)
-	if strings.Contains(string(got), "rd.luks.uuid=") {
-		t.Errorf("entry contains rd.luks.uuid= which is wrong; must use rd.luks.name=:\n%s", got)
-	}
-	if !strings.Contains(string(got), "rd.luks.name="+testUUID+"=root") {
-		t.Errorf("entry missing rd.luks.name=<UUID>=root:\n%s", got)
-	}
-})
+	t.Run("injects rd.luks.name into systemd-boot path", func(t *testing.T) {
+		dir := t.TempDir()
+		entriesDir := dir + "/boot/efi/loader/entries"
+		if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		entryPath := entriesDir + "/test.conf"
+		input := "title TunaOS\noptions root=UUID=abc rw\n"
+		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		n, err := post.EnsureLuksArgs(dir, testUUID)
+		if err != nil {
+			t.Fatalf("EnsureLuksArgs: %v", err)
+		}
+		if n != 1 {
+			t.Errorf("expected 1 entry modified, got %d", n)
+		}
+		got, _ := os.ReadFile(entryPath)
+		if !strings.Contains(string(got), wantArg) {
+			t.Errorf("entry missing %q:\n%s", wantArg, got)
+		}
+	})
 
-t.Run("does not modify entry without options line", func(t *testing.T) {
-	dir := t.TempDir()
-	entriesDir := filepath.Join(dir, "boot", "loader", "entries")
-	if err := os.MkdirAll(entriesDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	const input = "title TunaOS\n# no options line\n"
-	entryPath := filepath.Join(entriesDir, "entry.conf")
-	if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	n, err := post.EnsureLuksArgs(dir, testUUID)
-	if err != nil {
-		t.Fatalf("EnsureLuksArgs: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("expected 0 modifications for entry with no options line, got %d", n)
-	}
-	got, _ := os.ReadFile(entryPath)
-	if string(got) != input {
-		t.Errorf("entry was modified unexpectedly:\n%s", got)
-	}
-})
+	t.Run("idempotent — does not duplicate rd.luks.name", func(t *testing.T) {
+		dir := t.TempDir()
+		entriesDir := dir + "/boot/loader/entries"
+		if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		entryPath := entriesDir + "/test.conf"
+		input := "title TunaOS\noptions root=UUID=abc rw " + wantArg + "\n"
+		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		n, err := post.EnsureLuksArgs(dir, testUUID)
+		if err != nil {
+			t.Fatalf("EnsureLuksArgs: %v", err)
+		}
+		if n != 0 {
+			t.Errorf("expected 0 entries modified (idempotent), got %d", n)
+		}
+		got, _ := os.ReadFile(entryPath)
+		count := strings.Count(string(got), wantArg)
+		if count != 1 {
+			t.Errorf("expected arg to appear once, got %d times:\n%s", count, got)
+		}
+	})
+
+	t.Run("empty UUID is a no-op", func(t *testing.T) {
+		dir := t.TempDir()
+		n, err := post.EnsureLuksArgs(dir, "")
+		if err != nil {
+			t.Fatalf("EnsureLuksArgs with empty UUID: %v", err)
+		}
+		if n != 0 {
+			t.Errorf("expected 0, got %d", n)
+		}
+	})
+
+	t.Run("patches all entries in directory", func(t *testing.T) {
+		dir := t.TempDir()
+		entriesDir := filepath.Join(dir, "boot", "loader", "entries")
+		if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"entry1.conf", "entry2.conf", "entry3.conf"} {
+			input := "title TunaOS\noptions root=UUID=abc rw\n"
+			if err := os.WriteFile(filepath.Join(entriesDir, name), []byte(input), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		n, err := post.EnsureLuksArgs(dir, testUUID)
+		if err != nil {
+			t.Fatalf("EnsureLuksArgs: %v", err)
+		}
+		if n != 3 {
+			t.Errorf("expected 3 entries modified, got %d", n)
+		}
+	})
+
+	t.Run("patches both grub and systemd-boot paths simultaneously", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, sub := range []string{"boot/loader/entries", "boot/efi/loader/entries"} {
+			entriesDir := filepath.Join(dir, sub)
+			if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			input := "title TunaOS\noptions root=UUID=abc rw\n"
+			if err := os.WriteFile(filepath.Join(entriesDir, "entry.conf"), []byte(input), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		n, err := post.EnsureLuksArgs(dir, testUUID)
+		if err != nil {
+			t.Fatalf("EnsureLuksArgs: %v", err)
+		}
+		if n != 2 {
+			t.Errorf("expected 2 entries modified (one per path), got %d", n)
+		}
+	})
+
+	t.Run("uses rd.luks.name not rd.luks.uuid", func(t *testing.T) {
+		// Regression test: rd.luks.uuid maps to /dev/mapper/luks-<UUID> which
+		// systemd-gpt-auto-generator cannot find. Must use rd.luks.name=<UUID>=root.
+		dir := t.TempDir()
+		entriesDir := filepath.Join(dir, "boot", "loader", "entries")
+		if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		entryPath := filepath.Join(entriesDir, "entry.conf")
+		if err := os.WriteFile(entryPath, []byte("title TunaOS\noptions root=UUID=abc rw\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, err := post.EnsureLuksArgs(dir, testUUID)
+		if err != nil {
+			t.Fatalf("EnsureLuksArgs: %v", err)
+		}
+		got, _ := os.ReadFile(entryPath)
+		if strings.Contains(string(got), "rd.luks.uuid=") {
+			t.Errorf("entry contains rd.luks.uuid= which is wrong; must use rd.luks.name=:\n%s", got)
+		}
+		if !strings.Contains(string(got), "rd.luks.name="+testUUID+"=root") {
+			t.Errorf("entry missing rd.luks.name=<UUID>=root:\n%s", got)
+		}
+	})
+
+	t.Run("does not modify entry without options line", func(t *testing.T) {
+		dir := t.TempDir()
+		entriesDir := filepath.Join(dir, "boot", "loader", "entries")
+		if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		const input = "title TunaOS\n# no options line\n"
+		entryPath := filepath.Join(entriesDir, "entry.conf")
+		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		n, err := post.EnsureLuksArgs(dir, testUUID)
+		if err != nil {
+			t.Fatalf("EnsureLuksArgs: %v", err)
+		}
+		if n != 0 {
+			t.Errorf("expected 0 modifications for entry with no options line, got %d", n)
+		}
+		got, _ := os.ReadFile(entryPath)
+		if string(got) != input {
+			t.Errorf("entry was modified unexpectedly:\n%s", got)
+		}
+	})
 }

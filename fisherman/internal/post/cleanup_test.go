@@ -41,8 +41,6 @@ func setupRemoveAllRecorder(t *testing.T, rec *recorder) {
 	t.Cleanup(func() { post.RemoveAllFn = old })
 }
 
-
-
 // TestCleanup_Empty verifies that Cleanup.Run() with no mounts or LUKS is a no-op.
 func TestCleanup_Empty(t *testing.T) {
 	rec := setupRecorder(t)
@@ -131,7 +129,6 @@ func TestCleanup_Idempotent(t *testing.T) {
 			len(rec.calls)-firstCount)
 	}
 }
-
 
 // TestCleanup_WithLUKS verifies that a registered LUKS mapper is closed after
 // all mounts are unmounted, with proper I/O flushing and reference release.

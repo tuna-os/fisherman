@@ -8,42 +8,42 @@ import (
 
 // Recipe describes a fisherman installation.
 type Recipe struct {
-	Disk            string        `json:"disk"`            // block device, e.g. "/dev/sda" (auto-partition)
-	Filesystem      string        `json:"filesystem"`      // "xfs", "ext4", "btrfs", or "zfs"
-	BtrfsSubvolumes bool          `json:"btrfsSubvolumes"` // create @, @home, @snapshots
-	Encryption      Encryption    `json:"encryption"`
-	Image           string        `json:"image"`           // source OCI image reference
-	TargetImgref    string        `json:"targetImgref"`    // update-tracking ref (optional)
-	SelinuxDisabled  bool          `json:"selinuxDisabled"`
-	UnifiedStorage   bool          `json:"unifiedStorage"`  // pass --experimental-unified-storage
+	Disk            string     `json:"disk"`            // block device, e.g. "/dev/sda" (auto-partition)
+	Filesystem      string     `json:"filesystem"`      // "xfs", "ext4", "btrfs", or "zfs"
+	BtrfsSubvolumes bool       `json:"btrfsSubvolumes"` // create @, @home, @snapshots
+	Encryption      Encryption `json:"encryption"`
+	Image           string     `json:"image"`        // source OCI image reference
+	TargetImgref    string     `json:"targetImgref"` // update-tracking ref (optional)
+	SelinuxDisabled bool       `json:"selinuxDisabled"`
+	UnifiedStorage  bool       `json:"unifiedStorage"` // pass --experimental-unified-storage
 	// ComposeFsBackend passes --composefs-backend to bootc install to-filesystem.
 	// Required for composefs-native images (e.g. ghcr.io/bootcrew/*).
 	// Independent of UnifiedStorage — these are different bootc features.
 	// Works with any supported filesystem including xfs.
 	// Automatically forced to true when Filesystem is "zfs".
-	ComposeFsBackend bool          `json:"composeFsBackend"`
+	ComposeFsBackend bool `json:"composeFsBackend"`
 	// ZFSPoolName is the name of the ZFS pool to create (default: "rpool").
 	// Only used when Filesystem is "zfs".
-	ZFSPoolName      string        `json:"zfsPoolName,omitempty"`
+	ZFSPoolName string `json:"zfsPoolName,omitempty"`
 	// Bootloader selects the bootloader: "grub2" (default) or "systemd".
 	// Use "systemd" for images that ship systemd-boot (e.g. Project Bluefin/Dakota).
-	Bootloader       string        `json:"bootloader"`
+	Bootloader string `json:"bootloader"`
 	// ImageType selects the install backend: "bootc" (default) or "ostree".
 	// "ostree" support is not yet implemented and will be rejected by Validate().
-	ImageType        string        `json:"imageType"`
+	ImageType string `json:"imageType"`
 	// FlatpakVarPath is the path relative to the install target root where the
 	// writable /var for flatpaks lives. Defaults to "" which means fisherman
 	// auto-detects based on whether the system is ostree or composefs-native.
 	// Override in images.json for non-standard layouts, e.g. GnomeOS/Dakota:
 	//   "flatpak_var_path": "state/os/default/var"
-	FlatpakVarPath   string        `json:"flatpakVarPath,omitempty"`
-	Hostname         string        `json:"hostname"`
-	Flatpaks        []string      `json:"flatpaks"`        // flatpak app IDs to install; empty = fallback
-	User            UserSpec      `json:"user"`            // optional user account to create
+	FlatpakVarPath string   `json:"flatpakVarPath,omitempty"`
+	Hostname       string   `json:"hostname"`
+	Flatpaks       []string `json:"flatpaks"` // flatpak app IDs to install; empty = fallback
+	User           UserSpec `json:"user"`     // optional user account to create
 	// CustomMounts is set for manual partitioning. When non-empty, Disk/Filesystem/
 	// BtrfsSubvolumes and the auto-partition steps are skipped; fisherman formats and
 	// mounts the listed partitions directly.
-	CustomMounts    []CustomMount `json:"customMounts,omitempty"`
+	CustomMounts []CustomMount `json:"customMounts,omitempty"`
 	// AdditionalImageStores lists host paths to be exposed to the bootc
 	// container as containers/storage additionalimagestores. Each path is
 	// bind-mounted read-only into the container at the same location and added

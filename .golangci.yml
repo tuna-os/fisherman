@@ -16,6 +16,7 @@ linters-settings:
     enable-all: true
     disable:
       - fieldalignment  # struct padding hints are noise
+      - shadow          # `if err := foo(); err != nil` shadows are idiomatic Go
 
 issues:
   exclude-rules:

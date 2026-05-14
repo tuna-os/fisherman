@@ -27,10 +27,10 @@ var RemoveAllFn = os.RemoveAll
 // Cleanup tracks mounted filesystems and an open LUKS device so they can be
 // torn down in the correct order on both success and error paths.
 type Cleanup struct {
-	mounts        []string
-	postRemovals  []string
-	luksMapper    string
-	done          bool
+	mounts       []string
+	postRemovals []string
+	luksMapper   string
+	done         bool
 }
 
 func (c *Cleanup) AddMount(path string) { c.mounts = append(c.mounts, path) }

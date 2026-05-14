@@ -425,19 +425,19 @@ func assertAbsent(t *testing.T, slice []string, s string) {
 // is still mounted when UnifiedStorage=true. Bootc needs the mount to find the
 // source image in host podman storage and copy it into bootc's own storage.
 func TestNeedsContainerStorageMount_UnifiedStorage(t *testing.T) {
-if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: true}) {
-t.Error("should mount /var/lib/containers even when UnifiedStorage=true (bootc needs it to locate the source image)")
-}
+	if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: true}) {
+		t.Error("should mount /var/lib/containers even when UnifiedStorage=true (bootc needs it to locate the source image)")
+	}
 }
 
 func TestNeedsContainerStorageMount_Standard(t *testing.T) {
-if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: false}) {
-t.Error("should mount /var/lib/containers for standard (non-unified) installs")
-}
+	if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: false}) {
+		t.Error("should mount /var/lib/containers for standard (non-unified) installs")
+	}
 }
 
 func TestNeedsContainerStorageMount_ComposeFsBackend(t *testing.T) {
-if install.NeedsContainerStorageMount(install.Options{ComposeFsBackend: true}) {
-t.Error("should NOT mount /var/lib/containers when ComposeFsBackend=true")
-}
+	if install.NeedsContainerStorageMount(install.Options{ComposeFsBackend: true}) {
+		t.Error("should NOT mount /var/lib/containers when ComposeFsBackend=true")
+	}
 }

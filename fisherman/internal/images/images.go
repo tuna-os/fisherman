@@ -131,9 +131,9 @@ func nodeMatches(n *Node, q string) bool {
 
 // Catalog is the top-level structure of images.json.
 type Catalog struct {
-	DefaultImage     string    `json:"default_image"`
-	FallbackFlatpaks []string  `json:"fallback_flatpaks"`
-	Images           []*Node   `json:"images"`
+	DefaultImage     string   `json:"default_image"`
+	FallbackFlatpaks []string `json:"fallback_flatpaks"`
+	Images           []*Node  `json:"images"`
 }
 
 // Load reads the image catalog from the given path.

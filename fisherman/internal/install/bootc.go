@@ -330,14 +330,14 @@ func bootcViaContainer(opts Options) error {
 		// Select storage driver based on scratch filesystem safety and podman probe.
 		storageDriver, driverReason := selectStorageDriver(scratch, true)
 		progress.Substep(fmt.Sprintf("Using %s storage driver (%s)", storageDriver, driverReason))
-		
+
 		// Clear any previous podman database to avoid "database graph driver mismatch" errors
 		// when switching storage drivers. This is necessary when a previous invocation used
 		// a different driver (e.g., vfs) and the new invocation wants overlay.
 		if err := os.RemoveAll(containersRoot); err != nil && !os.IsNotExist(err) {
 			progress.Substep(fmt.Sprintf("Warning: could not clear previous podman database: %v", err))
 		}
-		
+
 		podmanArgs = append(podmanArgs,
 			"--root", containersRoot,
 			"--storage-driver", storageDriver,
