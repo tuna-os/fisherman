@@ -441,3 +441,4 @@ func TestNeedsContainerStorageMount_ComposeFsBackend(t *testing.T) {
 		t.Error("should NOT mount /var/lib/containers when ComposeFsBackend=true")
 	}
 }
+

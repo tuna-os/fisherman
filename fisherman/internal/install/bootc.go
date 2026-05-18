@@ -371,11 +371,28 @@ func bootcViaContainer(opts Options) error {
 		// filesystem without the host SELinux policy interfering.
 		"--security-opt", "label=disable",
 		"-v", "/dev:/dev",
-		// Ostree-based images (e.g. composefs) don't ship /var/tmp — it is created
-		// by systemd-tmpfiles on first boot. containers-image needs /var/tmp to write
-		// temp files when reconstructing layer blobs from containers-storage. Mount
-		// the disk-backed fisherman scratch space so there is always enough room.
-		"-v", scratch+":/var/tmp:z",
+	)
+
+	// For composefs with overlay storage on btrfs, we need to be careful about
+	// mount propagation. Instead of mounting the entire scratch dir to /var/tmp,
+	// mount the OCI cache specifically and use tmpfs for temporary container files.
+	// This avoids potential issues where overlay driver on btrfs doesn't properly
+	// expose nested mounts (issue #38).
+	if opts.ComposeFsBackend {
+		ociCacheHost := filepath.Join(scratch, "oci-cache")
+		// Create a tmpfs at /var/tmp for containers-image temporary files.
+		// This ensures /var/tmp exists even if the ostree image doesn't ship it.
+		podmanArgs = append(podmanArgs, "--tmpfs", "/var/tmp")
+		// Bind-mount the OCI cache read-only to /var/tmp/oci-cache.
+		// This is more reliable than mounting the entire scratch dir.
+		podmanArgs = append(podmanArgs,
+			"-v", ociCacheHost+":/var/tmp/oci-cache:ro")
+	} else {
+		// Non-composefs: mount entire scratch for containers-storage temporary files
+		podmanArgs = append(podmanArgs, "-v", scratch+":/var/tmp:z")
+	}
+
+	podmanArgs = append(podmanArgs,
 		// Use shared propagation so submounts (e.g. /boot/efi) created on the host
 		// before launching the container are visible inside it at /target.
 		"--mount", fmt.Sprintf("type=bind,src=%s,dst=/target,bind-propagation=rslave", opts.Target),
