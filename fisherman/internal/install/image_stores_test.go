@@ -40,7 +40,7 @@ func TestAppendImageStoreArgs_WritesGeneratedConf(t *testing.T) {
 	for _, want := range []string{
 		"/var/lib/store-a:/var/lib/store-a:ro",
 		"/var/lib/store-b:/var/lib/store-b:ro",
-		"CONTAINERS_STORAGE_CONF=/var/tmp/fisherman-conf/",
+		"CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("podman args missing %q; got: %v", want, out)
@@ -88,7 +88,7 @@ func TestAppendImageStoreArgs_CallerEnvWins(t *testing.T) {
 		t.Errorf("expected store bind-mount; got: %v", out)
 	}
 	// …but the caller's conf wins for the env var.
-	if !strings.Contains(joined, "CONTAINERS_STORAGE_CONF=/var/tmp/caller-storage.conf") {
+	if !strings.Contains(joined, "CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf") {
 		t.Errorf("expected caller env to win; got: %v", out)
 	}
 	// And no auto-generated file should have been written under fisherman-conf.

@@ -226,32 +226,50 @@ func writeAdditionalStoresConf(scratchDir string, stores []string) (hostPath, co
 // defer immediately.
 func appendImageStoreArgs(podmanArgs []string, scratch string, opts Options) ([]string, func()) {
 	noop := func() {}
+	stores := append([]string{}, opts.AdditionalImageStores...)
+	// Backward-compatible live-media default: if the SuperISO store is mounted
+	// on the host, expose it even when the recipe didn't explicitly pass
+	// AdditionalImageStores. This keeps caller-supplied storage.conf files that
+	// reference /var/lib/superiso-store working.
+	if _, err := os.Stat("/var/lib/superiso-store"); err == nil {
+		found := false
+		for _, s := range stores {
+			if s == "/var/lib/superiso-store" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			stores = append(stores, "/var/lib/superiso-store")
+		}
+	}
 	// Bind-mount each additional store read-only at its host path so any
 	// storage.conf entries (caller-supplied or auto-generated) resolve.
-	for _, store := range opts.AdditionalImageStores {
+	for _, store := range stores {
 		podmanArgs = append(podmanArgs, "-v", store+":"+store+":ro")
 	}
 
 	// Caller-supplied CONTAINERS_STORAGE_CONF always wins.
 	if sc := os.Getenv("CONTAINERS_STORAGE_CONF"); sc != "" {
-		scBase := "/var/tmp/" + filepath.Base(sc)
 		podmanArgs = append(podmanArgs,
-			"-v", sc+":"+scBase+":ro",
-			"-e", "CONTAINERS_STORAGE_CONF="+scBase)
+			"-v", sc+":/etc/containers/storage.conf:ro",
+			"-e", "CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf")
 		return podmanArgs, noop
 	}
 
 	// No caller env override: auto-generate a storage.conf when the recipe
 	// declared at least one additional store.
-	if len(opts.AdditionalImageStores) == 0 {
+	if len(stores) == 0 {
 		return podmanArgs, noop
 	}
-	hostConf, containerConf, err := writeAdditionalStoresConf(scratch, opts.AdditionalImageStores)
+	hostConf, _, err := writeAdditionalStoresConf(scratch, stores)
 	if err != nil {
 		progress.Info(fmt.Sprintf("warning: writing additional-stores storage.conf: %v", err))
 		return podmanArgs, noop
 	}
-	podmanArgs = append(podmanArgs, "-e", "CONTAINERS_STORAGE_CONF="+containerConf)
+	podmanArgs = append(podmanArgs,
+		"-v", hostConf+":/etc/containers/storage.conf:ro",
+		"-e", "CONTAINERS_STORAGE_CONF=/etc/containers/storage.conf")
 	cleanup := func() { os.Remove(hostConf) }
 	return podmanArgs, cleanup
 }
