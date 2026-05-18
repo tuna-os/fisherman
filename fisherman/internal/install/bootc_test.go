@@ -157,17 +157,24 @@ func TestBuildBootcArgs_ComposeFsBackend(t *testing.T) {
 	assertContains(t, args, "--composefs-backend")
 }
 
-// TestBuildBootcArgs_ComposeFsBackend_SourceImgref is a regression test for the
-// composefs to-filesystem bug: bootc install to-disk was being called instead of
-// to-filesystem, failing with "Device is mounted". The fix routes all images
-// through to-filesystem and exports to an OCI layout via skopeo so bootc
-// --composefs-backend has the raw blobs it needs.
-// This verifies that --source-imgref oci:/var/tmp/oci-cache is included in the
-// bootc args when composefs-backend is true.
+// TestBuildBootcArgs_ComposeFsBackend_SourceImgref verifies that BuildBootcArgs
+// emits --source-imgref oci:<scratchDir>/oci-cache when ComposeFsBackend is true.
+// In container mode, callers set ComposeFsOCIPath = containerOCICachePath
+// ("/run/fisherman/oci-cache") so the source points to the bind-mount destination
+// inside the container; in direct mode, the host-side scratchDir/oci-cache is used.
 func TestBuildBootcArgs_ComposeFsBackend_SourceImgref(t *testing.T) {
-	args := install.BuildBootcArgs(install.Options{ComposeFsBackend: true}, "", "/target")
-	assertContains(t, args, "--source-imgref")
-	assertContains(t, args, "oci:/var/tmp/oci-cache")
+	// Direct mode: no ComposeFsOCIPath — falls back to scratchDir/oci-cache.
+	directArgs := install.BuildBootcArgs(install.Options{ComposeFsBackend: true}, "", "/target")
+	assertContains(t, directArgs, "--source-imgref")
+	assertContains(t, directArgs, "oci:/var/fisherman-tmp/oci-cache") // default scratchDir
+
+	// Container mode: ComposeFsOCIPath is set to the container-side mount path.
+	containerArgs := install.BuildBootcArgs(install.Options{
+		ComposeFsBackend: true,
+		ComposeFsOCIPath: "/run/fisherman/oci-cache",
+	}, "", "/target")
+	assertContains(t, containerArgs, "--source-imgref")
+	assertContains(t, containerArgs, "oci:/run/fisherman/oci-cache")
 }
 
 func TestBuildBootcArgs_NoComposeFsBackend_NoSourceImgref(t *testing.T) {
@@ -222,9 +229,11 @@ func TestBuildBootcArgs_AllFlags(t *testing.T) {
 		ComposeFsBackend: true,
 		UnifiedStorage:   true,
 		SelinuxDisabled:  true,
+		ComposeFsOCIPath: "/run/fisherman/oci-cache",
 	}
 	args := install.BuildBootcArgs(opts, "img:tag", "/target")
 	assertContains(t, args, "--composefs-backend")
+	assertContains(t, args, "oci:/run/fisherman/oci-cache")
 	assertAbsent(t, args, "--experimental-unified-storage") // never emitted; see Options.UnifiedStorage
 	assertContains(t, args, "--disable-selinux")
 	assertContains(t, args, "--target-imgref")

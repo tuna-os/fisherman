@@ -120,6 +120,12 @@ type Options struct {
 	// already set CONTAINERS_STORAGE_CONF, that takes priority and this list
 	// is ignored.
 	AdditionalImageStores []string
+	// ComposeFsOCIPath is the container-side path passed to bootc as
+	// --source-imgref oci:<path>. Set by bootcViaContainer to the bind-mount
+	// destination inside the container (e.g. /run/fisherman/oci-cache).
+	// When empty, BuildBootcArgs falls back to the host-side OCI cache
+	// (scratchDir/oci-cache), which is correct for bootcDirect (no container).
+	ComposeFsOCIPath string
 }
 
 // scratchDir returns the host-side scratch directory from opts, falling back
@@ -130,6 +136,12 @@ func (o Options) scratchDir() string {
 	}
 	return "/var/fisherman-tmp"
 }
+
+// containerOCICachePath is the container-side path where the OCI cache is
+// bind-mounted when running bootc via a podman container. Using /run/fisherman
+// avoids any interaction with /var/tmp (which may be a tmpfs in some container
+// runtime configurations) and keeps the OCI cache mount at a dedicated path.
+const containerOCICachePath = "/run/fisherman/oci-cache"
 
 // BuildBootcArgs builds the argument slice for `bootc install to-filesystem`.
 // resolvedTargetImgref is the --target-imgref value (empty to omit the flag).
@@ -146,10 +158,14 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	// UnifiedStorage is intentionally not emitted — see Options.UnifiedStorage comment.
 	if opts.ComposeFsBackend {
 		args = append(args, "--composefs-backend")
-		// composefs-backend requires raw OCI blobs; bootcViaContainer exports
-		// the image to /var/fisherman-tmp/oci-cache (mounted at /var/tmp inside
-		// the container) and passes this as the source.
-		args = append(args, "--source-imgref", "oci:/var/tmp/oci-cache")
+		// composefs-backend requires raw OCI blobs. The source path differs
+		// between container mode (opts.ComposeFsOCIPath, a bind-mount inside
+		// the container) and direct mode (host-side scratchDir/oci-cache).
+		ociPath := opts.ComposeFsOCIPath
+		if ociPath == "" {
+			ociPath = opts.scratchDir() + "/oci-cache"
+		}
+		args = append(args, "--source-imgref", "oci:"+ociPath)
 	}
 	if opts.Bootloader != "" && opts.Bootloader != "grub2" {
 		args = append(args, "--bootloader", opts.Bootloader)
@@ -318,14 +334,20 @@ func bootcViaContainer(opts Options) error {
 		progress.Substep("Image already up to date, skipping pull")
 	}
 
-	bootcArgs := BuildBootcArgs(opts, targetImgref, "/target")
+	// For composefs, set the container-side OCI path so BuildBootcArgs emits
+	// the correct --source-imgref pointing inside the container.
+	containerOpts := opts
+	if opts.ComposeFsBackend {
+		containerOpts.ComposeFsOCIPath = containerOCICachePath
+	}
+	bootcArgs := BuildBootcArgs(containerOpts, targetImgref, "/target")
 
 	scratch := opts.scratchDir()
 
 	// composefs-backend requires raw OCI blobs that podman pull doesn't
 	// preserve in containers-storage. Export to an OCI layout first, then
-	// pass --source-imgref oci:/var/tmp/oci-cache (BuildBootcArgs adds this
-	// flag when ComposeFsBackend is true).
+	// pass --source-imgref oci:<containerOCICachePath> (BuildBootcArgs adds
+	// this flag when ComposeFsBackend is true).
 	// Note: SkopeoExportOCIFn emits its own progress substeps; don't duplicate them here.
 	if err := exportComposefsOCIIfNeeded(opts, opts.SourceImgref); err != nil {
 		return err
@@ -373,20 +395,18 @@ func bootcViaContainer(opts Options) error {
 		"-v", "/dev:/dev",
 	)
 
-	// For composefs with overlay storage on btrfs, we need to be careful about
-	// mount propagation. Instead of mounting the entire scratch dir to /var/tmp,
-	// mount the OCI cache specifically and use tmpfs for temporary container files.
-	// This avoids potential issues where overlay driver on btrfs doesn't properly
-	// expose nested mounts (issue #38).
+	// For composefs installs, mount the OCI cache at containerOCICachePath
+	// (/run/fisherman/oci-cache) inside the container. Using a dedicated path
+	// under /run avoids any interaction with /var/tmp (which may be a tmpfs or
+	// have different mount propagation on btrfs-on-LUKS targets). The --tmpfs
+	// /var/tmp is retained to give bootc a clean ephemeral directory for its own
+	// temporary files without requiring a large host-backed mount.
+	// See: https://github.com/tuna-os/fisherman/issues/38
 	if opts.ComposeFsBackend {
 		ociCacheHost := filepath.Join(scratch, "oci-cache")
-		// Create a tmpfs at /var/tmp for containers-image temporary files.
-		// This ensures /var/tmp exists even if the ostree image doesn't ship it.
 		podmanArgs = append(podmanArgs, "--tmpfs", "/var/tmp")
-		// Bind-mount the OCI cache read-only to /var/tmp/oci-cache.
-		// This is more reliable than mounting the entire scratch dir.
 		podmanArgs = append(podmanArgs,
-			"-v", ociCacheHost+":/var/tmp/oci-cache:ro")
+			"-v", ociCacheHost+":"+containerOCICachePath+":ro")
 	} else {
 		// Non-composefs: mount entire scratch for containers-storage temporary files
 		podmanArgs = append(podmanArgs, "-v", scratch+":/var/tmp:z")
@@ -542,20 +562,26 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 		"--pid=host",
 		"--security-opt", "label=disable",
 		"-v", "/dev:/dev",
-		"-v", scratch + ":/var/tmp:z",
+	}
+
+	if opts.ComposeFsBackend {
+		podmanArgs = append(podmanArgs, "--tmpfs", "/var/tmp")
+	} else {
+		podmanArgs = append(podmanArgs, "-v", scratch+":/var/tmp:z")
 	}
 
 	if opts.ComposeFsBackend {
 		// composefs-backend requires raw OCI blobs (compressed layer tarballs)
 		// that podman pull does not preserve in containers-storage. Export the
 		// image to an OCI directory layout via skopeo so the blobs exist on disk,
-		// then pass --source-imgref oci:/var/tmp/oci-cache to bootc.
+		// then bind-mount the cache at containerOCICachePath and pass
+		// --source-imgref oci:<containerOCICachePath> to bootc.
 		ociDir := filepath.Join(scratch, "oci-cache")
 		if err := SkopeoExportOCIFn(opts.SourceImgref, ociDir, scratch); err != nil {
 			return "", fmt.Errorf("exporting image to OCI layout: %w", err)
 		}
-		// Inside the container, the scratch dir is mounted at /var/tmp.
-		bootcArgs = append(bootcArgs, "--source-imgref", "oci:/var/tmp/oci-cache")
+		podmanArgs = append(podmanArgs, "-v", ociDir+":"+containerOCICachePath+":ro")
+		bootcArgs = append(bootcArgs, "--source-imgref", "oci:"+containerOCICachePath)
 		bootcArgs = append(bootcArgs, diskDevice)
 		effectiveDisk = diskDevice
 	} else {
