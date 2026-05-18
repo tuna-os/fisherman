@@ -126,6 +126,26 @@ images:
     nightly: false
     vm_boot: true
 
+  # Regression test for issue #38: composefs + btrfs + LUKS.
+  # The original bug occurred when scratch was on btrfs (live-ISO path, space-constrained /var).
+  # This entry tests btrfs+LUKS+composefs in CI (scratch is /var/fisherman-tmp on the runner, not
+  # btrfs, so does not reproduce the exact scratch-on-btrfs failure mode — but validates the
+  # LUKS+composefs install path against a btrfs target filesystem end-to-end).
+  - name: dakota-luks-btrfs
+    image: ghcr.io/projectbluefin/dakota:latest
+    ssh_image_name: dakota
+    filesystem: btrfs
+    composefs_backend: true
+    bootloader: systemd
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    luks: true
+    luks_passphrase: "bootcrew-luks-test"
+    vm_timeout: 800
+    nightly: false
+    vm_boot: true
+
   # gentoo-bootc disabled: consistently fails with missing blob in containers-storage
   # (sha256:2443e8...) — likely a broken layer in the ghcr.io/bootcrew/gentoo-bootc image.
   # Re-enable once upstream fixes the image.
