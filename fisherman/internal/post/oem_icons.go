@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 )
 
 //go:embed icons/*.svg
@@ -12,7 +14,51 @@ var oemIcons embed.FS
 
 // vendorIconFiles maps vendor to their embedded icon filename.
 var vendorIconFiles = map[string]string{
-	"asus": "icons/asus-rog-symbolic.svg",
+	"asus":     "icons/asus-rog-symbolic.svg",
+	"framework": "icons/framework-symbolic.svg",
+	"dell":     "icons/dell-symbolic.svg",
+	"lenovo":   "icons/lenovo-symbolic.svg",
+	"hp":       "icons/hp-symbolic.svg",
+	"system76": "icons/system76-symbolic.svg",
+	"razer":    "icons/razer-symbolic.svg",
+	"msi":      "icons/msi-symbolic.svg",
+	"nvidia":   "icons/nvidia-symbolic.svg",
+	"arm":      "icons/arm-symbolic.svg",
+}
+
+// detectGPUVendor checks for NVIDIA GPU presence via sysfs/PCI.
+func detectGPUVendor() string {
+	// NVIDIA PCI vendor ID is 0x10de
+	entries, err := os.ReadDir("/sys/bus/pci/devices")
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		vendor, err := os.ReadFile(filepath.Join("/sys/bus/pci/devices", e.Name(), "vendor"))
+		if err != nil {
+			continue
+		}
+		if strings.TrimSpace(string(vendor)) == "0x10de" {
+			class, err := os.ReadFile(filepath.Join("/sys/bus/pci/devices", e.Name(), "class"))
+			if err != nil {
+				continue
+			}
+			// VGA controller class: 0x030000, 3D controller: 0x030200
+			cls := strings.TrimSpace(string(class))
+			if strings.HasPrefix(cls, "0x0302") || strings.HasPrefix(cls, "0x0300") {
+				return "nvidia"
+			}
+		}
+	}
+	return ""
+}
+
+// detectArch returns "arm" if running on ARM/aarch64.
+func detectArch() string {
+	if runtime.GOARCH == "arm64" || runtime.GOARCH == "arm" {
+		return "arm"
+	}
+	return ""
 }
 
 // installVendorIcon installs the vendor's symbolic icon into the target's

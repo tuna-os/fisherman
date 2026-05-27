@@ -37,6 +37,14 @@ var vendorServices = map[string][]string{
 var vendorMenuIcons = map[string]string{
 	"asus":      "asus-rog-symbolic",
 	"framework": "framework-symbolic",
+	"dell":      "dell-symbolic",
+	"lenovo":    "lenovo-symbolic",
+	"hp":        "hp-symbolic",
+	"system76":  "system76-symbolic",
+	"razer":     "razer-symbolic",
+	"msi":       "msi-symbolic",
+	"nvidia":    "nvidia-symbolic",
+	"arm":       "arm-symbolic",
 }
 
 // detectVendor reads the system vendor from DMI sysfs.
@@ -51,12 +59,22 @@ func detectVendor() string {
 // normalizeVendor maps raw DMI vendor strings to a canonical short name.
 func normalizeVendor(raw string) string {
 	vendorMap := map[string]string{
-		"asustek computer inc.": "asus",
-		"asus":                  "asus",
-		"framework":            "framework",
-		"tuxedo":               "tuxedo",
-		"tuxedo computers":     "tuxedo",
-		"tuxedo computers gmbh": "tuxedo",
+		"asustek computer inc.":              "asus",
+		"asus":                               "asus",
+		"framework":                          "framework",
+		"tuxedo":                             "tuxedo",
+		"tuxedo computers":                   "tuxedo",
+		"tuxedo computers gmbh":              "tuxedo",
+		"dell inc.":                          "dell",
+		"dell":                               "dell",
+		"lenovo":                             "lenovo",
+		"hp":                                 "hp",
+		"hewlett-packard":                    "hp",
+		"hewlett packard":                    "hp",
+		"system76":                           "system76",
+		"razer":                              "razer",
+		"micro-star international co., ltd.": "msi",
+		"msi":                                "msi",
 	}
 	return vendorMap[strings.ToLower(strings.TrimSpace(raw))]
 }
@@ -64,45 +82,56 @@ func normalizeVendor(raw string) string {
 // InstallOEMPackages detects the hardware vendor and writes a first-boot
 // systemd user service that installs vendor-specific packages via brew.
 // Also enables any required system services in the target.
-// Non-fatal: returns nil if no vendor-specific packages are needed.
+// Sets the vendor's logo as the shell menu icon for hardware confidence.
+// Non-fatal: always returns nil (best-effort).
 func InstallOEMPackages(target string) error {
 	raw := detectVendor()
 	vendor := normalizeVendor(raw)
-	if vendor == "" {
-		return nil // not a recognized OEM laptop — nothing to do
+
+	if vendor != "" {
+		pkgs, hasPkgs := vendorPackages[vendor]
+		svcs, hasSvcs := vendorServices[vendor]
+
+		// Write a first-boot systemd user service that installs brew packages.
+		if hasPkgs && len(pkgs) > 0 {
+			if err := writeOEMBrewService(target, vendor, pkgs); err != nil {
+				return fmt.Errorf("writing OEM brew service: %w", err)
+			}
+		}
+
+		// Enable system-level services (e.g. asusd) in the target.
+		if hasSvcs {
+			for _, svc := range svcs {
+				enableSystemService(target, svc)
+			}
+		}
+
+		progress.Info(fmt.Sprintf("OEM setup for %s: %d packages queued, %d services enabled",
+			vendor, len(pkgs), len(svcs)))
 	}
 
-	pkgs, hasPkgs := vendorPackages[vendor]
-	svcs, hasSvcs := vendorServices[vendor]
-	if !hasPkgs && !hasSvcs {
+	// Set menu icon. Priority: vendor logo > NVIDIA GPU > ARM arch.
+	iconVendor := vendor
+	if _, ok := vendorMenuIcons[iconVendor]; !ok {
+		if gpu := detectGPUVendor(); gpu != "" {
+			iconVendor = gpu
+		} else if arch := detectArch(); arch != "" {
+			iconVendor = arch
+		}
+	}
+
+	if iconVendor == "" {
 		return nil
 	}
 
-	// Write a first-boot systemd user service that installs brew packages.
-	if hasPkgs && len(pkgs) > 0 {
-		if err := writeOEMBrewService(target, vendor, pkgs); err != nil {
-			return fmt.Errorf("writing OEM brew service: %w", err)
-		}
-	}
-
-	// Enable system-level services (e.g. asusd) in the target.
-	if hasSvcs {
-		for _, svc := range svcs {
-			enableSystemService(target, svc)
-		}
-	}
-
-	progress.Info(fmt.Sprintf("OEM setup for %s: %d packages queued, %d services enabled",
-		vendor, len(pkgs), len(svcs)))
-
-	// Set vendor-specific menu icon via dconf override.
-	if icon, ok := vendorMenuIcons[vendor]; ok {
-		if err := installVendorIcon(target, vendor); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not install icon for %s: %v", vendor, err))
+	if icon, ok := vendorMenuIcons[iconVendor]; ok {
+		if err := installVendorIcon(target, iconVendor); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not install icon for %s: %v", iconVendor, err))
 		}
 		if err := writeMenuIconOverride(target, icon); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not set menu icon for %s: %v", vendor, err))
+			progress.Info(fmt.Sprintf("Warning: could not set menu icon for %s: %v", iconVendor, err))
 		}
+		progress.Info(fmt.Sprintf("Menu icon set to %s", icon))
 	}
 
 	return nil
