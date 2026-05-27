@@ -39,12 +39,17 @@ var vendorMenuIcons = map[string]string{
 	"asus":      "asus-rog-symbolic",
 	"framework": "framework-symbolic",
 	"dell":      "dell-symbolic",
+	"alienware": "alienware-symbolic",
 	"hp":        "hp-symbolic",
 	"system76":  "system76-symbolic",
 	"razer":     "razer-symbolic",
 	"msi":       "msi-symbolic",
 	"nvidia":    "nvidia-symbolic",
 	"arm":       "arm-symbolic",
+	"legion":    "legion-symbolic",
+	"yoga":      "yoga-symbolic",
+	"thinkpad":  "thinkpad-symbolic",
+	"thinkpadx": "thinkpadx-symbolic",
 }
 
 // detectVendor reads the system vendor from DMI sysfs.
@@ -54,6 +59,34 @@ func detectVendor() string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+// detectSubBrand reads the product name from DMI sysfs and returns a
+// sub-brand if one is recognized (e.g. "Legion", "Yoga", "Alienware").
+func detectSubBrand() string {
+	data, err := os.ReadFile("/sys/devices/virtual/dmi/id/product_name")
+	if err != nil {
+		return ""
+	}
+	product := strings.ToLower(strings.TrimSpace(string(data)))
+
+	subBrands := []struct {
+		keyword string
+		brand   string
+	}{
+		{"legion", "legion"},
+		{"yoga", "yoga"},
+		{"alienware", "alienware"},
+		{"thinkpad x", "thinkpadx"},
+		{"thinkpad", "thinkpad"},
+	}
+
+	for _, sb := range subBrands {
+		if strings.Contains(product, sb.keyword) {
+			return sb.brand
+		}
+	}
+	return ""
 }
 
 // normalizeVendor maps raw DMI vendor strings to a canonical short name.
@@ -110,8 +143,16 @@ func InstallOEMPackages(target string) error {
 			vendor, len(pkgs), len(svcs)))
 	}
 
-	// Set menu icon. Priority: vendor logo > NVIDIA GPU > ARM arch.
-	iconVendor := vendor
+	// Set menu icon. Priority: sub-brand > vendor > NVIDIA GPU > ARM arch.
+	iconVendor := ""
+	if sub := detectSubBrand(); sub != "" {
+		if _, ok := vendorMenuIcons[sub]; ok {
+			iconVendor = sub
+		}
+	}
+	if iconVendor == "" {
+		iconVendor = vendor
+	}
 	if _, ok := vendorMenuIcons[iconVendor]; !ok {
 		if gpu := detectGPUVendor(); gpu != "" {
 			iconVendor = gpu

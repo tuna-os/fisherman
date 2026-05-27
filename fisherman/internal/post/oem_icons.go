@@ -13,16 +13,22 @@ import (
 var oemIcons embed.FS
 
 // vendorIconFiles maps vendor to their embedded icon filename.
+// Icons not yet on disk will be skipped gracefully at runtime.
 var vendorIconFiles = map[string]string{
 	"asus":      "icons/asus-rog-symbolic.svg",
 	"framework": "icons/framework-symbolic.svg",
 	"dell":      "icons/dell-symbolic.svg",
+	"alienware": "icons/alienware-symbolic.svg",
 	"hp":        "icons/hp-symbolic.svg",
 	"system76":  "icons/system76-symbolic.svg",
 	"razer":     "icons/razer-symbolic.svg",
 	"msi":       "icons/msi-symbolic.svg",
 	"nvidia":    "icons/nvidia-symbolic.svg",
 	"arm":       "icons/arm-symbolic.svg",
+	"legion":    "icons/legion-symbolic.svg",
+	"yoga":      "icons/yoga-symbolic.svg",
+	"thinkpad":  "icons/thinkpad-symbolic.svg",
+	"thinkpadx": "icons/thinkpadx-symbolic.svg",
 }
 
 // detectGPUVendor checks for NVIDIA GPU presence via sysfs/PCI.
@@ -75,7 +81,8 @@ func installVendorIcon(target string, vendor string) error {
 
 	data, err := oemIcons.ReadFile(iconFile)
 	if err != nil {
-		return fmt.Errorf("reading embedded icon: %w", err)
+		// Icon file not yet available — skip gracefully (placeholder for future icons)
+		return nil
 	}
 
 	// Resolve target paths.
