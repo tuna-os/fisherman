@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/tuna-os/fisherman/internal/runner"
@@ -68,13 +69,29 @@ func UUID(partition string) string {
 // EnrollTPM2 adds a TPM2 auto-unlock token to an existing LUKS2 container,
 // authenticating with the supplied passphrase. The passphrase remains as a
 // fallback unlock method. PCR 7 (Secure Boot state) is used by default.
+//
+// The passphrase is written to a temp file rather than passed via stdin because
+// systemd-cryptenroll resolves "--unlock-key-file=-" against the process home
+// directory (/var/roothome when running under pkexec), which fails when that
+// path does not exist. A temp file avoids this root home lookup entirely.
 func EnrollTPM2(partition, passphrase string) error {
-	return runner.RunWithStdin(
-		strings.NewReader(passphrase),
+	f, err := os.CreateTemp("", "fisherman-luks-key-*")
+	if err != nil {
+		return fmt.Errorf("creating temp key file: %w", err)
+	}
+	defer os.Remove(f.Name())
+	if _, err := f.WriteString(passphrase); err != nil {
+		f.Close()
+		return fmt.Errorf("writing temp key file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing temp key file: %w", err)
+	}
+	return runner.Run(
 		"systemd-cryptenroll",
 		"--tpm2-device=auto",
 		"--tpm2-pcrs=7",
-		"--unlock-key-file=-",
+		fmt.Sprintf("--unlock-key-file=%s", f.Name()),
 		partition,
 	)
 }

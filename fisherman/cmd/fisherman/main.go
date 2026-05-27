@@ -284,7 +284,6 @@ func main() {
 
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
-	hasTPM2enrolment := r.Encryption.Type == "tpm2-luks-passphrase"
 	isManual := len(r.CustomMounts) > 0
 	isSystemdBoot := r.Bootloader == "systemd" || r.Filesystem == "zfs"
 
@@ -302,7 +301,7 @@ func main() {
 		}
 	}
 
-	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2enrolment, r.VarDisk != nil && !r.VarDisk.KeepExisting)
+	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2, r.VarDisk != nil && !r.VarDisk.KeepExisting)
 	pi := 0 // profile index, incremented at each progress.Step call
 
 	// Compute total step count up front so the GUI can show accurate progress.
@@ -314,8 +313,8 @@ func main() {
 	if hasEncryption && !isManual {
 		totalSteps++ // extra step for LUKS setup (auto mode only)
 	}
-	if hasTPM2 && r.Encryption.Type == "tpm2-luks-passphrase" {
-		totalSteps++ // extra step for TPM2 enrolment
+	if hasTPM2 {
+		totalSteps++ // extra step for TPM2 enrolment (both tpm2-luks and tpm2-luks-passphrase)
 	}
 	hasVarDisk := r.VarDisk != nil
 	if hasVarDisk && !r.VarDisk.KeepExisting {
@@ -383,6 +382,7 @@ func main() {
 	var activeEfiPart string
 	var activeRootPart string // only used for TPM2 enrolment, empty in manual mode
 	var activeLuksUUID string // LUKS partition UUID for boot entry injection; empty if no encryption
+	var luksRecoveryKey string // random passphrase for tpm2-luks (emitted as recovery key)
 
 	if isManual {
 		// ── Step 1 (manual): Format and mount user-specified partitions ────────
@@ -481,7 +481,8 @@ func main() {
 				passphrase = r.Encryption.Passphrase
 			case "tpm2-luks":
 				passphrase = luks.RandomPassphrase()
-				progress.Info("TPM2-LUKS: using a temporary passphrase; TPM2 will be enrolled after install")
+				luksRecoveryKey = passphrase // emitted later so user can write it down
+				progress.Info("TPM2-LUKS: generated random recovery passphrase; TPM2 will be enrolled after install")
 			}
 
 			// A previous interrupted run may have left the mapper open. Close it
@@ -699,18 +700,29 @@ func main() {
 		}
 	}
 
-	// ── TPM2 enrolment (tpm2-luks-passphrase only) ────────────────────────────
-	// For plain tpm2-luks the random passphrase is ephemeral; no enrolment step.
-	// For tpm2-luks-passphrase the user's passphrase unlocks LUKS; we add a
-	// TPM2 token on top so the system auto-unlocks, with the password as fallback.
-	if r.Encryption.Type == "tpm2-luks-passphrase" {
+	// ── TPM2 enrolment ────────────────────────────────────────────────────────
+	// Both tpm2-luks and tpm2-luks-passphrase add a TPM2 auto-unlock token so
+	// the system boots without a passphrase prompt. The difference:
+	//   tpm2-luks:            random passphrase (recovery key) + TPM2
+	//   tpm2-luks-passphrase: user passphrase (fallback) + TPM2
+	if hasTPM2 && activeRootPart != "" {
 		progress.Step(step, totalSteps, "Enrolling TPM2 auto-unlock", profile[pi].cumulativePct, profile[pi].weightPct)
 		pi++
 		step++
 
-		if err := luks.EnrollTPM2(activeRootPart, r.Encryption.Passphrase); err != nil {
+		unlockPassphrase := r.Encryption.Passphrase
+		if r.Encryption.Type == "tpm2-luks" {
+			unlockPassphrase = luksRecoveryKey
+		}
+		if err := luks.EnrollTPM2(activeRootPart, unlockPassphrase); err != nil {
 			// Non-fatal: TPM2 hardware may not be present (e.g. VMs).
-			progress.Info(fmt.Sprintf("Warning: TPM2 enrolment failed (password unlock still works): %v", err))
+			progress.Info(fmt.Sprintf("Warning: TPM2 enrolment failed (recovery key unlock still works): %v", err))
+		}
+
+		// For tpm2-luks the user never chose a passphrase, so we emit the
+		// random one as a recovery key they must save before rebooting.
+		if luksRecoveryKey != "" {
+			progress.RecoveryKey(luksRecoveryKey)
 		}
 	}
 
