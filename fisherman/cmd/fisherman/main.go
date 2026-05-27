@@ -198,6 +198,7 @@ Usage:
   fisherman <recipe.json>          run an installation from a recipe file
   fisherman validate <recipe.json> validate a recipe without installing
   fisherman images [<query>]       list or search the image catalog
+  fisherman scan <disk>            scan disk for Windows data available to migrate
   fisherman version                print version information
   fisherman help                   show this help
 
@@ -212,6 +213,7 @@ Examples:
   fisherman images TunaOS
   fisherman images "GNOME 50"
   fisherman images --plain yellowfin
+  fisherman scan /dev/nvme0n1
 `)
 }
 
@@ -233,6 +235,18 @@ func main() {
 		return
 	case "validate":
 		runValidate(os.Args[2:])
+		return
+	case "scan":
+		if len(os.Args) < 3 {
+			fmt.Fprintf(os.Stderr, "Usage: fisherman scan <disk>\n")
+			os.Exit(1)
+		}
+		output, err := slurp.ScanJSON(os.Args[2])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "scan: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(output)
 		return
 	}
 
@@ -313,7 +327,28 @@ func main() {
 	// Extract Windows wallpapers from any NTFS partition on the target disk
 	// before partitioning destroys them. Held in RAM (/run). Entirely non-fatal.
 	var wallpaperResult *slurp.WallpaperResult
-	if r.SlurpWallpapers && !isManual {
+	var dataResult *slurp.DataSlurpResult
+
+	if r.Slurp != nil && !isManual {
+		// Full data slurp: user selected specific categories in the GUI
+		progress.Info("Migrating Windows user data before partitioning...")
+		cfg := &slurp.SlurpConfig{
+			SourcePartition: r.Slurp.SourcePartition,
+		}
+		for _, u := range r.Slurp.Users {
+			cfg.Users = append(cfg.Users, slurp.SlurpUserConfig{
+				Name:       u.Name,
+				Categories: u.Categories,
+			})
+		}
+		result, err := slurp.ExtractData(cfg)
+		if err != nil {
+			progress.Info(fmt.Sprintf("Data migration skipped: %v", err))
+		} else {
+			dataResult = result
+		}
+	} else if r.SlurpWallpapers && !isManual {
+		// Wallpaper-only easter egg (no explicit slurp config)
 		progress.Info("Checking for Windows wallpapers to migrate...")
 		ntfsPartitions, err := slurp.DetectNTFS(r.Disk)
 		if err != nil {
@@ -744,12 +779,21 @@ func main() {
 		progress.Info(fmt.Sprintf("Warning: could not copy Bluetooth pairings: %v", err))
 	}
 
-	// Inject slurped Windows wallpapers into the installed system. Non-fatal.
+	// Inject slurped Windows data into the installed system. Non-fatal.
+	if dataResult != nil && dataResult.Found {
+		composefs := post.IsComposeFsNativeExported(activeTargetMount)
+		if err := slurp.InjectData(activeTargetMount, dataResult, composefs); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not inject user data: %v", err))
+		}
+	}
 	if wallpaperResult != nil && wallpaperResult.Found {
 		composefs := post.IsComposeFsNativeExported(activeTargetMount)
 		if err := slurp.InjectWallpapers(activeTargetMount, wallpaperResult, composefs); err != nil {
 			progress.Info(fmt.Sprintf("Warning: could not inject wallpapers: %v", err))
 		}
+	}
+	// Cleanup scratch space (both data and wallpaper slurps use /run/fisherman-slurp)
+	if dataResult != nil || wallpaperResult != nil {
 		slurp.CleanupScratch()
 	}
 

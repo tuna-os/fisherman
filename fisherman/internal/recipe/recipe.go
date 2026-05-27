@@ -64,6 +64,11 @@ type Recipe struct {
 	// after the OS install completes. Entirely non-fatal — if no NTFS partition
 	// is found or extraction fails, the install continues normally.
 	SlurpWallpapers bool `json:"slurpWallpapers,omitempty"`
+	// Slurp configures full user-data migration from an existing Windows
+	// partition. When set, fisherman extracts the specified categories before
+	// partitioning and injects them post-install. Takes priority over
+	// SlurpWallpapers (which only grabs wallpapers).
+	Slurp *SlurpSpec `json:"slurp,omitempty"`
 	// TargetMount overrides the host path where fisherman assembles the
 	// target filesystem hierarchy. Defaults to "/mnt/fisherman-target".
 	// Use this to run multiple installs in parallel on the same host
@@ -84,6 +89,18 @@ type UserSpec struct {
 	Fullname string   `json:"fullname"`
 	Password string   `json:"password"`
 	Groups   []string `json:"groups"`
+}
+
+// SlurpSpec configures Windows user-data migration.
+type SlurpSpec struct {
+	SourcePartition string          `json:"sourcePartition"`
+	Users           []SlurpUserSpec `json:"users"`
+}
+
+// SlurpUserSpec describes which categories to extract for one Windows user.
+type SlurpUserSpec struct {
+	Name       string   `json:"name"`
+	Categories []string `json:"categories"`
 }
 
 // VarDiskSpec describes an optional separate disk to mount at /var.
