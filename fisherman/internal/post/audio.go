@@ -175,6 +175,69 @@ func GenerateAudioConfig(targetRoot string) error {
 	return nil
 }
 
+// ApplyAudioConfigLive detects audio devices and applies friendly names
+// immediately on the live session. Writes to the user-level WirePlumber
+// config (~/.config/wireplumber/wireplumber.conf.d/) and restarts
+// WirePlumber so changes take effect without reboot.
+//
+// Call this BEFORE install starts so the user sees clean audio names
+// while using the installer. The same rules are later persisted to the
+// target during post-install via GenerateAudioConfig().
+func ApplyAudioConfigLive() error {
+	devices, err := detectAudioDevices()
+	if err != nil {
+		return fmt.Errorf("detecting audio devices: %w", err)
+	}
+
+	if len(devices) == 0 {
+		return nil
+	}
+
+	var rules []string
+	for _, dev := range devices {
+		if shouldHide(dev) {
+			rules = append(rules, formatHideRule(dev))
+			continue
+		}
+		if friendly := friendlyName(dev); friendly != "" {
+			rules = append(rules, formatRenameRule(dev, friendly))
+		}
+	}
+
+	if len(rules) == 0 {
+		return nil
+	}
+
+	// Write to user-level config (no root needed, works in live session)
+	home := os.Getenv("HOME")
+	if home == "" {
+		home = "/home/liveuser"
+	}
+	confDir := filepath.Join(home, ".config", "wireplumber", "wireplumber.conf.d")
+	if err := os.MkdirAll(confDir, 0755); err != nil {
+		return fmt.Errorf("creating user wireplumber conf dir: %w", err)
+	}
+
+	content := generateWirePlumberConf(rules)
+	confPath := filepath.Join(confDir, "60-friendly-audio-names.conf")
+	if err := os.WriteFile(confPath, []byte(content), 0644); err != nil {
+		return fmt.Errorf("writing user wireplumber config: %w", err)
+	}
+
+	// Also write to system /etc/ so it persists for the live session's
+	// system-level WirePlumber (covers both user and system instances)
+	sysDir := "/etc/wireplumber/wireplumber.conf.d"
+	if err := os.MkdirAll(sysDir, 0755); err == nil {
+		_ = os.WriteFile(filepath.Join(sysDir, "60-friendly-audio-names.conf"), []byte(content), 0644)
+	}
+
+	// Restart WirePlumber to pick up new rules immediately
+	_ = Exec.Command("systemctl", "--user", "restart", "wireplumber").Run()
+
+	progress.Info("Applied friendly audio device names to live session")
+	return nil
+}
+
 // detectAudioDevices uses pw-cli to list all audio nodes.
 func detectAudioDevices() ([]AudioDevice, error) {
 	// pw-cli ls Node gives us all nodes with their properties

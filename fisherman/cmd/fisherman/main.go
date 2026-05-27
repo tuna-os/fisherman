@@ -323,6 +323,13 @@ func main() {
 	}
 	step := 1
 
+	// ── Immediate: Apply friendly audio names to live session ─────────────
+	// Detect hardware, rename ugly ALSA names, hide S/PDIF etc. Takes effect
+	// immediately via WirePlumber restart. Non-fatal.
+	if err := post.ApplyAudioConfigLive(); err != nil {
+		progress.Info(fmt.Sprintf("Live audio config skipped: %v", err))
+	}
+
 	// ── Pre-partition: Wallpaper slurp (easter egg) ──────────────────────────
 	// Extract Windows wallpapers from any NTFS partition on the target disk
 	// before partitioning destroys them. Held in RAM (/run). Entirely non-fatal.
