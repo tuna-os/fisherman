@@ -33,6 +33,12 @@ var vendorServices = map[string][]string{
 	},
 }
 
+// vendorMenuIcons maps vendor to their custom-command-menu icon name.
+var vendorMenuIcons = map[string]string{
+	"asus":      "asus-rog-symbolic",
+	"framework": "framework-symbolic",
+}
+
 // detectVendor reads the system vendor from DMI sysfs.
 func detectVendor() string {
 	data, err := os.ReadFile("/sys/devices/virtual/dmi/id/sys_vendor")
@@ -88,6 +94,17 @@ func InstallOEMPackages(target string) error {
 
 	progress.Info(fmt.Sprintf("OEM setup for %s: %d packages queued, %d services enabled",
 		vendor, len(pkgs), len(svcs)))
+
+	// Set vendor-specific menu icon via dconf override.
+	if icon, ok := vendorMenuIcons[vendor]; ok {
+		if err := installVendorIcon(target, vendor); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not install icon for %s: %v", vendor, err))
+		}
+		if err := writeMenuIconOverride(target, icon); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not set menu icon for %s: %v", vendor, err))
+		}
+	}
+
 	return nil
 }
 
@@ -238,4 +255,36 @@ func enableSystemService(target string, service string) {
 			progress.Info(fmt.Sprintf("Warning: could not enable %s: %v", service, err2))
 		}
 	}
+}
+
+// writeMenuIconOverride writes a dconf override that sets the custom-command-menu
+// icon to the vendor's logo. This persists across reboots as a system dconf lock.
+func writeMenuIconOverride(target string, iconName string) error {
+	var etcDir string
+	if isComposeFsNative(target) {
+		etcDir = filepath.Join(target, "etc")
+	} else {
+		deployDir, err := DeploymentDirFn(target)
+		if err != nil {
+			return fmt.Errorf("finding deployment dir: %w", err)
+		}
+		etcDir = filepath.Join(deployDir, "etc")
+	}
+
+	// Write dconf local.d override — higher priority than system defaults.
+	dconfDir := filepath.Join(etcDir, "dconf", "db", "local.d")
+	if err := os.MkdirAll(dconfDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir dconf dir: %w", err)
+	}
+
+	override := fmt.Sprintf(`[org/gnome/shell/extensions/custom-command-list]
+menuicon-setting='%s'
+`, iconName)
+
+	overridePath := filepath.Join(dconfDir, "02-oem-menu-icon")
+	if err := os.WriteFile(overridePath, []byte(override), 0o644); err != nil {
+		return fmt.Errorf("writing dconf override: %w", err)
+	}
+
+	return nil
 }
