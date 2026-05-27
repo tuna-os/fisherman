@@ -43,7 +43,7 @@ type stepProfile struct {
 // buildProfile returns per-step weight profiles based on timing data from a
 // yellowfin gnome-hwe loop-device install (264s uncached, ~111s cached).
 // Weights sum to 100. cumulativePct is the bar position at step start.
-func buildProfile(needsPull, hasLUKS, hasTPM2enrolment bool) []stepProfile {
+func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) []stepProfile {
 	osWeight := 87
 	flatpakWeight := 11
 	if !needsPull {
@@ -62,6 +62,9 @@ func buildProfile(needsPull, hasLUKS, hasTPM2enrolment bool) []stepProfile {
 		weights = append(weights, 1) // LUKS setup
 	}
 	weights = append(weights, 0, 0)     // format root, mount
+	if hasVarDiskFormat {
+		weights = append(weights, 0) // format /var disk (fast)
+	}
 	weights = append(weights, osWeight) // install OS
 	if hasTPM2enrolment {
 		weights = append(weights, 1) // TPM2 enrolment
@@ -284,7 +287,7 @@ func main() {
 		}
 	}
 
-	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2enrolment)
+	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2enrolment, r.VarDisk != nil && !r.VarDisk.KeepExisting)
 	pi := 0 // profile index, incremented at each progress.Step call
 
 	// Compute total step count up front so the GUI can show accurate progress.
@@ -298,6 +301,10 @@ func main() {
 	}
 	if hasTPM2 && r.Encryption.Type == "tpm2-luks-passphrase" {
 		totalSteps++ // extra step for TPM2 enrolment
+	}
+	hasVarDisk := r.VarDisk != nil
+	if hasVarDisk && !r.VarDisk.KeepExisting {
+		totalSteps++ // extra step to format the /var disk
 	}
 	step := 1
 
@@ -489,6 +496,30 @@ func main() {
 		activeEfiPart = efiPart
 	}
 
+	// ── Step 5.5: Mount /var disk (optional) ─────────────────────────────────
+	// Must happen before bootc install so bootc populates /var on the right disk.
+	if hasVarDisk {
+		varDir := filepath.Join(activeTargetMount, "var")
+		if err := os.MkdirAll(varDir, 0o755); err != nil {
+			fatal("creating /var mount point: %v", err)
+		}
+		if !r.VarDisk.KeepExisting {
+			progress.Step(step, totalSteps, "Formatting data disk (/var)", profile[pi].cumulativePct, profile[pi].weightPct)
+			pi++
+			step++
+			if err := disk.FormatVar(r.VarDisk.Disk); err != nil {
+				fatal("formatting /var disk: %v", err)
+			}
+		} else {
+			progress.Info(fmt.Sprintf("Keeping existing data on /var disk %s", r.VarDisk.Disk))
+		}
+		if err := disk.Mount(r.VarDisk.Disk, varDir, ""); err != nil {
+			fatal("mounting /var disk: %v", err)
+		}
+		cleanup.AddMount(varDir)
+		progress.Info(fmt.Sprintf("Mounted /var disk %s at /var", r.VarDisk.Disk))
+	}
+
 	// Bind-mount a host-side scratch directory at /var/tmp so bootc has
 	// disk-backed space for layer blobs. We deliberately use a path OUTSIDE
 	// the target tree so bootc's "empty rootfs" check doesn't find stray
@@ -627,6 +658,20 @@ func main() {
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
 	if err := post.WriteHostname(activeTargetMount, r.Hostname); err != nil {
 		fatal("writing hostname: %v", err)
+	}
+
+	// Write /var fstab entry if a separate /var disk was used.
+	if hasVarDisk {
+		varUUID := disk.UUID(r.VarDisk.Disk)
+		if varUUID == "" {
+			progress.Info(fmt.Sprintf("Warning: could not determine UUID for /var disk %s — skipping fstab entry", r.VarDisk.Disk))
+		} else {
+			if err := post.AppendFstabEntry(activeTargetMount, varUUID, "/var", "xfs", "defaults"); err != nil {
+				progress.Info(fmt.Sprintf("Warning: could not write /var fstab entry: %v", err))
+			} else {
+				progress.Info(fmt.Sprintf("Added /var fstab entry (UUID=%s)", varUUID))
+			}
+		}
 	}
 
 	// Create a user account if the recipe requests one (e.g. Bazzite has no OOBE).

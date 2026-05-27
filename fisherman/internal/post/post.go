@@ -395,3 +395,35 @@ func flatpakList(installFlag, typeFilter string) []string {
 	}
 	return refs
 }
+
+// AppendFstabEntry adds a UUID-based mount entry to /etc/fstab in the installed
+// system at target. Works for both composefs-native and ostree-based deployments.
+func AppendFstabEntry(target, uuid, mountpoint, fstype, options string) error {
+	var etcDir string
+	if isComposeFsNative(target) {
+		etcDir = filepath.Join(target, "etc")
+	} else {
+		deployDir, err := DeploymentDirFn(target)
+		if err != nil {
+			return fmt.Errorf("finding deployment dir for fstab: %w", err)
+		}
+		etcDir = filepath.Join(deployDir, "etc")
+	}
+	if err := os.MkdirAll(etcDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", etcDir, err)
+	}
+	if options == "" {
+		options = "defaults"
+	}
+	fstabPath := filepath.Join(etcDir, "fstab")
+	f, err := os.OpenFile(fstabPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return fmt.Errorf("opening fstab %s: %w", fstabPath, err)
+	}
+	defer f.Close()
+	entry := fmt.Sprintf("UUID=%s\t%s\t%s\t%s\t0 0\n", uuid, mountpoint, fstype, options)
+	if _, err := f.WriteString(entry); err != nil {
+		return fmt.Errorf("writing fstab entry: %w", err)
+	}
+	return nil
+}

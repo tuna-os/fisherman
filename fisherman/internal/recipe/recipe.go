@@ -44,6 +44,10 @@ type Recipe struct {
 	// BtrfsSubvolumes and the auto-partition steps are skipped; fisherman formats and
 	// mounts the listed partitions directly.
 	CustomMounts []CustomMount `json:"customMounts,omitempty"`
+	// VarDisk optionally describes a separate disk to mount at /var.
+	// When set, fisherman formats (or mounts as-is) this disk before running
+	// bootc, then adds a /var entry to the installed system's fstab.
+	VarDisk *VarDiskSpec `json:"varDisk,omitempty"`
 	// AdditionalImageStores lists host paths to be exposed to the bootc
 	// container as containers/storage additionalimagestores. Each path is
 	// bind-mounted read-only into the container at the same location and added
@@ -74,6 +78,12 @@ type UserSpec struct {
 	Fullname string   `json:"fullname"`
 	Password string   `json:"password"`
 	Groups   []string `json:"groups"`
+}
+
+// VarDiskSpec describes an optional separate disk to mount at /var.
+type VarDiskSpec struct {
+	Disk         string `json:"disk"`         // block device, e.g. "/dev/sdb"
+	KeepExisting bool   `json:"keepExisting"` // if true, mount as-is; if false, format XFS
 }
 
 // CustomMount describes a single partition → mountpoint mapping for manual layouts.
@@ -165,6 +175,17 @@ func (r *Recipe) Validate() error {
 		return fmt.Errorf("encryption.passphrase required for %s", r.Encryption.Type)
 	}
 	// image may be empty in live-ISO mode; bootc auto-detects the running container.
+	if r.VarDisk != nil {
+		if r.VarDisk.Disk == "" {
+			return fmt.Errorf("varDisk.disk is required")
+		}
+		if _, err := os.Stat(r.VarDisk.Disk); err != nil {
+			return fmt.Errorf("varDisk.disk %s: %w", r.VarDisk.Disk, err)
+		}
+		if r.VarDisk.Disk == r.Disk {
+			return fmt.Errorf("varDisk.disk must differ from the system disk")
+		}
+	}
 	if r.Hostname == "" {
 		return fmt.Errorf("hostname is required")
 	}

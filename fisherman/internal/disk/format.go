@@ -3,6 +3,7 @@ package disk
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/runner"
@@ -142,4 +143,19 @@ func MountEFI(rootMount, efiPart string) error {
 		return fmt.Errorf("mkdir %s: %w", efiDir, err)
 	}
 	return runner.Run("mount", efiPart, efiDir)
+}
+
+// FormatVar formats a device as XFS for use as a dedicated /var partition.
+func FormatVar(dev string) error {
+	return runner.Run("mkfs.xfs", "-f", "-L", "var", dev)
+}
+
+// UUID returns the filesystem UUID of dev using blkid.
+// Returns an empty string on any error (non-fatal; fstab write will be skipped).
+func UUID(dev string) string {
+	out, err := runner.Output("blkid", "-s", "UUID", "-o", "value", dev)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
