@@ -776,6 +776,7 @@
         {
           "name": "Dakota",
           "imgref": "ghcr.io/projectbluefin/dakota:latest",
+          "nvidia_imgref": "ghcr.io/projectbluefin/dakota-nvidia:latest",
           "desc": "GNOME workstation on GnomeOS — composefs + systemd-boot",
           "search_extra": "gnomeos composefs systemd-boot experimental",
           "icon": "resource:///org/bootcinstaller/Installer/images/dakota.png",
