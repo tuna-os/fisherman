@@ -827,6 +827,12 @@ func main() {
 		}
 	}
 
+	// Detect OEM hardware (ASUS, Framework) and queue vendor-specific packages
+	// for first-login install via brew. Also enables required system services. Non-fatal.
+	if err := post.InstallOEMPackages(activeTargetMount); err != nil {
+		progress.Info(fmt.Sprintf("Warning: OEM package setup: %v", err))
+	}
+
 	// Warm all system caches (fonts, icons, schemas, pixbuf, ldconfig, man-db,
 	// flatpak appstream) so first boot is instant. Non-fatal.
 	progress.Substep("Pre-warming system caches for first boot")
