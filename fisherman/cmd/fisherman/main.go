@@ -822,6 +822,11 @@ func main() {
 		}
 	}
 
+	// Warm all system caches (fonts, icons, schemas, pixbuf, ldconfig, man-db,
+	// flatpak appstream) so first boot is instant. Non-fatal.
+	progress.Substep("Pre-warming system caches for first boot")
+	post.WarmCaches(activeTargetMount)
+
 	// ── Step 9: Finalize ─────────────────────────────────────────────────────
 	// bootc's --skip-finalize kept the target writable for post-install writes.
 	// Now replicate what bootc's finalize_filesystem() does internally:
