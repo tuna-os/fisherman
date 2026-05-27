@@ -48,6 +48,9 @@ func normalizeVendor(raw string) string {
 		"asustek computer inc.": "asus",
 		"asus":                  "asus",
 		"framework":            "framework",
+		"tuxedo":               "tuxedo",
+		"tuxedo computers":     "tuxedo",
+		"tuxedo computers gmbh": "tuxedo",
 	}
 	return vendorMap[strings.ToLower(strings.TrimSpace(raw))]
 }
