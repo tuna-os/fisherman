@@ -58,6 +58,12 @@ type Recipe struct {
 	// CONTAINERS_STORAGE_CONF env var, that takes priority and this field is
 	// ignored.
 	AdditionalImageStores []string `json:"additionalImageStores,omitempty"`
+	// SlurpWallpapers enables pre-partition extraction of wallpapers from an
+	// existing Windows (NTFS) partition on the target disk. The wallpapers are
+	// held in RAM (/run) and injected into the installed user's home directory
+	// after the OS install completes. Entirely non-fatal — if no NTFS partition
+	// is found or extraction fails, the install continues normally.
+	SlurpWallpapers bool `json:"slurpWallpapers,omitempty"`
 	// TargetMount overrides the host path where fisherman assembles the
 	// target filesystem hierarchy. Defaults to "/mnt/fisherman-target".
 	// Use this to run multiple installs in parallel on the same host

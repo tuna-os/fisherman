@@ -13,6 +13,7 @@ import (
 	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
+	"github.com/tuna-os/fisherman/internal/slurp"
 )
 
 const (
@@ -307,6 +308,34 @@ func main() {
 		totalSteps++ // extra step to format the /var disk
 	}
 	step := 1
+
+	// ── Pre-partition: Wallpaper slurp (easter egg) ──────────────────────────
+	// Extract Windows wallpapers from any NTFS partition on the target disk
+	// before partitioning destroys them. Held in RAM (/run). Entirely non-fatal.
+	var wallpaperResult *slurp.WallpaperResult
+	if r.SlurpWallpapers && !isManual {
+		progress.Info("Checking for Windows wallpapers to migrate...")
+		ntfsPartitions, err := slurp.DetectNTFS(r.Disk)
+		if err != nil {
+			progress.Info(fmt.Sprintf("NTFS detection skipped: %v", err))
+		} else if len(ntfsPartitions) > 0 {
+			progress.Info(fmt.Sprintf("Found %d NTFS partition(s), extracting wallpapers", len(ntfsPartitions)))
+			for _, part := range ntfsPartitions {
+				result, err := slurp.ExtractWallpapers(part)
+				if err != nil {
+					progress.Info(fmt.Sprintf("Wallpaper extraction from %s skipped: %v", part, err))
+					continue
+				}
+				if result.Found {
+					wallpaperResult = result
+					break // take first successful extraction
+				}
+			}
+		}
+		if wallpaperResult == nil {
+			progress.Info("No Windows wallpapers found — continuing normally")
+		}
+	}
 
 	var activeTargetMount string
 	var activeEfiPart string
@@ -706,6 +735,32 @@ func main() {
 			progress.Info(fmt.Sprintf("Warning: could not inject LUKS boot args: %v", err))
 		} else if n > 0 {
 			progress.Info(fmt.Sprintf("Injected rd.luks.name into %d boot entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+		}
+	}
+
+	// Copy Bluetooth pairings from live session so paired keyboards/mice
+	// reconnect on first boot without re-pairing. Non-fatal.
+	if err := post.CopyBluetoothPairings(activeTargetMount); err != nil {
+		progress.Info(fmt.Sprintf("Warning: could not copy Bluetooth pairings: %v", err))
+	}
+
+	// Inject slurped Windows wallpapers into the installed system. Non-fatal.
+	if wallpaperResult != nil && wallpaperResult.Found {
+		composefs := post.IsComposeFsNativeExported(activeTargetMount)
+		if err := slurp.InjectWallpapers(activeTargetMount, wallpaperResult, composefs); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not inject wallpapers: %v", err))
+		}
+		slurp.CleanupScratch()
+	}
+
+	// Pre-generate thumbnails for ALL wallpapers (system + user-injected) so
+	// the GNOME wallpaper capplet opens instantly on first boot. Non-fatal.
+	{
+		composefs := post.IsComposeFsNativeExported(activeTargetMount)
+		progress.Substep("Pre-generating wallpaper thumbnails")
+		n := slurp.GenerateSystemThumbnails(activeTargetMount, composefs)
+		if n > 0 {
+			progress.Info(fmt.Sprintf("Pre-generated %d wallpaper thumbnail(s)", n))
 		}
 	}
 

@@ -115,6 +115,13 @@ func isComposeFsNative(sysroot string) bool {
 	return err != nil
 }
 
+// IsComposeFsNativeExported is a public wrapper for isComposeFsNative,
+// used by packages that need to determine the target system layout
+// (e.g. slurp.InjectWallpapers).
+func IsComposeFsNativeExported(sysroot string) bool {
+	return isComposeFsNative(sysroot)
+}
+
 // WriteHostname writes /etc/hostname into the installed system at target.
 // For ostree-based deployments the hostname goes into the ostree deployment
 // subtree (found via DeploymentDirFn). For composefs-native deployments it goes
@@ -394,6 +401,47 @@ func flatpakList(installFlag, typeFilter string) []string {
 		}
 	}
 	return refs
+}
+
+// CopyBluetoothPairings copies Bluetooth pairing data from the live environment
+// to the installed system so paired devices (keyboards, mice) reconnect on first
+// boot without re-pairing. Non-fatal: if no pairings exist or the copy fails, the
+// system still boots normally.
+func CopyBluetoothPairings(target string) error {
+	const src = "/var/lib/bluetooth"
+	info, err := os.Stat(src)
+	if err != nil || !info.IsDir() {
+		return nil // no bluetooth data — nothing to do
+	}
+
+	// Check if the directory has any adapter subdirectories.
+	entries, err := os.ReadDir(src)
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+
+	// Resolve the target /var/lib/bluetooth path (composefs-native vs ostree).
+	var dst string
+	if isComposeFsNative(target) {
+		dst = filepath.Join(target, "state", "os", "default", "var", "lib", "bluetooth")
+	} else {
+		dst = filepath.Join(target, "var", "lib", "bluetooth")
+	}
+
+	if err := runner.Run("mkdir", "-p", dst); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dst, err)
+	}
+
+	// Copy preserving permissions and ownership.
+	if err := runner.Run("cp", "-a", src+"/.", dst); err != nil {
+		return fmt.Errorf("copying bluetooth pairings: %w", err)
+	}
+
+	// Fix SELinux context if restorecon is available.
+	_ = runner.Run("restorecon", "-R", dst)
+
+	fmt.Fprintf(os.Stdout, "  copied Bluetooth pairings to %s\n", dst)
+	return nil
 }
 
 // AppendFstabEntry adds a UUID-based mount entry to /etc/fstab in the installed
