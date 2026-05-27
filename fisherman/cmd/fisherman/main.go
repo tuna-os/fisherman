@@ -848,6 +848,11 @@ func main() {
 		progress.Info(fmt.Sprintf("Warning: OEM package setup: %v", err))
 	}
 
+	// Enable print auto-discovery services (cups-browsed, avahi-daemon, ipp-usb)
+	// so USB and network printers are found on first boot without configuration.
+	// Non-fatal: services are skipped if their unit files are absent from the image.
+	post.EnablePrintServices(activeTargetMount)
+
 	// Warm all system caches (fonts, icons, schemas, pixbuf, ldconfig, man-db,
 	// flatpak appstream) so first boot is instant. Non-fatal.
 	progress.Substep("Pre-warming system caches for first boot")

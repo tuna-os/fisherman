@@ -536,3 +536,40 @@ func TestEnsureLuksArgs(t *testing.T) {
 		}
 	})
 }
+
+func TestEnablePrintServices(t *testing.T) {
+dir := t.TempDir()
+
+// Intercept runner.RunFn so "ls <sysroot>/ostree" returns an error (not composefs),
+// which makes enableSystemService fall through to DeploymentDirFn.
+origRunFn := runner.RunFn
+defer func() { runner.RunFn = origRunFn }()
+runner.RunFn = func(_ io.Reader, _ string, _ ...string) error { return nil }
+
+// Intercept runner.OutputFn so "ls <sysroot>/ostree" returns no "deploy" string,
+// confirming not composefs-native.
+origOutputFn := runner.OutputFn
+defer func() { runner.OutputFn = origOutputFn }()
+runner.OutputFn = func(_ string, _ ...string) ([]byte, error) { return []byte(""), nil }
+
+// Override DeploymentDirFn so it points to our temp dir.
+origFn := post.DeploymentDirFn
+defer func() { post.DeploymentDirFn = origFn }()
+deployDir := filepath.Join(dir, "deploy")
+if err := os.MkdirAll(filepath.Join(deployDir, "etc", "systemd", "system"), 0o755); err != nil {
+	t.Fatal(err)
+}
+post.DeploymentDirFn = func(sysroot string) (string, error) {
+	return deployDir, nil
+}
+
+post.EnablePrintServices(dir)
+
+wantsDir := filepath.Join(deployDir, "etc", "systemd", "system", "multi-user.target.wants")
+for _, svc := range []string{"cups-browsed.service", "avahi-daemon.service", "ipp-usb.service"} {
+	link := filepath.Join(wantsDir, svc)
+	if _, err := os.Lstat(link); err != nil {
+		t.Errorf("expected symlink for %s to exist, got: %v", svc, err)
+	}
+}
+}

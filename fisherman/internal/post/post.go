@@ -505,7 +505,23 @@ func CopyWiFiConnections(target string) error {
 	return nil
 }
 
-// AppendFstabEntry adds a UUID-based mount entry to /etc/fstab in the installed
+// EnablePrintServices enables cups-browsed, avahi-daemon, and ipp-usb in the
+// installed system so printers are auto-discovered on first boot without any
+// user configuration. All three are non-fatal: if the unit file is missing in
+// the target image the symlink is skipped with a warning.
+func EnablePrintServices(target string) {
+	services := []string{
+		"cups-browsed.service",
+		"avahi-daemon.service",
+		"ipp-usb.service",
+	}
+	for _, svc := range services {
+		enableSystemService(target, svc)
+	}
+	progress.Info("Print services enabled: cups-browsed, avahi-daemon, ipp-usb")
+}
+
+
 // system at target. Works for both composefs-native and ostree-based deployments.
 func AppendFstabEntry(target, uuid, mountpoint, fstype, options string) error {
 	var etcDir string
