@@ -786,6 +786,11 @@ func main() {
 		progress.Info(fmt.Sprintf("Warning: could not copy Bluetooth pairings: %v", err))
 	}
 
+	// Copy WiFi connections from live session so network reconnects on first boot. Non-fatal.
+	if err := post.CopyWiFiConnections(activeTargetMount); err != nil {
+		progress.Info(fmt.Sprintf("Warning: could not copy WiFi connections: %v", err))
+	}
+
 	// Generate friendly audio device names and hide useless outputs (S/PDIF,
 	// Pro Audio, monitor loopbacks). Writes WirePlumber rules to /etc/ so no
 	// GNOME extensions are needed. Non-fatal.

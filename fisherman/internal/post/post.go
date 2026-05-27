@@ -444,6 +444,67 @@ func CopyBluetoothPairings(target string) error {
 	return nil
 }
 
+// CopyWiFiConnections copies NetworkManager connection profiles from the live
+// session to the installed system so WiFi connects automatically on first boot.
+// Non-fatal: if no connections exist or the copy fails, the system still boots.
+func CopyWiFiConnections(target string) error {
+	const src = "/etc/NetworkManager/system-connections"
+	info, err := os.Stat(src)
+	if err != nil || !info.IsDir() {
+		return nil // no NM connections — nothing to do
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+
+	// Only copy .nmconnection files (skip other config).
+	var hasConnections bool
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".nmconnection") {
+			hasConnections = true
+			break
+		}
+	}
+	if !hasConnections {
+		return nil
+	}
+
+	// Resolve the target NM connections path (composefs-native vs ostree).
+	var dst string
+	if isComposeFsNative(target) {
+		dst = filepath.Join(target, "etc", "NetworkManager", "system-connections")
+	} else {
+		deployDir, err := DeploymentDirFn(target)
+		if err != nil {
+			return fmt.Errorf("finding deployment dir for NM connections: %w", err)
+		}
+		dst = filepath.Join(deployDir, "etc", "NetworkManager", "system-connections")
+	}
+
+	if err := runner.Run("mkdir", "-p", dst); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dst, err)
+	}
+
+	// Copy only .nmconnection files preserving permissions (they contain passwords, mode 0600).
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".nmconnection") {
+			continue
+		}
+		srcFile := filepath.Join(src, e.Name())
+		if err := runner.Run("cp", "-a", srcFile, dst+"/"); err != nil {
+			return fmt.Errorf("copying %s: %w", e.Name(), err)
+		}
+	}
+
+	// Fix SELinux context if restorecon is available.
+	_ = runner.Run("restorecon", "-R", dst)
+
+	fmt.Fprintf(os.Stdout, "  copied WiFi connections to %s\n", dst)
+	return nil
+}
+
 // AppendFstabEntry adds a UUID-based mount entry to /etc/fstab in the installed
 // system at target. Works for both composefs-native and ostree-based deployments.
 func AppendFstabEntry(target, uuid, mountpoint, fstype, options string) error {
