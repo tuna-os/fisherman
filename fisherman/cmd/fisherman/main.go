@@ -119,7 +119,7 @@ func prepareScratchDir(activeTargetMount string, liveISO bool) (string, error) {
 		scratchDir = filepath.Join(activeTargetMount, ".fisherman-scratch")
 		progress.Info("Live environment detected (/var is space-constrained) — using target disk for scratch I/O")
 	}
-	if err := os.MkdirAll(scratchDir, 0o1777); err != nil {
+	if err := os.MkdirAll(scratchDir, 0o700); err != nil {
 		return "", err
 	}
 	if liveISO {
@@ -616,8 +616,11 @@ func main() {
 	// For the live-ISO path scratchDir is on the target disk and removal is
 	// handled by cleanup.AddPostRemoval (registered in prepareScratchDir),
 	// which also fires on the fatal() error path. For the non-live path the
-	// directory is /var/fisherman-tmp on the host and is cleaned up here.
+	// directory is /var/fisherman-tmp on the host and is cleaned up here
+	// AND via cleanup.AddPostRemoval so it also fires on fatal() paths
+	// (os.Exit bypasses defers).
 	if !liveISO {
+		cleanup.AddPostRemoval(scratchDir)
 		defer os.RemoveAll(scratchDir)
 	}
 

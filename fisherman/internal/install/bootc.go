@@ -206,7 +206,11 @@ func writeAdditionalStoresConf(scratchDir string, stores []string) (hostPath, co
 	}
 	quoted := make([]string, len(stores))
 	for i, s := range stores {
-		quoted[i] = `"` + s + `"`
+		// Escape backslashes and double-quotes to prevent TOML injection.
+		escaped := strings.ReplaceAll(s, `\`, `\\`)
+		escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+		escaped = strings.ReplaceAll(escaped, "\n", "")
+		quoted[i] = `"` + escaped + `"`
 	}
 	conf := "[storage]\ndriver = \"overlay\"\n\n[storage.options]\nadditionalimagestores = [" +
 		strings.Join(quoted, ", ") + "]\n"
