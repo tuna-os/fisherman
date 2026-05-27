@@ -34,11 +34,11 @@ var vendorServices = map[string][]string{
 }
 
 // vendorMenuIcons maps vendor to their custom-command-menu icon name.
+// Only vendors with a recognizable non-wordmark symbol get an icon.
 var vendorMenuIcons = map[string]string{
 	"asus":      "asus-rog-symbolic",
 	"framework": "framework-symbolic",
 	"dell":      "dell-symbolic",
-	"lenovo":    "lenovo-symbolic",
 	"hp":        "hp-symbolic",
 	"system76":  "system76-symbolic",
 	"razer":     "razer-symbolic",

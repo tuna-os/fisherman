@@ -14,16 +14,15 @@ var oemIcons embed.FS
 
 // vendorIconFiles maps vendor to their embedded icon filename.
 var vendorIconFiles = map[string]string{
-	"asus":     "icons/asus-rog-symbolic.svg",
+	"asus":      "icons/asus-rog-symbolic.svg",
 	"framework": "icons/framework-symbolic.svg",
-	"dell":     "icons/dell-symbolic.svg",
-	"lenovo":   "icons/lenovo-symbolic.svg",
-	"hp":       "icons/hp-symbolic.svg",
-	"system76": "icons/system76-symbolic.svg",
-	"razer":    "icons/razer-symbolic.svg",
-	"msi":      "icons/msi-symbolic.svg",
-	"nvidia":   "icons/nvidia-symbolic.svg",
-	"arm":      "icons/arm-symbolic.svg",
+	"dell":      "icons/dell-symbolic.svg",
+	"hp":        "icons/hp-symbolic.svg",
+	"system76":  "icons/system76-symbolic.svg",
+	"razer":     "icons/razer-symbolic.svg",
+	"msi":       "icons/msi-symbolic.svg",
+	"nvidia":    "icons/nvidia-symbolic.svg",
+	"arm":       "icons/arm-symbolic.svg",
 }
 
 // detectGPUVendor checks for NVIDIA GPU presence via sysfs/PCI.
