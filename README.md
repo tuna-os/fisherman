@@ -1,3 +1,14 @@
+# ⚠️ This repository has moved
+
+**fisherman now lives at [projectbluefin/fisherman](https://github.com/projectbluefin/fisherman)**
+
+Please update your remotes:
+
+```bash
+git remote set-url origin https://github.com/projectbluefin/fisherman.git
+```
+
+---
 # fisherman
 
 A universal bootc installer backend, designed to be driven by a frontend such as [tuna-installer](https://github.com/tuna-os/tuna-installer).
