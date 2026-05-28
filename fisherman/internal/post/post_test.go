@@ -310,8 +310,8 @@ func TestEnsurePlymouthArgs(t *testing.T) {
 	}{
 		{
 			name:    "adds rhgb and quiet when absent",
-			input:   "title TunaOS\noptions root=UUID=abc rw\n",
-			wantOut: "title TunaOS\noptions root=UUID=abc rw rhgb quiet\n",
+			input:   "title Fedora Linux\noptions root=UUID=abc rw\n",
+			wantOut: "title Fedora Linux\noptions root=UUID=abc rw rhgb quiet\n",
 			wantMod: true,
 		},
 		{
@@ -368,7 +368,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 		entryPath := entriesDir + "/test.conf"
-		input := "title TunaOS\noptions root=UUID=abc rw\n"
+		input := "title Fedora Linux\noptions root=UUID=abc rw\n"
 		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -392,7 +392,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 		entryPath := entriesDir + "/test.conf"
-		input := "title TunaOS\noptions root=UUID=abc rw\n"
+		input := "title Fedora Linux\noptions root=UUID=abc rw\n"
 		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -416,7 +416,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 		entryPath := entriesDir + "/test.conf"
-		input := "title TunaOS\noptions root=UUID=abc rw " + wantArg + "\n"
+		input := "title Fedora Linux\noptions root=UUID=abc rw " + wantArg + "\n"
 		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -452,7 +452,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, name := range []string{"entry1.conf", "entry2.conf", "entry3.conf"} {
-			input := "title TunaOS\noptions root=UUID=abc rw\n"
+			input := "title Fedora Linux\noptions root=UUID=abc rw\n"
 			if err := os.WriteFile(filepath.Join(entriesDir, name), []byte(input), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -473,7 +473,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			if err := os.MkdirAll(entriesDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			input := "title TunaOS\noptions root=UUID=abc rw\n"
+			input := "title Fedora Linux\noptions root=UUID=abc rw\n"
 			if err := os.WriteFile(filepath.Join(entriesDir, "entry.conf"), []byte(input), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -496,7 +496,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 		entryPath := filepath.Join(entriesDir, "entry.conf")
-		if err := os.WriteFile(entryPath, []byte("title TunaOS\noptions root=UUID=abc rw\n"), 0o644); err != nil {
+		if err := os.WriteFile(entryPath, []byte("title Fedora Linux\noptions root=UUID=abc rw\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		_, err := post.EnsureLuksArgs(dir, testUUID)
@@ -518,7 +518,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 		if err := os.MkdirAll(entriesDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		const input = "title TunaOS\n# no options line\n"
+		const input = "title Fedora Linux\n# no options line\n"
 		entryPath := filepath.Join(entriesDir, "entry.conf")
 		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
 			t.Fatal(err)

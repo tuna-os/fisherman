@@ -80,6 +80,14 @@ type Recipe struct {
 	// installs should leave it at the default since the same name is
 	// hard-coded into installed system kernel cmdlines (rd.luks.name).
 	LuksMapperName string `json:"luksMapperName,omitempty"`
+	// DistroID is a short lowercase identifier for the distribution, used
+	// to name OEM setup paths and service files written to the target
+	// (e.g. /etc/<distroID>/oem/, <distroID>-oem-setup.service).
+	// Defaults to "bootc" when empty.
+	DistroID string `json:"distroID,omitempty"`
+	// BrewTap is an optional Homebrew tap to add before installing OEM
+	// packages (e.g. "ublue-os/tap"). When empty, no tap is added.
+	BrewTap string `json:"brewTap,omitempty"`
 }
 
 // UserSpec describes a user account to create during installation.

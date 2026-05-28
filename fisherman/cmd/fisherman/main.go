@@ -210,7 +210,7 @@ Examples:
   fisherman /tmp/recipe.json
   fisherman validate /tmp/recipe.json
   fisherman images
-  fisherman images TunaOS
+  fisherman images Bluefin
   fisherman images "GNOME 50"
   fisherman images --plain yellowfin
   fisherman scan /dev/nvme0n1
@@ -844,7 +844,7 @@ func main() {
 
 	// Detect OEM hardware (ASUS, Framework) and queue vendor-specific packages
 	// for first-login install via brew. Also enables required system services. Non-fatal.
-	if err := post.InstallOEMPackages(activeTargetMount); err != nil {
+	if err := post.InstallOEMPackages(activeTargetMount, r.DistroID, r.BrewTap); err != nil {
 		progress.Info(fmt.Sprintf("Warning: OEM package setup: %v", err))
 	}
 
