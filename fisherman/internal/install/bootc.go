@@ -397,6 +397,7 @@ func bootcViaContainer(opts Options) error {
 		// filesystem without the host SELinux policy interfering.
 		"--security-opt", "label=disable",
 		"-v", "/dev:/dev",
+		"-v", "/sys:/sys",
 	)
 
 	// For composefs installs, mount the OCI cache at containerOCICachePath
@@ -566,6 +567,7 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 		"--pid=host",
 		"--security-opt", "label=disable",
 		"-v", "/dev:/dev",
+		"-v", "/sys:/sys",
 	}
 
 	if opts.ComposeFsBackend {
