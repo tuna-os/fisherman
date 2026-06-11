@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/install"
@@ -449,4 +450,53 @@ func TestNeedsContainerStorageMount_ComposeFsBackend(t *testing.T) {
 	if install.NeedsContainerStorageMount(install.Options{ComposeFsBackend: true}) {
 		t.Error("should NOT mount /var/lib/containers when ComposeFsBackend=true")
 	}
+}
+
+// TestInjectStorageTmpDir verifies that injectStorageTmpDir correctly adds or
+// replaces the tmpdir line in a containers/storage TOML config string.
+func TestInjectStorageTmpDir(t *testing.T) {
+	newLine := `tmpdir = "/scratch"`
+
+	t.Run("replaces existing tmpdir", func(t *testing.T) {
+		conf := "[storage]\ndriver = \"vfs\"\ntmpdir = \"/old\"\ngraphroot = \"/var/lib/containers/storage\"\n"
+		result := install.InjectStorageTmpDir(conf, newLine)
+		if !strings.Contains(result, `tmpdir = "/scratch"`) {
+			t.Errorf("expected replaced tmpdir, got:\n%s", result)
+		}
+		if strings.Contains(result, `"/old"`) {
+			t.Errorf("old tmpdir still present:\n%s", result)
+		}
+	})
+
+	t.Run("injects when no tmpdir line", func(t *testing.T) {
+		conf := "[storage]\ndriver = \"vfs\"\nrunroot = \"/run/containers/storage\"\ngraphroot = \"/var/lib/containers/storage\"\n"
+		result := install.InjectStorageTmpDir(conf, newLine)
+		if !strings.Contains(result, `tmpdir = "/scratch"`) {
+			t.Errorf("tmpdir not injected, got:\n%s", result)
+		}
+		// Existing fields must still be present.
+		if !strings.Contains(result, `driver = "vfs"`) {
+			t.Errorf("driver line missing:\n%s", result)
+		}
+	})
+
+	t.Run("injects before next section", func(t *testing.T) {
+		conf := "[storage]\ndriver = \"overlay\"\n\n[storage.options]\nadditionalimagestores = []\n"
+		result := install.InjectStorageTmpDir(conf, newLine)
+		if !strings.Contains(result, `tmpdir = "/scratch"`) {
+			t.Errorf("tmpdir not injected, got:\n%s", result)
+		}
+		// additionalimagestores must survive unchanged.
+		if !strings.Contains(result, "additionalimagestores") {
+			t.Errorf("[storage.options] section lost:\n%s", result)
+		}
+	})
+
+	t.Run("handles empty config (live-ISO fallback)", func(t *testing.T) {
+		conf := ""
+		result := install.InjectStorageTmpDir(conf, newLine)
+		// No [storage] section → nothing to inject, just return unchanged.
+		// The fallback path in writeStorageConfWithTmpDir handles this.
+		_ = result // just must not panic
+	})
 }

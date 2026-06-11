@@ -175,6 +175,10 @@ func checkRequiredTools(r *recipe.Recipe) error {
 		{"zpool", "zfsutils-linux", r.Filesystem == "zfs"},
 		{"zfs", "zfsutils-linux", r.Filesystem == "zfs"},
 		{"cryptsetup", "cryptsetup", r.Encryption.Type != "" && r.Encryption.Type != "none"},
+		// systemd-cryptenroll is required for TPM2 auto-unlock enrolment.
+		// Check before touching any disks — a missing tool at step 9 (after
+		// partitioning and OS install) would leave the disk partially modified.
+		{"systemd-cryptenroll", "systemd", r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"},
 		{"skopeo", "skopeo", true},
 		{"podman", "podman", true},
 	}

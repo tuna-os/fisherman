@@ -686,6 +686,104 @@ func bareImageRef(image string) string {
 	return image
 }
 
+// injectStorageTmpDir returns a copy of the containers/storage TOML config
+// string with the tmpdir field in the [storage] section set to newLine
+// (e.g. `tmpdir = "/scratch"`). If the field already exists it is replaced;
+// otherwise it is inserted after the last key=value line in [storage].
+// InjectStorageTmpDir is exported for testing. Use injectStorageTmpDir
+// (the var below) for all internal call sites.
+func InjectStorageTmpDir(conf, newLine string) string {
+	return injectStorageTmpDir(conf, newLine)
+}
+
+func injectStorageTmpDir(conf, newLine string) string {
+	lines := strings.Split(conf, "\n")
+	inStorage := false
+	replaced := false
+	insertAfter := -1
+
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			if trimmed == "[storage]" {
+				inStorage = true
+				insertAfter = i
+			} else if inStorage {
+				inStorage = false // another section started
+			}
+		} else if inStorage {
+			// Replace an existing tmpdir = "…" line.
+			if strings.HasPrefix(strings.ToLower(trimmed), "tmpdir") &&
+				strings.Contains(trimmed, "=") {
+				lines[i] = newLine
+				replaced = true
+			} else if trimmed != "" {
+				insertAfter = i // track last non-blank line in section
+			}
+		}
+	}
+
+	if !replaced && insertAfter >= 0 {
+		// Insert after the last key=value line in [storage].
+		result := make([]string, 0, len(lines)+1)
+		for i, line := range lines {
+			result = append(result, line)
+			if i == insertAfter {
+				result = append(result, newLine)
+			}
+		}
+		return strings.Join(result, "\n")
+	}
+	return strings.Join(lines, "\n")
+}
+
+// writeStorageConfWithTmpDir writes a containers/storage configuration that
+// mirrors the current effective config (from CONTAINERS_STORAGE_CONF or
+// /etc/containers/storage.conf) with the tmpdir field overridden to scratchDir.
+//
+// containers/storage defaults TMPDir to /var/tmp and only falls back to
+// checking $TMPDIR when the config file contains no tmpdir line — and even
+// then only in newer versions. Setting $TMPDIR alone in the subprocess
+// environment is not sufficient on the live ISO (VFS driver, no tmpdir in
+// /etc/containers/storage.conf), so we supply an explicit config file.
+//
+// The caller must remove the returned path when done.
+func writeStorageConfWithTmpDir(confDir, scratchDir string) (string, error) {
+	if err := os.MkdirAll(confDir, 0o755); err != nil {
+		return "", err
+	}
+
+	// Read the current effective storage config so we preserve the driver,
+	// graphroot, runroot, and any additionalimagestores that let skopeo find
+	// the image (e.g. on a live ISO the driver is "vfs", not "overlay").
+	confSrc := os.Getenv("CONTAINERS_STORAGE_CONF")
+	if confSrc == "" {
+		confSrc = "/etc/containers/storage.conf"
+	}
+	existing, err := os.ReadFile(confSrc)
+	if err != nil {
+		// Fall back to a minimal VFS config that covers the live-ISO case.
+		existing = []byte("[storage]\ndriver = \"vfs\"\n" +
+			"runroot = \"/run/containers/storage\"\n" +
+			"graphroot = \"/var/lib/containers/storage\"\n")
+	}
+
+	escaped := strings.ReplaceAll(scratchDir, `"`, `\"`)
+	newLine := `tmpdir = "` + escaped + `"`
+	content := injectStorageTmpDir(string(existing), newLine)
+
+	f, err := os.CreateTemp(confDir, "storage-tmpdir-*.conf")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := f.WriteString(content); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
+}
+
 // skopeoExportOCI exports an image from containers-storage to an OCI directory
 // layout. The composefs-backend requires raw OCI blobs (compressed layer
 // tarballs) that podman pull does not preserve; skopeo reconstructs them from
@@ -717,14 +815,35 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 		tmpdir = "/tmp"
 	}
 	env := os.Environ()
-	// Remove any existing TMPDIR from the environment
-	cleanEnv := []string{}
+	// Strip any caller-set TMPDIR and CONTAINERS_STORAGE_CONF so we can
+	// supply controlled replacements below.
+	cleanEnv := make([]string, 0, len(env)+2)
 	for _, e := range env {
-		if !strings.HasPrefix(e, "TMPDIR=") {
+		if !strings.HasPrefix(e, "TMPDIR=") &&
+			!strings.HasPrefix(e, "CONTAINERS_STORAGE_CONF=") {
 			cleanEnv = append(cleanEnv, e)
 		}
 	}
 	cleanEnv = append(cleanEnv, "TMPDIR="+tmpdir)
+
+	// Override containers/storage's TMPDir via a custom config file.
+	// containers/storage defaults TMPDir to /var/tmp and — depending on the
+	// version — may not check $TMPDIR when no tmpdir line is in the config.
+	// On live ISOs /var/tmp is on a space-constrained overlayfs (~1.4 GiB)
+	// that cannot hold multi-GiB OCI layer blobs; the scratch dir on the
+	// target disk is the only safe location. See: issue reported in
+	// https://github.com/ublue-os/bluefin/discussions/4754
+	confDir := filepath.Join(tmpdir, "fisherman-conf")
+	if storageConf, confErr := writeStorageConfWithTmpDir(confDir, tmpdir); confErr == nil {
+		defer os.Remove(storageConf)
+		cleanEnv = append(cleanEnv, "CONTAINERS_STORAGE_CONF="+storageConf)
+		fmt.Fprintf(os.Stdout, "# CONTAINERS_STORAGE_CONF=%s (tmpdir=%s)\n", storageConf, tmpdir)
+	} else {
+		progress.Info(fmt.Sprintf(
+			"warning: could not write storage.conf for tmpdir override: %v — /var/tmp may be used",
+			confErr))
+	}
+
 	cmd.Env = cleanEnv
 	fmt.Fprintf(os.Stdout, "# TMPDIR=%s\n", tmpdir)
 	if err := runWithSubsteps(cmd); err != nil {
