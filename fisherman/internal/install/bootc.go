@@ -803,53 +803,39 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 		tmpdir = "/tmp"
 	}
 
-	// Two-stage export to avoid containers/image using containers/storage's
-	// hardcoded /var/tmp as the blob-staging tmpdir.
+	// Redirect /var/tmp to the disk-backed scratch dir before the export.
 	//
-	// Root cause: when skopeo copies FROM containers-storage:, containers/image
-	// calls ContainerTempDir(store, TypeBigFiles). TypeBigFiles checks
-	// store.TmpDir() first, which returns /var/tmp (the containers/storage
-	// default) regardless of the TMPDIR env var. On live ISOs /var/tmp is on
-	// the dracut overlayfs (~1.4 GiB) — too small for 5-6 GiB layer blobs.
+	// Root cause: containers/image's TypeBigFiles path calls store.TmpDir()
+	// which returns /var/tmp (containers/storage hardcoded default) regardless
+	// of the TMPDIR env var. On live ISOs /var/tmp is on the dracut overlayfs
+	// (~1.4 GiB) — too small for 5-6 GiB layer blobs. Both podman and skopeo
+	// hit this when reading from containers-storage.
 	//
-	// Fix: use "podman save --format oci-archive" to export from
-	// containers-storage to an OCI tar archive in the scratch dir (direct
-	// streaming, no blob staging). Then "skopeo copy oci-archive:..."
-	// reads from the archive; because the source is NOT containers-storage,
-	// store is nil in ContainerTempDir, so TMPDIR env var is respected and
-	// blobs are staged in the disk-backed scratch dir.
-
-	// Stage 1: podman save → OCI archive on scratch disk.
-	archivePath := filepath.Join(tmpdir, "skopeo-export.oci.tar")
-	defer os.Remove(archivePath)
-	podmanSaveArgs := []string{"save", "--format", "oci-archive", "-o", archivePath, bareImageRef(image)}
-	saveName, saveCmdArgs := runner.HostArgsWithEnv("podman", podmanSaveArgs, []string{"TMPDIR=" + tmpdir})
-	fmt.Fprintf(os.Stdout, "+ %s %s\n", saveName, strings.Join(saveCmdArgs, " "))
-	saveCmd := exec.Command(saveName, saveCmdArgs...)
-	if err := runWithSubsteps(saveCmd); err != nil {
-		return fmt.Errorf("podman save: %w", err)
+	// Fix: bind-mount the scratch dir over /var/tmp so the hardcoded path
+	// becomes disk-backed. Deferred umount restores it after export.
+	varTmpOverride := filepath.Join(tmpdir, "var-tmp-override")
+	if err := os.MkdirAll(varTmpOverride, 0o1777); err == nil {
+		mntName, mntArgs := runner.HostArgs("mount", []string{"--bind", varTmpOverride, "/var/tmp"})
+		if exec.Command(mntName, mntArgs...).Run() == nil {
+			fmt.Fprintf(os.Stdout, "# /var/tmp bind-mounted → %s for blob staging\n", varTmpOverride)
+			defer func() {
+				umName, umArgs := runner.HostArgs("umount", []string{"/var/tmp"})
+				exec.Command(umName, umArgs...).Run()
+			}()
+		} else {
+			fmt.Fprintf(os.Stdout, "# warning: /var/tmp bind-mount failed — ENOSPC likely on overlay tmpfs\n")
+		}
 	}
 
-	// Stage 2: skopeo copy oci-archive → OCI layout.
-	// Source is oci-archive (not containers-storage), so store is nil in
-	// ContainerTempDir — TMPDIR env var is used for blob staging.
-	skopeoArgs := []string{"copy", "oci-archive:" + archivePath, "oci:" + destDir}
-	envOverrides := []string{"TMPDIR=" + tmpdir}
-	name, args := runner.HostArgsWithEnv("skopeo", skopeoArgs, envOverrides)
+	skopeoArgs := []string{
+		"copy",
+		"containers-storage:" + bareImageRef(image),
+		"oci:" + destDir,
+	}
+	name, args := runner.HostArgs("skopeo", skopeoArgs)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 	fmt.Fprintf(os.Stdout, "# TMPDIR=%s\n", tmpdir)
 	cmd := exec.Command(name, args...)
-	if !runner.InFlatpak() {
-		env := os.Environ()
-		cleanEnv := make([]string, 0, len(env)+len(envOverrides))
-		for _, e := range env {
-			if !strings.HasPrefix(e, "TMPDIR=") {
-				cleanEnv = append(cleanEnv, e)
-			}
-		}
-		cleanEnv = append(cleanEnv, envOverrides...)
-		cmd.Env = cleanEnv
-	}
 	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("skopeo copy: %w", err)
 	}
