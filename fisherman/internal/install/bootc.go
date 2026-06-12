@@ -795,17 +795,7 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 		return fmt.Errorf("removing old OCI cache: %w", err)
 	}
 
-	skopeoArgs := []string{
-		"copy",
-		"containers-storage:" + bareImageRef(image),
-		"oci:" + destDir,
-	}
-
-	// tmpdir must be disk-backed for multi-gigabyte intermediate files. The
-	// caller picks the right location — on live ISOs that's a path on the
-	// target disk (since /var/tmp is on a constrained overlay/tmpfs there);
-	// on installed systems it's typically /var/fisherman-tmp. Fall back to
-	// /tmp only if even the caller-supplied path can't be created.
+	// tmpdir must be disk-backed for multi-gigabyte intermediate files.
 	if tmpdir == "" {
 		tmpdir = "/var/fisherman-tmp"
 	}
@@ -813,54 +803,53 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 		tmpdir = "/tmp"
 	}
 
-	// Build the list of env vars that must reach the skopeo subprocess.
-	// TMPDIR: containers/image blob staging uses os.Getenv("TMPDIR").
-	// CONTAINERS_STORAGE_CONF: overrides containers/storage's TMPDir field
-	// (belt-and-suspenders for versions that ignore $TMPDIR for big blobs).
-	envOverrides := []string{"TMPDIR=" + tmpdir}
+	// Two-stage export to avoid containers/image using containers/storage's
+	// hardcoded /var/tmp as the blob-staging tmpdir.
+	//
+	// Root cause: when skopeo copies FROM containers-storage:, containers/image
+	// calls ContainerTempDir(store, TypeBigFiles). TypeBigFiles checks
+	// store.TmpDir() first, which returns /var/tmp (the containers/storage
+	// default) regardless of the TMPDIR env var. On live ISOs /var/tmp is on
+	// the dracut overlayfs (~1.4 GiB) — too small for 5-6 GiB layer blobs.
+	//
+	// Fix: use "podman save --format oci-archive" to export from
+	// containers-storage to an OCI tar archive in the scratch dir (direct
+	// streaming, no blob staging). Then "skopeo copy oci-archive:..."
+	// reads from the archive; because the source is NOT containers-storage,
+	// store is nil in ContainerTempDir, so TMPDIR env var is respected and
+	// blobs are staged in the disk-backed scratch dir.
 
-	// Override containers/storage's TMPDir via a custom config file.
-	// containers/storage defaults TMPDir to /var/tmp and — depending on the
-	// version — may not check $TMPDIR when no tmpdir line is in the config.
-	// On live ISOs /var/tmp is on a space-constrained overlayfs (~1.4 GiB)
-	// that cannot hold multi-GiB OCI layer blobs; the scratch dir on the
-	// target disk is the only safe location. See: issue reported in
-	// https://github.com/ublue-os/bluefin/discussions/4754
-	confDir := filepath.Join(tmpdir, "fisherman-conf")
-	if storageConf, confErr := writeStorageConfWithTmpDir(confDir, tmpdir); confErr == nil {
-		defer os.Remove(storageConf)
-		envOverrides = append(envOverrides, "CONTAINERS_STORAGE_CONF="+storageConf)
-		fmt.Fprintf(os.Stdout, "# CONTAINERS_STORAGE_CONF=%s (tmpdir=%s)\n", storageConf, tmpdir)
-	} else {
-		progress.Info(fmt.Sprintf(
-			"warning: could not write storage.conf for tmpdir override: %v — /var/tmp may be used",
-			confErr))
+	// Stage 1: podman save → OCI archive on scratch disk.
+	archivePath := filepath.Join(tmpdir, "skopeo-export.oci.tar")
+	defer os.Remove(archivePath)
+	podmanSaveArgs := []string{"save", "--format", "oci-archive", "-o", archivePath, bareImageRef(image)}
+	saveName, saveCmdArgs := runner.HostArgsWithEnv("podman", podmanSaveArgs, []string{"TMPDIR=" + tmpdir})
+	fmt.Fprintf(os.Stdout, "+ %s %s\n", saveName, strings.Join(saveCmdArgs, " "))
+	saveCmd := exec.Command(saveName, saveCmdArgs...)
+	if err := runWithSubsteps(saveCmd); err != nil {
+		return fmt.Errorf("podman save: %w", err)
 	}
 
-	// Build the command. When inside a Flatpak, flatpak-spawn --host does NOT
-	// forward the sandbox's environment to the host process, so we must pass
-	// critical env vars via --env=KEY=VALUE flags. For non-Flatpak invocations
-	// we use HostArgs and set cmd.Env directly.
+	// Stage 2: skopeo copy oci-archive → OCI layout.
+	// Source is oci-archive (not containers-storage), so store is nil in
+	// ContainerTempDir — TMPDIR env var is used for blob staging.
+	skopeoArgs := []string{"copy", "oci-archive:" + archivePath, "oci:" + destDir}
+	envOverrides := []string{"TMPDIR=" + tmpdir}
 	name, args := runner.HostArgsWithEnv("skopeo", skopeoArgs, envOverrides)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 	fmt.Fprintf(os.Stdout, "# TMPDIR=%s\n", tmpdir)
 	cmd := exec.Command(name, args...)
-
 	if !runner.InFlatpak() {
-		// Non-Flatpak: set cmd.Env so the subprocess inherits our overrides
-		// rather than picking them up from the ambient environment.
 		env := os.Environ()
 		cleanEnv := make([]string, 0, len(env)+len(envOverrides))
 		for _, e := range env {
-			if !strings.HasPrefix(e, "TMPDIR=") &&
-				!strings.HasPrefix(e, "CONTAINERS_STORAGE_CONF=") {
+			if !strings.HasPrefix(e, "TMPDIR=") {
 				cleanEnv = append(cleanEnv, e)
 			}
 		}
 		cleanEnv = append(cleanEnv, envOverrides...)
 		cmd.Env = cleanEnv
 	}
-
 	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("skopeo copy: %w", err)
 	}
