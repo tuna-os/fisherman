@@ -800,9 +800,7 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 		"containers-storage:" + bareImageRef(image),
 		"oci:" + destDir,
 	}
-	name, args := runner.HostArgs("skopeo", skopeoArgs)
-	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
-	cmd := exec.Command(name, args...)
+
 	// tmpdir must be disk-backed for multi-gigabyte intermediate files. The
 	// caller picks the right location — on live ISOs that's a path on the
 	// target disk (since /var/tmp is on a constrained overlay/tmpfs there);
@@ -814,17 +812,12 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 	if err := os.MkdirAll(tmpdir, 0o1777); err != nil {
 		tmpdir = "/tmp"
 	}
-	env := os.Environ()
-	// Strip any caller-set TMPDIR and CONTAINERS_STORAGE_CONF so we can
-	// supply controlled replacements below.
-	cleanEnv := make([]string, 0, len(env)+2)
-	for _, e := range env {
-		if !strings.HasPrefix(e, "TMPDIR=") &&
-			!strings.HasPrefix(e, "CONTAINERS_STORAGE_CONF=") {
-			cleanEnv = append(cleanEnv, e)
-		}
-	}
-	cleanEnv = append(cleanEnv, "TMPDIR="+tmpdir)
+
+	// Build the list of env vars that must reach the skopeo subprocess.
+	// TMPDIR: containers/image blob staging uses os.Getenv("TMPDIR").
+	// CONTAINERS_STORAGE_CONF: overrides containers/storage's TMPDir field
+	// (belt-and-suspenders for versions that ignore $TMPDIR for big blobs).
+	envOverrides := []string{"TMPDIR=" + tmpdir}
 
 	// Override containers/storage's TMPDir via a custom config file.
 	// containers/storage defaults TMPDir to /var/tmp and — depending on the
@@ -836,7 +829,7 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 	confDir := filepath.Join(tmpdir, "fisherman-conf")
 	if storageConf, confErr := writeStorageConfWithTmpDir(confDir, tmpdir); confErr == nil {
 		defer os.Remove(storageConf)
-		cleanEnv = append(cleanEnv, "CONTAINERS_STORAGE_CONF="+storageConf)
+		envOverrides = append(envOverrides, "CONTAINERS_STORAGE_CONF="+storageConf)
 		fmt.Fprintf(os.Stdout, "# CONTAINERS_STORAGE_CONF=%s (tmpdir=%s)\n", storageConf, tmpdir)
 	} else {
 		progress.Info(fmt.Sprintf(
@@ -844,8 +837,30 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 			confErr))
 	}
 
-	cmd.Env = cleanEnv
+	// Build the command. When inside a Flatpak, flatpak-spawn --host does NOT
+	// forward the sandbox's environment to the host process, so we must pass
+	// critical env vars via --env=KEY=VALUE flags. For non-Flatpak invocations
+	// we use HostArgs and set cmd.Env directly.
+	name, args := runner.HostArgsWithEnv("skopeo", skopeoArgs, envOverrides)
+	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 	fmt.Fprintf(os.Stdout, "# TMPDIR=%s\n", tmpdir)
+	cmd := exec.Command(name, args...)
+
+	if !runner.InFlatpak() {
+		// Non-Flatpak: set cmd.Env so the subprocess inherits our overrides
+		// rather than picking them up from the ambient environment.
+		env := os.Environ()
+		cleanEnv := make([]string, 0, len(env)+len(envOverrides))
+		for _, e := range env {
+			if !strings.HasPrefix(e, "TMPDIR=") &&
+				!strings.HasPrefix(e, "CONTAINERS_STORAGE_CONF=") {
+				cleanEnv = append(cleanEnv, e)
+			}
+		}
+		cleanEnv = append(cleanEnv, envOverrides...)
+		cmd.Env = cleanEnv
+	}
+
 	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("skopeo copy: %w", err)
 	}
