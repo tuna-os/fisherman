@@ -179,16 +179,31 @@ func ComposeFsVarDir(target string) string {
 
 // DefaultDeploymentDir returns the ostree deployment directory inside sysroot
 // using `ostree admin --sysroot=<sysroot> --print-current-dir`.
+// DefaultDeploymentDir returns the ostree deployment directory inside sysroot.
+// It first tries `ostree admin --sysroot=<sysroot> --print-current-dir`, which
+// works on a booted system. On a freshly-installed target (never booted),
+// --print-current-dir exits 1 because there is no booted-deployment state;
+// we fall back to a filesystem glob over ostree/deploy/**/deploy/* to find
+// the single deployment that bootc install to-filesystem just created.
 func DefaultDeploymentDir(sysroot string) (string, error) {
 	out, err := Exec.Command("ostree", "admin", "--sysroot="+sysroot, "--print-current-dir").Output()
-	if err != nil {
-		return "", fmt.Errorf("ostree admin --print-current-dir: %w", err)
+	if err == nil {
+		path := strings.TrimSpace(string(out))
+		if path != "" {
+			return path, nil
+		}
 	}
-	path := strings.TrimSpace(string(out))
-	if path == "" {
-		return "", fmt.Errorf("ostree admin --print-current-dir returned empty path")
+	// Fallback: freshly-installed target has no booted-deployment state.
+	// bootc install to-filesystem always produces exactly one deployment at
+	// <sysroot>/ostree/deploy/<osname>/deploy/<hash>.<n>.
+	matches, globErr := filepath.Glob(filepath.Join(sysroot, "ostree", "deploy", "*", "deploy", "*"))
+	if globErr != nil || len(matches) == 0 {
+		if err != nil {
+			return "", fmt.Errorf("ostree admin --print-current-dir: %w", err)
+		}
+		return "", fmt.Errorf("no ostree deployment found under %s", sysroot)
 	}
-	return path, nil
+	return matches[0], nil
 }
 
 // DeploymentDirFn is called by WriteHostname to locate the ostree deployment

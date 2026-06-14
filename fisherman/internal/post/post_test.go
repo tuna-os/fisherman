@@ -670,3 +670,69 @@ func TestDefaultComposeFsDeployEtcDir_Fallback(t *testing.T) {
 		t.Errorf("got %q, expected one of %q or %q", got, first, second)
 	}
 }
+
+// TestDefaultDeploymentDir_PrintCurrentDirFails is the regression test for the
+// installer crash: `ostree admin --print-current-dir` always exits 1 against a
+// freshly-installed target (never booted, no booted-deployment state).
+// DefaultDeploymentDir must fall back to a filesystem glob and return the
+// single deployment directory created by `bootc install to-filesystem`.
+func TestDefaultDeploymentDir_PrintCurrentDirFails(t *testing.T) {
+	sysroot := t.TempDir()
+	deployDir := filepath.Join(sysroot, "ostree", "deploy", "default", "deploy", "abc123.0")
+	if err := os.MkdirAll(deployDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := setupMockExec(t)
+	mock.responses["ostree"] = struct {
+		out []byte
+		err error
+	}{err: fmt.Errorf("exit status 1")}
+
+	got, err := post.DefaultDeploymentDir(sysroot)
+	if err != nil {
+		t.Fatalf("DefaultDeploymentDir: unexpected error: %v", err)
+	}
+	if got != deployDir {
+		t.Errorf("DefaultDeploymentDir = %q, want %q", got, deployDir)
+	}
+}
+
+// TestDefaultDeploymentDir_PrintCurrentDirSucceeds verifies the happy path:
+// when `ostree admin --print-current-dir` returns a valid path, it is used
+// directly without touching the filesystem.
+func TestDefaultDeploymentDir_PrintCurrentDirSucceeds(t *testing.T) {
+	sysroot := t.TempDir()
+	want := "/sysroot/ostree/deploy/default/deploy/deadbeef.0"
+
+	mock := setupMockExec(t)
+	mock.responses["ostree"] = struct {
+		out []byte
+		err error
+	}{out: []byte(want + "\n")}
+
+	got, err := post.DefaultDeploymentDir(sysroot)
+	if err != nil {
+		t.Fatalf("DefaultDeploymentDir: unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("DefaultDeploymentDir = %q, want %q", got, want)
+	}
+}
+
+// TestDefaultDeploymentDir_NoDeploymentFound verifies that when ostree fails
+// AND no deployment directory exists on disk, an error is returned.
+func TestDefaultDeploymentDir_NoDeploymentFound(t *testing.T) {
+	sysroot := t.TempDir() // empty — no ostree/deploy/...
+
+	mock := setupMockExec(t)
+	mock.responses["ostree"] = struct {
+		out []byte
+		err error
+	}{err: fmt.Errorf("exit status 1")}
+
+	_, err := post.DefaultDeploymentDir(sysroot)
+	if err == nil {
+		t.Fatal("DefaultDeploymentDir: expected error for empty sysroot, got nil")
+	}
+}
