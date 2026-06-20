@@ -420,19 +420,19 @@ func bootcViaContainer(opts Options) error {
 			storageDriver = nonComposefsDriver
 		}
 
-		progress.Substep(fmt.Sprintf("Using %s storage driver with OCI layout", storageDriver))
-		if err := os.RemoveAll(containersRoot); err != nil && !os.IsNotExist(err) {
-			progress.Substep(fmt.Sprintf("Warning: could not clear previous podman database: %v", err))
-		}
+			// Clear any previous podman database to avoid driver-mismatch errors;
+			// the early RemoveAll when nonComposefsRoot is set handles this for
+			// the non-composefs path, so only do it for composefs here.
+			if opts.ComposeFsBackend {
+				if err := os.RemoveAll(nonComposefsRoot); err != nil && !os.IsNotExist(err) {
+					progress.Substep(fmt.Sprintf("Warning: could not clear previous podman database: %v", err))
+				}
+			}
 
+		progress.Substep(fmt.Sprintf("Using %s storage driver with OCI layout", storageDriver))
 		podmanArgs = append(podmanArgs,
 			"--root", containersRoot,
 			"--storage-driver", storageDriver,
-		)
-	} else if nonComposefsRoot != "" {
-		podmanArgs = append(podmanArgs,
-			"--root", nonComposefsRoot,
-			"--storage-driver", nonComposefsDriver,
 		)
 	}
 

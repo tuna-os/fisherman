@@ -227,7 +227,7 @@ func partition(disk, script string) error {
 // `bootc install to-disk` with systemd-boot. bootc creates a 3-partition GPT:
 //
 //	p1 = BIOS boot (1 MiB)
-//	p2 = EFI System (512 MiB, FAT32)
+//	p2 = EFI System (2 GiB, FAT32)
 //	p3 = Linux root (remainder, btrfs/xfs/ext4)
 //
 // It uses lsblk to confirm the layout rather than hardcoding partition numbers.
