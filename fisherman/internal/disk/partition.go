@@ -104,19 +104,16 @@ func SetPartitionType(disk string, partNum int, partType string) error {
 
 // Partition wipes disk and creates a three-partition GPT layout using sfdisk:
 //
-//	Partition 1 – EFI System (512 MiB)
-//	Partition 2 – /boot     (2 GiB, ext4 — bootloader reads this)
+//	Partition 1 – EFI System (2 GiB)
+//	Partition 2 – /boot     (2 GiB, ext4 — GRUB reads this)
 //	Partition 3 – Linux root (remaining space)
 //
-// A separate /boot partition is required because GRUB's built-in XFS driver
-// does not support the newer XFS features enabled by mkfs.xfs on el10
-// (nrext64, exchange, rmapbt). By keeping /boot on ext4, GRUB never needs
-// to parse XFS. This matches what bootc install to-disk always does.
+// ESP is 2 GiB for fleet consistency with dakota (systemd-boot) images.
+// GRUB only places its EFI binary on the ESP so the extra space is unused
+// on grub2 installs, but uniform sizing simplifies fleet tooling.
 //
-// 2 GiB provides headroom for the running deployment, a staged upgrade, and
-// a rollback entry — each kernel+initramfs pair can be 200-400 MiB with large
-// driver sets (e.g. NVIDIA), so 1 GiB fills up quickly once entries accumulate.
-// The systemd-boot layout already uses 2 GiB for the same reason.
+// A separate /boot (ext4) is required because GRUB's built-in XFS driver
+// does not support newer XFS features (nrext64, rmapbt) on el10.
 //
 // On real block devices sfdisk notifies the kernel via BLKRRPART, so
 // partition devices appear after udevadm settle. Loop devices reject
@@ -126,7 +123,7 @@ func Partition(disk string) error {
 	script := strings.Join([]string{
 		"label: gpt",
 		"",
-		`size=512MiB, type=uefi, name="EFI-SYSTEM"`,
+		`size=2GiB, type=uefi, name="EFI-SYSTEM"`,
 		`size=2GiB,   type=linux, name="boot"`,
 		`type=linux, name="root"`,
 	}, "\n") + "\n"

@@ -187,7 +187,7 @@ func sfdiskStdin(t *testing.T, rec *recorder) string {
 }
 
 // TestPartition_SfdiskScript verifies that Partition() produces a 3-partition
-// GPT layout: EFI (512MiB) + /boot ext4 (1GiB) + root (remaining).
+// GPT layout: EFI (2GiB) + /boot ext4 (1GiB) + root (remaining).
 //
 // This is a regression test for the 2→3 partition layout change. Any attempt
 // to drop the separate ext4 /boot partition will be caught here.
@@ -220,14 +220,14 @@ func TestPartition_SfdiskScript(t *testing.T) {
 	}
 
 	// Partition 1: EFI System, 512 MiB.
-	if !strings.Contains(script, "size=512MiB") || !strings.Contains(script, "type=uefi") {
-		t.Errorf("EFI partition (size=512MiB, type=uefi) not found in sfdisk script:\n%s", script)
+	if !strings.Contains(script, "size=2GiB") || !strings.Contains(script, "type=uefi") {
+		t.Errorf("EFI partition (size=2GiB, type=uefi) not found in sfdisk script:\n%s", script)
 	}
 
-	// Partition 2: Linux /boot, 1 GiB.
+	// Partition 2: Linux /boot, 2 GiB.
 	// Must have an explicit size (so it doesn't consume remaining space).
-	if !strings.Contains(script, "size=1GiB") || !strings.Contains(script, "type=linux") {
-		t.Errorf("/boot partition (size=1GiB, type=linux) not found in sfdisk script:\n%s", script)
+	if !strings.Contains(script, "size=2GiB") || !strings.Contains(script, "type=linux") {
+		t.Errorf("/boot partition (size=2GiB, type=linux) not found in sfdisk script:\n%s", script)
 	}
 
 	// Partition 3: root — must NOT have a size= field (fills remaining space).
