@@ -13,19 +13,14 @@ type storageDriverCandidate struct {
 	reason string // human-readable explanation
 }
 
-// selectStorageDriver chooses a storage driver for the composefs path.
-// If composefs is not enabled, returns ("vfs", "reason") unconditionally for backward compat.
-// If composefs is enabled, returns ("overlay", "reason") when safe, or ("vfs", "reason") as fallback.
+// selectStorageDriver chooses a storage driver for podman when --root is redirected
+// to a scratch directory (needed for both composefs and non-composefs installs when
+// the host's /var/lib/containers is space- or memory-constrained).
+// Returns ("overlay", "reason") when safe, or ("vfs", "reason") as fallback.
 // Checks include:
-// - Filesystem type of scratchPath (rejects BTRFS, overlayfs, tmpfs)
+// - Filesystem type of scratchPath (rejects overlayfs, tmpfs)
 // - Explicit podman overlay probe to verify the driver works on the target root
-func selectStorageDriver(scratchPath string, composefs bool) (driver, reason string) {
-	if !composefs {
-		// Non-composefs installs always use vfs, unchanged from current behavior.
-		return "vfs", "standard containers-storage (non-composefs path)"
-	}
-
-	// Composefs path: try overlay, but carefully.
+func selectStorageDriver(scratchPath string) (driver, reason string) {
 	candidate := overlayCandidate(scratchPath)
 	if candidate.driver == "vfs" {
 		return candidate.driver, candidate.reason
@@ -36,7 +31,7 @@ func selectStorageDriver(scratchPath string, composefs bool) (driver, reason str
 		return "vfs", fmt.Sprintf("podman overlay probe failed: %v", err)
 	}
 
-	return "overlay", "overlay-backed composefs temporary storage on safe filesystem"
+	return "overlay", "overlay-backed storage on safe filesystem"
 }
 
 // overlayCandidate checks if the scratch filesystem is safe for overlay, returning either

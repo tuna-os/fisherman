@@ -54,7 +54,8 @@ images:
     selinux_disabled: true
     flatpaks:
       - org.mozilla.firefox
-    vm_boot: false
+    vm_boot: true   # exercises Flatpak-copy + installer-app-exclusion (PR #1)
+    build_ssh_image: true
 
   - name: ubuntu-bootc
     image: ghcr.io/bootcrew/ubuntu-bootc:latest

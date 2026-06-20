@@ -151,3 +151,77 @@ func TestComposeFsVsStandardMountSeparation(t *testing.T) {
 		t.Errorf("standard path missing scratch:/var/tmp mount: %s", standardOut)
 	}
 }
+
+// TestBootcViaContainer_MountsSys is a regression test for projectbluefin/fisherman PR #2.
+// Without -v /sys:/sys, efibootmgr cannot read or write UEFI variables from
+// inside the bootc container, so UEFI boot entries are never updated.
+func TestBootcViaContainer_MountsSys(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error { return nil }
+	t.Cleanup(func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI })
+
+	target := filepath.Join(tmpDir, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+
+	_ = install.BootcInstall(install.Options{
+		SourceImgref: "containers-storage:ghcr.io/projectbluefin/dakota:latest",
+		TargetImgref: "ghcr.io/projectbluefin/dakota:latest",
+		Target:       target,
+		ScratchDir:   tmpDir,
+		NeedsPull:    false,
+	})
+
+	w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	io.Copy(&buf, r) //nolint:errcheck
+	output := buf.String()
+
+	if !strings.Contains(output, "-v /sys:/sys") {
+		t.Errorf("bootcViaContainer missing '-v /sys:/sys' mount; efibootmgr cannot set UEFI variables without it\ngot: %s", output)
+	}
+}
+
+// TestBootcToDiskViaContainer_MountsSys is a regression test for projectbluefin/fisherman PR #2.
+// Both container-based install paths (bootcViaContainer and bootcToDiskViaContainer)
+// must bind-mount /sys so that efibootmgr can write firmware UEFI entries.
+func TestBootcToDiskViaContainer_MountsSys(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error { return nil }
+	t.Cleanup(func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI })
+
+	// BootcToDisk with SourceImgref set routes through bootcToDiskViaContainer.
+	oldStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	os.Stdout = w
+
+	_, _ = install.BootcToDisk(install.Options{
+		SourceImgref: "containers-storage:ghcr.io/projectbluefin/dakota:latest",
+		TargetImgref: "ghcr.io/projectbluefin/dakota:latest",
+		ScratchDir:   tmpDir,
+	}, "/dev/sda", "ext4")
+
+	w.Close()
+	os.Stdout = oldStdout
+	var buf bytes.Buffer
+	io.Copy(&buf, r) //nolint:errcheck
+	output := buf.String()
+
+	if !strings.Contains(output, "-v /sys:/sys") {
+		t.Errorf("bootcToDiskViaContainer missing '-v /sys:/sys' mount\ngot: %s", output)
+	}
+}

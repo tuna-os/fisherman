@@ -294,6 +294,36 @@ sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHo
     -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "bootctl status" 2>/dev/null \
     | tee "$ARTIFACTS_DIR/bootctl-status-$RUN_TAG.log" || echo "⚠️  bootctl not available"
 
+# Verify UEFI boot entries were written by efibootmgr (PR #2: -v /sys:/sys).
+# Without /sys:/sys in the podman run, efibootmgr inside the bootc container
+# cannot reach /sys/firmware/efi/efivars and silently skips registering entries.
+# We check both efibootmgr (direct NVRAM) and bootctl (systemd-boot entries) so
+# the test covers both GRUB and systemd-boot images.
+echo ""
+echo "=== UEFI boot entry verification (efibootmgr) ==="
+EFIBOOT_OUT=$(sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null -o PubkeyAuthentication=no \
+    root@127.0.0.1 -p "$SSH_PORT" "efibootmgr" 2>/dev/null || true)
+if [ -n "$EFIBOOT_OUT" ]; then
+  echo "$EFIBOOT_OUT" | tee "$ARTIFACTS_DIR/efibootmgr-$RUN_TAG.log"
+  # Assert at least one boot entry exists (e.g. "Boot0000*" line).
+  if echo "$EFIBOOT_OUT" | grep -qE '^Boot[0-9A-Fa-f]{4}'; then
+    echo "✅ UEFI boot entries present (efibootmgr)"
+  else
+    echo "❌ FAIL: no UEFI boot entries found — efibootmgr likely could not reach NVRAM."
+    echo "   Regression: fisherman must pass -v /sys:/sys to the bootc container (PR #2)."
+    # Treat as a warning for non-EFI images (e.g. GRUB on legacy BIOS).
+    # Fail only when the image is systemd-boot based (which always registers entries).
+    if echo "$EFIBOOT_OUT" | grep -qi 'not supported'; then
+      echo "⚠️  efibootmgr: EFI not supported on this firmware — skipping assertion"
+    else
+      EFIBOOT_FAIL=1
+    fi
+  fi
+else
+  echo "⚠️  efibootmgr not available in guest — skipping UEFI entry assertion"
+fi
+
 echo ""
 echo "=== journalctl -b (last boot) ==="
 # Capture into artifacts always (cheap; ~1-2 MB) but only echo the tail to
@@ -323,5 +353,10 @@ sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHo
 sleep 5
 kill $QEMU_PID 2>/dev/null || true
 wait $QEMU_PID 2>/dev/null || true
+
+if [ "${EFIBOOT_FAIL:-0}" = "1" ]; then
+  echo "❌ FAIL: UEFI boot entry assertion failed (see efibootmgr output above)"
+  exit 1
+fi
 
 echo "✅ VM verification complete"

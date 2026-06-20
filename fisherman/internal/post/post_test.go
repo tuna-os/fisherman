@@ -736,3 +736,148 @@ func TestDefaultDeploymentDir_NoDeploymentFound(t *testing.T) {
 		t.Fatal("DefaultDeploymentDir: expected error for empty sysroot, got nil")
 	}
 }
+
+// TestCopyFlatpaks_RemovesInstallerApps verifies that CopyFlatpaks strips the
+// known installer Flatpak app IDs from the target /var/lib/flatpak directory
+// after the copy so they are not present on the installed system.
+// Regression test for projectbluefin/fisherman PR #1.
+func TestCopyFlatpaks_RemovesInstallerApps(t *testing.T) {
+	mock := setupMockExec(t)
+	target := t.TempDir()
+
+	// Simulate "no flatpak data" so we skip the tar pipe but still exercise
+	// the cleanup path (which runs after the copy regardless).
+	mock.responses["du -sb /var/lib/flatpak"] = struct {
+		out []byte
+		err error
+	}{out: []byte("0\t/var/lib/flatpak\n")}
+
+	// Resolve the expected dst path: composefs-native because no /ostree/ dir.
+	dst := filepath.Join(target, "ostree", "deploy", "default", "var", "lib", "flatpak")
+
+	// Pre-create installer app artifacts that should be removed.
+	installerIDs := []string{
+		"org.bootcinstaller.Installer",
+		"org.bootcinstaller.Installer.Devel",
+		"org.tunaos.Installer",
+		"org.tunaos.Installer.Devel",
+	}
+	for _, id := range installerIDs {
+		// app dir
+		appDir := filepath.Join(dst, "app", id)
+		if err := os.MkdirAll(appDir, 0o755); err != nil {
+			t.Fatalf("mkdir appDir: %v", err)
+		}
+		// desktop entry
+		desktopDir := filepath.Join(dst, "exports", "share", "applications")
+		if err := os.MkdirAll(desktopDir, 0o755); err != nil {
+			t.Fatalf("mkdir desktopDir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(desktopDir, id+".desktop"), []byte("[Desktop Entry]\n"), 0o644); err != nil {
+			t.Fatalf("write desktop file: %v", err)
+		}
+		// dbus service file
+		dbusDir := filepath.Join(dst, "exports", "share", "dbus-1", "services")
+		if err := os.MkdirAll(dbusDir, 0o755); err != nil {
+			t.Fatalf("mkdir dbusDir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dbusDir, id+".service"), []byte("[D-BUS Service]\n"), 0o644); err != nil {
+			t.Fatalf("write dbus file: %v", err)
+		}
+	}
+
+	if err := post.CopyFlatpaks(target, nil, ""); err != nil {
+		t.Fatalf("CopyFlatpaks: %v", err)
+	}
+
+	// All installer artifacts must be gone.
+	for _, id := range installerIDs {
+		appDir := filepath.Join(dst, "app", id)
+		if _, err := os.Stat(appDir); err == nil {
+			t.Errorf("installer app dir still exists for %s: %s", id, appDir)
+		}
+		desktopFile := filepath.Join(dst, "exports", "share", "applications", id+".desktop")
+		if _, err := os.Stat(desktopFile); err == nil {
+			t.Errorf("installer desktop file still exists for %s: %s", id, desktopFile)
+		}
+		dbusFile := filepath.Join(dst, "exports", "share", "dbus-1", "services", id+".service")
+		if _, err := os.Stat(dbusFile); err == nil {
+			t.Errorf("installer dbus service still exists for %s: %s", id, dbusFile)
+		}
+	}
+}
+
+// TestCopyFlatpaks_PreservesNonInstallerApps verifies that CopyFlatpaks does NOT
+// remove regular user apps — only the known installer app IDs are targeted.
+func TestCopyFlatpaks_PreservesNonInstallerApps(t *testing.T) {
+	mock := setupMockExec(t)
+	target := t.TempDir()
+
+	mock.responses["du -sb /var/lib/flatpak"] = struct {
+		out []byte
+		err error
+	}{out: []byte("0\t/var/lib/flatpak\n")}
+
+	dst := filepath.Join(target, "ostree", "deploy", "default", "var", "lib", "flatpak")
+
+	// Regular app that must NOT be removed.
+	userAppDir := filepath.Join(dst, "app", "org.mozilla.firefox")
+	if err := os.MkdirAll(userAppDir, 0o755); err != nil {
+		t.Fatalf("mkdir userAppDir: %v", err)
+	}
+
+	if err := post.CopyFlatpaks(target, nil, ""); err != nil {
+		t.Fatalf("CopyFlatpaks: %v", err)
+	}
+
+	// org.mozilla.firefox must still be present.
+	if _, err := os.Stat(userAppDir); err != nil {
+		t.Errorf("non-installer app dir was unexpectedly removed: %v", err)
+	}
+}
+
+// TestCopyFlatpaks_CleanupIdempotentWhenAppsMissing verifies that cleanup is
+// a no-op (no error) when no installer app dirs exist in the target.
+func TestCopyFlatpaks_CleanupIdempotentWhenAppsMissing(t *testing.T) {
+	mock := setupMockExec(t)
+	target := t.TempDir()
+
+	mock.responses["du -sb /var/lib/flatpak"] = struct {
+		out []byte
+		err error
+	}{out: []byte("0\t/var/lib/flatpak\n")}
+
+	// No app dirs pre-created — cleanup should be silent.
+	if err := post.CopyFlatpaks(target, nil, ""); err != nil {
+		t.Fatalf("CopyFlatpaks: %v", err)
+	}
+}
+
+// TestCopyFlatpaks_RemovesInstallerApps_CustomFlatpakVarPath verifies cleanup
+// also works when a custom flatpakVarPath is set (e.g. GnomeOS/Dakota layout).
+func TestCopyFlatpaks_RemovesInstallerApps_CustomFlatpakVarPath(t *testing.T) {
+	mock := setupMockExec(t)
+	target := t.TempDir()
+
+	mock.responses["du -sb /var/lib/flatpak"] = struct {
+		out []byte
+		err error
+	}{out: []byte("0\t/var/lib/flatpak\n")}
+
+	flatpakVarPath := "state/os/default/var"
+	dst := filepath.Join(target, flatpakVarPath, "lib", "flatpak")
+
+	appID := "org.tunaos.Installer"
+	appDir := filepath.Join(dst, "app", appID)
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatalf("mkdir appDir: %v", err)
+	}
+
+	if err := post.CopyFlatpaks(target, nil, flatpakVarPath); err != nil {
+		t.Fatalf("CopyFlatpaks: %v", err)
+	}
+
+	if _, err := os.Stat(appDir); err == nil {
+		t.Errorf("installer app dir still exists at custom flatpakVarPath: %s", appDir)
+	}
+}
