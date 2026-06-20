@@ -108,9 +108,9 @@ func SetPartitionType(disk string, partNum int, partType string) error {
 //	Partition 2 – /boot     (2 GiB, ext4 — GRUB reads this)
 //	Partition 3 – Linux root (remaining space)
 //
-// ESP is 2 GiB for fleet consistency with dakota (systemd-boot) images.
-// GRUB only places its EFI binary on the ESP so the extra space is unused
-// on grub2 installs, but uniform sizing simplifies fleet tooling.
+// 2 GiB ESP for fleet consistency with dakota (systemd-boot). Fedora/Anaconda
+// defaults to 500-600 MiB but that's for interactive installs that don't need
+// to hold multiple kernels on the ESP. Uniform 2 GiB simplifies fleet tooling.
 //
 // A separate /boot (ext4) is required because GRUB's built-in XFS driver
 // does not support newer XFS features (nrext64, rmapbt) on el10.
