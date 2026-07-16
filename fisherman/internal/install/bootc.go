@@ -449,6 +449,10 @@ func bootcViaContainer(opts Options) error {
 		"run", "--rm",
 		"--privileged",
 		"--pid=host",
+		// The install container needs no network of its own (the image comes
+		// from a bind mount); host networking also avoids requiring netavark's
+		// nft/nftables stack, which minimal environments (initramfs) lack.
+		"--network", "host",
 		"--security-opt", "label=disable",
 		"-v", "/dev:/dev",
 		"-v", "/sys:/sys",
@@ -611,6 +615,9 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 		"run", "--rm",
 		"--privileged",
 		"--pid=host",
+		// Same rationale as bootcViaContainer: no container network needed,
+		// and host networking avoids netavark's nft dependency.
+		"--network", "host",
 		"--security-opt", "label=disable",
 		"-v", "/dev:/dev",
 		"-v", "/sys:/sys",
