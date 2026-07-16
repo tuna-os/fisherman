@@ -392,7 +392,16 @@ func bootcViaContainer(opts Options) error {
 	// containers-storage bind mount (the major source of podman memory
 	// pressure).
 	if useOciLayout {
-		if err := exportComposefsOCIIfNeeded(opts, opts.SourceImgref); err != nil {
+		exportRef := opts.SourceImgref
+		if nonComposefsRoot != "" {
+			// The image was pulled into the redirected root; qualify the
+			// containers-storage reference so skopeo reads that store instead
+			// of the default /var/lib/containers (where the image is absent —
+			// the unqualified ref made skopeo copy fail with exit status 2).
+			exportRef = fmt.Sprintf("containers-storage:[%s@%s+/run/containers/storage]%s",
+				nonComposefsDriver, nonComposefsRoot, bareImageRef(opts.SourceImgref))
+		}
+		if err := exportComposefsOCIIfNeeded(opts, exportRef); err != nil {
 			return err
 		}
 	}
