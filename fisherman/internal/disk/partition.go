@@ -376,10 +376,16 @@ func unmountAll(disk string) error {
 	// a stale (potentially much smaller) partition table.
 	deactivateLVM(disk)
 
-	// Kill any processes still holding FDs open on any partition of this disk.
-	// fuser exits non-zero when no processes are found — that is fine.
-	fmt.Fprintf(os.Stdout, "+ fuser -km %s (kill remaining holders)\n", disk)
-	_ = runner.Run("fuser", "-km", disk)
+	// qemu-nbd itself has the NBD device open while backing a VHDX. Killing it
+	// disconnects the disk immediately before sfdisk opens it. For ordinary
+	// block devices retain the aggressive holder cleanup.
+	if strings.HasPrefix(filepath.Base(disk), "nbd") {
+		fmt.Fprintf(os.Stdout, "+ skipping fuser for active NBD device %s\n", disk)
+	} else {
+		// fuser exits non-zero when no processes are found — that is fine.
+		fmt.Fprintf(os.Stdout, "+ fuser -km %s (kill remaining holders)\n", disk)
+		_ = runner.Run("fuser", "-km", disk)
+	}
 
 	// Flush pending I/O so the kernel can drop its internal references.
 	_ = runner.Run("blockdev", "--flushbufs", disk)
