@@ -426,6 +426,43 @@ func TestUnmountAll_AutomountedDisk(t *testing.T) {
 	}
 }
 
+// TestUnmountAll_NBDSkipsFuser verifies that for a network block device
+// (/dev/nbd*, served by a userspace qemu-nbd process), fuser -km is NOT
+// called — killing the server would tear down the device and make sfdisk
+// fail with "cannot open /dev/nbd0: Invalid argument". Regression test for
+// the wootc VHDX-over-NBD partitioning failure.
+func TestUnmountAll_NBDSkipsFuser(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "mounts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close() // empty /proc/mounts — nothing mounted on the fresh NBD device
+	disk.SetProcMountsPath(f.Name())
+	t.Cleanup(func() { disk.SetProcMountsPath("/proc/mounts") })
+
+	rec := setupRecorder(t)
+
+	if err := disk.Partition("/dev/nbd0"); err != nil {
+		t.Fatalf("Partition: %v", err)
+	}
+
+	for _, c := range rec.calls {
+		if c.name == "fuser" {
+			t.Fatalf("fuser was called on /dev/nbd0 (args %v) — would kill the qemu-nbd server", c.args)
+		}
+	}
+	// sfdisk must still run.
+	sawSfdisk := false
+	for _, c := range rec.calls {
+		if c.name == "sfdisk" {
+			sawSfdisk = true
+		}
+	}
+	if !sawSfdisk {
+		t.Error("sfdisk not called for NBD device")
+	}
+}
+
 // TestUnmountAll_NoMounts verifies that Partition succeeds cleanly when
 // no partitions of the target disk are mounted (common case for NVMe install targets).
 func TestUnmountAll_NoMounts(t *testing.T) {
