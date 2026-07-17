@@ -354,15 +354,22 @@ func bootcViaContainer(opts Options) error {
 	// supports overlay and redirect podman storage there via --root.  Overlay
 	// avoids the copy entirely — working layers are created via mount namespaces —
 	// eliminating the memory pressure that kills podman during bootc install.
-	var nonComposefsRoot, nonComposefsDriver string
+	var nonComposefsRoot, nonComposefsRunRoot, nonComposefsDriver string
 	if !opts.ComposeFsBackend && defaultStorageSpaceConstrained() {
 		driver, reason := selectStorageDriver(scratch)
 		if driver == "overlay" {
 			progress.Substep(fmt.Sprintf("Redirecting podman storage to target disk with %s driver (%s)", driver, reason))
 			nonComposefsRoot = filepath.Join(scratch, "containers-root")
+			// Keep graphroot and runroot together.  Skopeo's containers-storage
+			// transport needs both paths to address the exact store into which the
+			// preceding podman pull wrote the image.
+			nonComposefsRunRoot = filepath.Join(scratch, "containers-runroot")
 			nonComposefsDriver = driver
 			if err := os.RemoveAll(nonComposefsRoot); err != nil && !os.IsNotExist(err) {
 				progress.Substep(fmt.Sprintf("Warning: could not clear previous podman database: %v", err))
+			}
+			if err := os.RemoveAll(nonComposefsRunRoot); err != nil && !os.IsNotExist(err) {
+				progress.Substep(fmt.Sprintf("Warning: could not clear previous podman runroot: %v", err))
 			}
 			// Only re-pull when the source is a registry URL.  containers-storage:
 			// images are already local; they get exported to OCI layout instead.
@@ -380,7 +387,7 @@ func bootcViaContainer(opts Options) error {
 	useOciLayout := opts.ComposeFsBackend || nonComposefsRoot != ""
 
 	if opts.NeedsPull {
-		if err := pullImage(opts.SourceImgref, opts.LayerCount, nonComposefsRoot, nonComposefsDriver); err != nil {
+		if err := pullImage(opts.SourceImgref, opts.LayerCount, nonComposefsRoot, nonComposefsRunRoot, nonComposefsDriver); err != nil {
 			return fmt.Errorf("pulling image: %w", err)
 		}
 	} else {
@@ -398,8 +405,8 @@ func bootcViaContainer(opts Options) error {
 			// containers-storage reference so skopeo reads that store instead
 			// of the default /var/lib/containers (where the image is absent —
 			// the unqualified ref made skopeo copy fail with exit status 2).
-			exportRef = fmt.Sprintf("containers-storage:[%s@%s+/run/containers/storage]%s",
-				nonComposefsDriver, nonComposefsRoot, bareImageRef(opts.SourceImgref))
+			exportRef = fmt.Sprintf("containers-storage:[%s@%s+%s]%s",
+				nonComposefsDriver, nonComposefsRoot, nonComposefsRunRoot, bareImageRef(opts.SourceImgref))
 		}
 		if err := exportComposefsOCIIfNeeded(opts, exportRef); err != nil {
 			return err
@@ -429,6 +436,7 @@ func bootcViaContainer(opts Options) error {
 			storageDriver = nonComposefsDriver
 		}
 
+
 			// Clear any previous podman database to avoid driver-mismatch errors;
 			// the early RemoveAll when nonComposefsRoot is set handles this for
 			// the non-composefs path, so only do it for composefs here.
@@ -443,6 +451,9 @@ func bootcViaContainer(opts Options) error {
 			"--root", containersRoot,
 			"--storage-driver", storageDriver,
 		)
+		if !opts.ComposeFsBackend {
+			podmanArgs = append(podmanArgs, "--runroot", nonComposefsRunRoot)
+		}
 	}
 
 	podmanArgs = append(podmanArgs,
@@ -587,7 +598,7 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 	}
 
 	if opts.NeedsPull {
-		if err := pullImage(opts.SourceImgref, opts.LayerCount, "", ""); err != nil {
+		if err := pullImage(opts.SourceImgref, opts.LayerCount, "", "", ""); err != nil {
 			return "", fmt.Errorf("pulling image: %w", err)
 		}
 	} else {
@@ -887,7 +898,7 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 
 	skopeoArgs := []string{
 		"copy",
-		"containers-storage:" + bareImageRef(image),
+		containersStorageSource(image),
 		"oci:" + destDir,
 	}
 	name, args := runner.HostArgs("skopeo", skopeoArgs)
@@ -899,6 +910,17 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 	}
 	progress.Substep("OCI export complete")
 	return nil
+}
+
+// containersStorageSource preserves a fully-qualified containers-storage
+// reference.  In particular, [driver@graphroot+runroot] identifies a
+// redirected Podman store; stripping it makes skopeo look in the default
+// store, where a preceding `podman --root ... pull` image does not exist.
+func containersStorageSource(image string) string {
+	if strings.HasPrefix(image, "containers-storage:") {
+		return image
+	}
+	return "containers-storage:" + bareImageRef(image)
 }
 
 // loopBackingFile returns the backing file path for a loop device.
@@ -967,7 +989,7 @@ func bootcToDiskDirect(opts Options, diskDevice, filesystem string) (string, err
 // avoiding "file does not exist" blob errors when CONFIG_OVERLAY_FS_REDIRECT_DIR
 // is set on the host kernel.
 // layerCount is the expected number of layers from CheckImage, used for progress.
-func pullImage(image string, layerCount int, root, storageDriver string) error {
+func pullImage(image string, layerCount int, root, runRoot, storageDriver string) error {
 	progress.Substep("Pulling container image")
 	if layerCount > 0 {
 		progress.Substep(fmt.Sprintf("Pulling image: %d layers to download", layerCount))
@@ -976,6 +998,9 @@ func pullImage(image string, layerCount int, root, storageDriver string) error {
 	podmanArgs := []string{}
 	if root != "" {
 		podmanArgs = append(podmanArgs, "--root", root)
+	}
+	if runRoot != "" {
+		podmanArgs = append(podmanArgs, "--runroot", runRoot)
 	}
 	if storageDriver != "" {
 		podmanArgs = append(podmanArgs, "--storage-driver", storageDriver)
