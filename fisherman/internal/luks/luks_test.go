@@ -144,17 +144,37 @@ func TestEnrollTPM2(t *testing.T) {
 	if c.name != "systemd-cryptenroll" {
 		t.Errorf("name = %q, want systemd-cryptenroll", c.name)
 	}
-	wantArgs := []string{"--tpm2-device=auto", "--tpm2-pcrs=7", "--unlock-key-file=-", part}
-	if !equalSlice(c.args, wantArgs) {
-		t.Errorf("args = %v, want %v", c.args, wantArgs)
+
+	// Args: --tpm2-device, --tpm2-pcrs, --unlock-key-file=<tmp>, partition.
+	if len(c.args) != 4 {
+		t.Fatalf("expected 4 args, got %d: %v", len(c.args), c.args)
 	}
-	if c.stdin != pass {
-		t.Errorf("stdin = %q, want passphrase %q", c.stdin, pass)
+	if c.args[0] != "--tpm2-device=auto" {
+		t.Errorf("args[0] = %q, want --tpm2-device=auto", c.args[0])
 	}
+	if c.args[1] != "--tpm2-pcrs=7" {
+		t.Errorf("args[1] = %q, want --tpm2-pcrs=7", c.args[1])
+	}
+	if !strings.HasPrefix(c.args[2], "--unlock-key-file=") {
+		t.Errorf("args[2] = %q, want --unlock-key-file=<path>", c.args[2])
+	}
+	if strings.Contains(c.args[2], "-") && c.args[2] == "--unlock-key-file=-" {
+		t.Errorf("EnrollTPM2 still passes stdin flag -- should use a temp file")
+	}
+	if c.args[3] != part {
+		t.Errorf("args[3] = %q, want %q", c.args[3], part)
+	}
+
+	// Passphrase must not appear in argv.
 	for _, arg := range c.args {
 		if strings.Contains(arg, pass) {
 			t.Errorf("passphrase leaked into argv: %q", arg)
 		}
+	}
+
+	// stdin is not used; the passphrase goes to a temp file.
+	if c.stdin != "" {
+		t.Errorf("stdin = %q, want empty (passphrase goes to temp file)", c.stdin)
 	}
 }
 

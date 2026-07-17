@@ -152,6 +152,34 @@ else
   echo "✅ ostree-based installation verified"
 fi
 
+# Verify no installer Flatpak app dirs exist on the installed system.
+# CopyFlatpaks (PR #1) must strip these regardless of the install backend.
+INSTALLER_IDS="org.bootcinstaller.Installer org.bootcinstaller.Installer.Devel org.tunaos.Installer org.tunaos.Installer.Devel"
+
+# Locate the flatpak app dir: composefs-native vs ostree layout.
+if [ "$COMPOSEFS" = "true" ]; then
+  FLATPAK_APP_DIR="$ROOT_DIR/state/os/default/var/lib/flatpak/app"
+else
+  FLATPAK_APP_DIR="$ROOT_DIR/ostree/deploy/default/var/lib/flatpak/app"
+fi
+
+if [ -d "$FLATPAK_APP_DIR" ]; then
+  INSTALLER_FOUND=""
+  for APPID in $INSTALLER_IDS; do
+    if [ -d "$FLATPAK_APP_DIR/$APPID" ]; then
+      INSTALLER_FOUND="$INSTALLER_FOUND $APPID"
+    fi
+  done
+  if [ -n "$INSTALLER_FOUND" ]; then
+    echo "FAIL: installer Flatpak app(s) found on target — must not be present after install:"
+    echo "  $INSTALLER_FOUND"
+    exit 1
+  fi
+  echo "✅ No installer Flatpak apps found in target ($FLATPAK_APP_DIR)"
+else
+  echo "ℹ️  No flatpak/app dir at $FLATPAK_APP_DIR — skip installer-app absence check"
+fi
+
 $SUDO_BIN umount "$ROOT_DIR"
 if [ "$LUKS_OPENED" -eq 1 ]; then
   $SUDO_BIN cryptsetup luksClose "$LUKS_MAPPER"

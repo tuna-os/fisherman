@@ -155,10 +155,10 @@ func TestOverlayCandidate_Loopback_BTRFS(t *testing.T) {
 	}
 }
 
-func TestSelectStorageDriver_Loopback_Ext4_Composefs(t *testing.T) {
+func TestSelectStorageDriver_Loopback_Ext4(t *testing.T) {
 	mountDir := withLoopbackFS(t, "ext4")
-	driver, reason := selectStorageDriver(mountDir, true)
-	t.Logf("ext4 composefs driver=%s reason=%s", driver, reason)
+	driver, reason := selectStorageDriver(mountDir)
+	t.Logf("ext4 driver=%s reason=%s", driver, reason)
 	// overlay is expected; vfs is acceptable if podman probe fails in this environment.
 	if driver != "overlay" && driver != "vfs" {
 		t.Errorf("unexpected driver %q", driver)
@@ -170,10 +170,10 @@ func TestSelectStorageDriver_Loopback_Ext4_Composefs(t *testing.T) {
 	}
 }
 
-func TestSelectStorageDriver_Loopback_XFS_Composefs(t *testing.T) {
+func TestSelectStorageDriver_Loopback_XFS(t *testing.T) {
 	mountDir := withLoopbackFS(t, "xfs")
-	driver, reason := selectStorageDriver(mountDir, true)
-	t.Logf("xfs composefs driver=%s reason=%s", driver, reason)
+	driver, reason := selectStorageDriver(mountDir)
+	t.Logf("xfs driver=%s reason=%s", driver, reason)
 	if driver != "overlay" && driver != "vfs" {
 		t.Errorf("unexpected driver %q", driver)
 	}
@@ -184,10 +184,10 @@ func TestSelectStorageDriver_Loopback_XFS_Composefs(t *testing.T) {
 	}
 }
 
-func TestSelectStorageDriver_Loopback_BTRFS_Composefs(t *testing.T) {
+func TestSelectStorageDriver_Loopback_BTRFS(t *testing.T) {
 	mountDir := withLoopbackFS(t, "btrfs")
-	driver, reason := selectStorageDriver(mountDir, true)
-	t.Logf("btrfs composefs driver=%s reason=%s", driver, reason)
+	driver, reason := selectStorageDriver(mountDir)
+	t.Logf("btrfs driver=%s reason=%s", driver, reason)
 	if driver != "overlay" && driver != "vfs" {
 		t.Errorf("unexpected driver %q", driver)
 	}

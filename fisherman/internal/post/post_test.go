@@ -88,22 +88,39 @@ func setupMockExec(t *testing.T) *mockExecutor {
 	return mock
 }
 
-// TestWriteHostname_ComposeFsNative verifies that when no /ostree/ directory
-// exists under the target (composefs-native deployment), hostname is written
-// directly to $TARGET/etc/hostname.
+// TestWriteHostname_ComposeFsNative verifies that for a composefs-native
+// deployment hostname is written to the deploy etc dir returned by
+// ComposeFsDeployEtcDirFn, not to $TARGET/etc/hostname directly.
 func TestWriteHostname_ComposeFsNative(t *testing.T) {
 	target := t.TempDir()
+
+	// Set up the stub deploy etc dir (simulates state/deploy/<hash>/etc).
+	deployEtc := filepath.Join(target, "state", "deploy", "abc123", "etc")
+	if err := os.MkdirAll(deployEtc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Override ComposeFsDeployEtcDirFn to return our stub path.
+	old := post.ComposeFsDeployEtcDirFn
+	post.ComposeFsDeployEtcDirFn = func(string) (string, error) { return deployEtc, nil }
+	t.Cleanup(func() { post.ComposeFsDeployEtcDirFn = old })
+
 	if err := post.WriteHostname(target, "myhost"); err != nil {
 		t.Fatalf("WriteHostname: %v", err)
 	}
 
-	hostnameFile := filepath.Join(target, "etc", "hostname")
+	// Hostname must land in the deploy etc, not in $TARGET/etc.
+	hostnameFile := filepath.Join(deployEtc, "hostname")
 	data, err := os.ReadFile(hostnameFile)
 	if err != nil {
-		t.Fatalf("reading hostname file: %v", err)
+		t.Fatalf("reading hostname file from deploy etc: %v", err)
 	}
 	if string(data) != "myhost\n" {
 		t.Errorf("hostname file content = %q, want %q", string(data), "myhost\n")
+	}
+	// Confirm nothing was written to the wrong path.
+	if _, err := os.Stat(filepath.Join(target, "etc", "hostname")); err == nil {
+		t.Error("hostname was unexpectedly written to $TARGET/etc/hostname (wrong path)")
 	}
 }
 
@@ -310,8 +327,8 @@ func TestEnsurePlymouthArgs(t *testing.T) {
 	}{
 		{
 			name:    "adds rhgb and quiet when absent",
-			input:   "title TunaOS\noptions root=UUID=abc rw\n",
-			wantOut: "title TunaOS\noptions root=UUID=abc rw rhgb quiet\n",
+			input:   "title Fedora Linux\noptions root=UUID=abc rw\n",
+			wantOut: "title Fedora Linux\noptions root=UUID=abc rw rhgb quiet\n",
 			wantMod: true,
 		},
 		{
@@ -368,7 +385,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 		entryPath := entriesDir + "/test.conf"
-		input := "title TunaOS\noptions root=UUID=abc rw\n"
+		input := "title Fedora Linux\noptions root=UUID=abc rw\n"
 		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -392,7 +409,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 		entryPath := entriesDir + "/test.conf"
-		input := "title TunaOS\noptions root=UUID=abc rw\n"
+		input := "title Fedora Linux\noptions root=UUID=abc rw\n"
 		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -416,7 +433,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 		entryPath := entriesDir + "/test.conf"
-		input := "title TunaOS\noptions root=UUID=abc rw " + wantArg + "\n"
+		input := "title Fedora Linux\noptions root=UUID=abc rw " + wantArg + "\n"
 		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -452,7 +469,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, name := range []string{"entry1.conf", "entry2.conf", "entry3.conf"} {
-			input := "title TunaOS\noptions root=UUID=abc rw\n"
+			input := "title Fedora Linux\noptions root=UUID=abc rw\n"
 			if err := os.WriteFile(filepath.Join(entriesDir, name), []byte(input), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -473,7 +490,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			if err := os.MkdirAll(entriesDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			input := "title TunaOS\noptions root=UUID=abc rw\n"
+			input := "title Fedora Linux\noptions root=UUID=abc rw\n"
 			if err := os.WriteFile(filepath.Join(entriesDir, "entry.conf"), []byte(input), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -496,7 +513,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 			t.Fatal(err)
 		}
 		entryPath := filepath.Join(entriesDir, "entry.conf")
-		if err := os.WriteFile(entryPath, []byte("title TunaOS\noptions root=UUID=abc rw\n"), 0o644); err != nil {
+		if err := os.WriteFile(entryPath, []byte("title Fedora Linux\noptions root=UUID=abc rw\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		_, err := post.EnsureLuksArgs(dir, testUUID)
@@ -518,7 +535,7 @@ func TestEnsureLuksArgs(t *testing.T) {
 		if err := os.MkdirAll(entriesDir, 0o755); err != nil {
 			t.Fatal(err)
 		}
-		const input = "title TunaOS\n# no options line\n"
+		const input = "title Fedora Linux\n# no options line\n"
 		entryPath := filepath.Join(entriesDir, "entry.conf")
 		if err := os.WriteFile(entryPath, []byte(input), 0o644); err != nil {
 			t.Fatal(err)
@@ -535,4 +552,332 @@ func TestEnsureLuksArgs(t *testing.T) {
 			t.Errorf("entry was modified unexpectedly:\n%s", got)
 		}
 	})
+}
+
+func TestEnablePrintServices(t *testing.T) {
+	t.Run("composefs-native", func(t *testing.T) {
+		dir := t.TempDir()
+
+		// Set up stub deploy etc dir.
+		deployEtc := filepath.Join(dir, "state", "deploy", "abc123", "etc")
+		if err := os.MkdirAll(filepath.Join(deployEtc, "systemd", "system"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		// Override ComposeFsDeployEtcDirFn.
+		old := post.ComposeFsDeployEtcDirFn
+		post.ComposeFsDeployEtcDirFn = func(string) (string, error) { return deployEtc, nil }
+		t.Cleanup(func() { post.ComposeFsDeployEtcDirFn = old })
+
+		post.EnablePrintServices(dir)
+
+		wantsDir := filepath.Join(deployEtc, "systemd", "system", "multi-user.target.wants")
+		for _, svc := range []string{"cups-browsed.service", "avahi-daemon.service", "ipp-usb.service"} {
+			link := filepath.Join(wantsDir, svc)
+			if _, err := os.Lstat(link); err != nil {
+				t.Errorf("expected symlink for %s in deploy etc, got: %v", svc, err)
+			}
+		}
+	})
+
+	t.Run("ostree", func(t *testing.T) {
+		dir := t.TempDir()
+
+		// Create /ostree/ dir so isComposeFsNative returns false.
+		if err := os.MkdirAll(filepath.Join(dir, "ostree"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+
+		// Intercept runner so "ls <sysroot>/ostree" succeeds (not composefs-native).
+		origRunFn := runner.RunFn
+		defer func() { runner.RunFn = origRunFn }()
+		runner.RunFn = func(_ io.Reader, _ string, _ ...string) error { return nil }
+
+		// Override DeploymentDirFn.
+		origFn := post.DeploymentDirFn
+		defer func() { post.DeploymentDirFn = origFn }()
+		deployDir := filepath.Join(dir, "deploy")
+		if err := os.MkdirAll(filepath.Join(deployDir, "etc", "systemd", "system"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		post.DeploymentDirFn = func(string) (string, error) { return deployDir, nil }
+
+		post.EnablePrintServices(dir)
+
+		wantsDir := filepath.Join(deployDir, "etc", "systemd", "system", "multi-user.target.wants")
+		for _, svc := range []string{"cups-browsed.service", "avahi-daemon.service", "ipp-usb.service"} {
+			link := filepath.Join(wantsDir, svc)
+			if _, err := os.Lstat(link); err != nil {
+				t.Errorf("expected symlink for %s in deploy dir, got: %v", svc, err)
+			}
+		}
+	})
+}
+
+// TestDefaultComposeFsDeployEtcDir_BLSEntry verifies that the BLS loader entry
+// composefs= field is parsed correctly to find the deploy etc dir.
+func TestDefaultComposeFsDeployEtcDir_BLSEntry(t *testing.T) {
+	target := t.TempDir()
+	const hash = "61b6b932abc"
+
+	// Create the deploy etc dir.
+	deployEtc := filepath.Join(target, "state", "deploy", hash, "etc")
+	if err := os.MkdirAll(deployEtc, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a BLS loader entry with composefs=<hash>.
+	entriesDir := filepath.Join(target, "boot", "loader", "entries")
+	if err := os.MkdirAll(entriesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	entry := "title Bluefin\nversion 1\noptions root=UUID=abc rw composefs=" + hash + " rhgb quiet\n"
+	if err := os.WriteFile(filepath.Join(entriesDir, "entry.conf"), []byte(entry), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := post.DefaultComposeFsDeployEtcDir(target)
+	if err != nil {
+		t.Fatalf("DefaultComposeFsDeployEtcDir: %v", err)
+	}
+	if got != deployEtc {
+		t.Errorf("got %q, want %q", got, deployEtc)
+	}
+}
+
+// TestDefaultComposeFsDeployEtcDir_Fallback verifies the fallback to newest
+// state/deploy entry when no BLS entry is present.
+func TestDefaultComposeFsDeployEtcDir_Fallback(t *testing.T) {
+	target := t.TempDir()
+
+	// Create two deploy dirs; the second is newer.
+	deployBase := filepath.Join(target, "state", "deploy")
+	first := filepath.Join(deployBase, "oldhash123", "etc")
+	second := filepath.Join(deployBase, "newhash456", "etc")
+	if err := os.MkdirAll(first, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(second, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := post.DefaultComposeFsDeployEtcDir(target)
+	if err != nil {
+		t.Fatalf("DefaultComposeFsDeployEtcDir: %v", err)
+	}
+	// Should return one of the two deploy etc dirs (whichever is newest).
+	if got != first && got != second {
+		t.Errorf("got %q, expected one of %q or %q", got, first, second)
+	}
+}
+
+// TestDefaultDeploymentDir_PrintCurrentDirFails is the regression test for the
+// installer crash: `ostree admin --print-current-dir` always exits 1 against a
+// freshly-installed target (never booted, no booted-deployment state).
+// DefaultDeploymentDir must fall back to a filesystem glob and return the
+// single deployment directory created by `bootc install to-filesystem`.
+func TestDefaultDeploymentDir_PrintCurrentDirFails(t *testing.T) {
+	sysroot := t.TempDir()
+	deployDir := filepath.Join(sysroot, "ostree", "deploy", "default", "deploy", "abc123.0")
+	if err := os.MkdirAll(deployDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := setupMockExec(t)
+	mock.responses["ostree"] = struct {
+		out []byte
+		err error
+	}{err: fmt.Errorf("exit status 1")}
+
+	got, err := post.DefaultDeploymentDir(sysroot)
+	if err != nil {
+		t.Fatalf("DefaultDeploymentDir: unexpected error: %v", err)
+	}
+	if got != deployDir {
+		t.Errorf("DefaultDeploymentDir = %q, want %q", got, deployDir)
+	}
+}
+
+// TestDefaultDeploymentDir_PrintCurrentDirSucceeds verifies the happy path:
+// when `ostree admin --print-current-dir` returns a valid path, it is used
+// directly without touching the filesystem.
+func TestDefaultDeploymentDir_PrintCurrentDirSucceeds(t *testing.T) {
+	sysroot := t.TempDir()
+	want := "/sysroot/ostree/deploy/default/deploy/deadbeef.0"
+
+	mock := setupMockExec(t)
+	mock.responses["ostree"] = struct {
+		out []byte
+		err error
+	}{out: []byte(want + "\n")}
+
+	got, err := post.DefaultDeploymentDir(sysroot)
+	if err != nil {
+		t.Fatalf("DefaultDeploymentDir: unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("DefaultDeploymentDir = %q, want %q", got, want)
+	}
+}
+
+// TestDefaultDeploymentDir_NoDeploymentFound verifies that when ostree fails
+// AND no deployment directory exists on disk, an error is returned.
+func TestDefaultDeploymentDir_NoDeploymentFound(t *testing.T) {
+	sysroot := t.TempDir() // empty — no ostree/deploy/...
+
+	mock := setupMockExec(t)
+	mock.responses["ostree"] = struct {
+		out []byte
+		err error
+	}{err: fmt.Errorf("exit status 1")}
+
+	_, err := post.DefaultDeploymentDir(sysroot)
+	if err == nil {
+		t.Fatal("DefaultDeploymentDir: expected error for empty sysroot, got nil")
+	}
+}
+
+// TestCopyFlatpaks_RemovesInstallerApps verifies that CopyFlatpaks strips the
+// known installer Flatpak app IDs from the target /var/lib/flatpak directory
+// after the copy so they are not present on the installed system.
+// Regression test for projectbluefin/fisherman PR #1.
+func TestCopyFlatpaks_RemovesInstallerApps(t *testing.T) {
+	mock := setupMockExec(t)
+	target := t.TempDir()
+
+	// Simulate "no flatpak data" so we skip the tar pipe but still exercise
+	// the cleanup path (which runs after the copy regardless).
+	mock.responses["du -sb /var/lib/flatpak"] = struct {
+		out []byte
+		err error
+	}{out: []byte("0\t/var/lib/flatpak\n")}
+
+	// Resolve the expected dst path: composefs-native because no /ostree/ dir.
+	dst := filepath.Join(target, "ostree", "deploy", "default", "var", "lib", "flatpak")
+
+	// Pre-create installer app artifacts that should be removed.
+	installerIDs := []string{
+		"org.bootcinstaller.Installer",
+		"org.bootcinstaller.Installer.Devel",
+		"org.tunaos.Installer",
+		"org.tunaos.Installer.Devel",
+	}
+	for _, id := range installerIDs {
+		// app dir
+		appDir := filepath.Join(dst, "app", id)
+		if err := os.MkdirAll(appDir, 0o755); err != nil {
+			t.Fatalf("mkdir appDir: %v", err)
+		}
+		// desktop entry
+		desktopDir := filepath.Join(dst, "exports", "share", "applications")
+		if err := os.MkdirAll(desktopDir, 0o755); err != nil {
+			t.Fatalf("mkdir desktopDir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(desktopDir, id+".desktop"), []byte("[Desktop Entry]\n"), 0o644); err != nil {
+			t.Fatalf("write desktop file: %v", err)
+		}
+		// dbus service file
+		dbusDir := filepath.Join(dst, "exports", "share", "dbus-1", "services")
+		if err := os.MkdirAll(dbusDir, 0o755); err != nil {
+			t.Fatalf("mkdir dbusDir: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(dbusDir, id+".service"), []byte("[D-BUS Service]\n"), 0o644); err != nil {
+			t.Fatalf("write dbus file: %v", err)
+		}
+	}
+
+	if err := post.CopyFlatpaks(target, nil, ""); err != nil {
+		t.Fatalf("CopyFlatpaks: %v", err)
+	}
+
+	// All installer artifacts must be gone.
+	for _, id := range installerIDs {
+		appDir := filepath.Join(dst, "app", id)
+		if _, err := os.Stat(appDir); err == nil {
+			t.Errorf("installer app dir still exists for %s: %s", id, appDir)
+		}
+		desktopFile := filepath.Join(dst, "exports", "share", "applications", id+".desktop")
+		if _, err := os.Stat(desktopFile); err == nil {
+			t.Errorf("installer desktop file still exists for %s: %s", id, desktopFile)
+		}
+		dbusFile := filepath.Join(dst, "exports", "share", "dbus-1", "services", id+".service")
+		if _, err := os.Stat(dbusFile); err == nil {
+			t.Errorf("installer dbus service still exists for %s: %s", id, dbusFile)
+		}
+	}
+}
+
+// TestCopyFlatpaks_PreservesNonInstallerApps verifies that CopyFlatpaks does NOT
+// remove regular user apps — only the known installer app IDs are targeted.
+func TestCopyFlatpaks_PreservesNonInstallerApps(t *testing.T) {
+	mock := setupMockExec(t)
+	target := t.TempDir()
+
+	mock.responses["du -sb /var/lib/flatpak"] = struct {
+		out []byte
+		err error
+	}{out: []byte("0\t/var/lib/flatpak\n")}
+
+	dst := filepath.Join(target, "ostree", "deploy", "default", "var", "lib", "flatpak")
+
+	// Regular app that must NOT be removed.
+	userAppDir := filepath.Join(dst, "app", "org.mozilla.firefox")
+	if err := os.MkdirAll(userAppDir, 0o755); err != nil {
+		t.Fatalf("mkdir userAppDir: %v", err)
+	}
+
+	if err := post.CopyFlatpaks(target, nil, ""); err != nil {
+		t.Fatalf("CopyFlatpaks: %v", err)
+	}
+
+	// org.mozilla.firefox must still be present.
+	if _, err := os.Stat(userAppDir); err != nil {
+		t.Errorf("non-installer app dir was unexpectedly removed: %v", err)
+	}
+}
+
+// TestCopyFlatpaks_CleanupIdempotentWhenAppsMissing verifies that cleanup is
+// a no-op (no error) when no installer app dirs exist in the target.
+func TestCopyFlatpaks_CleanupIdempotentWhenAppsMissing(t *testing.T) {
+	mock := setupMockExec(t)
+	target := t.TempDir()
+
+	mock.responses["du -sb /var/lib/flatpak"] = struct {
+		out []byte
+		err error
+	}{out: []byte("0\t/var/lib/flatpak\n")}
+
+	// No app dirs pre-created — cleanup should be silent.
+	if err := post.CopyFlatpaks(target, nil, ""); err != nil {
+		t.Fatalf("CopyFlatpaks: %v", err)
+	}
+}
+
+// TestCopyFlatpaks_RemovesInstallerApps_CustomFlatpakVarPath verifies cleanup
+// also works when a custom flatpakVarPath is set (e.g. GnomeOS/Dakota layout).
+func TestCopyFlatpaks_RemovesInstallerApps_CustomFlatpakVarPath(t *testing.T) {
+	mock := setupMockExec(t)
+	target := t.TempDir()
+
+	mock.responses["du -sb /var/lib/flatpak"] = struct {
+		out []byte
+		err error
+	}{out: []byte("0\t/var/lib/flatpak\n")}
+
+	flatpakVarPath := "state/os/default/var"
+	dst := filepath.Join(target, flatpakVarPath, "lib", "flatpak")
+
+	appID := "org.tunaos.Installer"
+	appDir := filepath.Join(dst, "app", appID)
+	if err := os.MkdirAll(appDir, 0o755); err != nil {
+		t.Fatalf("mkdir appDir: %v", err)
+	}
+
+	if err := post.CopyFlatpaks(target, nil, flatpakVarPath); err != nil {
+		t.Fatalf("CopyFlatpaks: %v", err)
+	}
+
+	if _, err := os.Stat(appDir); err == nil {
+		t.Errorf("installer app dir still exists at custom flatpakVarPath: %s", appDir)
+	}
 }

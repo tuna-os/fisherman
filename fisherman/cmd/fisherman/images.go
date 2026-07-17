@@ -28,7 +28,7 @@ func runImages(args []string) {
 		fmt.Fprintf(os.Stderr, "With a query: show details for matching images or families.\n\n")
 		fmt.Fprintf(os.Stderr, "Examples:\n")
 		fmt.Fprintf(os.Stderr, "  fisherman images\n")
-		fmt.Fprintf(os.Stderr, "  fisherman images TunaOS\n")
+		fmt.Fprintf(os.Stderr, "  fisherman images Bluefin\n")
 		fmt.Fprintf(os.Stderr, "  fisherman images yellowfin\n")
 		fmt.Fprintf(os.Stderr, "  fisherman images \"GNOME 50\"\n\n")
 		fs.PrintDefaults()

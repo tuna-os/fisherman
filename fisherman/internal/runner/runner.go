@@ -26,6 +26,35 @@ func HostArgs(name string, args []string) (string, []string) {
 	return name, args
 }
 
+// HostArgsWithEnv is like HostArgs but also forwards the provided env vars
+// to the host process via --env=KEY=VALUE when running inside a Flatpak.
+//
+// Background: flatpak-spawn --host spawns the command in the host mount
+// namespace but does NOT automatically forward the Flatpak sandbox's
+// environment variables to the spawned process. Any env vars that the host
+// command needs (e.g. TMPDIR, CONTAINERS_STORAGE_CONF) must be passed
+// explicitly with --env=KEY=VALUE flags.
+//
+// For non-Flatpak invocations the result is identical to HostArgs; callers
+// are expected to set cmd.Env on the returned command to propagate the vars.
+func HostArgsWithEnv(name string, args []string, envVars []string) (string, []string) {
+	if inFlatpak() {
+		fpArgs := make([]string, 0, 1+len(envVars)+1+len(args))
+		fpArgs = append(fpArgs, "--host")
+		for _, e := range envVars {
+			fpArgs = append(fpArgs, "--env="+e)
+		}
+		fpArgs = append(fpArgs, name)
+		fpArgs = append(fpArgs, args...)
+		return "flatpak-spawn", fpArgs
+	}
+	return name, args
+}
+
+// InFlatpak reports whether the current process is running inside a Flatpak
+// sandbox. Exported for use in conditional code paths outside this package.
+func InFlatpak() bool { return inFlatpak() }
+
 // DefaultRun is the real subprocess implementation. It applies flatpak-spawn
 // wrapping when running inside a Flatpak sandbox, then streams the command's
 // stdout and stderr to os.Stdout in real time.

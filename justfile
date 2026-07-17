@@ -203,6 +203,13 @@ bootcrew-vm IMAGE="quay.io/centos-bootc/centos-bootc:c10s" FILESYSTEM="xfs" COMP
 # CI-specific recipes (GitHub Actions)
 # ========================================
 
+# Validate that E2E checks catch their target bugs (no real disk/VM required).
+# Tests the installer-Flatpak absence check (PR #1) and the efibootmgr UEFI
+# entry check (PR #2) against mock filesystem/output states.
+test-checks:
+  #!/bin/bash
+  bash tests/check-validation.sh
+
 # Verify installation partitions and basic structure
 verify-installation LOOPDEV COMPOSEFS LUKS_PASSPHRASE="":
   #!/bin/bash

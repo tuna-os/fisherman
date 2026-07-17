@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### 🐛 Bug Fixes
+
+- **OCI layout for non-composefs installs**: Non-composefs images (bluefin, lts,
+  lts-hwe) now export to an OCI layout at scratch and use `--source-imgref oci:...`
+  for `bootc install to-filesystem`. The previous VFS squash path corrupted ostree
+  commit structure, producing “Expected commit object, not File”. The overlay
+  redirect eliminates ENOSPC on 8+ GiB images by placing working container layers
+  on the target disk instead of the 1.4 GiB live overlayfs.
+- **`--source-imgref` in direct mode**: Direct mode now emits `--source-imgref`
+  so `bootc install to-filesystem` does not fail with “must be executed inside
+  a podman container” on offline live-ISO installs.
+
+### 📊 Partition Layout
+
+- **2 GiB /boot**: grub2 `/boot` ext4 partition increased from 1 GiB → 2 GiB.
+  Each kernel+initramfs pair (200–400 MiB with NVIDIA drivers) fills 1 GiB quickly
+  once deployment + rollback + staged upgrade accumulate.
+- **2 GiB ESP for all fleet images**: grub2 EFI System Partition increased from
+  512 MiB → 2 GiB for fleet consistency with systemd-boot (dakota) images.
+
+---
+
 ## [0.2.0] - 2026-05-08
 
 ### 🚀 Major Features

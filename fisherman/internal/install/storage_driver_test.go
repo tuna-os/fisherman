@@ -8,8 +8,8 @@ import (
 )
 
 func TestSelectStorageDriver_NonComposefs(t *testing.T) {
-	// Non-composefs always returns vfs, unchanged behavior.
-	driver, reason := selectStorageDriver("/tmp", false)
+	// Non-composefs also probes overlay now; /tmp is usually tmpfs so should fall back to vfs.
+	driver, reason := selectStorageDriver("/tmp")
 	if driver != "vfs" {
 		t.Errorf("non-composefs driver = %q, want vfs", driver)
 	}
@@ -80,7 +80,7 @@ func TestProbeOverlay_WithTempDir(t *testing.T) {
 func TestSelectStorageDriver_Integration(t *testing.T) {
 	// Test the full selector with a known temp directory.
 	tmpDir := t.TempDir()
-	driver, reason := selectStorageDriver(tmpDir, true)
+	driver, reason := selectStorageDriver(tmpDir)
 
 	if driver != "vfs" && driver != "overlay" {
 		t.Errorf("invalid driver: %s", driver)

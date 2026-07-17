@@ -187,7 +187,7 @@ func sfdiskStdin(t *testing.T, rec *recorder) string {
 }
 
 // TestPartition_SfdiskScript verifies that Partition() produces a 3-partition
-// GPT layout: EFI (512MiB) + /boot ext4 (1GiB) + root (remaining).
+// GPT layout: EFI (2GiB) + /boot ext4 (2GiB) + root (remaining).
 //
 // This is a regression test for the 2→3 partition layout change. Any attempt
 // to drop the separate ext4 /boot partition will be caught here.
@@ -219,15 +219,15 @@ func TestPartition_SfdiskScript(t *testing.T) {
 		t.Errorf("expected exactly 3 partition lines, got %d:\n%s", len(partLines), script)
 	}
 
-	// Partition 1: EFI System, 512 MiB.
-	if !strings.Contains(script, "size=512MiB") || !strings.Contains(script, "type=uefi") {
-		t.Errorf("EFI partition (size=512MiB, type=uefi) not found in sfdisk script:\n%s", script)
+	// Partition 1: EFI System, 2 GiB — use full token to distinguish from /boot.
+	if !strings.Contains(partLines[0], "size=2GiB") || !strings.Contains(partLines[0], "type=uefi") {
+		t.Errorf("EFI partition (size=2GiB, type=uefi) not found in sfdisk script:\n%s", script)
 	}
 
-	// Partition 2: Linux /boot, 1 GiB.
+	// Partition 2: Linux /boot, 2 GiB — check the second partition line directly.
 	// Must have an explicit size (so it doesn't consume remaining space).
-	if !strings.Contains(script, "size=1GiB") || !strings.Contains(script, "type=linux") {
-		t.Errorf("/boot partition (size=1GiB, type=linux) not found in sfdisk script:\n%s", script)
+	if !strings.Contains(partLines[1], "size=2GiB") || !strings.Contains(partLines[1], "type=linux") {
+		t.Errorf("/boot partition (size=2GiB, type=linux) not found in sfdisk script:\n%s", script)
 	}
 
 	// Partition 3: root — must NOT have a size= field (fills remaining space).
@@ -423,6 +423,43 @@ func TestUnmountAll_AutomountedDisk(t *testing.T) {
 	wantArgs := []string{"unmount", "--no-user-interaction", "--block-device", "/dev/sda1"}
 	if !equalSlice(udisksCall.args, wantArgs) {
 		t.Errorf("udisksctl args = %v, want %v", udisksCall.args, wantArgs)
+	}
+}
+
+// TestUnmountAll_NBDSkipsFuser verifies that for a network block device
+// (/dev/nbd*, served by a userspace qemu-nbd process), fuser -km is NOT
+// called — killing the server would tear down the device and make sfdisk
+// fail with "cannot open /dev/nbd0: Invalid argument". Regression test for
+// the wootc VHDX-over-NBD partitioning failure.
+func TestUnmountAll_NBDSkipsFuser(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "mounts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Close() // empty /proc/mounts — nothing mounted on the fresh NBD device
+	disk.SetProcMountsPath(f.Name())
+	t.Cleanup(func() { disk.SetProcMountsPath("/proc/mounts") })
+
+	rec := setupRecorder(t)
+
+	if err := disk.Partition("/dev/nbd0"); err != nil {
+		t.Fatalf("Partition: %v", err)
+	}
+
+	for _, c := range rec.calls {
+		if c.name == "fuser" {
+			t.Fatalf("fuser was called on /dev/nbd0 (args %v) — would kill the qemu-nbd server", c.args)
+		}
+	}
+	// sfdisk must still run.
+	sawSfdisk := false
+	for _, c := range rec.calls {
+		if c.name == "sfdisk" {
+			sawSfdisk = true
+		}
+	}
+	if !sawSfdisk {
+		t.Error("sfdisk not called for NBD device")
 	}
 }
 

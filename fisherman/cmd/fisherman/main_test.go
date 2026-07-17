@@ -156,3 +156,80 @@ func TestPrepareScratchDir_LiveISORegistersCleanup(t *testing.T) {
 		t.Fatalf("removeAll calls = %v, want [%q]", removed, scratchDir)
 	}
 }
+
+// TestCheckRequiredTools_MissingCryptsetupForLUKS verifies that cryptsetup is
+// required when a LUKS passphrase encryption type is selected.
+func TestCheckRequiredTools_MissingCryptsetupForLUKS(t *testing.T) {
+	orig := lookPath
+	t.Cleanup(func() { lookPath = orig })
+	lookPath = func(file string) (string, error) {
+		if file == "cryptsetup" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+
+	r := &recipe.Recipe{
+		Filesystem: "xfs",
+		Encryption: recipe.Encryption{Type: "luks-passphrase", Passphrase: "hunter2"},
+	}
+	err := checkRequiredTools(r)
+	if err == nil {
+		t.Fatal("expected error for missing cryptsetup, got nil")
+	}
+	if !strings.Contains(err.Error(), "cryptsetup") {
+		t.Errorf("error should mention cryptsetup, got: %v", err)
+	}
+}
+
+// TestCheckRequiredTools_MissingSystemdCryptenrollForTPM2 verifies that
+// systemd-cryptenroll is required for TPM2 encryption types, and that the
+// check fires before any disk is touched.
+func TestCheckRequiredTools_MissingSystemdCryptenrollForTPM2(t *testing.T) {
+	orig := lookPath
+	t.Cleanup(func() { lookPath = orig })
+	lookPath = func(file string) (string, error) {
+		if file == "systemd-cryptenroll" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+
+	for _, encType := range []string{"tpm2-luks", "tpm2-luks-passphrase"} {
+		r := &recipe.Recipe{
+			Filesystem: "xfs",
+			Encryption: recipe.Encryption{Type: encType, Passphrase: "hunter2"},
+		}
+		err := checkRequiredTools(r)
+		if err == nil {
+			t.Fatalf("encType=%s: expected error for missing systemd-cryptenroll, got nil", encType)
+		}
+		if !strings.Contains(err.Error(), "systemd-cryptenroll") {
+			t.Errorf("encType=%s: error should mention systemd-cryptenroll, got: %v", encType, err)
+		}
+		if !strings.Contains(err.Error(), "systemd") {
+			t.Errorf("encType=%s: error should mention systemd package, got: %v", encType, err)
+		}
+	}
+}
+
+// TestCheckRequiredTools_SystemdCryptenrollNotCheckedForPlainLUKS verifies that
+// systemd-cryptenroll is NOT required for plain luks-passphrase (no TPM2).
+func TestCheckRequiredTools_SystemdCryptenrollNotCheckedForPlainLUKS(t *testing.T) {
+	orig := lookPath
+	t.Cleanup(func() { lookPath = orig })
+	lookPath = func(file string) (string, error) {
+		if file == "systemd-cryptenroll" {
+			return "", errors.New("not found")
+		}
+		return "/usr/bin/" + file, nil
+	}
+
+	r := &recipe.Recipe{
+		Filesystem: "xfs",
+		Encryption: recipe.Encryption{Type: "luks-passphrase", Passphrase: "hunter2"},
+	}
+	if err := checkRequiredTools(r); err != nil {
+		t.Errorf("systemd-cryptenroll should not be checked for luks-passphrase, got: %v", err)
+	}
+}

@@ -44,6 +44,10 @@ type Recipe struct {
 	// BtrfsSubvolumes and the auto-partition steps are skipped; fisherman formats and
 	// mounts the listed partitions directly.
 	CustomMounts []CustomMount `json:"customMounts,omitempty"`
+	// VarDisk optionally describes a separate disk to mount at /var.
+	// When set, fisherman formats (or mounts as-is) this disk before running
+	// bootc, then adds a /var entry to the installed system's fstab.
+	VarDisk *VarDiskSpec `json:"varDisk,omitempty"`
 	// AdditionalImageStores lists host paths to be exposed to the bootc
 	// container as containers/storage additionalimagestores. Each path is
 	// bind-mounted read-only into the container at the same location and added
@@ -54,6 +58,17 @@ type Recipe struct {
 	// CONTAINERS_STORAGE_CONF env var, that takes priority and this field is
 	// ignored.
 	AdditionalImageStores []string `json:"additionalImageStores,omitempty"`
+	// SlurpWallpapers enables pre-partition extraction of wallpapers from an
+	// existing Windows (NTFS) partition on the target disk. The wallpapers are
+	// held in RAM (/run) and injected into the installed user's home directory
+	// after the OS install completes. Entirely non-fatal — if no NTFS partition
+	// is found or extraction fails, the install continues normally.
+	SlurpWallpapers bool `json:"slurpWallpapers,omitempty"`
+	// Slurp configures full user-data migration from an existing Windows
+	// partition. When set, fisherman extracts the specified categories before
+	// partitioning and injects them post-install. Takes priority over
+	// SlurpWallpapers (which only grabs wallpapers).
+	Slurp *SlurpSpec `json:"slurp,omitempty"`
 	// TargetMount overrides the host path where fisherman assembles the
 	// target filesystem hierarchy. Defaults to "/mnt/fisherman-target".
 	// Use this to run multiple installs in parallel on the same host
@@ -65,6 +80,14 @@ type Recipe struct {
 	// installs should leave it at the default since the same name is
 	// hard-coded into installed system kernel cmdlines (rd.luks.name).
 	LuksMapperName string `json:"luksMapperName,omitempty"`
+	// DistroID is a short lowercase identifier for the distribution, used
+	// to name OEM setup paths and service files written to the target
+	// (e.g. /etc/<distroID>/oem/, <distroID>-oem-setup.service).
+	// Defaults to "bootc" when empty.
+	DistroID string `json:"distroID,omitempty"`
+	// BrewTap is an optional Homebrew tap to add before installing OEM
+	// packages (e.g. "ublue-os/tap"). When empty, no tap is added.
+	BrewTap string `json:"brewTap,omitempty"`
 }
 
 // UserSpec describes a user account to create during installation.
@@ -74,6 +97,24 @@ type UserSpec struct {
 	Fullname string   `json:"fullname"`
 	Password string   `json:"password"`
 	Groups   []string `json:"groups"`
+}
+
+// SlurpSpec configures Windows user-data migration.
+type SlurpSpec struct {
+	SourcePartition string          `json:"sourcePartition"`
+	Users           []SlurpUserSpec `json:"users"`
+}
+
+// SlurpUserSpec describes which categories to extract for one Windows user.
+type SlurpUserSpec struct {
+	Name       string   `json:"name"`
+	Categories []string `json:"categories"`
+}
+
+// VarDiskSpec describes an optional separate disk to mount at /var.
+type VarDiskSpec struct {
+	Disk         string `json:"disk"`         // block device, e.g. "/dev/sdb"
+	KeepExisting bool   `json:"keepExisting"` // if true, mount as-is; if false, format XFS
 }
 
 // CustomMount describes a single partition → mountpoint mapping for manual layouts.
@@ -165,6 +206,17 @@ func (r *Recipe) Validate() error {
 		return fmt.Errorf("encryption.passphrase required for %s", r.Encryption.Type)
 	}
 	// image may be empty in live-ISO mode; bootc auto-detects the running container.
+	if r.VarDisk != nil {
+		if r.VarDisk.Disk == "" {
+			return fmt.Errorf("varDisk.disk is required")
+		}
+		if _, err := os.Stat(r.VarDisk.Disk); err != nil {
+			return fmt.Errorf("varDisk.disk %s: %w", r.VarDisk.Disk, err)
+		}
+		if r.VarDisk.Disk == r.Disk {
+			return fmt.Errorf("varDisk.disk must differ from the system disk")
+		}
+	}
 	if r.Hostname == "" {
 		return fmt.Errorf("hostname is required")
 	}
