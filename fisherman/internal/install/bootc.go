@@ -355,8 +355,8 @@ func bootcViaContainer(opts Options) error {
 	// avoids the copy entirely — working layers are created via mount namespaces —
 	// eliminating the memory pressure that kills podman during bootc install.
 	var nonComposefsRoot, nonComposefsRunRoot, nonComposefsDriver string
-	if !opts.ComposeFsBackend && defaultStorageSpaceConstrained() {
-		driver, reason := selectStorageDriver(scratch)
+	if !opts.ComposeFsBackend && storageSpaceConstrainedFn() {
+		driver, reason := selectStorageDriverFn(scratch)
 		if driver == "overlay" {
 			progress.Substep(fmt.Sprintf("Redirecting podman storage to target disk with %s driver (%s)", driver, reason))
 			nonComposefsRoot = filepath.Join(scratch, "containers-root")
@@ -436,15 +436,14 @@ func bootcViaContainer(opts Options) error {
 			storageDriver = nonComposefsDriver
 		}
 
-
-			// Clear any previous podman database to avoid driver-mismatch errors;
-			// the early RemoveAll when nonComposefsRoot is set handles this for
-			// the non-composefs path, so only do it for composefs here.
-			if opts.ComposeFsBackend {
-				if err := os.RemoveAll(nonComposefsRoot); err != nil && !os.IsNotExist(err) {
-					progress.Substep(fmt.Sprintf("Warning: could not clear previous podman database: %v", err))
-				}
+		// Clear any previous podman database to avoid driver-mismatch errors;
+		// the early RemoveAll when nonComposefsRoot is set handles this for
+		// the non-composefs path, so only do it for composefs here.
+		if opts.ComposeFsBackend {
+			if err := os.RemoveAll(nonComposefsRoot); err != nil && !os.IsNotExist(err) {
+				progress.Substep(fmt.Sprintf("Warning: could not clear previous podman database: %v", err))
 			}
+		}
 
 		progress.Substep(fmt.Sprintf("Using %s storage driver with OCI layout", storageDriver))
 		podmanArgs = append(podmanArgs,
@@ -738,6 +737,18 @@ type SkopeoExportFunc func(image, destDir, tmpdir string) error
 // a composefs image to an OCI layout. Replace in tests to avoid disk I/O.
 var SkopeoExportOCIFn SkopeoExportFunc = skopeoExportOCI
 
+// storageSpaceConstrainedFn decides whether to redirect podman storage to
+// the target disk (and thus export the image to an OCI layout) for
+// non-composefs installs. A package var so tests can force the redirect
+// path deterministically instead of depending on the runner's
+// /var/lib/containers free space.
+var storageSpaceConstrainedFn = defaultStorageSpaceConstrained
+
+// selectStorageDriverFn is the storage-driver decision, a package var so
+// tests can force "overlay" (which triggers the OCI-redirect export path)
+// without depending on a real podman overlay probe.
+var selectStorageDriverFn = selectStorageDriver
+
 // bareImageRef strips any OCI transport prefix from image, returning the bare
 // registry reference. This handles both "scheme://ref" (e.g. "docker://") and
 // "scheme:ref" (e.g. "containers-storage:") styles. Live-ISO recipes may carry
@@ -806,53 +817,6 @@ func injectStorageTmpDir(conf, newLine string) string {
 	return strings.Join(lines, "\n")
 }
 
-// writeStorageConfWithTmpDir writes a containers/storage configuration that
-// mirrors the current effective config (from CONTAINERS_STORAGE_CONF or
-// /etc/containers/storage.conf) with the tmpdir field overridden to scratchDir.
-//
-// containers/storage defaults TMPDir to /var/tmp and only falls back to
-// checking $TMPDIR when the config file contains no tmpdir line — and even
-// then only in newer versions. Setting $TMPDIR alone in the subprocess
-// environment is not sufficient on the live ISO (VFS driver, no tmpdir in
-// /etc/containers/storage.conf), so we supply an explicit config file.
-//
-// The caller must remove the returned path when done.
-func writeStorageConfWithTmpDir(confDir, scratchDir string) (string, error) {
-	if err := os.MkdirAll(confDir, 0o755); err != nil {
-		return "", err
-	}
-
-	// Read the current effective storage config so we preserve the driver,
-	// graphroot, runroot, and any additionalimagestores that let skopeo find
-	// the image (e.g. on a live ISO the driver is "vfs", not "overlay").
-	confSrc := os.Getenv("CONTAINERS_STORAGE_CONF")
-	if confSrc == "" {
-		confSrc = "/etc/containers/storage.conf"
-	}
-	existing, err := os.ReadFile(confSrc)
-	if err != nil {
-		// Fall back to a minimal VFS config that covers the live-ISO case.
-		existing = []byte("[storage]\ndriver = \"vfs\"\n" +
-			"runroot = \"/run/containers/storage\"\n" +
-			"graphroot = \"/var/lib/containers/storage\"\n")
-	}
-
-	escaped := strings.ReplaceAll(scratchDir, `"`, `\"`)
-	newLine := `tmpdir = "` + escaped + `"`
-	content := injectStorageTmpDir(string(existing), newLine)
-
-	f, err := os.CreateTemp(confDir, "storage-tmpdir-*.conf")
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	if _, err := f.WriteString(content); err != nil {
-		os.Remove(f.Name())
-		return "", err
-	}
-	return f.Name(), nil
-}
-
 // skopeoExportOCI exports an image from containers-storage to an OCI directory
 // layout. The composefs-backend requires raw OCI blobs (compressed layer
 // tarballs) that podman pull does not preserve; skopeo reconstructs them from
@@ -889,7 +853,7 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 			fmt.Fprintf(os.Stdout, "# /var/tmp bind-mounted → %s for blob staging\n", varTmpOverride)
 			defer func() {
 				umName, umArgs := runner.HostArgs("umount", []string{"/var/tmp"})
-				exec.Command(umName, umArgs...).Run()
+				_ = exec.Command(umName, umArgs...).Run()
 			}()
 		} else {
 			fmt.Fprintf(os.Stdout, "# warning: /var/tmp bind-mount failed — ENOSPC likely on overlay tmpfs\n")

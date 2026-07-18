@@ -41,13 +41,19 @@ func overlayCandidate(scratchPath string) storageDriverCandidate {
 	if err != nil {
 		return storageDriverCandidate{"vfs", fmt.Sprintf("could not detect filesystem type: %v", err)}
 	}
+	return overlaySafe(fsType)
+}
 
+// overlaySafe is the pure filesystem-type → driver decision, split out so it
+// can be tested deterministically without depending on the ambient
+// filesystem type of any real path (e.g. /tmp is tmpfs on dev machines but
+// ext4 on CI runners).
+func overlaySafe(fsType string) storageDriverCandidate {
 	// Filesystems where overlay should NOT be used.
 	unsafeFS := map[string]bool{
 		"overlayfs": true,
 		"tmpfs":     true,
 	}
-
 	if unsafeFS[fsType] {
 		return storageDriverCandidate{"vfs", fmt.Sprintf("scratch filesystem %s does not support overlay", fsType)}
 	}

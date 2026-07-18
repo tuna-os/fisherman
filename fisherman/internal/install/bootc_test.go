@@ -192,7 +192,7 @@ func TestBuildBootcArgs_NoComposeFsBackend_NoSourceImgref(t *testing.T) {
 // directory" when the OCI layout was exported but the flag was missing.
 func TestBuildBootcArgs_OCIPathWithoutComposefs(t *testing.T) {
 	args := install.BuildBootcArgs(install.Options{
-		ComposeFsBackend:  false,
+		ComposeFsBackend: false,
 		ComposeFsOCIPath: "/run/fisherman/oci-cache",
 	}, "", "/target")
 	assertContains(t, args, "--source-imgref")
@@ -519,7 +519,7 @@ func TestInjectStorageTmpDir(t *testing.T) {
 		conf := ""
 		result := install.InjectStorageTmpDir(conf, newLine)
 		// No [storage] section → nothing to inject, just return unchanged.
-		// The fallback path in writeStorageConfWithTmpDir handles this.
+		// The fallback path in the storage-conf setup handles this.
 		_ = result // just must not panic
 	})
 }
@@ -530,6 +530,12 @@ func TestInjectStorageTmpDir(t *testing.T) {
 // test for the bug where exportComposefsOCIIfNeeded returned nil for
 // non-composefs, causing "oci-cache/index.json: no such file or directory".
 func TestBootcInstall_NonComposefsContainerExportsOCI(t *testing.T) {
+	// Non-composefs only exports to an OCI layout when it redirects podman
+	// storage to the target disk, which happens when the default store is
+	// space-constrained. Force that path so the test is deterministic
+	// regardless of the runner's /var/lib/containers free space.
+	defer install.SetStorageSpaceConstrainedForTest(true)()
+	defer install.SetSelectStorageDriverForTest("overlay", "forced for test")()
 	tmpDir := t.TempDir()
 	var scratchDir string
 	var err error

@@ -133,7 +133,7 @@ func warmIconCache(target string) error {
 	iconsDir := filepath.Join(target, "usr", "share", "icons")
 	entries, err := os.ReadDir(iconsDir)
 	if err != nil {
-		return nil // no icons dir, skip
+		return nil //nolint:nilerr // no icons dir → nothing to do
 	}
 
 	for _, entry := range entries {
