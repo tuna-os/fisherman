@@ -355,8 +355,8 @@ func bootcViaContainer(opts Options) error {
 	// avoids the copy entirely — working layers are created via mount namespaces —
 	// eliminating the memory pressure that kills podman during bootc install.
 	var nonComposefsRoot, nonComposefsRunRoot, nonComposefsDriver string
-	if !opts.ComposeFsBackend && defaultStorageSpaceConstrained() {
-		driver, reason := selectStorageDriver(scratch)
+	if !opts.ComposeFsBackend && storageSpaceConstrainedFn() {
+		driver, reason := selectStorageDriverFn(scratch)
 		if driver == "overlay" {
 			progress.Substep(fmt.Sprintf("Redirecting podman storage to target disk with %s driver (%s)", driver, reason))
 			nonComposefsRoot = filepath.Join(scratch, "containers-root")
@@ -436,15 +436,14 @@ func bootcViaContainer(opts Options) error {
 			storageDriver = nonComposefsDriver
 		}
 
-
-			// Clear any previous podman database to avoid driver-mismatch errors;
-			// the early RemoveAll when nonComposefsRoot is set handles this for
-			// the non-composefs path, so only do it for composefs here.
-			if opts.ComposeFsBackend {
-				if err := os.RemoveAll(nonComposefsRoot); err != nil && !os.IsNotExist(err) {
-					progress.Substep(fmt.Sprintf("Warning: could not clear previous podman database: %v", err))
-				}
+		// Clear any previous podman database to avoid driver-mismatch errors;
+		// the early RemoveAll when nonComposefsRoot is set handles this for
+		// the non-composefs path, so only do it for composefs here.
+		if opts.ComposeFsBackend {
+			if err := os.RemoveAll(nonComposefsRoot); err != nil && !os.IsNotExist(err) {
+				progress.Substep(fmt.Sprintf("Warning: could not clear previous podman database: %v", err))
 			}
+		}
 
 		progress.Substep(fmt.Sprintf("Using %s storage driver with OCI layout", storageDriver))
 		podmanArgs = append(podmanArgs,
@@ -737,6 +736,18 @@ type SkopeoExportFunc func(image, destDir, tmpdir string) error
 // SkopeoExportOCIFn is the function used by bootcToDiskViaContainer to export
 // a composefs image to an OCI layout. Replace in tests to avoid disk I/O.
 var SkopeoExportOCIFn SkopeoExportFunc = skopeoExportOCI
+
+// storageSpaceConstrainedFn decides whether to redirect podman storage to
+// the target disk (and thus export the image to an OCI layout) for
+// non-composefs installs. A package var so tests can force the redirect
+// path deterministically instead of depending on the runner's
+// /var/lib/containers free space.
+var storageSpaceConstrainedFn = defaultStorageSpaceConstrained
+
+// selectStorageDriverFn is the storage-driver decision, a package var so
+// tests can force "overlay" (which triggers the OCI-redirect export path)
+// without depending on a real podman overlay probe.
+var selectStorageDriverFn = selectStorageDriver
 
 // bareImageRef strips any OCI transport prefix from image, returning the bare
 // registry reference. This handles both "scheme://ref" (e.g. "docker://") and
