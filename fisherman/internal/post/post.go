@@ -549,7 +549,7 @@ func CopyBluetoothPairings(target string) error {
 	const src = "/var/lib/bluetooth"
 	info, err := os.Stat(src)
 	if err != nil || !info.IsDir() {
-		return nil // no bluetooth data — nothing to do //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
+		return nil //nolint:nilerr // no bluetooth data → nothing to do
 	}
 
 	// Check if the directory has any adapter subdirectories.
@@ -589,7 +589,7 @@ func CopyWiFiConnections(target string) error {
 	const src = "/etc/NetworkManager/system-connections"
 	info, err := os.Stat(src)
 	if err != nil || !info.IsDir() {
-		return nil // no NM connections — nothing to do //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
+		return nil //nolint:nilerr // no NM connections → nothing to do
 	}
 
 	entries, err := os.ReadDir(src)

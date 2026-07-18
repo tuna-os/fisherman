@@ -842,7 +842,7 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 	// which returns /var/tmp (containers/storage hardcoded default) regardless
 	// of the TMPDIR env var. On live ISOs /var/tmp is on the dracut overlayfs
 	// (~1.4 GiB) — too small for 5-6 GiB layer blobs. Both podman and skopeo
-	// hit this when reading from containers-storage. //nolint:errcheck // best-effort
+	// hit this when reading from containers-storage.
 	//
 	// Fix: bind-mount the scratch dir over /var/tmp so the hardcoded path
 	// becomes disk-backed. Deferred umount restores it after export.
@@ -853,7 +853,7 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 			fmt.Fprintf(os.Stdout, "# /var/tmp bind-mounted → %s for blob staging\n", varTmpOverride)
 			defer func() {
 				umName, umArgs := runner.HostArgs("umount", []string{"/var/tmp"})
-				exec.Command(umName, umArgs...).Run()
+				_ = exec.Command(umName, umArgs...).Run()
 			}()
 		} else {
 			fmt.Fprintf(os.Stdout, "# warning: /var/tmp bind-mount failed — ENOSPC likely on overlay tmpfs\n")
