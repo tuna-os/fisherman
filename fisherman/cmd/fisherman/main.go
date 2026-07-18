@@ -62,7 +62,7 @@ func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) [
 	if hasLUKS {
 		weights = append(weights, 1) // LUKS setup
 	}
-	weights = append(weights, 0, 0)     // format root, mount
+	weights = append(weights, 0, 0) // format root, mount
 	if hasVarDiskFormat {
 		weights = append(weights, 0) // format /var disk (fast)
 	}
@@ -384,8 +384,8 @@ func main() {
 
 	var activeTargetMount string
 	var activeEfiPart string
-	var activeRootPart string // only used for TPM2 enrolment, empty in manual mode
-	var activeLuksUUID string // LUKS partition UUID for boot entry injection; empty if no encryption
+	var activeRootPart string  // only used for TPM2 enrolment, empty in manual mode
+	var activeLuksUUID string  // LUKS partition UUID for boot entry injection; empty if no encryption
 	var luksRecoveryKey string // random passphrase for tpm2-luks (emitted as recovery key)
 
 	if isManual {
@@ -718,9 +718,16 @@ func main() {
 		if r.Encryption.Type == "tpm2-luks" {
 			unlockPassphrase = luksRecoveryKey
 		}
-		if err := luks.EnrollTPM2(activeRootPart, unlockPassphrase); err != nil {
-			// Non-fatal: TPM2 hardware may not be present (e.g. VMs).
-			progress.Info(fmt.Sprintf("Warning: TPM2 enrolment failed (recovery key unlock still works): %v", err))
+		// Enroll TPM2 on the FIRST BOOT of the installed system, not here:
+		// --tpm2-pcrs=7 seals against PCR 7 as measured in the live
+		// installer, but the installed system boots a different chain and
+		// measures a different PCR 7 — so an install-time enrollment can
+		// never unseal on first boot. Staging a first-boot oneshot captures
+		// the correct PCR 7. The recovery/passphrase key unlocks until then.
+		if err := luks.StageFirstBootEnrollment(activeTargetMount, activeLuksUUID, unlockPassphrase); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not stage first-boot TPM2 enrollment (recovery key unlock still works): %v", err))
+		} else {
+			progress.Info("TPM2 auto-unlock will be enrolled on first boot")
 		}
 
 		// For tpm2-luks the user never chose a passphrase, so we emit the
