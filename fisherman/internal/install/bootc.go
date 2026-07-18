@@ -817,53 +817,6 @@ func injectStorageTmpDir(conf, newLine string) string {
 	return strings.Join(lines, "\n")
 }
 
-// writeStorageConfWithTmpDir writes a containers/storage configuration that
-// mirrors the current effective config (from CONTAINERS_STORAGE_CONF or
-// /etc/containers/storage.conf) with the tmpdir field overridden to scratchDir.
-//
-// containers/storage defaults TMPDir to /var/tmp and only falls back to
-// checking $TMPDIR when the config file contains no tmpdir line — and even
-// then only in newer versions. Setting $TMPDIR alone in the subprocess
-// environment is not sufficient on the live ISO (VFS driver, no tmpdir in
-// /etc/containers/storage.conf), so we supply an explicit config file.
-//
-// The caller must remove the returned path when done.
-func writeStorageConfWithTmpDir(confDir, scratchDir string) (string, error) {
-	if err := os.MkdirAll(confDir, 0o755); err != nil {
-		return "", err
-	}
-
-	// Read the current effective storage config so we preserve the driver,
-	// graphroot, runroot, and any additionalimagestores that let skopeo find
-	// the image (e.g. on a live ISO the driver is "vfs", not "overlay").
-	confSrc := os.Getenv("CONTAINERS_STORAGE_CONF")
-	if confSrc == "" {
-		confSrc = "/etc/containers/storage.conf"
-	}
-	existing, err := os.ReadFile(confSrc)
-	if err != nil {
-		// Fall back to a minimal VFS config that covers the live-ISO case.
-		existing = []byte("[storage]\ndriver = \"vfs\"\n" +
-			"runroot = \"/run/containers/storage\"\n" +
-			"graphroot = \"/var/lib/containers/storage\"\n")
-	}
-
-	escaped := strings.ReplaceAll(scratchDir, `"`, `\"`)
-	newLine := `tmpdir = "` + escaped + `"`
-	content := injectStorageTmpDir(string(existing), newLine)
-
-	f, err := os.CreateTemp(confDir, "storage-tmpdir-*.conf")
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-	if _, err := f.WriteString(content); err != nil {
-		os.Remove(f.Name())
-		return "", err
-	}
-	return f.Name(), nil
-}
-
 // skopeoExportOCI exports an image from containers-storage to an OCI directory
 // layout. The composefs-backend requires raw OCI blobs (compressed layer
 // tarballs) that podman pull does not preserve; skopeo reconstructs them from
@@ -889,7 +842,7 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 	// which returns /var/tmp (containers/storage hardcoded default) regardless
 	// of the TMPDIR env var. On live ISOs /var/tmp is on the dracut overlayfs
 	// (~1.4 GiB) — too small for 5-6 GiB layer blobs. Both podman and skopeo
-	// hit this when reading from containers-storage.
+	// hit this when reading from containers-storage. //nolint:errcheck // best-effort
 	//
 	// Fix: bind-mount the scratch dir over /var/tmp so the hardcoded path
 	// becomes disk-backed. Deferred umount restores it after export.
