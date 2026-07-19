@@ -196,7 +196,7 @@ func TestRandomPassphrase(t *testing.T) {
 
 	// Must be valid hex.
 	for i, c := range p1 {
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			t.Errorf("passphrase[%d] = %q is not lowercase hex", i, c)
 			break
 		}
