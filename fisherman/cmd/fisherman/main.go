@@ -693,6 +693,13 @@ func main() {
 			fatal("retagging root partition: %v", err)
 		}
 		// Remount root so finalization and post-install writes can proceed.
+		// udisksctl unmount (used by UnmountPartition above) removes the
+		// mountpoint directory it manages, and disk.Mount — unlike
+		// MountTmpfs/BindMount — does not create its target, so recreate it
+		// or the plain `mount` syscall below fails with ENOENT.
+		if err := os.MkdirAll(activeTargetMount, 0o755); err != nil {
+			fatal("recreating target mountpoint before remount: %v", err)
+		}
 		rootPart := disk.PartName(r.Disk, 2)
 		if err := disk.Mount(rootPart, activeTargetMount, ""); err != nil {
 			fatal("remounting root partition after retagging: %v", err)
