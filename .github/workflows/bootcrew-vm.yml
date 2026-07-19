@@ -101,18 +101,21 @@ jobs:
         image: ${{ fromJson(needs.setup.outputs.matrix_required) }}
     steps:
       - uses: actions/checkout@v4
+
+      # Free ~30 GiB on the runner before we pull multi-GB OCI images and
+      # build a target loop disk. Pattern lifted from projectbluefin/dakota-iso.
+      # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache,
+      # which is where setup-go installs the toolchain.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: fisherman/go.mod
           cache: true
           cache-dependency-path: fisherman/go.sum
-
-      # Free ~30 GiB on the runner before we pull multi-GB OCI images and
-      # build a target loop disk. Pattern lifted from projectbluefin/dakota-iso.
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
-        with:
-          tool-cache: true
 
       - name: Setup CI environment
         run: |
@@ -190,15 +193,17 @@ jobs:
         image: ${{ fromJson(needs.setup.outputs.matrix_advisory) }}
     steps:
       - uses: actions/checkout@v4
+      # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache,
+      # which is where setup-go installs the toolchain.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
       - uses: actions/setup-go@v5
         with:
           go-version-file: fisherman/go.mod
           cache: true
           cache-dependency-path: fisherman/go.sum
-      - name: Free disk space
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
-        with:
-          tool-cache: true
       - name: Setup CI environment
         run: |
           sudo apt-get update -qq
