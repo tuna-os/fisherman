@@ -143,11 +143,18 @@ fi
 
 # Verify hostname
 if [ "$COMPOSEFS" = "true" ]; then
-  if [ ! -f "$ROOT_DIR/etc/hostname" ]; then
-    echo "FAIL: $ROOT_DIR/etc/hostname not found (composefs-native)"
+  # composefs-native has no top-level /etc: the writable /etc lives at
+  # state/deploy/<COMPOSEFS_HASH>/etc/ (see internal/post/post.go
+  # DefaultComposeFsDeployEtcDir). A fresh install has exactly one
+  # deployment, so just take whichever etc/ dir exists under state/deploy/.
+  ETC_DIR=$($SUDO_BIN find "$ROOT_DIR/state/deploy" -mindepth 2 -maxdepth 2 -type d -name etc 2>/dev/null | head -n1)
+  if [ -z "$ETC_DIR" ] || [ ! -f "$ETC_DIR/hostname" ]; then
+    echo "FAIL: composefs-native writable /etc (state/deploy/<hash>/etc/hostname) not found"
+    echo "--- state/deploy contents ---"
+    $SUDO_BIN find "$ROOT_DIR/state/deploy" 2>/dev/null | head -n 50
     exit 1
   fi
-  echo "✅ composefs-native hostname at $ROOT_DIR/etc/hostname"
+  echo "✅ composefs-native hostname at $ETC_DIR/hostname"
 else
   echo "✅ ostree-based installation verified"
 fi
