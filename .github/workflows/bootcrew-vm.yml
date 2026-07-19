@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: fisherman/go.mod
@@ -43,7 +43,7 @@ jobs:
       matrix_required: ${{ steps.read-matrix.outputs.matrix_required }}
       matrix_advisory: ${{ steps.read-matrix.outputs.matrix_advisory }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Parse image matrix (split required vs advisory)
         id: read-matrix
         shell: bash
@@ -65,7 +65,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: fisherman/go.mod
@@ -100,7 +100,7 @@ jobs:
       matrix:
         image: ${{ fromJson(needs.setup.outputs.matrix_required) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Free ~30 GiB on the runner before we pull multi-GB OCI images and
       # build a target loop disk. Pattern lifted from projectbluefin/dakota-iso.
@@ -192,7 +192,7 @@ jobs:
       matrix:
         image: ${{ fromJson(needs.setup.outputs.matrix_advisory) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache,
       # which is where setup-go installs the toolchain.
       - name: Free disk space
