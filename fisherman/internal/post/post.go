@@ -211,12 +211,26 @@ func DefaultDeploymentDir(sysroot string) (string, error) {
 var DeploymentDirFn = DefaultDeploymentDir
 
 // isComposeFsNative reports whether the installed system at sysroot uses the
-// composefs-native backend. Composefs-native deployments have no /ostree/
-// directory; ostree-based deployments always create one.
+// composefs-native backend (bootc install to-filesystem --composefs-backend).
+//
+// Detection is POSITIVE, via the composefs-native deploy base
+// <sysroot>/state/deploy/<hash>/ (the same path DefaultComposeFsDeployEtcDir
+// resolves against). The earlier heuristic keyed off "/ostree absent", but the
+// composefs-native backend ALSO creates an /ostree directory — so that check
+// mis-classified composefs-native installs as ostree. The concrete failure:
+// WriteHostname (and every other isComposeFsNative caller) then took the ostree
+// path, calling `ostree admin --print-current-dir`, which exits 1 on a
+// freshly-installed --skip-finalize target, and whose glob fallback over
+// /ostree/deploy/*/deploy/* finds nothing because the deployment is under
+// /state/ — a fatal `finding deployment dir` crash on composefs images.
 func isComposeFsNative(sysroot string) bool {
-	// Use ls via runner to check existence, as os.Stat might look in the sandbox.
-	err := runner.Run("ls", filepath.Join(sysroot, "ostree"))
-	return err != nil
+	// Use ls via runner (not os.Stat), which runs in the host mount namespace
+	// rather than any sandbox. composefs-native ⟺ state/deploy exists.
+	if err := runner.Run("ls", filepath.Join(sysroot, "state", "deploy")); err == nil {
+		return true
+	}
+	// Legacy signal retained: a deployment with no /ostree at all is composefs.
+	return runner.Run("ls", filepath.Join(sysroot, "ostree")) != nil
 }
 
 // IsComposeFsNativeExported is a public wrapper for isComposeFsNative,
