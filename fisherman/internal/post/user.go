@@ -3,6 +3,7 @@ package post
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -30,6 +31,7 @@ func CreateUser(sysroot string, u UserConfig) error {
 	}
 
 	var root string
+	var staterootHome string
 	if isComposeFsNative(sysroot) {
 		root = sysroot
 	} else {
@@ -41,8 +43,8 @@ func CreateUser(sysroot string, u UserConfig) error {
 
 		// On ostree/bootc, /home inside the deployment is a symlink to
 		// var/home (the stateroot var). Pre-create the stateroot home dir so
-		// that useradd --create-home has a real directory to populate.
-		staterootHome := filepath.Join(sysroot, "ostree", "deploy", "default", "var", "home")
+		// the relocation below has a destination.
+		staterootHome = filepath.Join(sysroot, "ostree", "deploy", "default", "var", "home")
 		if err := runner.Run("mkdir", "-p", staterootHome); err != nil {
 			return fmt.Errorf("mkdir stateroot home: %w", err)
 		}
@@ -64,6 +66,39 @@ func CreateUser(sysroot string, u UserConfig) error {
 
 	if err := runner.Run("useradd", args...); err != nil {
 		return fmt.Errorf("useradd: %w", err)
+	}
+
+	// useradd --create-home resolved /home through the deployment's
+	// /home -> var/home symlink and wrote the directory into the
+	// DEPLOYMENT's own var/ — which the booted system never sees: the
+	// stateroot var is mounted over /var at runtime. The account then
+	// boots with a passwd entry but no home directory at all (wootc E2E
+	// run 20260723T0423: var/home held only the image's seed content).
+	// Relocate the freshly created home into the stateroot var, and pin
+	// it with a tmpfiles.d snippet so the first boot (re)creates it from
+	// /etc/skel if missing and restores ownership + SELinux labels under
+	// the live policy — offline useradd cannot label correctly.
+	if staterootHome != "" {
+		deployHome := filepath.Join(root, "var", "home", u.Username)
+		stateHome := filepath.Join(staterootHome, u.Username)
+		if _, err := os.Stat(deployHome); err == nil {
+			if _, err := os.Stat(stateHome); os.IsNotExist(err) {
+				if err := runner.Run("mv", deployHome, stateHome); err != nil {
+					return fmt.Errorf("relocating home to stateroot var: %w", err)
+				}
+			}
+		}
+		tmpfilesDir := filepath.Join(root, "etc", "tmpfiles.d")
+		if err := os.MkdirAll(tmpfilesDir, 0o755); err != nil {
+			return fmt.Errorf("mkdir tmpfiles.d: %w", err)
+		}
+		snippet := fmt.Sprintf(
+			"C /var/home/%[1]s 0700 %[1]s %[1]s - /etc/skel\nZ /var/home/%[1]s 0700 %[1]s %[1]s -\n",
+			u.Username)
+		snippetPath := filepath.Join(tmpfilesDir, "fisherman-home-"+u.Username+".conf")
+		if err := os.WriteFile(snippetPath, []byte(snippet), 0o644); err != nil {
+			return fmt.Errorf("writing home tmpfiles snippet: %w", err)
+		}
 	}
 
 	// Set the password via chpasswd stdin to avoid it appearing in ps output.
