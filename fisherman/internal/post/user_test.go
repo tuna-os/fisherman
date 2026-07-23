@@ -40,10 +40,13 @@ func TestCreateUserRelocatesHomeToStaterootVar(t *testing.T) {
 			return nil
 		case "mkdir":
 			return os.MkdirAll(args[len(args)-1], 0o755)
-		case "useradd":
-			// Simulate the real symlink-following behavior: the home
-			// lands in the deployment's own var/home.
-			return os.MkdirAll(filepath.Join(deployDir, "var", "home", "alice"), 0o700)
+		case "chroot":
+			if len(args) > 1 && args[1] == "useradd" {
+				// Simulate the real symlink-following behavior: the home
+				// lands in the deployment's own var/home.
+				return os.MkdirAll(filepath.Join(deployDir, "var", "home", "alice"), 0o700)
+			}
+			return nil
 		case "mv":
 			return os.Rename(args[len(args)-2], args[len(args)-1])
 		}
@@ -73,5 +76,52 @@ func TestCreateUserRelocatesHomeToStaterootVar(t *testing.T) {
 		if !strings.Contains(string(snippet), want) {
 			t.Errorf("tmpfiles snippet missing %q; got:\n%s", want, snippet)
 		}
+	}
+}
+
+// useradd --root from a booted host initializes the host PAM/SELinux stack
+// and fails against a writable target etc (wootc run 20260723T0738). User
+// tooling must run via chroot with the target's own binaries.
+func TestCreateUserUsesChrootNotRootFlag(t *testing.T) {
+	sysroot := t.TempDir()
+	deployDir := filepath.Join(sysroot, "ostree", "deploy", "default", "deploy", "abc123.0")
+	if err := os.MkdirAll(deployDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origDeployFn := DeploymentDirFn
+	defer func() { DeploymentDirFn = origDeployFn }()
+	DeploymentDirFn = func(string) (string, error) { return deployDir, nil }
+
+	var calls [][]string
+	origRunFn := runner.RunFn
+	defer func() { runner.RunFn = origRunFn }()
+	runner.RunFn = func(_ io.Reader, name string, args ...string) error {
+		calls = append(calls, append([]string{name}, args...))
+		if name == "ls" {
+			if _, err := os.Stat(args[len(args)-1]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	if err := CreateUser(sysroot, UserConfig{Username: "bob", Password: "$6$salt$hash"}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+
+	var sawUseradd, sawChpasswd bool
+	for _, c := range calls {
+		if c[0] == "useradd" || c[0] == "chpasswd" {
+			t.Errorf("direct %s call (must go through chroot): %v", c[0], c)
+		}
+		if c[0] == "chroot" && len(c) > 2 && c[2] == "useradd" {
+			sawUseradd = true
+		}
+		if c[0] == "chroot" && len(c) > 2 && c[2] == "chpasswd" && c[3] == "-e" {
+			sawChpasswd = true
+		}
+	}
+	if !sawUseradd || !sawChpasswd {
+		t.Errorf("missing chroot useradd/chpasswd calls: %v", calls)
 	}
 }

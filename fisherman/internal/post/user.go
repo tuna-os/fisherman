@@ -50,9 +50,17 @@ func CreateUser(sysroot string, u UserConfig) error {
 		}
 	}
 
-	// Build useradd arguments.
+	// Run the TARGET's useradd via chroot rather than `useradd --root`:
+	// --root chroots too, but first initializes the HOST's PAM/SELinux
+	// stack — from a booted host it dies with "failure while writing
+	// changes to /etc/passwd" against a target whose etc is perfectly
+	// writable (wootc run 20260723T0738: the deployer-initramfs
+	// environment masked this; the same call from booted Phase 2 failed
+	// every time while `chroot <dep> useradd` succeeded on the same
+	// files). Plain chroot uses only the target's own libraries.
 	args := []string{
-		"--root", root,
+		root,
+		"useradd",
 		"--create-home",
 		"--shell", "/bin/bash",
 	}
@@ -64,8 +72,8 @@ func CreateUser(sysroot string, u UserConfig) error {
 	}
 	args = append(args, u.Username)
 
-	if err := runner.Run("useradd", args...); err != nil {
-		return fmt.Errorf("useradd: %w", err)
+	if err := runner.Run("chroot", args...); err != nil {
+		return fmt.Errorf("useradd (chroot %s): %w", root, err)
 	}
 
 	// useradd --create-home resolved /home through the deployment's
@@ -105,9 +113,10 @@ func CreateUser(sysroot string, u UserConfig) error {
 	}
 
 	// Set the password via chpasswd stdin to avoid it appearing in ps output.
+	// Same chroot rationale as useradd above.
 	if u.Password != "" {
 		input := fmt.Sprintf("%s:%s\n", u.Username, u.Password)
-		chpasswdArgs := []string{"--root", root}
+		chpasswdArgs := []string{root, "chpasswd"}
 		// A pre-hashed crypt(3) string ("$id$salt$hash", e.g. wootc's vault
 		// $6$ SHA-512) must be written verbatim with -e. Without it chpasswd
 		// (a) treats the hash as a PLAINTEXT password — the account's real
@@ -117,8 +126,8 @@ func CreateUser(sysroot string, u UserConfig) error {
 		if strings.HasPrefix(u.Password, "$") {
 			chpasswdArgs = append(chpasswdArgs, "-e")
 		}
-		if err := runner.RunWithStdin(bytes.NewBufferString(input), "chpasswd", chpasswdArgs...); err != nil {
-			return fmt.Errorf("chpasswd: %w", err)
+		if err := runner.RunWithStdin(bytes.NewBufferString(input), "chroot", chpasswdArgs...); err != nil {
+			return fmt.Errorf("chpasswd (chroot %s): %w", root, err)
 		}
 	}
 
