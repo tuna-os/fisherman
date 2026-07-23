@@ -70,6 +70,15 @@ func CreateUser(sysroot string, u UserConfig) error {
 	if u.Password != "" {
 		input := fmt.Sprintf("%s:%s\n", u.Username, u.Password)
 		chpasswdArgs := []string{"--root", root}
+		// A pre-hashed crypt(3) string ("$id$salt$hash", e.g. wootc's vault
+		// $6$ SHA-512) must be written verbatim with -e. Without it chpasswd
+		// (a) treats the hash as a PLAINTEXT password — the account's real
+		// password becomes the literal hash text — and (b) invokes the
+		// hashing stack (PAM/crypt config) inside the --root chroot, which
+		// exits 1 on EL10-family targets (proven live on bluefin:lts).
+		if strings.HasPrefix(u.Password, "$") {
+			chpasswdArgs = append(chpasswdArgs, "-e")
+		}
 		if err := runner.RunWithStdin(bytes.NewBufferString(input), "chpasswd", chpasswdArgs...); err != nil {
 			return fmt.Errorf("chpasswd: %w", err)
 		}
