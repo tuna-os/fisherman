@@ -3,6 +3,7 @@ package disk
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/tuna-os/fisherman/internal/progress"
@@ -33,13 +34,26 @@ func FormatRoot(dev, filesystem string) error {
 
 // Mount mounts dev at target. opts is an optional comma-separated option string
 // passed to -o; pass "" for no options.
+//
+// On failure the error carries mount's own stderr plus a blkid probe of the
+// device: in the deployer initramfs, runner.Run's streamed output never
+// reaches the serial console, so "exit status 32" arrived with zero
+// diagnosable context (GH run 20260723T2257 burned an hour of archaeology
+// on a message that mount itself had already explained).
 func Mount(dev, target, opts string) error {
 	args := []string{}
 	if opts != "" {
 		args = append(args, "-o", opts)
 	}
 	args = append(args, dev, target)
-	return runner.Run("mount", args...)
+	if err := runner.Run("mount", args...); err != nil {
+		name, cargs := runner.HostArgs("mount", args)
+		out, _ := exec.Command(name, cargs...).CombinedOutput()
+		probe, _ := runner.Output("blkid", dev)
+		return fmt.Errorf("%w: %s (blkid: %s)", err,
+			strings.TrimSpace(string(out)), strings.TrimSpace(string(probe)))
+	}
+	return nil
 }
 
 // MountTmpfs mounts a tmpfs of the given size (e.g. "4G") at path, creating
