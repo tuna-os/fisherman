@@ -92,8 +92,11 @@ func CreateUser(sysroot string, u UserConfig) error {
 		if err := os.MkdirAll(tmpfilesDir, 0o755); err != nil {
 			return fmt.Errorf("mkdir tmpfiles.d: %w", err)
 		}
+		// Z mode "-": fix ownership and restore SELinux contexts recursively
+		// but keep each file's own mode — 0700 here would mark every migrated
+		// document executable.
 		snippet := fmt.Sprintf(
-			"C /var/home/%[1]s 0700 %[1]s %[1]s - /etc/skel\nZ /var/home/%[1]s 0700 %[1]s %[1]s -\n",
+			"C /var/home/%[1]s 0700 %[1]s %[1]s - /etc/skel\nZ /var/home/%[1]s - %[1]s %[1]s -\n",
 			u.Username)
 		snippetPath := filepath.Join(tmpfilesDir, "fisherman-home-"+u.Username+".conf")
 		if err := os.WriteFile(snippetPath, []byte(snippet), 0o644); err != nil {

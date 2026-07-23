@@ -68,7 +68,7 @@ func TestCreateUserRelocatesHomeToStaterootVar(t *testing.T) {
 	}
 	for _, want := range []string{
 		"C /var/home/alice 0700 alice alice - /etc/skel",
-		"Z /var/home/alice 0700 alice alice -",
+		"Z /var/home/alice - alice alice -",
 	} {
 		if !strings.Contains(string(snippet), want) {
 			t.Errorf("tmpfiles snippet missing %q; got:\n%s", want, snippet)
