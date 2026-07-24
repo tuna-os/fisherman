@@ -125,3 +125,47 @@ func TestCreateUserUsesChrootNotRootFlag(t *testing.T) {
 		t.Errorf("missing chroot useradd/chpasswd calls: %v", calls)
 	}
 }
+
+// composefs-native has no chrootable rootfs during deploy — useradd must run
+// with --root (not chroot), pointed at the deploy root (parent of the
+// state/deploy/<hash>/etc dir). dakota exit-127 regression, GH 20260724T1508.
+func TestCreateUserComposeFsUsesRootFlag(t *testing.T) {
+	sysroot := t.TempDir()
+	etcDir := filepath.Join(sysroot, "state", "deploy", "abc123", "etc")
+	if err := os.MkdirAll(etcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// isComposeFsNative keys off state/deploy existing (via the ls stub below).
+	origEtcFn := ComposeFsDeployEtcDirFn
+	defer func() { ComposeFsDeployEtcDirFn = origEtcFn }()
+	ComposeFsDeployEtcDirFn = func(string) (string, error) { return etcDir, nil }
+
+	var calls [][]string
+	origRunFn := runner.RunFn
+	defer func() { runner.RunFn = origRunFn }()
+	runner.RunFn = func(_ io.Reader, name string, args ...string) error {
+		calls = append(calls, append([]string{name}, args...))
+		if name == "ls" {
+			_, err := os.Stat(args[len(args)-1])
+			return err
+		}
+		return nil
+	}
+
+	if err := CreateUser(sysroot, UserConfig{Username: "carol", Password: "$6$s$h"}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	wantRoot := filepath.Join(sysroot, "state", "deploy", "abc123")
+	var sawUseradd bool
+	for _, c := range calls {
+		if c[0] == "chroot" {
+			t.Errorf("composefs must not chroot: %v", c)
+		}
+		if c[0] == "useradd" && c[1] == "--root" && c[2] == wantRoot {
+			sawUseradd = true
+		}
+	}
+	if !sawUseradd {
+		t.Errorf("expected useradd --root %s; calls: %v", wantRoot, calls)
+	}
+}

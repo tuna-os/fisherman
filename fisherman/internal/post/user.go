@@ -32,8 +32,19 @@ func CreateUser(sysroot string, u UserConfig) error {
 
 	var root string
 	var staterootHome string
-	if isComposeFsNative(sysroot) {
-		root = sysroot
+	composefs := isComposeFsNative(sysroot)
+	if composefs {
+		// composefs-native has no full chrootable rootfs during deploy — the
+		// sealed image's /usr (with useradd) is mounted read-only elsewhere,
+		// so `chroot <sysroot> useradd` exits 127 (dakota, GH matrix
+		// 20260724T1508). Point at the writable deployment root (parent of
+		// the state/deploy/<hash>/etc dir) and use `useradd --root` below,
+		// which edits the passwd files without needing a chroot rootfs.
+		etcDir, err := ComposeFsDeployEtcDirFn(sysroot)
+		if err != nil {
+			return fmt.Errorf("finding composefs deploy root: %w", err)
+		}
+		root = filepath.Dir(etcDir)
 	} else {
 		deployDir, err := DeploymentDirFn(sysroot)
 		if err != nil {
@@ -58,22 +69,28 @@ func CreateUser(sysroot string, u UserConfig) error {
 	// environment masked this; the same call from booted Phase 2 failed
 	// every time while `chroot <dep> useradd` succeeded on the same
 	// files). Plain chroot uses only the target's own libraries.
-	args := []string{
-		root,
-		"useradd",
-		"--create-home",
-		"--shell", "/bin/bash",
-	}
+	// ostree: `chroot <deployDir> useradd` (the deployDir is a full rootfs).
+	// composefs-native: `useradd --root <deployRoot>` (no chroot rootfs
+	// exists during deploy; --root only edits the passwd files, and the
+	// booted-host PAM problem that forced chroot is ostree-only — composefs
+	// deploys happen in the initramfs).
+	tail := []string{"useradd", "--create-home", "--shell", "/bin/bash"}
 	if u.Fullname != "" {
-		args = append(args, "--comment", u.Fullname)
+		tail = append(tail, "--comment", u.Fullname)
 	}
 	if len(u.Groups) > 0 {
-		args = append(args, "--groups", strings.Join(u.Groups, ","))
+		tail = append(tail, "--groups", strings.Join(u.Groups, ","))
 	}
-	args = append(args, u.Username)
+	tail = append(tail, u.Username)
 
-	if err := runner.Run("chroot", args...); err != nil {
-		return fmt.Errorf("useradd (chroot %s): %w", root, err)
+	if composefs {
+		if err := runner.Run("useradd", append([]string{"--root", root}, tail...)...); err != nil {
+			return fmt.Errorf("useradd (--root %s): %w", root, err)
+		}
+	} else {
+		if err := runner.Run("chroot", append([]string{root}, tail...)...); err != nil {
+			return fmt.Errorf("useradd (chroot %s): %w", root, err)
+		}
 	}
 
 	// useradd --create-home resolved /home through the deployment's
@@ -113,21 +130,28 @@ func CreateUser(sysroot string, u UserConfig) error {
 	}
 
 	// Set the password via chpasswd stdin to avoid it appearing in ps output.
-	// Same chroot rationale as useradd above.
+	// Same ostree-chroot vs composefs---root split as useradd above.
 	if u.Password != "" {
 		input := fmt.Sprintf("%s:%s\n", u.Username, u.Password)
-		chpasswdArgs := []string{root, "chpasswd"}
 		// A pre-hashed crypt(3) string ("$id$salt$hash", e.g. wootc's vault
 		// $6$ SHA-512) must be written verbatim with -e. Without it chpasswd
 		// (a) treats the hash as a PLAINTEXT password — the account's real
 		// password becomes the literal hash text — and (b) invokes the
-		// hashing stack (PAM/crypt config) inside the --root chroot, which
-		// exits 1 on EL10-family targets (proven live on bluefin:lts).
+		// hashing stack (PAM/crypt config), which exits 1 on EL10 targets.
+		flag := []string{}
 		if strings.HasPrefix(u.Password, "$") {
-			chpasswdArgs = append(chpasswdArgs, "-e")
+			flag = []string{"-e"}
 		}
-		if err := runner.RunWithStdin(bytes.NewBufferString(input), "chroot", chpasswdArgs...); err != nil {
-			return fmt.Errorf("chpasswd (chroot %s): %w", root, err)
+		var cpErr error
+		if composefs {
+			cpErr = runner.RunWithStdin(bytes.NewBufferString(input), "chpasswd",
+				append([]string{"--root", root}, flag...)...)
+		} else {
+			cpErr = runner.RunWithStdin(bytes.NewBufferString(input), "chroot",
+				append([]string{root, "chpasswd"}, flag...)...)
+		}
+		if cpErr != nil {
+			return fmt.Errorf("chpasswd (%s): %w", root, cpErr)
 		}
 	}
 
