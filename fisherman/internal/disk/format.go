@@ -50,8 +50,14 @@ func Mount(dev, target, opts string) error {
 		name, cargs := runner.HostArgs("mount", args)
 		out, _ := exec.Command(name, cargs...).CombinedOutput()
 		probe, _ := runner.Output("blkid", dev)
-		return fmt.Errorf("%w: %s (blkid: %s)", err,
-			strings.TrimSpace(string(out)), strings.TrimSpace(string(probe)))
+		// The kernel's ring buffer is the only place that says WHY a mount
+		// was rejected (unsupported feature bits, SB validation, missing
+		// module): mount's own stderr came back empty in the deployer
+		// initramfs (GH bonito repro 20260724T0335).
+		dmesg, _ := runner.Output("sh", "-c", "dmesg | tail -8")
+		return fmt.Errorf("%w: %s (blkid: %s) (dmesg: %s)", err,
+			strings.TrimSpace(string(out)), strings.TrimSpace(string(probe)),
+			strings.TrimSpace(string(dmesg)))
 	}
 	return nil
 }
