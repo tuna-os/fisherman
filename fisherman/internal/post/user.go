@@ -84,7 +84,12 @@ func CreateUser(sysroot string, u UserConfig) error {
 	tail = append(tail, u.Username)
 
 	if composefs {
-		if err := runner.Run("useradd", append([]string{"--root", root}, tail...)...); err != nil {
+		// tail[0] is the literal "useradd" command name, needed only by the
+		// ostree branch's `chroot <root> useradd …`. Here we invoke the
+		// useradd binary directly, so drop it — otherwise it becomes a second
+		// positional login name alongside the username and shadow-utils exits 2
+		// ("invalid command syntax", dakota GH matrix 20260724T1705).
+		if err := runner.Run("useradd", append([]string{"--root", root}, tail[1:]...)...); err != nil {
 			return fmt.Errorf("useradd (--root %s): %w", root, err)
 		}
 	} else {
