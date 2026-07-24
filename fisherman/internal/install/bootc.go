@@ -1161,7 +1161,13 @@ func runWithSubsteps(cmd *exec.Cmd) error {
 		return err
 	}
 
-	// Read lines in a goroutine so we don't block.
+	// Read lines in a goroutine so we don't block. Retain the last few lines
+	// so a failure carries its own reason: bootc/ostree stream their error
+	// (e.g. "No space left on device") to this pipe, but it scrolls past in
+	// the blob-copy noise and the wrapped error was a bare "exit status 1"
+	// with no clue (el10-kde bootc-install failure, GH matrix 20260724T1619).
+	const tailN = 15
+	tail := make([]string, 0, tailN)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -1173,6 +1179,14 @@ func runWithSubsteps(cmd *exec.Cmd) error {
 			line := scanner.Text()
 			// Always relay the raw line to the VTE terminal.
 			fmt.Fprintln(os.Stdout, line)
+			// Keep a rolling tail, skipping pure progress noise so the
+			// retained lines are the substantive ones.
+			if !strings.HasPrefix(line, "Copying blob") && strings.TrimSpace(line) != "" {
+				if len(tail) == tailN {
+					tail = tail[1:]
+				}
+				tail = append(tail, line)
+			}
 			// Detect bootc / ostree / podman progress keywords and emit substep.
 			if sub := ClassifyLine(line); sub != "" && sub != lastSubstep {
 				lastSubstep = sub
@@ -1184,6 +1198,9 @@ func runWithSubsteps(cmd *exec.Cmd) error {
 	err := cmd.Wait()
 	pw.Close()
 	<-done
+	if err != nil && len(tail) > 0 {
+		return fmt.Errorf("%w — last output:\n  %s", err, strings.Join(tail, "\n  "))
+	}
 	return err
 }
 
