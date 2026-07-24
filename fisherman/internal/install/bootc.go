@@ -100,6 +100,12 @@ type Options struct {
 	// ComposeFsBackend passes --composefs-backend when true.
 	// Required for images using the composefs-native deployment backend (e.g. ghcr.io/bootcrew/*).
 	ComposeFsBackend bool
+	// GenericImage passes --generic-image, which skips bootc's bootupd presence
+	// check (and host-specific EFI NVRAM writes). Set for ostree images that
+	// ship no bootupd (non-Fedora/EL bootc images, e.g. Arch/Debian) — bootc
+	// otherwise fails "bootupd is required for ostree-based installs". Safe
+	// because wootc supplies its own signed ESP bootloader for Phase 2.
+	GenericImage bool
 	// Bootloader selects the bootloader passed to bootc via --bootloader.
 	// Empty or "grub2" uses the default (grub2). "systemd" passes --bootloader systemd.
 	Bootloader string
@@ -159,6 +165,9 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	// UnifiedStorage is intentionally not emitted — see Options.UnifiedStorage comment.
 	if opts.ComposeFsBackend {
 		args = append(args, "--composefs-backend")
+	}
+	if opts.GenericImage {
+		args = append(args, "--generic-image")
 	}
 	// --source-imgref is required for composefs (raw OCI blobs), for
 	// non-composefs OCI-redirect installs, and for direct mode where bootc

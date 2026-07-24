@@ -653,6 +653,7 @@ func main() {
 		SelinuxDisabled:       r.SelinuxDisabled,
 		UnifiedStorage:        r.UnifiedStorage,
 		ComposeFsBackend:      composeFsBackend,
+		GenericImage:          r.GenericImage,
 		Bootloader:            r.Bootloader,
 		Target:                activeTargetMount,
 		ScratchDir:            scratchDir,
