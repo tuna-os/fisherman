@@ -89,8 +89,30 @@ func CreateUser(sysroot string, u UserConfig) error {
 		// useradd binary directly, so drop it — otherwise it becomes a second
 		// positional login name alongside the username and shadow-utils exits 2
 		// ("invalid command syntax", dakota GH matrix 20260724T1705).
-		if err := runner.Run("useradd", append([]string{"--root", root}, tail[1:]...)...); err != nil {
+		//
+		// Also drop --create-home: on a composefs-native deploy root, /home is a
+		// symlink to a stateroot var that does not exist under --root, so useradd
+		// --create-home cannot create the directory and exits 12 (dakota GH
+		// matrix 20260724T2128). The passwd entry is written without it, and the
+		// composefs tmpfiles.d snippet below builds+labels /var/home/<user> from
+		// /etc/skel on first boot — the same mechanism the ostree branch relies
+		// on after its relocation.
+		cargs := []string{"--root", root}
+		for _, a := range tail[1:] {
+			if a == "--create-home" {
+				continue
+			}
+			cargs = append(cargs, a)
+		}
+		if err := runner.Run("useradd", cargs...); err != nil {
 			return fmt.Errorf("useradd (--root %s): %w", root, err)
+		}
+		// First-boot home creation for composefs-native (no staterootHome
+		// relocation path). /home -> var/home is a bootc invariant, so the
+		// runtime /var/home/<user> path is correct regardless of the composefs
+		// deploy layout. Mirrors the ostree snippet below.
+		if err := writeHomeTmpfiles(root, u.Username); err != nil {
+			return err
 		}
 	} else {
 		if err := runner.Run("chroot", append([]string{root}, tail...)...); err != nil {
@@ -118,19 +140,8 @@ func CreateUser(sysroot string, u UserConfig) error {
 				}
 			}
 		}
-		tmpfilesDir := filepath.Join(root, "etc", "tmpfiles.d")
-		if err := os.MkdirAll(tmpfilesDir, 0o755); err != nil {
-			return fmt.Errorf("mkdir tmpfiles.d: %w", err)
-		}
-		// Z mode "-": fix ownership and restore SELinux contexts recursively
-		// but keep each file's own mode — 0700 here would mark every migrated
-		// document executable.
-		snippet := fmt.Sprintf(
-			"C /var/home/%[1]s 0700 %[1]s %[1]s - /etc/skel\nZ /var/home/%[1]s - %[1]s %[1]s -\n",
-			u.Username)
-		snippetPath := filepath.Join(tmpfilesDir, "fisherman-home-"+u.Username+".conf")
-		if err := os.WriteFile(snippetPath, []byte(snippet), 0o644); err != nil {
-			return fmt.Errorf("writing home tmpfiles snippet: %w", err)
+		if err := writeHomeTmpfiles(root, u.Username); err != nil {
+			return err
 		}
 	}
 
@@ -161,5 +172,29 @@ func CreateUser(sysroot string, u UserConfig) error {
 	}
 
 	fmt.Printf("  created user %q in installed system\n", u.Username)
+	return nil
+}
+
+// writeHomeTmpfiles drops a tmpfiles.d snippet under <root>/etc/tmpfiles.d that
+// makes the first boot create /var/home/<user> from /etc/skel if missing and
+// restore ownership + SELinux labels under the live policy — offline useradd
+// cannot label correctly, and on composefs-native it cannot create the home at
+// all. /home -> var/home is a bootc invariant, so the runtime /var/home path is
+// correct for both ostree and composefs deploys.
+func writeHomeTmpfiles(root, username string) error {
+	tmpfilesDir := filepath.Join(root, "etc", "tmpfiles.d")
+	if err := os.MkdirAll(tmpfilesDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir tmpfiles.d: %w", err)
+	}
+	// Z mode "-": fix ownership and restore SELinux contexts recursively but
+	// keep each file's own mode — 0700 here would mark every migrated document
+	// executable.
+	snippet := fmt.Sprintf(
+		"C /var/home/%[1]s 0700 %[1]s %[1]s - /etc/skel\nZ /var/home/%[1]s - %[1]s %[1]s -\n",
+		username)
+	snippetPath := filepath.Join(tmpfilesDir, "fisherman-home-"+username+".conf")
+	if err := os.WriteFile(snippetPath, []byte(snippet), 0o644); err != nil {
+		return fmt.Errorf("writing home tmpfiles snippet: %w", err)
+	}
 	return nil
 }
