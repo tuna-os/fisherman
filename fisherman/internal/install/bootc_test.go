@@ -158,6 +158,17 @@ func TestBuildBootcArgs_ComposeFsBackend(t *testing.T) {
 	assertContains(t, args, "--composefs-backend")
 }
 
+// GenericImage emits --generic-image (bootupd-less ostree images, e.g. Arch/Debian).
+func TestBuildBootcArgs_GenericImage(t *testing.T) {
+	args := install.BuildBootcArgs(install.Options{GenericImage: true}, "", "/target")
+	assertContains(t, args, "--generic-image")
+}
+
+func TestBuildBootcArgs_NoGenericImage(t *testing.T) {
+	args := install.BuildBootcArgs(install.Options{GenericImage: false}, "", "/target")
+	assertAbsent(t, args, "--generic-image")
+}
+
 // TestBuildBootcArgs_ComposeFsBackend_SourceImgref verifies that BuildBootcArgs
 // emits --source-imgref oci:<scratchDir>/oci-cache when ComposeFsBackend is true.
 // In container mode, callers set ComposeFsOCIPath = containerOCICachePath

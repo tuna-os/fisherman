@@ -22,6 +22,15 @@ type Recipe struct {
 	// Works with any supported filesystem including xfs.
 	// Automatically forced to true when Filesystem is "zfs".
 	ComposeFsBackend bool `json:"composeFsBackend"`
+	// GenericImage passes --generic-image to bootc install to-filesystem, which
+	// skips the bootupd presence check (and host-specific EFI NVRAM writes).
+	// Set for ostree-based images that ship no bootupd (e.g. non-Fedora/EL bootc
+	// images like Arch/Debian): bootc otherwise aborts with "bootupd is required
+	// for ostree-based installs". Safe for wootc because Phase-2 boots via the
+	// signed shim+grub chain wootc stages on the ESP, not a bootc-installed
+	// bootloader. Left false for images that DO ship bootupd (bluefin, EL, Fedora)
+	// so their proven install path is unchanged.
+	GenericImage bool `json:"genericImage,omitempty"`
 	// ZFSPoolName is the name of the ZFS pool to create (default: "rpool").
 	// Only used when Filesystem is "zfs".
 	ZFSPoolName string `json:"zfsPoolName,omitempty"`
