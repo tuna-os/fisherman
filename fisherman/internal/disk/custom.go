@@ -101,7 +101,15 @@ func formatPartition(dev, fstype string) error {
 	case "fat32":
 		return runner.Run("mkfs.fat", "-F32", dev)
 	case "ext4":
-		return runner.Run("mkfs.ext4", "-F", dev)
+		// -O verity for the same reason FormatRoot uses it: bootc's
+		// --composefs-backend calls FS_IOC_ENABLE_VERITY on deployed files, and
+		// ext4 only permits that when the feature was set at format time.
+		// Omitting it here made composefs installs onto a manual layout fail
+		// with "Filesystem does not support fs-verity" *after* the target had
+		// been formatted and the image deployed — the manual-layout path is the
+		// one used to install alongside an existing OS, so that late failure
+		// lands on a partition the user cannot afford to lose.
+		return runner.Run("mkfs.ext4", "-F", "-O", "verity", dev)
 	case "ext3":
 		return runner.Run("mkfs.ext3", "-F", dev)
 	case "xfs":
