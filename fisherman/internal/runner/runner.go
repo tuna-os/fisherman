@@ -16,11 +16,42 @@ var inFlatpak = sync.OnceValue(func() bool {
 	return err == nil
 })
 
+// localCommands is the set of commands that are bundled inside the Flatpak
+// sandbox and should NOT be forwarded to the host via flatpak-spawn --host.
+// These are filesystem formatting and management tools (mkfs.*, btrfs, mkswap)
+// that only need block-device access (already granted by --device=all).
+//
+// Privileged tools (sfdisk, cryptsetup, mount, podman, …) are NOT in this set;
+// they continue to run on the host via flatpak-spawn so they operate in the
+// host mount namespace.
+var localCommands = map[string]bool{
+	"mkfs.fat":   true,
+	"mkfs.vfat":  true,
+	"mkfs.ext4":  true,
+	"mkfs.ext3":  true,
+	"mkfs.ext2":  true,
+	"mkfs.xfs":   true,
+	"mkfs.btrfs": true,
+	"btrfs":      true,
+	"mkswap":     true,
+}
+
+// useHost reports whether a command should be forwarded to the host via
+// flatpak-spawn --host. Returns false for commands that are bundled inside
+// the Flatpak sandbox and can access block devices directly via --device=all.
+func useHost(name string) bool {
+	return !localCommands[name]
+}
+
 // HostArgs prepends "flatpak-spawn --host" when running inside a Flatpak so
 // that privileged host tools (sfdisk, cryptsetup, podman, …) execute in the
 // host mount namespace rather than the sandbox.
+//
+// Commands in the localCommands set (mkfs.*, btrfs, mkswap) are bundled inside
+// the Flatpak sandbox and run directly — they access block devices through the
+// sandbox's --device=all permission and do not need the host mount namespace.
 func HostArgs(name string, args []string) (string, []string) {
-	if inFlatpak() {
+	if inFlatpak() && useHost(name) {
 		return "flatpak-spawn", append([]string{"--host", name}, args...)
 	}
 	return name, args
@@ -38,7 +69,7 @@ func HostArgs(name string, args []string) (string, []string) {
 // For non-Flatpak invocations the result is identical to HostArgs; callers
 // are expected to set cmd.Env on the returned command to propagate the vars.
 func HostArgsWithEnv(name string, args []string, envVars []string) (string, []string) {
-	if inFlatpak() {
+	if inFlatpak() && useHost(name) {
 		fpArgs := make([]string, 0, 1+len(envVars)+1+len(args))
 		fpArgs = append(fpArgs, "--host")
 		for _, e := range envVars {
