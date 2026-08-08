@@ -123,7 +123,9 @@ jobs:
           sudo apt-get install -y just socat
           just ci-install-tools
       - name: Login to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${{ env.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
@@ -210,7 +212,9 @@ jobs:
           sudo apt-get install -y just socat
           just ci-install-tools
       - name: Login to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${{ env.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
