@@ -106,9 +106,11 @@ func TestCleanup_UmountArgs(t *testing.T) {
 	if call.name != "umount" {
 		t.Errorf("name = %q, want umount", call.name)
 	}
-	// Cleanup uses -R (recursive) to handle bind mounts and submounts.
-	if len(call.args) < 2 || call.args[0] != "-R" {
-		t.Errorf("args = %v, want [-R <path>]", call.args)
+	// Cleanup uses -Rl (recursive + lazy) to handle bind mounts and submounts
+	// and detach even when a mount is busy.  Mirrors the umount -l fallback
+	// in internal/disk/partition.go:unmountAll().
+	if len(call.args) < 2 || call.args[0] != "-Rl" {
+		t.Errorf("args = %v, want [-Rl <path>]", call.args)
 	}
 }
 

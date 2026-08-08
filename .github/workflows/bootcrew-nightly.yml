@@ -15,7 +15,7 @@ jobs:
     outputs:
       matrix: ${{ steps.read-matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Parse image matrix
         id: read-matrix
@@ -31,7 +31,7 @@ jobs:
   unit-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
@@ -54,7 +54,7 @@ jobs:
         image: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v7
         with:
@@ -259,7 +259,7 @@ jobs:
 
       - name: Upload boot logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: boot-logs-nightly-${{ matrix.image.name }}
           path: /tmp/boot-*.log
