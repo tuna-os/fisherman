@@ -33,7 +33,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
           cache: true
@@ -56,7 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
           cache: true
@@ -259,7 +259,7 @@ jobs:
 
       - name: Upload boot logs on failure
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: boot-logs-nightly-${{ matrix.image.name }}
           path: /tmp/boot-*.log

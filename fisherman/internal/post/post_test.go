@@ -588,10 +588,16 @@ func TestEnablePrintServices(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		// Intercept runner so "ls <sysroot>/ostree" succeeds (not composefs-native).
+		// Intercept runner: ostree layout has /ostree but NO /state/deploy, so
+		// "ls <sysroot>/state/deploy" must fail and "ls <sysroot>/ostree" succeed.
 		origRunFn := runner.RunFn
 		defer func() { runner.RunFn = origRunFn }()
-		runner.RunFn = func(_ io.Reader, _ string, _ ...string) error { return nil }
+		runner.RunFn = func(_ io.Reader, _ string, args ...string) error {
+			if len(args) > 0 && strings.HasSuffix(args[len(args)-1], filepath.Join("state", "deploy")) {
+				return fmt.Errorf("no state/deploy (ostree layout)")
+			}
+			return nil
+		}
 
 		// Override DeploymentDirFn.
 		origFn := post.DeploymentDirFn
@@ -668,6 +674,40 @@ func TestDefaultComposeFsDeployEtcDir_Fallback(t *testing.T) {
 	// Should return one of the two deploy etc dirs (whichever is newest).
 	if got != first && got != second {
 		t.Errorf("got %q, expected one of %q or %q", got, first, second)
+	}
+}
+
+// TestIsComposeFsNative_ComposeFsBackendAlsoCreatesOstree is the regression test
+// for the composefs installer crash: `bootc install to-filesystem
+// --composefs-backend` lays the deployment under <sysroot>/state/deploy/<hash>/
+// but ALSO creates an /ostree directory. The earlier "/ostree absent" heuristic
+// therefore mis-classified composefs-native installs as ostree, and WriteHostname
+// crashed with `finding deployment dir: ostree admin --print-current-dir: exit
+// status 1`. Detection must key off state/deploy, so /ostree being present must
+// NOT defeat it. Uses the real runner against a real tmpdir (no stub).
+func TestIsComposeFsNative_ComposeFsBackendAlsoCreatesOstree(t *testing.T) {
+	dir := t.TempDir()
+	// composefs-native layout as bootc actually produces it: BOTH present.
+	if err := os.MkdirAll(filepath.Join(dir, "ostree"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "state", "deploy", "abc123"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !post.IsComposeFsNativeExported(dir) {
+		t.Errorf("composefs-native (state/deploy present, /ostree also present) must be detected as composefs")
+	}
+}
+
+// TestIsComposeFsNative_TraditionalOstree verifies a traditional ostree layout
+// (/ostree/deploy, no /state/deploy) is NOT treated as composefs-native.
+func TestIsComposeFsNative_TraditionalOstree(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "ostree", "deploy", "default"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if post.IsComposeFsNativeExported(dir) {
+		t.Errorf("traditional ostree (no state/deploy) must NOT be detected as composefs-native")
 	}
 }
 

@@ -546,7 +546,7 @@ func main() {
 				fatal("setting up btrfs subvolumes: %v", err)
 			}
 		} else {
-			if err := disk.Mount(rootDev, targetMount, ""); err != nil {
+			if err := disk.MountType(rootDev, targetMount, r.Filesystem, ""); err != nil {
 				fatal("mounting root: %v", err)
 			}
 		}
@@ -653,6 +653,7 @@ func main() {
 		SelinuxDisabled:       r.SelinuxDisabled,
 		UnifiedStorage:        r.UnifiedStorage,
 		ComposeFsBackend:      composeFsBackend,
+		GenericImage:          r.GenericImage,
 		Bootloader:            r.Bootloader,
 		Target:                activeTargetMount,
 		ScratchDir:            scratchDir,

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/runner"
@@ -99,6 +100,12 @@ type Options struct {
 	// ComposeFsBackend passes --composefs-backend when true.
 	// Required for images using the composefs-native deployment backend (e.g. ghcr.io/bootcrew/*).
 	ComposeFsBackend bool
+	// GenericImage passes --generic-image, which skips bootc's bootupd presence
+	// check (and host-specific EFI NVRAM writes). Set for ostree images that
+	// ship no bootupd (non-Fedora/EL bootc images, e.g. Arch/Debian) — bootc
+	// otherwise fails "bootupd is required for ostree-based installs". Safe
+	// because wootc supplies its own signed ESP bootloader for Phase 2.
+	GenericImage bool
 	// Bootloader selects the bootloader passed to bootc via --bootloader.
 	// Empty or "grub2" uses the default (grub2). "systemd" passes --bootloader systemd.
 	Bootloader string
@@ -158,6 +165,9 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	// UnifiedStorage is intentionally not emitted — see Options.UnifiedStorage comment.
 	if opts.ComposeFsBackend {
 		args = append(args, "--composefs-backend")
+	}
+	if opts.GenericImage {
+		args = append(args, "--generic-image")
 	}
 	// --source-imgref is required for composefs (raw OCI blobs), for
 	// non-composefs OCI-redirect installs, and for direct mode where bootc
@@ -953,7 +963,28 @@ func bootcToDiskDirect(opts Options, diskDevice, filesystem string) (string, err
 // avoiding "file does not exist" blob errors when CONFIG_OVERLAY_FS_REDIRECT_DIR
 // is set on the host kernel.
 // layerCount is the expected number of layers from CheckImage, used for progress.
+//
+// Retries: a registry pull is the single most network-fragile step of an
+// install, and it runs on end-user machines with end-user connectivity
+// (and, in E2E, on hosts where sibling runs contend for bandwidth — run
+// 20260723T0953 died on one transient "exit status 125"). Podman resumes
+// already-copied layers on retry, so the cost of another attempt is small.
 func pullImage(image string, layerCount int, root, runRoot, storageDriver string) error {
+	var err error
+	for attempt := 1; attempt <= 3; attempt++ {
+		if err = pullImageOnce(image, layerCount, root, runRoot, storageDriver); err == nil {
+			return nil
+		}
+		if attempt < 3 {
+			wait := time.Duration(attempt*15) * time.Second
+			progress.Substep(fmt.Sprintf("Pull failed (attempt %d/3): %v — retrying in %s", attempt, err, wait))
+			time.Sleep(wait)
+		}
+	}
+	return err
+}
+
+func pullImageOnce(image string, layerCount int, root, runRoot, storageDriver string) error {
 	progress.Substep("Pulling container image")
 	if layerCount > 0 {
 		progress.Substep(fmt.Sprintf("Pulling image: %d layers to download", layerCount))
@@ -1103,7 +1134,13 @@ func runWithSubsteps(cmd *exec.Cmd) error {
 		return err
 	}
 
-	// Read lines in a goroutine so we don't block.
+	// Read lines in a goroutine so we don't block. Retain the last few lines
+	// so a failure carries its own reason: bootc/ostree stream their error
+	// (e.g. "No space left on device") to this pipe, but it scrolls past in
+	// the blob-copy noise and the wrapped error was a bare "exit status 1"
+	// with no clue (el10-kde bootc-install failure, GH matrix 20260724T1619).
+	const tailN = 15
+	tail := make([]string, 0, tailN)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -1115,6 +1152,14 @@ func runWithSubsteps(cmd *exec.Cmd) error {
 			line := scanner.Text()
 			// Always relay the raw line to the VTE terminal.
 			fmt.Fprintln(os.Stdout, line)
+			// Keep a rolling tail, skipping pure progress noise so the
+			// retained lines are the substantive ones.
+			if !strings.HasPrefix(line, "Copying blob") && strings.TrimSpace(line) != "" {
+				if len(tail) == tailN {
+					tail = tail[1:]
+				}
+				tail = append(tail, line)
+			}
 			// Detect bootc / ostree / podman progress keywords and emit substep.
 			if sub := ClassifyLine(line); sub != "" && sub != lastSubstep {
 				lastSubstep = sub
@@ -1126,6 +1171,9 @@ func runWithSubsteps(cmd *exec.Cmd) error {
 	err := cmd.Wait()
 	pw.Close()
 	<-done
+	if err != nil && len(tail) > 0 {
+		return fmt.Errorf("%w — last output:\n  %s", err, strings.Join(tail, "\n  "))
+	}
 	return err
 }
 

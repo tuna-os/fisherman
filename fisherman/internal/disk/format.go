@@ -3,6 +3,7 @@ package disk
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/tuna-os/fisherman/internal/progress"
@@ -31,15 +32,61 @@ func FormatRoot(dev, filesystem string) error {
 	}
 }
 
+// MountType mounts dev at target with an explicit filesystem type. Prefer it
+// over Mount whenever the type is known: the deployer initramfs lacks the
+// libblkid probe path mount uses to auto-detect, so a typeless mount of a
+// freshly-created xfs root was attempted as ext4 and failed "Can't find
+// ext4 filesystem" (GH bonito repro 20260724T04xx) — kernel guessing, not a
+// real error. Empty fstype falls back to Mount's auto-detect.
+func MountType(dev, target, fstype, opts string) error {
+	if fstype == "" || fstype == "zfs" {
+		return Mount(dev, target, opts)
+	}
+	args := []string{"-t", fstype}
+	if opts != "" {
+		args = append(args, "-o", opts)
+	}
+	args = append(args, dev, target)
+	if err := runner.Run("mount", args...); err != nil {
+		name, cargs := runner.HostArgs("mount", args)
+		out, _ := exec.Command(name, cargs...).CombinedOutput()
+		probe, _ := runner.Output("blkid", dev)
+		dmesg, _ := runner.Output("sh", "-c", "dmesg | tail -8")
+		return fmt.Errorf("%w: %s (blkid: %s) (dmesg: %s)", err,
+			strings.TrimSpace(string(out)), strings.TrimSpace(string(probe)),
+			strings.TrimSpace(string(dmesg)))
+	}
+	return nil
+}
+
 // Mount mounts dev at target. opts is an optional comma-separated option string
 // passed to -o; pass "" for no options.
+//
+// On failure the error carries mount's own stderr plus a blkid probe of the
+// device: in the deployer initramfs, runner.Run's streamed output never
+// reaches the serial console, so "exit status 32" arrived with zero
+// diagnosable context (GH run 20260723T2257 burned an hour of archaeology
+// on a message that mount itself had already explained).
 func Mount(dev, target, opts string) error {
 	args := []string{}
 	if opts != "" {
 		args = append(args, "-o", opts)
 	}
 	args = append(args, dev, target)
-	return runner.Run("mount", args...)
+	if err := runner.Run("mount", args...); err != nil {
+		name, cargs := runner.HostArgs("mount", args)
+		out, _ := exec.Command(name, cargs...).CombinedOutput()
+		probe, _ := runner.Output("blkid", dev)
+		// The kernel's ring buffer is the only place that says WHY a mount
+		// was rejected (unsupported feature bits, SB validation, missing
+		// module): mount's own stderr came back empty in the deployer
+		// initramfs (GH bonito repro 20260724T0335).
+		dmesg, _ := runner.Output("sh", "-c", "dmesg | tail -8")
+		return fmt.Errorf("%w: %s (blkid: %s) (dmesg: %s)", err,
+			strings.TrimSpace(string(out)), strings.TrimSpace(string(probe)),
+			strings.TrimSpace(string(dmesg)))
+	}
+	return nil
 }
 
 // MountTmpfs mounts a tmpfs of the given size (e.g. "4G") at path, creating

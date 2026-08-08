@@ -23,15 +23,15 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
           cache: true
           cache-dependency-path: fisherman/go.sum
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
-          version: v1.61
+          version: v2.12.2
           working-directory: fisherman
           # .golangci.yml at the repo root configures the linter set.
           args: --config=${{ github.workspace }}/.golangci.yml --timeout=5m
@@ -66,7 +66,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
           cache: true
@@ -80,7 +80,7 @@ jobs:
         working-directory: fisherman
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-coverage
           path: fisherman/coverage.out
@@ -111,7 +111,7 @@ jobs:
         with:
           tool-cache: true
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
           cache: true
@@ -123,7 +123,9 @@ jobs:
           sudo apt-get install -y just socat
           just ci-install-tools
       - name: Login to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${{ env.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
@@ -139,7 +141,7 @@ jobs:
 
       - name: Upload boot artifacts (always)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: boot-artifacts-${{ matrix.image.name }}
           path: |
@@ -199,7 +201,7 @@ jobs:
         uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
         with:
           tool-cache: true
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
           cache: true
@@ -210,7 +212,9 @@ jobs:
           sudo apt-get install -y just socat
           just ci-install-tools
       - name: Login to GHCR
-        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "${{ env.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
@@ -224,7 +228,7 @@ jobs:
           just bootcrew-ci-test "$IMAGE_JSON"
       - name: Upload boot artifacts (always)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: boot-artifacts-${{ matrix.image.name }}
           path: |
