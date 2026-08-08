@@ -3,7 +3,7 @@ module github.com/projectbluefin/fisherman/tui
 go 1.26.2
 
 require (
-	github.com/charmbracelet/bubbles v1.0.0
+	github.com/charmbracelet/bubbles/v2 v2.1.1
 	github.com/charmbracelet/bubbletea/v2 v2.0.8
 	github.com/charmbracelet/huh/v2 v2.0.3
 	github.com/charmbracelet/lipgloss/v2 v2.0.5
