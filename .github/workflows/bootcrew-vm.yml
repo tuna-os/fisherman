@@ -80,7 +80,7 @@ jobs:
         working-directory: fisherman
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: unit-test-coverage
           path: fisherman/coverage.out
@@ -139,7 +139,7 @@ jobs:
 
       - name: Upload boot artifacts (always)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: boot-artifacts-${{ matrix.image.name }}
           path: |
@@ -224,7 +224,7 @@ jobs:
           just bootcrew-ci-test "$IMAGE_JSON"
       - name: Upload boot artifacts (always)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: boot-artifacts-${{ matrix.image.name }}
           path: |
