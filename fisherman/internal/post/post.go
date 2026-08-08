@@ -55,7 +55,11 @@ func (c *Cleanup) Run() {
 	c.done = true
 	for i := len(c.mounts) - 1; i >= 0; i-- {
 		mp := c.mounts[i]
-		if err := runner.Run("umount", "-R", mp); err != nil {
+		// Use lazy recursive unmount so that busy mounts (e.g. held by
+		// container processes after bootc install) are detached immediately
+		// rather than blocking the LUKS close below.  Mirrors the umount -l
+		// fallback in internal/disk/partition.go:unmountAll().
+		if err := runner.Run("umount", "-Rl", mp); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: unmounting %s: %v\n", mp, err)
 		}
 	}
