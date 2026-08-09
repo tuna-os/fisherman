@@ -178,7 +178,7 @@ func TestExtractWallpapersFromPictures_Subdirs(t *testing.T) {
 	}
 }
 
-// --- md5hex / thumbnailers ---
+// --- md5hex / thumbnail generation ---
 
 func TestMd5Hex(t *testing.T) {
 	got := md5hex("file:///usr/share/backgrounds/a.jpg")
