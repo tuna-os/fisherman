@@ -290,6 +290,10 @@ func RescanPartitions(d string) error {
 
 // loopRescan detaches a loop device and re-attaches it with --partscan (-P)
 // so the kernel creates partition block devices (/dev/loopNpM).
+// After re-attach, partprobe forces a partition-table re-read to eliminate a
+// race where the kernel hasn't finished populating the partition nodes before
+// subsequent mkfs/mount calls access them (observed as "No such device or
+// address" on /dev/loopNpM in CI, especially under load with large images).
 func loopRescan(disk string) error {
 	spawnArgs := func(name string, args ...string) (string, []string) {
 		if inFlatpakEnv() {
@@ -314,6 +318,11 @@ func loopRescan(disk string) error {
 		return fmt.Errorf("reattach with partscan: %w", err)
 	}
 
+	// partprobe forces the kernel to re-read the partition table even
+	// when udev is still processing the loop-attach event. Without this,
+	// a busy CI runner can hit a window where losetup -P has returned but
+	// /dev/loopNpM nodes don't exist yet → mkfs fails with ENOENT.
+	_ = runner.Run("partprobe", disk)
 	_ = runner.Run("udevadm", "settle")
 	return nil
 }
