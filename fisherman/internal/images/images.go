@@ -9,14 +9,17 @@ import (
 	"strings"
 )
 
-// Node is a single entry in the image catalog tree. Leaf nodes have Imgref
-// set; group nodes have Children.
+// Node is a single entry in the image catalog tree. Leaf nodes have an
+// Imgref (or Registry+Tag, or NvidiaImgref) and no Children.
 //
 // Boolean fields use *bool so that JSON absence (nil) is distinguishable from
 // an explicit false — enabling correct inheritance when Resolve() is called.
 type Node struct {
 	Name              string  `json:"name"`
 	Imgref            string  `json:"imgref,omitempty"`
+	Registry          string  `json:"registry,omitempty"`
+	Tag               string  `json:"tag,omitempty"`
+	NvidiaImgref      string  `json:"nvidia_imgref,omitempty"`
 	Desc              string  `json:"desc,omitempty"`
 	Subtitle          string  `json:"subtitle,omitempty"`
 	Icon              string  `json:"icon,omitempty"`
@@ -29,8 +32,27 @@ type Node struct {
 	Children          []*Node `json:"children,omitempty"`
 }
 
-// IsLeaf returns true if this node is an installable image (has an imgref and no children).
-func (n *Node) IsLeaf() bool { return n.Imgref != "" && len(n.Children) == 0 }
+// EffectiveImgref returns the effective image reference for this node.
+// If Imgref is set directly it is returned; otherwise it is constructed
+// from Registry:Tag. Returns "" when no image reference is available.
+func (n *Node) EffectiveImgref() string {
+	if n.Imgref != "" {
+		return n.Imgref
+	}
+	if n.Registry != "" && n.Tag != "" {
+		return n.Registry + ":" + n.Tag
+	}
+	return ""
+}
+
+// IsLeaf returns true if this node is an installable image (has a resolvable
+// image reference and no children).
+func (n *Node) IsLeaf() bool {
+	if len(n.Children) > 0 {
+		return false
+	}
+	return n.Imgref != "" || (n.Registry != "" && n.Tag != "") || n.NvidiaImgref != ""
+}
 
 // ResolvedNode holds the effective configuration for a node after inheriting
 // fields from its ancestor group nodes (root → node). String fields inherit
@@ -51,11 +73,16 @@ type ResolvedNode struct {
 
 // Resolve computes the effective configuration by walking ancestors root-first
 // and applying the most-specific (deepest) value for each field.
-func (r *NodeResult) Resolve() ResolvedNode {
+// Registry and Tag are inherited from ancestors and combined into Imgref when
+// the node itself does not set Imgref directly.
+// Alias references (e.g. "@aurora_brew") in Flatpaks are resolved against the
+// catalog's aliases map when catalog is non-nil.
+func (r *NodeResult) Resolve(catalog *Catalog) ResolvedNode {
 	all := make([]*Node, 0, len(r.Path)+1)
 	all = append(all, r.Path...)
 	all = append(all, r.Node)
 
+	var registry, tag string
 	res := ResolvedNode{
 		Name:        r.Node.Name,
 		Imgref:      r.Node.Imgref,
@@ -64,6 +91,12 @@ func (r *NodeResult) Resolve() ResolvedNode {
 		SearchExtra: r.Node.SearchExtra,
 	}
 	for _, n := range all {
+		if n.Registry != "" {
+			registry = n.Registry
+		}
+		if n.Tag != "" {
+			tag = n.Tag
+		}
 		if n.Flatpaks != "" {
 			res.Flatpaks = n.Flatpaks
 		}
@@ -78,6 +111,17 @@ func (r *NodeResult) Resolve() ResolvedNode {
 		}
 		if n.NeedsUserCreation != nil {
 			res.NeedsUserCreation = *n.NeedsUserCreation
+		}
+	}
+	// Build imgref from registry:tag if no direct imgref set on this node.
+	if res.Imgref == "" && registry != "" && tag != "" {
+		res.Imgref = registry + ":" + tag
+	}
+	// Resolve alias references in flatpaks.
+	if catalog != nil && strings.HasPrefix(res.Flatpaks, "@") {
+		aliasKey := res.Flatpaks[1:]
+		if resolved, ok := catalog.Aliases[aliasKey]; ok {
+			res.Flatpaks = resolved
 		}
 	}
 	return res
@@ -123,17 +167,26 @@ func findIn(n *Node, path []*Node, q string, out *[]*NodeResult) {
 }
 
 func nodeMatches(n *Node, q string) bool {
-	return strings.Contains(strings.ToLower(n.Name), q) ||
-		strings.Contains(strings.ToLower(n.Imgref), q) ||
+	if strings.Contains(strings.ToLower(n.Name), q) ||
 		strings.Contains(strings.ToLower(n.SearchExtra), q) ||
-		strings.Contains(strings.ToLower(n.Desc), q)
+		strings.Contains(strings.ToLower(n.Desc), q) {
+		return true
+	}
+	// Search against all possible image references.
+	for _, ref := range []string{n.Imgref, n.Registry, n.Tag, n.NvidiaImgref, n.EffectiveImgref()} {
+		if ref != "" && strings.Contains(strings.ToLower(ref), q) {
+			return true
+		}
+	}
+	return false
 }
 
 // Catalog is the top-level structure of images.json.
 type Catalog struct {
-	DefaultImage     string   `json:"default_image"`
-	FallbackFlatpaks []string `json:"fallback_flatpaks"`
-	Images           []*Node  `json:"images"`
+	Aliases          map[string]string `json:"aliases"`
+	DefaultImage     string            `json:"default_image"`
+	FallbackFlatpaks []string          `json:"fallback_flatpaks"`
+	Images           []*Node           `json:"images"`
 }
 
 // Load reads the image catalog from the given path.
