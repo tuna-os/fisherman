@@ -54,6 +54,11 @@ var userDataCategories = []struct {
 	{"Wallpapers", "AppData/Roaming/Microsoft/Windows/Themes"},
 }
 
+// scanMountPoint is where Scan temporarily mounts NTFS partitions read-only
+// to enumerate user data. Package-level (like wallpaper.go's scratchBase /
+// ntfsMountPoint) so tests can point it at a temp dir.
+var scanMountPoint = "/run/fisherman-slurp-scan"
+
 // Scan mounts the NTFS partitions on a disk read-only and enumerates available
 // user data for migration. Returns a ScanResult suitable for JSON serialization
 // to the GUI. Does NOT extract any data — just measures what's available.
@@ -68,14 +73,13 @@ func Scan(disk string) (*ScanResult, error) {
 		return result, nil // no NTFS found — not an error
 	}
 
-	mountPoint := "/run/fisherman-slurp-scan"
-	if err := os.MkdirAll(mountPoint, 0o755); err != nil {
+	if err := os.MkdirAll(scanMountPoint, 0o755); err != nil {
 		return result, fmt.Errorf("creating scan mount point: %w", err)
 	}
-	defer os.Remove(mountPoint)
+	defer os.Remove(scanMountPoint)
 
 	for _, part := range ntfsPartitions {
-		partScan, err := scanPartition(part, mountPoint)
+		partScan, err := scanPartition(part, scanMountPoint)
 		if err != nil {
 			continue // skip unreadable partitions
 		}
