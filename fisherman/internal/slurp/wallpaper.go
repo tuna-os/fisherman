@@ -13,15 +13,14 @@ import (
 	"github.com/tuna-os/fisherman/internal/runner"
 )
 
-const (
-	// scratchBase is the RAM-backed directory where slurped data is held
-	// between extraction (pre-partition) and injection (post-install).
-	// /run is tmpfs — survives disk wipe, freed on reboot.
-	scratchBase = "/run/fisherman-slurp"
+// scratchBase is the RAM-backed directory where slurped data is held
+// between extraction (pre-partition) and injection (post-install).
+// /run is tmpfs — survives disk wipe, freed on reboot. Package-level (like
+// scan.go's scanMountPoint) so tests can point it at a temp dir.
+var scratchBase = "/run/fisherman-slurp"
 
-	// ntfsMountPoint is where we temporarily mount the Windows partition.
-	ntfsMountPoint = "/run/fisherman-slurp-mnt"
-)
+// ntfsMountPoint is where we temporarily mount the Windows partition.
+var ntfsMountPoint = "/run/fisherman-slurp-mnt"
 
 // WallpaperResult holds the outcome of a wallpaper extraction attempt.
 type WallpaperResult struct {

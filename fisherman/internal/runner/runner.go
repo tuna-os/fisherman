@@ -16,6 +16,12 @@ var inFlatpak = sync.OnceValue(func() bool {
 	return err == nil
 })
 
+// inFlatpakFn is the sandbox detector consulted by useHost, HostArgs,
+// HostArgsWithEnv, and InFlatpak. It is a variable — like RunFn/OutputFn
+// below — so tests can exercise the flatpak-spawn wrapping paths without
+// actually running inside a sandbox. Swap it and restore via t.Cleanup.
+var inFlatpakFn = inFlatpak
+
 // localCommands is the set of commands that are bundled inside the Flatpak
 // sandbox and should NOT be forwarded to the host via flatpak-spawn --host.
 // These are filesystem formatting and management tools (mkfs.*, btrfs, mkswap)
@@ -51,7 +57,7 @@ func useHost(name string) bool {
 // the Flatpak sandbox and run directly — they access block devices through the
 // sandbox's --device=all permission and do not need the host mount namespace.
 func HostArgs(name string, args []string) (string, []string) {
-	if inFlatpak() && useHost(name) {
+	if inFlatpakFn() && useHost(name) {
 		return "flatpak-spawn", append([]string{"--host", name}, args...)
 	}
 	return name, args
@@ -69,7 +75,7 @@ func HostArgs(name string, args []string) (string, []string) {
 // For non-Flatpak invocations the result is identical to HostArgs; callers
 // are expected to set cmd.Env on the returned command to propagate the vars.
 func HostArgsWithEnv(name string, args []string, envVars []string) (string, []string) {
-	if inFlatpak() && useHost(name) {
+	if inFlatpakFn() && useHost(name) {
 		fpArgs := make([]string, 0, 1+len(envVars)+1+len(args))
 		fpArgs = append(fpArgs, "--host")
 		for _, e := range envVars {
@@ -84,7 +90,7 @@ func HostArgsWithEnv(name string, args []string, envVars []string) (string, []st
 
 // InFlatpak reports whether the current process is running inside a Flatpak
 // sandbox. Exported for use in conditional code paths outside this package.
-func InFlatpak() bool { return inFlatpak() }
+func InFlatpak() bool { return inFlatpakFn() }
 
 // DefaultRun is the real subprocess implementation. It applies flatpak-spawn
 // wrapping when running inside a Flatpak sandbox, then streams the command's

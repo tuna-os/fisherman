@@ -712,10 +712,10 @@ func TestIsComposeFsNative_TraditionalOstree(t *testing.T) {
 }
 
 // TestDefaultDeploymentDir_PrintCurrentDirFails is the regression test for the
-// installer crash: `ostree admin --print-current-dir` always exits 1 against a
-// freshly-installed target (never booted, no booted-deployment state).
-// DefaultDeploymentDir must fall back to a filesystem glob and return the
-// single deployment directory created by `bootc install to-filesystem`.
+// installer crash: `ostree --sysroot=<path> admin --print-current-dir` always
+// exits 1 against a freshly-installed target (never booted, no booted-deployment
+// state). DefaultDeploymentDir must fall back to walking the filesystem and
+// return the single deployment directory created by `bootc install to-filesystem`.
 func TestDefaultDeploymentDir_PrintCurrentDirFails(t *testing.T) {
 	sysroot := t.TempDir()
 	deployDir := filepath.Join(sysroot, "ostree", "deploy", "default", "deploy", "abc123.0")
@@ -739,8 +739,8 @@ func TestDefaultDeploymentDir_PrintCurrentDirFails(t *testing.T) {
 }
 
 // TestDefaultDeploymentDir_PrintCurrentDirSucceeds verifies the happy path:
-// when `ostree admin --print-current-dir` returns a valid path, it is used
-// directly without touching the filesystem.
+// when `ostree --sysroot=<path> admin --print-current-dir` returns a valid path,
+// it is used directly without touching the filesystem.
 func TestDefaultDeploymentDir_PrintCurrentDirSucceeds(t *testing.T) {
 	sysroot := t.TempDir()
 	want := "/sysroot/ostree/deploy/default/deploy/deadbeef.0"
@@ -774,6 +774,60 @@ func TestDefaultDeploymentDir_NoDeploymentFound(t *testing.T) {
 	_, err := post.DefaultDeploymentDir(sysroot)
 	if err == nil {
 		t.Fatal("DefaultDeploymentDir: expected error for empty sysroot, got nil")
+	}
+}
+
+// TestDefaultDeploymentDir_NonDefaultStateroot verifies the fallback walk
+// finds a deployment even when the osname (stateroot) is not "default" — for
+// example on arch-bootc or debian-bootc where the osname may differ.
+func TestDefaultDeploymentDir_NonDefaultStateroot(t *testing.T) {
+	sysroot := t.TempDir()
+	deployDir := filepath.Join(sysroot, "ostree", "deploy", "arch", "deploy", "abc123.0")
+	if err := os.MkdirAll(deployDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := setupMockExec(t)
+	mock.responses["ostree"] = struct {
+		out []byte
+		err error
+	}{err: fmt.Errorf("exit status 1")}
+
+	got, err := post.DefaultDeploymentDir(sysroot)
+	if err != nil {
+		t.Fatalf("DefaultDeploymentDir: unexpected error: %v", err)
+	}
+	if got != deployDir {
+		t.Errorf("DefaultDeploymentDir = %q, want %q", got, deployDir)
+	}
+}
+
+// TestDefaultDeploymentDir_PrefersOstreeOutput verifies that when ostree
+// succeeds, its output is used even when deployment dirs also exist on disk.
+// This ensures the ostree path (which knows about rollback/current state)
+// always takes priority over the filesystem walk.
+func TestDefaultDeploymentDir_PrefersOstreeOutput(t *testing.T) {
+	sysroot := t.TempDir()
+	// Create a directory on disk that would be found by the walk fallback.
+	diskDeploy := filepath.Join(sysroot, "ostree", "deploy", "default", "deploy", "bbb222.0")
+	if err := os.MkdirAll(diskDeploy, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	mock := setupMockExec(t)
+	// ostree reports a different deployment (e.g. rollback).
+	ostreePath := "/ostree/deploy/default/deploy/aaa111.0"
+	mock.responses["ostree"] = struct {
+		out []byte
+		err error
+	}{out: []byte(ostreePath + "\n")}
+
+	got, err := post.DefaultDeploymentDir(sysroot)
+	if err != nil {
+		t.Fatalf("DefaultDeploymentDir: unexpected error: %v", err)
+	}
+	if got != ostreePath {
+		t.Errorf("DefaultDeploymentDir = %q, want ostree output %q (disk has %q)", got, ostreePath, diskDeploy)
 	}
 }
 

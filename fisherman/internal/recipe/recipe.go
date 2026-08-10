@@ -19,7 +19,8 @@ type Recipe struct {
 	// ComposeFsBackend passes --composefs-backend to bootc install to-filesystem.
 	// Required for composefs-native images (e.g. ghcr.io/bootcrew/*).
 	// Independent of UnifiedStorage — these are different bootc features.
-	// Works with any supported filesystem including xfs.
+	// Requires a filesystem that supports fs-verity (ext4, btrfs, f2fs).
+	// XFS does NOT support fs-verity and is rejected in Validate().
 	// Automatically forced to true when Filesystem is "zfs".
 	ComposeFsBackend bool `json:"composeFsBackend"`
 	// GenericImage passes --generic-image to bootc install to-filesystem, which
@@ -224,6 +225,9 @@ func (r *Recipe) Validate() error {
 		}
 		if r.BtrfsSubvolumes && r.Filesystem != "btrfs" {
 			return fmt.Errorf("btrfsSubvolumes requires filesystem=btrfs")
+		}
+		if r.ComposeFsBackend && r.Filesystem == "xfs" {
+			return fmt.Errorf("composefs-backend requires fs-verity, which XFS does not support; use ext4 or btrfs instead")
 		}
 		if r.Filesystem == "zfs" && r.Encryption.Type != "" && r.Encryption.Type != "none" {
 			return fmt.Errorf("ZFS filesystem does not support LUKS encryption in this version")
