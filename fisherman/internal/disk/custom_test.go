@@ -214,8 +214,6 @@ func TestApplyCustomLayout_Classification(t *testing.T) {
 	dir := t.TempDir()
 	targetBase := filepath.Join(dir, "target")
 
-	rec := setupRecorder(t)
-
 	specs := []disk.MountSpec{
 		{Partition: "/dev/sda1", Target: "/boot/efi", Fstype: "fat32"},
 		{Partition: "/dev/sda2", Target: "/", Fstype: "xfs"},

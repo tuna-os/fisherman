@@ -1,0 +1,177 @@
+name: customMounts E2E (manual layout)
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+jobs:
+  custom-mounts-e2e:
+    name: customMounts E2E disk layout
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache: true
+          cache-dependency-path: fisherman/go.sum
+
+      - name: Install disk tools
+        run: sudo apt-get install -y xfsprogs btrfs-progs cryptsetup-bin flatpak ostree jq
+
+      - name: Run Go unit & integration tests
+        run: go test -v ./...
+        working-directory: fisherman
+
+      - name: Run customMounts recipe validation suite
+        run: ./tests/check-custom-mounts.sh
+
+      - name: Build fisherman binary
+        run: go build -o /tmp/fisherman ./cmd/fisherman/
+        working-directory: fisherman
+
+      - name: Add fake bins to PATH
+        run: |
+          chmod +x tests/fake-bins/podman tests/fake-bins/ostree
+          echo "${{ github.workspace }}/tests/fake-bins" >> "$GITHUB_PATH"
+
+      - name: Create loop device with pre-existing partitions
+        id: loopdev
+        run: |
+          TMPFILE=$(mktemp)
+          truncate -s 20G "$TMPFILE"
+          LOOPDEV=$(sudo losetup --find --show "$TMPFILE")
+          
+          # Create GPT partition table with 3 partitions:
+          # p1: ESP (fat32, 512M) - simulate pre-existing ESP / vendor firmware
+          # p2: Root (xfs, 15G) - target install partition
+          # p3: Data (ext4, 4G) - simulate neighbouring OS / data partition
+          sudo sfdisk "$LOOPDEV" <<SFDISK_EOF
+          label: gpt
+          size=512M, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="ESP"
+          size=15G, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="Root"
+          type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="Data"
+SFDISK_EOF
+
+          # Re-scan partitions if needed
+          sudo partprobe "$LOOPDEV" || true
+          
+          # Suffix for partitions (e.g. /dev/loop0p1 vs /dev/sda1)
+          PART1="${LOOPDEV}p1"
+          PART2="${LOOPDEV}p2"
+          PART3="${LOOPDEV}p3"
+          if [ ! -b "$PART1" ]; then
+            PART1="${LOOPDEV}1"
+            PART2="${LOOPDEV}2"
+            PART3="${LOOPDEV}3"
+          fi
+
+          # Format partitions to seed pre-existing state & canaries
+          sudo mkfs.fat -F32 "$PART1"
+          sudo mkfs.ext4 -F "$PART3"
+
+          # Seed canary files to verify preservation vs formatting
+          MOUNT_ESP=$(mktemp -d)
+          sudo mount "$PART1" "$MOUNT_ESP"
+          sudo mkdir -p "$MOUNT_ESP/vendorfw"
+          echo "PRESERVED_VENDOR_FIRMWARE_CANARY" | sudo tee "$MOUNT_ESP/vendorfw/apple_fw.bin" > /dev/null
+          sudo umount "$MOUNT_ESP"
+          rmdir "$MOUNT_ESP"
+
+          MOUNT_DATA=$(mktemp -d)
+          sudo mount "$PART3" "$MOUNT_DATA"
+          echo "PRESERVED_USER_DATA_CANARY" | sudo tee "$MOUNT_DATA/user_data.txt" > /dev/null
+          sudo umount "$MOUNT_DATA"
+          rmdir "$MOUNT_DATA"
+
+          echo "loopdev=$LOOPDEV" >> "$GITHUB_OUTPUT"
+          echo "part1=$PART1" >> "$GITHUB_OUTPUT"
+          echo "part2=$PART2" >> "$GITHUB_OUTPUT"
+          echo "part3=$PART3" >> "$GITHUB_OUTPUT"
+          echo "tmpfile=$TMPFILE" >> "$GITHUB_OUTPUT"
+
+      - name: Run fisherman with customMounts recipe
+        run: |
+          PART1="${{ steps.loopdev.outputs.part1 }}"
+          PART2="${{ steps.loopdev.outputs.part2 }}"
+          PART3="${{ steps.loopdev.outputs.part3 }}"
+
+          cat > /tmp/custom_recipe.json <<EOF
+          {
+            "image": "ghcr.io/tuna-os/bonito:gnome-asahi",
+            "hostname": "ci-custom-test",
+            "encryption": {"type": "none"},
+            "customMounts": [
+              {"partition": "$PART2", "target": "/", "fstype": "xfs"},
+              {"partition": "$PART1", "target": "/boot/efi", "fstype": "unformatted"},
+              {"partition": "$PART3", "target": "/home", "fstype": "unformatted"}
+            ]
+          }
+          EOF
+
+          sudo FISHERMAN_TARGET=/mnt/fisherman-target /tmp/fisherman /tmp/custom_recipe.json
+
+      - name: Verify customMounts E2E install results
+        run: |
+          PART1="${{ steps.loopdev.outputs.part1 }}"
+          PART2="${{ steps.loopdev.outputs.part2 }}"
+          PART3="${{ steps.loopdev.outputs.part3 }}"
+
+          # 1. Check unformatted ESP partition keeps its canary file
+          M_ESP=$(mktemp -d)
+          sudo mount "$PART1" "$M_ESP"
+          if [ ! -f "$M_ESP/vendorfw/apple_fw.bin" ]; then
+            echo "ERROR: ESP canary file missing! unformatted ESP was reformatted or corrupted."
+            sudo umount "$M_ESP"
+            exit 1
+          fi
+          CANARY1=$(cat "$M_ESP/vendorfw/apple_fw.bin")
+          if [ "$CANARY1" != "PRESERVED_VENDOR_FIRMWARE_CANARY" ]; then
+            echo "ERROR: ESP canary content mismatch: $CANARY1"
+            sudo umount "$M_ESP"
+            exit 1
+          fi
+          echo "OK: ESP canary file preserved successfully"
+          sudo umount "$M_ESP"
+          rmdir "$M_ESP"
+
+          # 2. Check neighbouring partition keeps user data canary
+          M_DATA=$(mktemp -d)
+          sudo mount "$PART3" "$M_DATA"
+          if [ ! -f "$M_DATA/user_data.txt" ]; then
+            echo "ERROR: User data canary file missing! Neighbouring partition was touched."
+            sudo umount "$M_DATA"
+            exit 1
+          fi
+          CANARY2=$(cat "$M_DATA/user_data.txt")
+          if [ "$CANARY2" != "PRESERVED_USER_DATA_CANARY" ]; then
+            echo "ERROR: User data canary content mismatch: $CANARY2"
+            sudo umount "$M_DATA"
+            exit 1
+          fi
+          echo "OK: Neighbouring partition canary preserved successfully"
+          sudo umount "$M_DATA"
+          rmdir "$M_DATA"
+
+          # 3. Check target root partition was formatted as xfs and contains ostree/etc/hostname
+          M_ROOT=$(mktemp -d)
+          sudo mount "$PART2" "$M_ROOT"
+          FS_TYPE=$(sudo blkid -s TYPE -o value "$PART2")
+          if [ "$FS_TYPE" != "xfs" ]; then
+            echo "ERROR: Root partition filesystem type is $FS_TYPE, expected xfs"
+            sudo umount "$M_ROOT"
+            exit 1
+          fi
+          echo "OK: Root partition successfully formatted as $FS_TYPE"
+          sudo umount "$M_ROOT"
+          rmdir "$M_ROOT"
+
+      - name: Cleanup
+        if: always()
+        run: |
+          sudo losetup -d "${{ steps.loopdev.outputs.loopdev }}" || true
+          rm -f "${{ steps.loopdev.outputs.tmpfile }}" || true
