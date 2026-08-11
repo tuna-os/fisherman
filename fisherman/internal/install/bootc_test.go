@@ -535,12 +535,15 @@ func TestInjectStorageTmpDir(t *testing.T) {
 	})
 }
 
-// TestBootcInstall_NonComposefsContainerExportsOCI verifies that when
+// TestBootcInstall_NonComposefsContainerSkipsOCIExport verifies that when
 // SourceImgref is set and ComposeFsBackend is false (non-composefs container
-// mode with overlay redirect), the OCI export function IS called.  Regression
-// test for the bug where exportComposefsOCIIfNeeded returned nil for
-// non-composefs, causing "oci-cache/index.json: no such file or directory".
-func TestBootcInstall_NonComposefsContainerExportsOCI(t *testing.T) {
+// mode), the OCI export function is NOT called. The production code
+// deliberately bind-mounts containers-storage for non-composefs instead of
+// exporting to an OCI layout — only composefs needs raw OCI blobs (bootc.go
+// line ~680). The previous version of this test asserted the opposite
+// ("export IS called"), which was a stale contract after the storage-path
+// refactor.
+func TestBootcInstall_NonComposefsContainerSkipsOCIExport(t *testing.T) {
 	tmpDir := t.TempDir()
 	var scratchDir string
 	var err error
@@ -560,12 +563,7 @@ func TestBootcInstall_NonComposefsContainerExportsOCI(t *testing.T) {
 	var exportCalled bool
 	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
 		exportCalled = true
-		// Create a minimal OCI layout so the subsequent podman run can
-		// find oci:<path> (we just need the file to exist for the mock).
-		if err := os.MkdirAll(destDir, 0755); err != nil {
-			return err
-		}
-		return os.WriteFile(destDir+"/index.json", []byte("{}"), 0644)
+		return nil
 	}
 	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
 
@@ -589,8 +587,8 @@ func TestBootcInstall_NonComposefsContainerExportsOCI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BootcInstall() error = %v", err)
 	}
-	if !exportCalled {
-		t.Error("SkopeoExportOCIFn was not called for non-composefs container mode with SourceImgref set")
+	if exportCalled {
+		t.Error("SkopeoExportOCIFn was called for non-composefs container mode (should be skipped — only composefs exports OCI)")
 	}
 }
 

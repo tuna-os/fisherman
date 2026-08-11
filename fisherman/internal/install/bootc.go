@@ -52,17 +52,27 @@ int fsetxattr(int fd, const char *name, const void *value, size_t size, int flag
 `
 
 // BuildSelinuxBypassShim compiles selinuxBypassCSrc into a shared library
-// at /tmp/fisherman-selinux-bypass.so and returns its path.
+// and returns its path. The shim is built in a private temp directory —
+// /tmp is frequently mounted noexec on CI/dev boxes (GOTMPDIR documents
+// this), and ld.so cannot mmap a shared library from a noexec filesystem.
+// Uses $TMPDIR if set and exec-capable; otherwise falls back to /var/tmp.
 // Returns an error if cc is not available or compilation fails.
 func BuildSelinuxBypassShim() (string, error) {
-	const (
-		srcPath = "/tmp/fisherman-selinux-bypass.c"
-		soPath  = "/tmp/fisherman-selinux-bypass.so"
-	)
+	baseDir := os.TempDir()
+	if _, ok := os.LookupEnv("TMPDIR"); !ok {
+		if st, err := os.Stat("/var/tmp"); err == nil && st.IsDir() {
+			baseDir = "/var/tmp"
+		}
+	}
+	dir, err := os.MkdirTemp(baseDir, "fisherman-selinux-*")
+	if err != nil {
+		return "", fmt.Errorf("creating temp dir for shim: %w", err)
+	}
+	srcPath := filepath.Join(dir, "bypass.c")
+	soPath := filepath.Join(dir, "bypass.so")
 	if err := os.WriteFile(srcPath, []byte(selinuxBypassCSrc), 0644); err != nil {
 		return "", fmt.Errorf("writing shim source: %w", err)
 	}
-	defer os.Remove(srcPath)
 
 	out, err := exec.Command("cc", "-shared", "-fPIC", "-O2", "-nostartfiles", "-ldl",
 		"-o", soPath, srcPath).CombinedOutput()
