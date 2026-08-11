@@ -214,6 +214,8 @@ func TestApplyCustomLayout_Classification(t *testing.T) {
 	dir := t.TempDir()
 	targetBase := filepath.Join(dir, "target")
 
+	setupRecorder(t)
+
 	specs := []disk.MountSpec{
 		{Partition: "/dev/sda1", Target: "/boot/efi", Fstype: "fat32"},
 		{Partition: "/dev/sda2", Target: "/", Fstype: "xfs"},
@@ -275,14 +277,7 @@ func TestApplyCustomLayout_AllSupportedFstypes(t *testing.T) {
 			dir := t.TempDir()
 			targetBase := filepath.Join(dir, "target")
 
-			var gotName string
-			var gotArgs []string
-			runner.RunFn = func(_ io.Reader, name string, args ...string) error {
-				gotName = name
-				gotArgs = args
-				return nil
-			}
-			t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
+			rec := setupRecorder(t)
 
 			// formatPartition is unexported; call it via ApplyCustomLayout.
 			specs := []disk.MountSpec{
@@ -291,6 +286,20 @@ func TestApplyCustomLayout_AllSupportedFstypes(t *testing.T) {
 			_, _, _, err := disk.ApplyCustomLayout(specs, targetBase)
 			if err != nil {
 				t.Fatalf("ApplyCustomLayout(%q): %v", tt.fstype, err)
+			}
+
+			// ApplyCustomLayout also mounts, so pick the format call out of
+			// the recorded calls instead of looking at the last one.
+			var gotName string
+			var gotArgs []string
+			for _, c := range rec.calls {
+				if strings.HasPrefix(c.name, "mkfs.") {
+					gotName, gotArgs = c.name, c.args
+					break
+				}
+			}
+			if gotName == "" {
+				t.Fatalf("no mkfs call recorded for fstype %q (calls: %+v)", tt.fstype, rec.calls)
 			}
 
 			if gotName != tt.wantMkfs {
@@ -319,11 +328,10 @@ func TestApplyCustomLayout_FormatFailure(t *testing.T) {
 	dir := t.TempDir()
 	targetBase := filepath.Join(dir, "target")
 
-	calls := 0
-	runner.RunFn = func(_ io.Reader, name string, args ...string) error {
-		calls++
-		if calls == 2 {
-			// The second call is mkfs for /boot — fail it.
+	// Fail the mkfs for /boot (the second partition), leaving the root format
+	// and mount to succeed first.
+	runner.RunFn = func(_ io.Reader, name string, _ ...string) error {
+		if name == "mkfs.ext4" {
 			return io.ErrUnexpectedEOF
 		}
 		return nil
@@ -370,8 +378,6 @@ func TestApplyCustomLayout_NoRootError(t *testing.T) {
 		t.Errorf("expected no calls when root is missing, got %d: %+v", len(rec.calls), rec.calls)
 	}
 }
-
-
 
 // TestApplyCustomLayout_RealDirLayout verifies the exact directory structure
 // created under targetBase matches what the caller (main.go) expects: root at
@@ -473,5 +479,3 @@ func TestApplyCustomLayout_PreserveCanary(t *testing.T) {
 		t.Errorf("formatted = %v, want [/dev/sda2 /dev/sda4] (root first)", formattedDevices)
 	}
 }
-
-

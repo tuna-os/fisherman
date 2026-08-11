@@ -6,26 +6,34 @@ on:
   push:
     branches: [dev, main]
 
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-mounts-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   custom-mounts-e2e:
     name: customMounts E2E disk layout
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.22"
+          go-version-file: fisherman/go.mod
           cache: true
           cache-dependency-path: fisherman/go.sum
 
+      # skopeo/podman are hard requirements of fisherman's pre-flight check;
+      # the mkfs.* helpers are what the customMounts layout formats with.
       - name: Install disk tools
-        run: sudo apt-get install -y xfsprogs btrfs-progs cryptsetup-bin flatpak ostree jq
-
-      - name: Run Go unit & integration tests
-        run: go test -v ./...
-        working-directory: fisherman
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xfsprogs btrfs-progs cryptsetup-bin flatpak ostree jq podman skopeo
 
       - name: Run customMounts recipe validation suite
         run: ./tests/check-custom-mounts.sh
@@ -55,7 +63,7 @@ jobs:
           size=512M, type=C12A7328-F81F-11D2-BA4B-00A0C93EC93B, name="ESP"
           size=15G, type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="Root"
           type=0FC63DAF-8483-4772-8E79-3D69D8477DE4, name="Data"
-SFDISK_EOF
+          SFDISK_EOF
 
           # Re-scan partitions if needed
           sudo partprobe "$LOOPDEV" || true
@@ -104,6 +112,7 @@ SFDISK_EOF
           {
             "image": "ghcr.io/tuna-os/bonito:gnome-asahi",
             "hostname": "ci-custom-test",
+            "targetMount": "/mnt/fisherman-target",
             "encryption": {"type": "none"},
             "customMounts": [
               {"partition": "$PART2", "target": "/", "fstype": "xfs"},
@@ -113,7 +122,11 @@ SFDISK_EOF
           }
           EOF
 
-          sudo FISHERMAN_TARGET=/mnt/fisherman-target /tmp/fisherman /tmp/custom_recipe.json
+          # `sudo` resets PATH via secure_path, which would hide the fake
+          # podman/ostree staged on $GITHUB_PATH and make this pull the real
+          # multi-GB image. Pass the job PATH through explicitly.
+          sudo env "PATH=$PATH" FISHERMAN_TARGET=/mnt/fisherman-target \
+            /tmp/fisherman /tmp/custom_recipe.json
 
       - name: Verify customMounts E2E install results
         run: |
