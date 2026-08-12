@@ -88,7 +88,7 @@ images:
   - name: arch-bootc
     image: ghcr.io/bootcrew/arch-bootc:latest
     filesystem: xfs
-    composefs_backend: true
+    composefs_backend: false
     bootloader: systemd
     unified_storage: false
     selinux_disabled: false
@@ -116,7 +116,7 @@ images:
     image: ghcr.io/bootcrew/arch-bootc:latest
     ssh_image_name: arch-bootc
     filesystem: xfs
-    composefs_backend: true
+    composefs_backend: false
     bootloader: systemd
     unified_storage: false
     selinux_disabled: false
@@ -160,7 +160,7 @@ images:
   - name: debian-bootc
     image: ghcr.io/bootcrew/debian-bootc:latest
     filesystem: xfs
-    composefs_backend: true
+    composefs_backend: false
     bootloader: systemd
     unified_storage: false
     selinux_disabled: false
