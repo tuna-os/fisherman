@@ -2,6 +2,7 @@ package install
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -64,10 +65,13 @@ func BuildSelinuxBypassShim() (string, error) {
 	}
 	defer os.Remove(srcPath)
 
-	out, err := exec.Command("cc", "-shared", "-fPIC", "-O2", "-nostartfiles", "-ldl",
-		"-o", soPath, srcPath).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("compiling SELinux bypass shim: %w\n%s", err, out)
+	cmd := Exec.Command("cc", "-shared", "-fPIC", "-O2", "-nostartfiles", "-ldl",
+		"-o", soPath, srcPath)
+	var out bytes.Buffer
+	cmd.SetStdout(&out)
+	cmd.SetStderr(&out)
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("compiling SELinux bypass shim: %w\n%s", err, out.Bytes())
 	}
 	if err := os.Chmod(soPath, 0755); err != nil {
 		return "", fmt.Errorf("chmod shim: %w", err)
@@ -899,8 +903,7 @@ func containersStorageSource(image string) string {
 
 // loopBackingFile returns the backing file path for a loop device.
 func loopBackingFile(loopDev string) (string, error) {
-	name, args := runner.HostArgs("losetup", []string{"--noheadings", "-O", "BACK-FILE", loopDev})
-	out, err := exec.Command(name, args...).Output()
+	out, err := Exec.Command("losetup", "--noheadings", "-O", "BACK-FILE", loopDev).Output()
 	if err != nil {
 		return "", err
 	}
@@ -909,22 +912,19 @@ func loopBackingFile(loopDev string) (string, error) {
 
 // loopDetach detaches a loop device.
 func loopDetach(loopDev string) error {
-	name, args := runner.HostArgs("losetup", []string{"-d", loopDev})
-	return exec.Command(name, args...).Run()
+	return Exec.Command("losetup", "-d", loopDev).Run()
 }
 
 // loopReattach attaches backingFile to loopDev with --partscan so partition
 // nodes are visible on the host.
 func loopReattach(loopDev, backingFile string) error {
-	name, args := runner.HostArgs("losetup", []string{"-P", loopDev, backingFile})
-	return exec.Command(name, args...).Run()
+	return Exec.Command("losetup", "-P", loopDev, backingFile).Run()
 }
 
 // loopAttachFile attaches file to a free loop device with partscan and returns
 // the assigned device path (e.g. /dev/loop2).
 func loopAttachFile(file string) (string, error) {
-	name, args := runner.HostArgs("losetup", []string{"--find", "--partscan", "--show", file})
-	out, err := exec.Command(name, args...).Output()
+	out, err := Exec.Command("losetup", "--find", "--partscan", "--show", file).Output()
 	if err != nil {
 		return "", err
 	}
@@ -1060,9 +1060,9 @@ type ImageCheck struct {
 
 // DefaultSkopeoInspect runs `skopeo inspect <args>` and returns stdout.
 func DefaultSkopeoInspect(args ...string) ([]byte, error) {
-	name, hargs := runner.HostArgs("skopeo", append([]string{"inspect"}, args...))
-	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(hargs, " "))
-	return exec.Command(name, hargs...).Output()
+	fullArgs := append([]string{"inspect"}, args...)
+	fmt.Fprintf(os.Stdout, "+ skopeo %s\n", strings.Join(fullArgs, " "))
+	return Exec.Command("skopeo", fullArgs...).Output()
 }
 
 // SkopeoInspectFn is the function used by CheckImage to call skopeo inspect.
