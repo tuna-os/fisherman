@@ -12,7 +12,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
-	"github.com/projectbluefin/fisherman/tui/internal/config"
+	"github.com/tuna-os/fisherman/tui/internal/config"
 )
 
 const recipePath = "/tmp/bootc-installer-recipe.json"

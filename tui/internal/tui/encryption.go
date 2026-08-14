@@ -6,7 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
-	"github.com/projectbluefin/fisherman/tui/internal/config"
+	"github.com/tuna-os/fisherman/tui/internal/config"
 )
 
 type encryptionModel struct {
