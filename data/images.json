@@ -1384,7 +1384,8 @@
           "name": "26.04 Desktop",
           "desc": "Ubuntu 26.04 LTS with GNOME — ZFS root filesystem support",
           "search_extra": "26.04 lts zfs",
-          "registry": "ghcr.io/canonical/ubuntu:26.04",
+          "registry": "ghcr.io/canonical/ubuntu",
+          "tag": "26.04",
           "filesystems": [
             "btrfs",
             "xfs",
