@@ -2,7 +2,7 @@ package tui
 
 import (
 	tea "github.com/charmbracelet/bubbletea"
-	"github.com/projectbluefin/fisherman/tui/internal/config"
+	"github.com/tuna-os/fisherman/tui/internal/config"
 )
 
 type step int
