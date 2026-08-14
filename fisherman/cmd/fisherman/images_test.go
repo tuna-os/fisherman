@@ -74,7 +74,7 @@ func TestRunImages_PlainTree(t *testing.T) {
 		t.Fatalf("unexpected stderr: %q", errOut)
 	}
 	for _, want := range []string{
-		"Bluefin",                                    // family line, no dash
+		"Bluefin", // family line, no dash
 		"- Stable  ghcr.io/tuna-os/bluefin:stable *", // default marker
 		"- Dev  ghcr.io:bluefin:dev",                 // registry:tag composition, no marker
 		"- Yellowfin  ghcr.io/tuna-os/yellowfin:stable",
