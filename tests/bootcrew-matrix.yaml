@@ -177,7 +177,7 @@ images:
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
-    vm_boot: true  # composefs backend verification (using pre-built SSH image)
+    vm_boot: false  # SSH-enabled image boots but never answers SSH in the VM (login prompt only); keep nightly-only until ssh.service is fixed
     build_ssh_image: true
 
   - name: frostyard-snow
