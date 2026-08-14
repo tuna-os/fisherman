@@ -7,6 +7,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -46,7 +47,10 @@ func readAll(r *os.File) ([]byte, error) {
 		n, err := r.Read(buf)
 		b = append(b, buf[:n]...)
 		if err != nil {
-			break
+			if err == io.EOF {
+				break
+			}
+			return b, err
 		}
 	}
 	return b, nil
