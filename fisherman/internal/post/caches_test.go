@@ -14,10 +14,9 @@ import (
 
 // cachesMockExecutor records commands and returns configurable results.
 type cachesMockExecutor struct {
-	calls    []string // "name arg1 arg2"
-	runErr   error
-	output   []byte
-	outputOK map[string]bool // command keys that should return output
+	calls  []string // "name arg1 arg2"
+	runErr error
+	output []byte
 }
 
 func (m *cachesMockExecutor) Command(name string, args ...string) runner.Command {
