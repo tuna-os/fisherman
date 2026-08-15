@@ -14,6 +14,17 @@
         "digest"
       ],
       "automerge": true
+    },
+    {
+      "description": "tui/ is pinned to charmbracelet v1 (source imports v1 APIs). Upstream v2 moved to charm.land vanity paths and requires a runtime-tested migration (fisherman#128); renovate v2 bumps break the module because nothing builds it in CI.",
+      "matchFileNames": ["tui/go.mod"],
+      "matchPackageNames": [
+        "github.com/charmbracelet/bubbles",
+        "github.com/charmbracelet/bubbletea",
+        "github.com/charmbracelet/huh",
+        "github.com/charmbracelet/lipgloss"
+      ],
+      "enabled": false
     }
   ]
 }
