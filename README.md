@@ -1,15 +1,12 @@
-# ⚠️ This repository has moved
-
-**fisherman now lives at [projectbluefin/fisherman](https://github.com/projectbluefin/fisherman)**
-
-Please update your remotes:
-
-```bash
-git remote set-url origin https://github.com/projectbluefin/fisherman.git
-```
-
----
 # fisherman
+
+> ℹ️ **Note on the project home.** This repository is the **origin** and is
+> actively maintained (the `dev` branch carries TunaOS fixes, e.g.
+> customMounts validation and TPM2 first-boot enrolment).
+> [`projectbluefin/fisherman`](https://github.com/projectbluefin/fisherman) is
+> a fork of this repo that is kept in sync (see
+> [tuna-os/fisherman#59](https://github.com/tuna-os/fisherman/pull/59)); pick
+> whichever home matches your distro's tooling.
 
 A universal bootc installer backend, designed to be driven by a frontend such as [tuna-installer](https://github.com/tuna-os/tuna-installer).
 
