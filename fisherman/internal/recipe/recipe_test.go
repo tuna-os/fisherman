@@ -82,8 +82,13 @@ func TestValidate(t *testing.T) {
 			r:    recipe.Recipe{Disk: diskPath, Filesystem: "btrfs", Hostname: "h", ComposeFsBackend: true},
 		},
 		{
-			name: "valid composefs_backend with xfs",
-			r:    recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ComposeFsBackend: true},
+			name: "valid composefs_backend with ext4",
+			r:    recipe.Recipe{Disk: diskPath, Filesystem: "ext4", Hostname: "h", ComposeFsBackend: true},
+		},
+		{
+			name:    "composefs_backend rejected with xfs (no fs-verity)",
+			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ComposeFsBackend: true},
+			wantErr: "composefs-backend requires fs-verity",
 		},
 		{
 			name: "valid bootloader empty (default grub2)",

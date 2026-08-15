@@ -85,9 +85,13 @@ images:
     flatpaks: []
     vm_boot: false
 
+  # ghcr.io/bootcrew/arch-bootc is a composefs-native image and ships no
+  # `ostree` binary, so it can only be installed via --composefs-backend.
+  # composefs requires fs-verity, which XFS does not support, so use ext4
+  # (the same backend/layout as the passing dakota canary).
   - name: arch-bootc
     image: ghcr.io/bootcrew/arch-bootc:latest
-    filesystem: xfs
+    filesystem: ext4
     composefs_backend: true
     bootloader: systemd
     unified_storage: false
@@ -112,10 +116,13 @@ images:
     nightly: false
     vm_boot: true
 
-  - name: arch-bootc-luks-xfs
+  # Same composefs-native arch-bootc image as above, now under LUKS. XFS
+  # cannot be used with composefs-backend (no fs-verity), so filesystem is
+  # ext4 — the same LUKS+composefs+ext4 layout as the passing dakota-luks.
+  - name: arch-bootc-luks
     image: ghcr.io/bootcrew/arch-bootc:latest
     ssh_image_name: arch-bootc
-    filesystem: xfs
+    filesystem: ext4
     composefs_backend: true
     bootloader: systemd
     unified_storage: false
@@ -157,15 +164,20 @@ images:
   #   unified_storage: false
   #   selinux_disabled: false
 
+  # ghcr.io/bootcrew/debian-bootc is a composefs-native image and ships no
+  # `ostree` binary: with composefs_backend=false the ostree install path
+  # fails with "Creating ostree deployment: No such file or directory".
+  # composefs requires fs-verity, which XFS does not support, so use ext4
+  # (the same backend/layout as the passing dakota canary).
   - name: debian-bootc
     image: ghcr.io/bootcrew/debian-bootc:latest
-    filesystem: xfs
+    filesystem: ext4
     composefs_backend: true
     bootloader: systemd
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
-    vm_boot: true  # composefs backend verification (using pre-built SSH image)
+    vm_boot: false  # SSH-enabled image boots but never answers SSH in the VM (login prompt only); keep nightly-only until ssh.service is fixed
     build_ssh_image: true
 
   - name: frostyard-snow

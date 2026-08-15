@@ -62,7 +62,7 @@ func runImages(args []string) {
 			if i > 0 {
 				fmt.Println()
 			}
-			printNodeDetail(r, catalog.DefaultImage, *plain)
+			printNodeDetail(r, catalog, catalog.DefaultImage, *plain)
 		}
 		return
 	}
@@ -81,9 +81,9 @@ func runImages(args []string) {
 }
 
 // printNodeDetail shows a rich detail view for a single matched node.
-func printNodeDetail(r *images.NodeResult, defaultImg string, plain bool) {
+func printNodeDetail(r *images.NodeResult, catalog *images.Catalog, defaultImg string, plain bool) {
 	n := r.Node
-	resolved := r.Resolve()
+	resolved := r.Resolve(catalog)
 
 	if plain {
 		if r.Breadcrumb() != n.Name {
@@ -191,10 +191,10 @@ func printNode(n *images.Node, prefix string, last bool, defaultImg string, plai
 	if plain {
 		if n.IsLeaf() {
 			marker := ""
-			if n.Imgref == defaultImg {
+			if n.EffectiveImgref() == defaultImg {
 				marker = " *"
 			}
-			fmt.Printf("%s- %s  %s%s\n", prefix, n.Name, n.Imgref, marker)
+			fmt.Printf("%s- %s  %s%s\n", prefix, n.Name, n.EffectiveImgref(), marker)
 		} else {
 			fmt.Printf("%s%s\n", prefix, n.Name)
 		}
@@ -212,8 +212,9 @@ func printNode(n *images.Node, prefix string, last bool, defaultImg string, plai
 	}
 
 	if n.IsLeaf() {
+		imgref := n.EffectiveImgref()
 		marker := ""
-		if n.Imgref == defaultImg {
+		if imgref == defaultImg {
 			marker = yellow + " ★ default" + reset
 		}
 		namePart := n.Name
@@ -225,7 +226,7 @@ func printNode(n *images.Node, prefix string, last bool, defaultImg string, plai
 			prefix, connector,
 			cyan, namePart, reset,
 			strings.Repeat(" ", padding),
-			dim+n.Imgref+reset,
+			dim+imgref+reset,
 			marker,
 		)
 	} else {
