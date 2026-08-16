@@ -403,12 +403,10 @@ func TestShippedCatalog_EveryLeafResolvesAnImgref(t *testing.T) {
 		}
 	}
 	// knownUnresolvable: leaves that resolve to an empty imgref in the shipped
-	// catalog. '26.04 Desktop' embeds its tag in the registry field
-	// ("ghcr.io/canonical/ubuntu:26.04") instead of using the separate tag
-	// field, so both Resolve() and EffectiveImgref() yield "" — tuna-os/
-	// fisherman#99 (data bug filed by quality). Remove the entry here when
-	// the catalog data is fixed.
-	knownUnresolvable := map[string]bool{"26.04 Desktop": true}
+	// catalog. #111 split the Ubuntu 26.04 registry+tag, so the catalog should
+	// have no unresolvable leaves. Keep this empty map as a canary: any future
+	// leaf that embeds its tag in the registry field will fail loudly.
+	knownUnresolvable := map[string]bool{}
 	var bad []string
 	walk(c.Images, nil, &bad)
 	var unexpected []string
