@@ -37,4 +37,4 @@ fisherman install --recipe /tmp/bootc-installer-recipe.json
 
 ---
 
-Part of the [TunaOS](https://tunaos.org) ecosystem. [Docs](https://tunaos.org) · [Contributing](CONTRIBUTING.md)
+Part of the [TunaOS](https://tunaos.org) ecosystem. [Docs](https://tunaos.org) · [Contributing](../CONTRIBUTING.md)
