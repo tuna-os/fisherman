@@ -134,13 +134,16 @@ jobs:
           fi
 
           if [ "$COMPOSEFS" = "true" ]; then
-            if [ ! -f "$ROOT_DIR/etc/hostname" ]; then
-              echo "FAIL: $ROOT_DIR/etc/hostname not found (composefs-native)"
+            # composefs-native installs do not expose /etc/hostname at the raw
+            # partition mount — the rootfs lives inside the composefs image and
+            # the on-disk layout is composefs/ + state/ + var/ (no ostree/).
+            if [ ! -d "$ROOT_DIR/composefs" ]; then
+              echo "FAIL: composefs layout missing at $ROOT_DIR/composefs"
               sudo umount "$ROOT_DIR" || true
               sudo umount "$VERIFY_DIR" || true
               exit 1
             fi
-            echo "OK: composefs-native hostname at $ROOT_DIR/etc/hostname"
+            echo "OK: composefs-native layout at $ROOT_DIR/composefs"
           fi
 
           IMAGE_NAME="${{ matrix.image.name }}"
@@ -155,16 +158,16 @@ jobs:
                exit 1
             fi
             echo "OK: Flatpak found at $FLATPAK_APP_DIR"
-            FLATPAK_INSTALLATION=${FLATPAK_APP_DIR%/app/org.mozilla.firefox}
-            LIST_OUT=$(sudo flatpak list --installation="$FLATPAK_INSTALLATION" --columns=ref || true)
-            if ! echo "$LIST_OUT" | grep -q "org.mozilla.firefox"; then
-              echo "FAIL: flatpak list --installation did not show firefox"
-              echo "List output: $LIST_OUT"
+            # flatpak list --installation cannot resolve a mount-prefixed
+            # installation dir (errors with "Could not find installation"),
+            # so verify the copied deployment metadata directly instead.
+            if [ ! -e "$FLATPAK_APP_DIR/active" ] && [ ! -d "$FLATPAK_APP_DIR/current" ]; then
+              echo "FAIL: Firefox flatpak app dir present but no active deployment"
               sudo umount "$ROOT_DIR" || true
               sudo umount "$VERIFY_DIR" || true
               exit 1
             fi
-            echo "OK: Flatpaks verified in flatpak list"
+            echo "OK: Flatpaks verified in image (deployment present)"
           fi
 
           sudo umount "$ROOT_DIR"
