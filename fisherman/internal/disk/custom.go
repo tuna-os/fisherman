@@ -30,6 +30,17 @@ func ApplyCustomLayout(specs []MountSpec, targetBase string) (targetMount, efiPa
 		return "", "", nil, fmt.Errorf("no mount specs provided")
 	}
 
+	hasRoot := false
+	for _, s := range specs {
+		if s.Target == "/" {
+			hasRoot = true
+			break
+		}
+	}
+	if !hasRoot {
+		return "", "", nil, fmt.Errorf("no root partition (/) found in mount specs")
+	}
+
 	// Sort mounts by target depth so "/" comes first, then "/boot", then "/boot/efi" etc.
 	sorted := make([]MountSpec, len(specs))
 	copy(sorted, specs)
@@ -89,9 +100,6 @@ func ApplyCustomLayout(specs []MountSpec, targetBase string) (targetMount, efiPa
 		}
 	}
 
-	if targetMount == "" {
-		return "", "", mounted, fmt.Errorf("no root partition (/) found in mount specs")
-	}
 	return targetMount, efiPart, mounted, nil
 }
 
