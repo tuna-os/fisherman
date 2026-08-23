@@ -385,11 +385,11 @@ func TestBuildSelinuxBypassShim_Compiles(t *testing.T) {
 	if _, err := exec.LookPath("cc"); err != nil {
 		t.Skip("cc not found; skipping shim compilation test")
 	}
-	soPath, err := install.BuildSelinuxBypassShim()
+	soPath, cleanup, err := install.BuildSelinuxBypassShim()
 	if err != nil {
 		t.Fatalf("BuildSelinuxBypassShim() error = %v", err)
 	}
-	defer os.Remove(soPath)
+	defer cleanup()
 
 	info, err := os.Stat(soPath)
 	if err != nil {
@@ -407,11 +407,11 @@ func TestBuildSelinuxBypassShim_InterceptsSecuritySelinux(t *testing.T) {
 	if _, err := exec.LookPath("cc"); err != nil {
 		t.Skip("cc not found; skipping shim test")
 	}
-	soPath, err := install.BuildSelinuxBypassShim()
+	soPath, cleanup, err := install.BuildSelinuxBypassShim()
 	if err != nil {
 		t.Fatalf("BuildSelinuxBypassShim() error = %v", err)
 	}
-	defer os.Remove(soPath)
+	defer cleanup()
 
 	// Run a small helper binary under LD_PRELOAD that calls lsetxattr and reports
 	// whether the call succeeded (exit 0) or failed (exit 1).

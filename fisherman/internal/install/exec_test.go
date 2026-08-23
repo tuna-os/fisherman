@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -78,15 +80,16 @@ func assertArgs(t *testing.T, got, want []string) {
 }
 
 // TestBuildSelinuxBypassShim_InvokesExpectedCCArgs verifies the exact cc
-// invocation (flags documented in the function's doc comment) and that the
-// generated C source is always cleaned up. The mocked cc never actually
-// writes the .so file, so chmod fails afterward — a real, if synthetic,
-// error path (cc reporting success without producing its declared output).
+// invocation (flags documented in the function's doc comment), that the
+// source and object live in a private 0700 directory rather than at fixed
+// /tmp paths, and that the generated C source is always cleaned up. The
+// mocked cc never actually writes the .so file, so chmod fails afterward — a
+// real, if synthetic, error path (cc reporting success without producing its
+// declared output).
 func TestBuildSelinuxBypassShim_InvokesExpectedCCArgs(t *testing.T) {
-	_ = os.Remove("/tmp/fisherman-selinux-bypass.so")
 	mock := setupInstallMockExec(t)
 
-	_, err := BuildSelinuxBypassShim()
+	_, _, err := BuildSelinuxBypassShim()
 	if err == nil || !strings.Contains(err.Error(), "chmod shim") {
 		t.Fatalf("BuildSelinuxBypassShim() error = %v, want a chmod error (mock never creates the .so)", err)
 	}
@@ -94,13 +97,62 @@ func TestBuildSelinuxBypassShim_InvokesExpectedCCArgs(t *testing.T) {
 	if len(mock.calls) != 1 || mock.calls[0].name != "cc" {
 		t.Fatalf("expected exactly one cc invocation, got calls=%v", mock.calls)
 	}
-	assertArgs(t, mock.calls[0].args, []string{
-		"-shared", "-fPIC", "-O2", "-nostartfiles", "-ldl",
-		"-o", "/tmp/fisherman-selinux-bypass.so", "/tmp/fisherman-selinux-bypass.c",
-	})
+	args := mock.calls[0].args
+	if len(args) != 8 {
+		t.Fatalf("cc args = %v, want 8 arguments", args)
+	}
+	assertArgs(t, args[:6], []string{"-shared", "-fPIC", "-O2", "-nostartfiles", "-ldl", "-o"})
+	soPath, srcPath := args[6], args[7]
 
-	if _, statErr := os.Stat("/tmp/fisherman-selinux-bypass.c"); !os.IsNotExist(statErr) {
-		t.Error("shim source file should be removed after BuildSelinuxBypassShim returns")
+	// The paths must be generated, not the old constants. With a fixed name
+	// under world-writable /tmp, an unprivileged user could pre-plant the
+	// object file that root goes on to LD_PRELOAD, or point the source path
+	// at a symlink that root then truncates.
+	for _, p := range []string{soPath, srcPath} {
+		if p == "/tmp/fisherman-selinux-bypass.so" || p == "/tmp/fisherman-selinux-bypass.c" {
+			t.Errorf("shim path %s is a fixed, predictable path", p)
+		}
+	}
+	dir := filepath.Dir(soPath)
+	if filepath.Dir(srcPath) != dir {
+		t.Errorf("source %s and object %s are not in the same directory", srcPath, soPath)
+	}
+	if !strings.Contains(filepath.Base(dir), "fisherman-selinux-bypass-") {
+		t.Errorf("shim directory %s does not look like a generated temp dir", dir)
+	}
+
+	// The whole directory goes away on the error path, taking the source
+	// with it — nothing is left behind for a later run to pick up.
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("shim directory %s should be removed when BuildSelinuxBypassShim fails", dir)
+	}
+}
+
+// TestBuildSelinuxBypassShim_PrivateDirectory verifies the shim directory is
+// created 0700, so no other user can read the object file root preloads or
+// replace it between compilation and the bind-mount into the bootc container.
+func TestBuildSelinuxBypassShim_PrivateDirectory(t *testing.T) {
+	if _, err := exec.LookPath("cc"); err != nil {
+		t.Skip("cc not found; skipping shim compilation test")
+	}
+	soPath, cleanup, err := BuildSelinuxBypassShim()
+	if err != nil {
+		t.Fatalf("BuildSelinuxBypassShim() error = %v", err)
+	}
+	defer cleanup()
+
+	info, err := os.Stat(filepath.Dir(soPath))
+	if err != nil {
+		t.Fatalf("stat shim directory: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Errorf("shim directory mode = %v, want 0700", perm)
+	}
+
+	dir := filepath.Dir(soPath)
+	cleanup()
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("cleanup() left %s behind", dir)
 	}
 }
 
@@ -110,17 +162,22 @@ func TestBuildSelinuxBypassShim_InvokesExpectedCCArgs(t *testing.T) {
 func TestBuildSelinuxBypassShim_CCFailureIncludesCompilerOutput(t *testing.T) {
 	mock := setupInstallMockExec(t)
 	mock.errFor["cc"] = fmt.Errorf("exit status 1")
-	mock.outFor["cc"] = []byte("fisherman-selinux-bypass.c:5:1: error: unknown type name 'foo'\n")
+	mock.outFor["cc"] = []byte("bypass.c:5:1: error: unknown type name 'foo'\n")
 
-	_, err := BuildSelinuxBypassShim()
+	_, _, err := BuildSelinuxBypassShim()
 	if err == nil {
 		t.Fatal("expected error when cc fails")
 	}
 	if !strings.Contains(err.Error(), "unknown type name") {
 		t.Errorf("expected compiler diagnostic in error, got: %v", err)
 	}
-	if _, statErr := os.Stat("/tmp/fisherman-selinux-bypass.c"); !os.IsNotExist(statErr) {
-		t.Error("shim source file should be removed even when cc fails")
+	if len(mock.calls) != 1 {
+		t.Fatalf("expected exactly one cc invocation, got calls=%v", mock.calls)
+	}
+	// The private shim directory — source and all — is removed on failure.
+	dir := filepath.Dir(mock.calls[0].args[6])
+	if _, statErr := os.Stat(dir); !os.IsNotExist(statErr) {
+		t.Errorf("shim directory %s should be removed even when cc fails", dir)
 	}
 }
 

@@ -52,16 +52,32 @@ int fsetxattr(int fd, const char *name, const void *value, size_t size, int flag
 }
 `
 
-// BuildSelinuxBypassShim compiles selinuxBypassCSrc into a shared library
-// at /tmp/fisherman-selinux-bypass.so and returns its path.
+// BuildSelinuxBypassShim compiles selinuxBypassCSrc into a shared library and
+// returns its path together with a cleanup func that removes it.
 // Returns an error if cc is not available or compilation fails.
-func BuildSelinuxBypassShim() (string, error) {
-	const (
-		srcPath = "/tmp/fisherman-selinux-bypass.c"
-		soPath  = "/tmp/fisherman-selinux-bypass.so"
-	)
+//
+// The shim is built inside a fresh private directory rather than at fixed
+// /tmp paths, because both the source and the object file are handled by a
+// process running as root and the object file is then LD_PRELOADed into the
+// privileged bootc container. With constant, world-writable paths an
+// unprivileged local user could pre-create /tmp/fisherman-selinux-bypass.so
+// and have root preload it, or symlink /tmp/fisherman-selinux-bypass.c at an
+// arbitrary file and have root truncate it. os.MkdirTemp creates the
+// directory 0700 with O_EXCL semantics, so neither file can be pre-planted or
+// swapped by anyone but root.
+func BuildSelinuxBypassShim() (string, func(), error) {
+	dir, err := os.MkdirTemp("", "fisherman-selinux-bypass-")
+	if err != nil {
+		return "", nil, fmt.Errorf("creating shim directory: %w", err)
+	}
+	cleanup := func() { os.RemoveAll(dir) }
+
+	srcPath := filepath.Join(dir, "bypass.c")
+	soPath := filepath.Join(dir, "bypass.so")
+
 	if err := os.WriteFile(srcPath, []byte(selinuxBypassCSrc), 0644); err != nil {
-		return "", fmt.Errorf("writing shim source: %w", err)
+		cleanup()
+		return "", nil, fmt.Errorf("writing shim source: %w", err)
 	}
 	defer os.Remove(srcPath)
 
@@ -71,12 +87,14 @@ func BuildSelinuxBypassShim() (string, error) {
 	cmd.SetStdout(&out)
 	cmd.SetStderr(&out)
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("compiling SELinux bypass shim: %w\n%s", err, out.Bytes())
+		cleanup()
+		return "", nil, fmt.Errorf("compiling SELinux bypass shim: %w\n%s", err, out.Bytes())
 	}
 	if err := os.Chmod(soPath, 0755); err != nil {
-		return "", fmt.Errorf("chmod shim: %w", err)
+		cleanup()
+		return "", nil, fmt.Errorf("chmod shim: %w", err)
 	}
-	return soPath, nil
+	return soPath, cleanup, nil
 }
 
 // Options configures a bootc installation.
@@ -522,11 +540,11 @@ func bootcViaContainer(opts Options) error {
 	// (fsetxattr). Since the target has selinux=disabled, missing per-file
 	// labels are harmless.
 	if opts.SelinuxDisabled && selinuxActive() {
-		shimPath, shimErr := BuildSelinuxBypassShim()
+		shimPath, shimCleanup, shimErr := BuildSelinuxBypassShim()
 		if shimErr != nil {
 			progress.Info(fmt.Sprintf("warning: SELinux bypass shim unavailable (%v); install may fail on cross-policy images", shimErr))
 		} else {
-			defer os.Remove(shimPath)
+			defer shimCleanup()
 			podmanArgs = append(podmanArgs,
 				"-v", shimPath+":/fisherman-selinux-bypass.so:z",
 				"-e", "LD_PRELOAD=/fisherman-selinux-bypass.so",
