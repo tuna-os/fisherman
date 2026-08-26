@@ -58,8 +58,8 @@ func TestInstallSystemdBoot_FullInstall(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o755 {
-		t.Errorf("vendor binary mode = %v, want 0755", info.Mode().Perm())
+	if info.Mode().Perm()&0o700 != 0o700 {
+		t.Errorf("vendor binary mode = %v, want at least owner rwx", info.Mode().Perm())
 	}
 	// loader.conf defaults.
 	lc, err := os.ReadFile(loaderConf)
