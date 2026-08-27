@@ -81,9 +81,16 @@ For `luks-passphrase` and `tpm2-luks-passphrase`, add `"passphrase": "hunter2"` 
 ## Building
 
 ```bash
+cd fisherman
 go build ./cmd/fisherman/   # build binary
 go vet ./...                # lint
 go test ./...               # unit tests
+```
+
+Or from the repository root:
+
+```bash
+just build                  # builds binary to /tmp/fisherman
 ```
 
 ## CI / Bootcrew integration tests
