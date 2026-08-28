@@ -25,11 +25,11 @@ RUN if command -v dnf >/dev/null 2>&1; then \
       echo "WARNING: Unsupported distribution, SSH installation may have failed"; \
     fi
 
-# Configure SSH for password authentication and set root password
-RUN echo "PermitRootLogin yes" >> /etc/ssh/sshd_config && \
-    echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config && \
-    echo "bootcrew-test" | passwd --stdin root || \
-    echo "bootcrew-test" | passwd root
+# CI injects an ephemeral public key into the installed target before boot.
+# Do not bake reusable root credentials into images published to GHCR.
+RUN echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config && \
+    echo "PasswordAuthentication no" >> /etc/ssh/sshd_config && \
+    echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config
 
 # Generate SSH host keys (required for sshd to start)
 RUN ssh-keygen -A 2>/dev/null || (mkdir -p /etc/ssh && \

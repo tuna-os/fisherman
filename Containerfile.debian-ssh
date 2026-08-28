@@ -27,12 +27,11 @@ RUN apt-get update && \
 # Create SSH host keys
 RUN ssh-keygen -A
 
-# Set root password for testing
-RUN echo 'root:bootcrew-test' | chpasswd
-
-# Enable password authentication in sshd_config
-RUN sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config && \
-    sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config
+# CI injects an ephemeral public key into the installed target before boot.
+# Do not bake reusable root credentials into test images.
+RUN echo 'PermitRootLogin prohibit-password' >> /etc/ssh/sshd_config && \
+    echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config && \
+    echo 'PubkeyAuthentication yes' >> /etc/ssh/sshd_config
 
 # Bring up the virtio NIC in QEMU for SSH-based tests.
 RUN mkdir -p /etc/systemd/network /etc/systemd/system/multi-user.target.wants && \

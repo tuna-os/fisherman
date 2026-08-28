@@ -187,6 +187,9 @@ bootcrew-vm IMAGE="quay.io/centos-bootc/centos-bootc:c10s" FILESYSTEM="xfs" COMP
   
   # Install
   just install
+
+  # Grant the test VM access with the ephemeral key created above.
+  bash scripts/enable-ssh-installed.sh "$LOOPDEV" "{{ COMPOSEFS }}" /tmp/bootcrew-ssh/id_rsa.pub
   
   # Boot and verify
   just boot-verify
@@ -329,6 +332,10 @@ bootcrew-ci-test IMAGE_JSON:
   
   echo "Installing system..."
   sudo /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
+
+  # The registry image has password authentication disabled. Inject this
+  # run's public key into the installed target for the localhost-only VM test.
+  bash scripts/enable-ssh-installed.sh "$LOOPDEV" "$COMPOSEFS" /tmp/bootcrew-ssh/id_rsa.pub
   
   # Verify installation (opens LUKS container if passphrase is set).
   just verify-installation "$LOOPDEV" "$COMPOSEFS" "$LUKS_PASSPHRASE"
