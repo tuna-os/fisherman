@@ -82,15 +82,14 @@ sudo chroot "$ROOTFS" sh -c '
     ssh-keygen -A
   fi
   
-  # Configure SSH
-  sed -i "s/^#PermitRootLogin .*/PermitRootLogin yes/" /etc/ssh/sshd_config 2>/dev/null || true
-  sed -i "s/^#PasswordAuthentication .*/PasswordAuthentication yes/" /etc/ssh/sshd_config 2>/dev/null || true
+  # CI uses an ephemeral key injected below; never enable password root login.
+  sed -i "s/^#PermitRootLogin .*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config 2>/dev/null || true
+  sed -i "s/^#PasswordAuthentication .*/PasswordAuthentication no/" /etc/ssh/sshd_config 2>/dev/null || true
   sed -i "s/^#PubkeyAuthentication .*/PubkeyAuthentication yes/" /etc/ssh/sshd_config 2>/dev/null || true
+  echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config 2>/dev/null || true
+  echo "PasswordAuthentication no" >> /etc/ssh/sshd_config 2>/dev/null || true
+  echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config 2>/dev/null || true
 ' 2>/dev/null || true
-
-# Set root password
-echo "Setting root password..."
-sudo chroot "$ROOTFS" sh -c 'echo "root:bootcrew-test" | chpasswd' 2>/dev/null || true
 
 # Create SSH directory and inject key
 echo "Injecting SSH public key..."

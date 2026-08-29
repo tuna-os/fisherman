@@ -118,17 +118,13 @@ $SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c '
   mkdir -p /var/roothome/.ssh 2>/dev/null || true
   mkdir -p /root/.ssh 2>/dev/null || true
   chmod 700 /root/.ssh 2>/dev/null || true
-  sed -i "s/^#PermitRootLogin .*/PermitRootLogin yes/" /etc/ssh/sshd_config 2>/dev/null || true
-  sed -i "s/^#PasswordAuthentication .*/PasswordAuthentication yes/" /etc/ssh/sshd_config 2>/dev/null || true
+  sed -i "s/^#PermitRootLogin .*/PermitRootLogin prohibit-password/" /etc/ssh/sshd_config 2>/dev/null || true
+  sed -i "s/^#PasswordAuthentication .*/PasswordAuthentication no/" /etc/ssh/sshd_config 2>/dev/null || true
   sed -i "s/^#PubkeyAuthentication .*/PubkeyAuthentication yes/" /etc/ssh/sshd_config 2>/dev/null || true
-  echo "PermitRootLogin yes" >> /etc/ssh/sshd_config 2>/dev/null || true
-  echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config 2>/dev/null || true
+  echo "PermitRootLogin prohibit-password" >> /etc/ssh/sshd_config 2>/dev/null || true
+  echo "PasswordAuthentication no" >> /etc/ssh/sshd_config 2>/dev/null || true
   echo "PubkeyAuthentication yes" >> /etc/ssh/sshd_config 2>/dev/null || true
 ' || true
-
-# Set root password for SSH password authentication
-echo "Setting root password for SSH testing..."
-$SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c "echo 'root:bootcrew-test' | chpasswd" || true
 
 # Add SSH public key using podman cp (more reliable than piping)
 if [ -f "$SSH_PUBKEY_FILE" ]; then
