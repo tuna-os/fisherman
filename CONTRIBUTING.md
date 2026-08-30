@@ -11,7 +11,8 @@ Thank you for your interest in contributing to `fisherman`, the universal bootc 
 
 ### Prerequisites
 
-- [Go](https://go.dev/) (v1.22 or newer)
+- [Go](https://go.dev/) 1.22 or newer for the fisherman backend
+- Go 1.26.2 or newer when building or testing the TUI (`tui/go.mod`)
 - [just](https://github.com/casey/just) command runner
 - Standard Linux storage utilities (`util-linux`, `dosfstools`, `e2fsprogs`, `xfsprogs`, `cryptsetup`, `podman`, `skopeo`)
 
@@ -32,6 +33,13 @@ just build
 
 The compiled binary will be placed at `/tmp/fisherman`.
 
+To build the terminal UI, use its separate Go module:
+
+```bash
+cd tui
+go build -o bootc-installer-tui ./cmd/bootc-installer-tui
+```
+
 ### Running Tests and Verification
 
 Run Go unit tests:
@@ -39,6 +47,13 @@ Run Go unit tests:
 ```bash
 cd fisherman
 go test -v ./...
+```
+
+Run the TUI tests separately with its newer toolchain:
+
+```bash
+cd tui
+go test ./...
 ```
 
 Run validation tests:
