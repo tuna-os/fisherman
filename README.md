@@ -1,5 +1,9 @@
 # fisherman
 
+> **Active development:** This is the canonical repository for fisherman. The
+> project has not moved or been migrated elsewhere; new development and bug
+> fixes belong here.
+
 A universal bootc installer backend, designed to be driven by a frontend such as [tuna-installer](https://github.com/tuna-os/tuna-installer).
 
 fisherman handles disk partitioning, formatting, LUKS encryption, and `bootc install to-filesystem` image installation. It works with any bootc-compatible image regardless of distro.
