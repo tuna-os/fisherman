@@ -87,8 +87,10 @@ func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) [
 }
 
 func fatal(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	progress.Error(msg)
 	cleanup.Run()
-	fmt.Fprintf(os.Stderr, "fisherman: fatal: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "fisherman: fatal: %s\n", msg)
 	os.Exit(1)
 }
 
