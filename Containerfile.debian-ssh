@@ -1,4 +1,4 @@
-FROM ghcr.io/bootcrew/debian-bootc@sha256:bb612b5b9c71579259a4deb5ba8cd02c6cdcf3f74f9484bc6102b7ee57017f1a
+FROM ghcr.io/bootcrew/debian-bootc@sha256:006eaaad4072b4925ef6f2bb693332a81baee1ff01fec4b1a68bdcc7b0eb622b
 
 # Initialize dpkg/apt structure that's missing from the base image
 RUN mkdir -p /var/lib/dpkg/status.d \
