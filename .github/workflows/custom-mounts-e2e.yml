@@ -1,0 +1,56 @@
+name: customMounts E2E (manual layout)
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: custom-mounts-e2e-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  custom-mounts-e2e:
+    name: customMounts E2E disk layout
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: fisherman/go.mod
+          cache: true
+          cache-dependency-path: fisherman/go.sum
+
+      - name: Install disk tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xfsprogs dosfstools e2fsprogs jq
+
+      - name: Run customMounts recipe validation suite
+        run: ./tests/check-custom-mounts.sh
+
+      # Builds a real 3-partition GPT loop device (ESP + install target +
+      # neighbouring data partition), seeds canary files on the two partitions
+      # the recipe marks "unformatted", and drives disk.ApplyCustomLayout
+      # against those block devices: the target root must come out formatted as
+      # xfs while the ESP and data partition keep their contents byte for byte.
+      #
+      # FISHERMAN_LOOPBACK_E2E=require turns the test's "no root / no loop
+      # device" skips into failures, so this job cannot go green without having
+      # actually exercised the disk. bootcrew-vm.yml's unit-tests job runs the
+      # same test without it, where a skip is the right outcome.
+      - name: customMounts layout on a real loop device
+        run: sudo env "PATH=$PATH" FISHERMAN_LOOPBACK_E2E=require
+          go test -count=1 -v -run TestApplyCustomLayout_Loopback ./internal/disk/
+        working-directory: fisherman
+
+      - name: Show leftover loop devices
+        if: failure()
+        run: losetup --list || true
