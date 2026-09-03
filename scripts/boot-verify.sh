@@ -196,9 +196,10 @@ ssh_root() {
 # Wait for SSH to be ready (using public-key auth)
 # For LUKS VMs, luks-unlock.py runs concurrently and injects the passphrase;
 # SSH becomes available once the system has fully booted after unlock.
-echo "Waiting for VM to boot and SSH to be ready (up to 240s)..."
+SSH_WAIT_ITERS=180  # 360s: observed boots landing at 246-253s vs the prior 240s budget (issue #193)
+echo "Waiting for VM to boot and SSH to be ready (up to $((SSH_WAIT_ITERS * 2))s)..."
 SSH_READY=0
-for i in {1..120}; do
+for i in $(seq 1 "$SSH_WAIT_ITERS"); do
   sleep 2
   if ssh_root "echo OK" 2>/dev/null; then
     echo "✅ SSH connection successful"
@@ -212,7 +213,7 @@ for i in {1..120}; do
     break
   fi
   if [ $((i % 10)) -eq 0 ]; then
-    echo "  Waiting... ($i/120)"
+    echo "  Waiting... ($i/$SSH_WAIT_ITERS)"
   fi
 done
 
