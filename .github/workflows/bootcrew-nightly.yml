@@ -36,8 +36,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
-          cache: true
-          cache-dependency-path: fisherman/go.sum
+          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
 
       - name: Run unit tests
         run: sudo go test -race ./...
@@ -59,8 +58,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
-          cache: true
-          cache-dependency-path: fisherman/go.sum
+          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
 
       - name: Install tools
         run: |
