@@ -72,6 +72,27 @@ elif [ -d "$MOUNT_DIR/ostree/deploy/default/deploy" ]; then
     exit 1
   fi
   ROOTFS="$HASH_DIR"
+elif [ -d "$MOUNT_DIR/state/deploy" ]; then
+  # fisherman's own composefs layout, which none of the branches above match.
+  #
+  # The composefs branch expects /etc/hostname at the mount root; the two
+  # ostree branches expect `<name>.0` directories. fisherman writes neither:
+  # it deploys to state/deploy/<hash>, with a bare 128-character hash and no
+  # `.0` suffix (see the install log's `mkdir -p
+  # /mnt/fisherman-target/state/deploy/<hash>/etc`).
+  #
+  # Falling through to the else left ROOTFS at the mount point, whose only
+  # entries are lost+found, state and var, so the "essential directories not
+  # found" guard below rejected a perfectly good install. That guard was
+  # right about what it saw and wrong about what it meant.
+  DEPLOY_BASE="$MOUNT_DIR/state/deploy"
+  HASH_DIR=$(sudo ls -d "$DEPLOY_BASE"/*/ 2>/dev/null | head -1)
+  if [ -z "$HASH_DIR" ]; then
+    echo "WARNING: Could not find deployment directory in $DEPLOY_BASE"
+    sudo ls -la "$DEPLOY_BASE" 2>/dev/null | head -20
+    exit 1
+  fi
+  ROOTFS="${HASH_DIR%/}"
 else
   ROOTFS="$MOUNT_DIR"
 fi
