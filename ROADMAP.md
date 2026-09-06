@@ -1,6 +1,6 @@
 # fisherman Roadmap
 
-**Last updated**: 2026-08-23 | **Maintainer**: tuna-os (hanthor) / installer maintainers
+**Last updated**: 2026-09-05 | **Maintainer**: tuna-os (hanthor) / installer maintainers
 
 ---
 
@@ -23,7 +23,7 @@ outranks anything else on this page.
 | Consumer | How it consumes fisherman |
 |---|---|
 | `tuna-installer-kde` / `-cosmic` / `-niri` / `-xfce` | Frontends that shell out to the `fisherman` binary with a recipe |
-| `bootc-installer` | Submodule → `projectbluefin/fisherman`, branch `dev` |
+| `bootc-installer` | Submodule → `tuna-os/fisherman`, branch `dev` |
 | `wootc` | Submodule → `tuna-os/fisherman`, pinned commit |
 | `tromso` | Live-ISO install path; builds a patched binary for some test cells |
 | `tunaOS`, `xfce-linux` | Recipe schema and install-path references |
@@ -48,7 +48,8 @@ against a single caller.
   the same day (#161).
 - **Consumers have diverged.** `wootc` pins `e2b31660` (2026-08-11), which
   GitHub reports as *diverged* from `dev` — 45 behind, 1 ahead. `bootc-installer`
-  pins a different upstream entirely.
+  pinned a different upstream entirely until D1 was resolved; its URL now points
+  here, at the same commit it already used.
 
 ---
 
@@ -57,20 +58,37 @@ against a single caller.
 These are not tasks; they are questions that block the tasks under them.
 Tracked in #162.
 
-### D1 — Where does fisherman live? (blocking)
+### D1 — Where does fisherman live? — **RESOLVED 2026-09-05: here**
 
-The repository currently gives three answers:
+`tuna-os/fisherman` is the origin and is actively maintained.
+[`projectbluefin/fisherman`](https://github.com/projectbluefin/fisherman) is a
+fork kept in sync with it. Send fixes here.
 
-- the GitHub description says `⚠️ MOVED → github.com/projectbluefin/fisherman`;
-- `README.md` says this repository is the origin and projectbluefin is a fork
-  kept in sync;
-- PR #59 (merged 2026-07-26) is titled "sync: merge projectbluefin/fisherman
-  main — 14 install-path fixes this fork lacks".
+This was blocking because the repository gave three answers at once — a GitHub
+description reading `⚠️ MOVED → github.com/projectbluefin/fisherman`, a
+`README.md` calling this repository the origin, and PR #59 merging 14
+install-path fixes *from* the fork. A contributor could not tell where to send a
+patch, and the most visible surface said the repo was dead.
 
-Whichever answer is correct, the description, the README, and
-`tuna-installer-kde`'s README must agree, and the two submodule URLs above must
-resolve to the same decision. Until then a contributor cannot tell where to send
-a fix, and the most visible surface says this repo is dead.
+Aligning the four surfaces D1 named:
+
+| surface | state |
+|---|---|
+| `README.md` | already correct — says origin, actively maintained |
+| `AGENTS.md` | already correct — "This repository is the origin." |
+| `tuna-installer-kde`'s README | already correct — links `tuna-os/fisherman` |
+| `bootc-installer` submodule URL | realigned to `tuna-os/fisherman` (see below) |
+| **GitHub repository description** | **a repo setting, not a file — must be set by a maintainer** |
+
+The description is the one surface no commit can reach. Until it is changed, the
+first thing a visitor reads still contradicts every file in the tree, which is
+the whole of what made D1 blocking.
+
+`bootc-installer` pinned `6092be78` via the fork's URL. That commit is present
+in this repository (it is the merge of projectbluefin#10), so repointing the URL
+resolves to the identical tree — no code moves, the submodule simply fetches the
+canonical remote. **Which** commit each consumer pins is D2 below and is
+deliberately not touched here.
 
 ### D2 — What does a consumer pin?
 

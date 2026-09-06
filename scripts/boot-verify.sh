@@ -196,11 +196,17 @@ ssh_root() {
 # Wait for SSH to be ready (using public-key auth)
 # For LUKS VMs, luks-unlock.py runs concurrently and injects the passphrase;
 # SSH becomes available once the system has fully booted after unlock.
-echo "Waiting for VM to boot and SSH to be ready (up to 240s)..."
+SSH_WAIT_ITERS=180  # 360s: observed boots landing at 246-253s vs the prior 240s budget (issue #193)
+echo "Waiting for VM to boot and SSH to be ready (up to $((SSH_WAIT_ITERS * 2))s)..."
 SSH_READY=0
-for i in {1..120}; do
+# Keep the stderr of the most recent probe. Discarding it left "SSH connection
+# failed (timeout)" indistinguishable between "port forward never answered"
+# and "sshd answered and rejected the key" — which is what every post-#172
+# failure actually was.
+SSH_ERR_LOG="$ARTIFACTS_DIR/ssh-probe-stderr-$RUN_TAG.log"
+for i in $(seq 1 "$SSH_WAIT_ITERS"); do
   sleep 2
-  if ssh_root "echo OK" 2>/dev/null; then
+  if ssh_root "echo OK" 2>"$SSH_ERR_LOG"; then
     echo "✅ SSH connection successful"
     SSH_READY=1
     # Capture a screendump as visual evidence the guest reached login.
@@ -212,7 +218,7 @@ for i in {1..120}; do
     break
   fi
   if [ $((i % 10)) -eq 0 ]; then
-    echo "  Waiting... ($i/120)"
+    echo "  Waiting... ($i/$SSH_WAIT_ITERS)"
   fi
 done
 
@@ -232,6 +238,17 @@ fi
 if [ $SSH_READY -eq 0 ]; then
   echo "❌ SSH connection failed (timeout)"
   FAIL_PATH=1
+
+  echo ""
+  echo "=== Last SSH probe stderr ==="
+  cat "$SSH_ERR_LOG" 2>/dev/null || echo "(none captured)"
+  # One more attempt with client debugging on, so the log shows whether the
+  # TCP connection was refused/timed out or sshd replied and declined the key
+  # ("Permission denied (publickey)", "Authentications that can continue").
+  echo ""
+  echo "=== Final SSH probe (verbose) ==="
+  ssh_root -v "echo OK" > "$ARTIFACTS_DIR/ssh-probe-verbose-$RUN_TAG.log" 2>&1 || true
+  tail -40 "$ARTIFACTS_DIR/ssh-probe-verbose-$RUN_TAG.log" 2>/dev/null || true
 
   if [ -f "$SERIAL_LOG" ]; then
     echo ""

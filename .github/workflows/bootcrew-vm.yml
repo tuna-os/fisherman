@@ -26,8 +26,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
-          cache: true
-          cache-dependency-path: fisherman/go.sum
+          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
@@ -69,8 +68,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
-          cache: true
-          cache-dependency-path: fisherman/go.sum
+          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
       - name: Unit tests (race + coverage)
         # Most tests do not need sudo; the loopback/storage_driver ones do
         # (losetup, mount). Run the lot under sudo so both categories work
@@ -114,8 +112,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
-          cache: true
-          cache-dependency-path: fisherman/go.sum
+          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
 
       - name: Setup CI environment
         run: |
@@ -204,8 +201,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: fisherman/go.mod
-          cache: true
-          cache-dependency-path: fisherman/go.sum
+          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
       - name: Setup CI environment
         run: |
           sudo apt-get update -qq
