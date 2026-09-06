@@ -122,8 +122,7 @@ elif [ -d "$MOUNT_DIR/ostree/deploy/default/deploy" ]; then
   ROOTFS="$HASH_DIR"
   STATE_VAR="$MOUNT_DIR/ostree/deploy/default/var"
 elif [ -d "$MOUNT_DIR/state/deploy" ]; then
-  # fisherman's own composefs layout, which none of the branches above match
-  # (from PR #196).
+  # fisherman's own composefs layout, which none of the branches above match.
   #
   # The composefs branch expects /etc/hostname at the mount root; the two
   # ostree branches expect `<name>.0` directories. fisherman writes neither:
