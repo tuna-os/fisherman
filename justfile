@@ -334,14 +334,27 @@ bootcrew-ci-test IMAGE_JSON:
   sudo /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
 
   # The registry image has password authentication disabled. Inject this
-  # run's public key into the installed target for the localhost-only VM test.
-  bash scripts/enable-ssh-installed.sh "$LOOPDEV" "$COMPOSEFS" /tmp/bootcrew-ssh/id_rsa.pub
+  # run's public key into the installed target for the localhost-only VM test
+  # (opens the LUKS container if a passphrase is set).
+  bash scripts/enable-ssh-installed.sh "$LOOPDEV" "$COMPOSEFS" /tmp/bootcrew-ssh/id_rsa.pub "$LUKS_PASSPHRASE"
   
   # Verify installation (opens LUKS container if passphrase is set).
   just verify-installation "$LOOPDEV" "$COMPOSEFS" "$LUKS_PASSPHRASE"
   
   # Patch BLS entries to add console=ttyS0 so that serial output is visible
   # in CI logs and (for LUKS) luks-unlock.py can detect the Plymouth prompt.
+  #
+  # Also boot the guest with SELinux permissive (enforcing=0). The harness
+  # writes root's authorized_keys and an sshd_config.d drop-in into the
+  # installed disk from this Ubuntu runner, which has no SELinux policy, so
+  # those files land unlabeled. On an enforcing guest (centos-bootc) sshd_t
+  # cannot read an unlabeled file, sshd fails to start, and every SSH probe
+  # is reset before the banner (kex_exchange_identification: Connection
+  # reset by peer) — while yellowfin, whose image already carries
+  # selinux=0 in its kernel args, boots and accepts the same key. Permissive
+  # keeps the labeling gap visible as AVC denials in the journal instead of
+  # silently failing the boot verification; a real fix is labeling the files
+  # (enable-ssh-installed.sh tries via setfattr) or relabeling on first boot.
   echo ""
   echo "=== Patching BLS entries for serial console ==="
   patch_bls_console() {
@@ -356,8 +369,13 @@ bootcrew-ci-test IMAGE_JSON:
         sudo sed -i 's/^options /options console=ttyS0,115200 console=tty0 /' "$conf"
         patched=1
         echo "  Patched ($label): $(basename "$conf")"
-        sudo grep "^options" "$conf"
       fi
+      if ! sudo grep -Eq "selinux=0|enforcing=0" "$conf"; then
+        sudo sed -i 's/^options /options enforcing=0 /' "$conf"
+        patched=1
+        echo "  Patched ($label, enforcing=0): $(basename "$conf")"
+      fi
+      [ "$patched" -eq 1 ] && sudo grep "^options" "$conf"
     done
     [ "$patched" -eq 0 ] && echo "  No BLS entries on $label (or already patched)"
     sudo umount "$MNT"
