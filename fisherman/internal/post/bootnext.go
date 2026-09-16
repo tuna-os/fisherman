@@ -12,8 +12,11 @@ import (
 func FindBootNextID(efiPart string) (string, error) {
 	// Get the PARTUUID of the EFI partition we just formatted.
 	partuuidRaw, err := Exec.Command("blkid", "-s", "PARTUUID", "-o", "value", efiPart).Output()
-	if err != nil || strings.TrimSpace(string(partuuidRaw)) == "" {
+	if err != nil {
 		return "", fmt.Errorf("blkid %s: %w", efiPart, err)
+	}
+	if strings.TrimSpace(string(partuuidRaw)) == "" {
+		return "", fmt.Errorf("blkid %s: no PARTUUID found (partition may not be formatted yet)", efiPart)
 	}
 	// Normalise to lowercase without dashes so we can match regardless of
 	// how efibootmgr formats the UUID in the HD() descriptor.

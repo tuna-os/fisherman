@@ -1,0 +1,43 @@
+FROM ghcr.io/bootcrew/debian-bootc@sha256:006eaaad4072b4925ef6f2bb693332a81baee1ff01fec4b1a68bdcc7b0eb622b
+
+# Initialize dpkg/apt structure that's missing from the base image
+RUN mkdir -p /var/lib/dpkg/status.d \
+    /var/lib/apt/lists/partial \
+    /var/cache/apt/archives/partial \
+    /var/log/apt
+
+# Touch required status files
+RUN touch /var/lib/dpkg/status /var/lib/apt/extended_states
+
+# Install GRUB and efibootmgr for UEFI boot entry creation
+# This fixes the systemd-boot composefs boot issue where OVMF defaults to network boot
+RUN apt-get update && \
+    apt-get install -y grub-efi-amd64 efibootmgr && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /var/lib/apt/lists/partial
+
+# Install and configure SSH
+RUN apt-get update && \
+    apt-get install -y openssh-server openssh-client && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /var/lib/apt/lists/partial
+
+# Create SSH host keys
+RUN ssh-keygen -A
+
+# CI injects an ephemeral public key into the installed target before boot.
+# Do not bake reusable root credentials into test images.
+RUN echo 'PermitRootLogin prohibit-password' >> /etc/ssh/sshd_config && \
+    echo 'PasswordAuthentication no' >> /etc/ssh/sshd_config && \
+    echo 'PubkeyAuthentication yes' >> /etc/ssh/sshd_config
+
+# Bring up the virtio NIC in QEMU for SSH-based tests.
+RUN mkdir -p /etc/systemd/network /etc/systemd/system/multi-user.target.wants && \
+    printf '[Match]\nName=en* eth*\n\n[Network]\nDHCP=yes\nLinkLocalAddressing=yes\nIPv6AcceptRA=yes\n' > /etc/systemd/network/20-wired.network && \
+    ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/multi-user.target.wants/systemd-networkd.service && \
+    ln -sf /usr/lib/systemd/system/systemd-networkd.service /etc/systemd/system/dbus-org.freedesktop.network1.service
+
+LABEL org.opencontainers.image.title="Debian Bootc with SSH and GRUB"
+LABEL org.opencontainers.image.description="Debian bootc image with OpenSSH and GRUB pre-installed for testing"

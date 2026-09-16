@@ -20,19 +20,34 @@ import (
 // Tests replace this with a mock; restore with runner.DefaultExecutor.
 var Exec runner.Executor = runner.DefaultExecutor
 
+// RemoveAllFn is a hook for tests to override os.RemoveAll behavior.
+// Normally set to os.RemoveAll, but tests can replace it.
+var RemoveAllFn = os.RemoveAll
+
 // Cleanup tracks mounted filesystems and an open LUKS device so they can be
 // torn down in the correct order on both success and error paths.
 type Cleanup struct {
-	mounts     []string
-	luksMapper string
-	done       bool
+	mounts       []string
+	postRemovals []string
+	luksMapper   string
+	done         bool
 }
 
 func (c *Cleanup) AddMount(path string) { c.mounts = append(c.mounts, path) }
 func (c *Cleanup) SetLUKS(name string)  { c.luksMapper = name }
 
+// AddPostRemoval registers a path to be removed after all unmounts and the
+// LUKS device close have completed. Use this for scratch directories whose
+// contents (e.g. bind mounts, OCI caches) must remain accessible until every
+// post-install step has run — including the fatal-error path, where
+// os.Exit(1) would otherwise skip a deferred RemoveAll.
+func (c *Cleanup) AddPostRemoval(path string) {
+	c.postRemovals = append(c.postRemovals, path)
+}
+
 // Run unmounts all registered mount points in reverse order, then closes any
-// open LUKS device. It is idempotent.
+// open LUKS device, then deletes any registered post-removal paths. It is
+// idempotent.
 func (c *Cleanup) Run() {
 	if c.done {
 		return
@@ -40,29 +55,178 @@ func (c *Cleanup) Run() {
 	c.done = true
 	for i := len(c.mounts) - 1; i >= 0; i-- {
 		mp := c.mounts[i]
-		if err := runner.Run("umount", "-R", mp); err != nil {
+		// Use lazy recursive unmount so that busy mounts (e.g. held by
+		// container processes after bootc install) are detached immediately
+		// rather than blocking the LUKS close below.  Mirrors the umount -l
+		// fallback in internal/disk/partition.go:unmountAll().
+		if err := runner.Run("umount", "-Rl", mp); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: unmounting %s: %v\n", mp, err)
 		}
 	}
 	if c.luksMapper != "" {
+		// Before closing LUKS device, flush pending I/O and release device references
+		// to prevent "Device or resource busy" errors. Mirrors the strategy in
+		// internal/disk/partition.go:unmountAll().
+
+		// Kill any processes still holding file descriptors on the LUKS device.
+		// fuser exits non-zero when no processes are found — that is fine.
+		_ = runner.Run("fuser", "-km", luks.MapperPath(c.luksMapper))
+
+		// Flush pending I/O so the kernel can drop its internal references.
+		_ = runner.Run("blockdev", "--flushbufs", luks.MapperPath(c.luksMapper))
+
+		// Give udev and udisksd time to release all device references.
+		_ = runner.Run("udevadm", "settle")
+
+		// Now close the LUKS device.
 		if err := luks.Close(c.luksMapper); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: closing LUKS device %s: %v\n", c.luksMapper, err)
 		}
 	}
+	// Post-removals run last so any path that was bind-mounted into the target
+	// (and thus depended on the unmount above) can now be safely deleted.
+	for _, p := range c.postRemovals {
+		if err := RemoveAllFn(p); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: removing %s: %v\n", p, err)
+		}
+	}
 }
 
-// DefaultDeploymentDir returns the ostree deployment directory inside sysroot
-// using `ostree admin --sysroot=<sysroot> --print-current-dir`.
-func DefaultDeploymentDir(sysroot string) (string, error) {
-	out, err := Exec.Command("ostree", "admin", "--sysroot="+sysroot, "--print-current-dir").Output()
+// DefaultComposeFsDeployEtcDir finds the writable /etc directory for the
+// composefs-native deployment installed at target.  The bootc composefs-native
+// layout stores the writable /etc at state/deploy/<COMPOSEFS_HASH>/etc/ — the
+// same hash that appears in the kernel command line as composefs=<HASH> at boot.
+//
+// Discovery priority:
+//  1. Read composefs=<HASH> from any BLS loader entry under
+//     $TARGET/boot/loader/entries/ or $TARGET/boot/efi/loader/entries/.
+//  2. Fall back to the newest directory under $TARGET/state/deploy/ (safe for
+//     fresh installs where only one deployment exists).
+//
+// This path is bind-mounted at /etc on the booted system and must be used
+// instead of $TARGET/etc/ for any post-install write that should be visible
+// after first boot.
+func DefaultComposeFsDeployEtcDir(target string) (string, error) {
+	// Preferred: parse composefs=<HASH> from BLS loader entries.
+	for _, loaderDir := range []string{
+		filepath.Join(target, "boot", "loader", "entries"),
+		filepath.Join(target, "boot", "efi", "loader", "entries"),
+	} {
+		entries, err := filepath.Glob(filepath.Join(loaderDir, "*.conf"))
+		if err != nil || len(entries) == 0 {
+			continue
+		}
+		for _, entry := range entries {
+			data, err := os.ReadFile(entry)
+			if err != nil {
+				continue
+			}
+			for _, line := range strings.Split(string(data), "\n") {
+				if !strings.HasPrefix(strings.TrimSpace(line), "options") {
+					continue
+				}
+				for _, field := range strings.Fields(line) {
+					if !strings.HasPrefix(field, "composefs=") {
+						continue
+					}
+					hash := strings.TrimPrefix(field, "composefs=")
+					if hash == "" {
+						continue
+					}
+					deployEtc := filepath.Join(target, "state", "deploy", hash, "etc")
+					if _, statErr := os.Stat(deployEtc); statErr == nil {
+						return deployEtc, nil
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback: pick the newest directory under state/deploy/.
+	deployBase := filepath.Join(target, "state", "deploy")
+	entries, err := os.ReadDir(deployBase)
 	if err != nil {
-		return "", fmt.Errorf("ostree admin --print-current-dir: %w", err)
+		return "", fmt.Errorf("reading composefs deploy base %s: %w", deployBase, err)
 	}
-	path := strings.TrimSpace(string(out))
-	if path == "" {
-		return "", fmt.Errorf("ostree admin --print-current-dir returned empty path")
+	var newestName string
+	var newestMtime time.Time
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		if newestName == "" || info.ModTime().After(newestMtime) {
+			newestName = e.Name()
+			newestMtime = info.ModTime()
+		}
 	}
-	return path, nil
+	if newestName == "" {
+		return "", fmt.Errorf("no composefs deploy directory found under %s", deployBase)
+	}
+	return filepath.Join(deployBase, newestName, "etc"), nil
+}
+
+// ComposeFsDeployEtcDirFn is called by composefs-native post-install functions
+// to locate the writable /etc for the active deployment. Tests replace this with
+// a stub; restore with DefaultComposeFsDeployEtcDir.
+var ComposeFsDeployEtcDirFn = DefaultComposeFsDeployEtcDir
+
+// ComposeFsVarDir returns the writable /var directory for composefs-native
+// installs. The bootc composefs-native layout bind-mounts this path at /var
+// at boot.
+func ComposeFsVarDir(target string) string {
+	return filepath.Join(target, "state", "os", "default", "var")
+}
+
+// DefaultDeploymentDir returns the ostree deployment directory inside sysroot.
+// It first tries `ostree --sysroot=<sysroot> admin --print-current-dir` (which
+// works on a booted system). On a freshly-installed target (never booted),
+// --print-current-dir exits 1 because there is no booted-deployment state;
+// we fall back to walking ostree/deploy/ to find the single deployment that
+// bootc install to-filesystem just created.
+func DefaultDeploymentDir(sysroot string) (string, error) {
+	// --sysroot is a global option that must precede the admin subcommand.
+	out, err := Exec.Command("ostree", "--sysroot="+sysroot, "admin", "--print-current-dir").Output()
+	if err == nil {
+		path := strings.TrimSpace(string(out))
+		if path != "" {
+			return path, nil
+		}
+	}
+	// Fallback: freshly-installed target has no booted-deployment state.
+	// Walk ostree/deploy/*/deploy/ to find the single deployment that
+	// bootc install to-filesystem just created at
+	// <sysroot>/ostree/deploy/<osname>/deploy/<hash>.<n>.
+	deployBase := filepath.Join(sysroot, "ostree", "deploy")
+	stateroots, readErr := os.ReadDir(deployBase)
+	if readErr != nil {
+		if err != nil {
+			return "", fmt.Errorf("ostree admin --print-current-dir: %w (also could not read %s: %w)", err, deployBase, readErr)
+		}
+		return "", fmt.Errorf("no ostree deployment found under %s: %w", deployBase, readErr)
+	}
+	for _, st := range stateroots {
+		if !st.IsDir() {
+			continue
+		}
+		deploySubDir := filepath.Join(deployBase, st.Name(), "deploy")
+		deployments, subErr := os.ReadDir(deploySubDir)
+		if subErr != nil {
+			continue
+		}
+		for _, dep := range deployments {
+			if dep.IsDir() {
+				return filepath.Join(deploySubDir, dep.Name()), nil
+			}
+		}
+	}
+	if err != nil {
+		return "", fmt.Errorf("ostree admin --print-current-dir: %w (also no deployment found under %s)", err, deployBase)
+	}
+	return "", fmt.Errorf("no ostree deployment found under %s", deployBase)
 }
 
 // DeploymentDirFn is called by WriteHostname to locate the ostree deployment
@@ -70,22 +234,47 @@ func DefaultDeploymentDir(sysroot string) (string, error) {
 var DeploymentDirFn = DefaultDeploymentDir
 
 // isComposeFsNative reports whether the installed system at sysroot uses the
-// composefs-native backend. Composefs-native deployments have no /ostree/
-// directory; ostree-based deployments always create one.
+// composefs-native backend (bootc install to-filesystem --composefs-backend).
+//
+// Detection is POSITIVE, via the composefs-native deploy base
+// <sysroot>/state/deploy/<hash>/ (the same path DefaultComposeFsDeployEtcDir
+// resolves against). The earlier heuristic keyed off "/ostree absent", but the
+// composefs-native backend ALSO creates an /ostree directory — so that check
+// mis-classified composefs-native installs as ostree. The concrete failure:
+// WriteHostname (and every other isComposeFsNative caller) then took the ostree
+// path, calling `ostree admin --print-current-dir`, which exits 1 on a
+// freshly-installed --skip-finalize target, and whose glob fallback over
+// /ostree/deploy/*/deploy/* finds nothing because the deployment is under
+// /state/ — a fatal `finding deployment dir` crash on composefs images.
 func isComposeFsNative(sysroot string) bool {
-	// Use ls via runner to check existence, as os.Stat might look in the sandbox.
-	err := runner.Run("ls", filepath.Join(sysroot, "ostree"))
-	return err != nil
+	// Use ls via runner (not os.Stat), which runs in the host mount namespace
+	// rather than any sandbox. composefs-native ⟺ state/deploy exists.
+	if err := runner.Run("ls", filepath.Join(sysroot, "state", "deploy")); err == nil {
+		return true
+	}
+	// Legacy signal retained: a deployment with no /ostree at all is composefs.
+	return runner.Run("ls", filepath.Join(sysroot, "ostree")) != nil
+}
+
+// IsComposeFsNativeExported is a public wrapper for isComposeFsNative,
+// used by packages that need to determine the target system layout
+// (e.g. slurp.InjectWallpapers).
+func IsComposeFsNativeExported(sysroot string) bool {
+	return isComposeFsNative(sysroot)
 }
 
 // WriteHostname writes /etc/hostname into the installed system at target.
-// For ostree-based deployments the hostname goes into the ostree deployment
-// subtree (found via DeploymentDirFn). For composefs-native deployments it goes
-// directly at $TARGET/etc/hostname.
+// For composefs-native deployments, the hostname goes into the active deploy
+// etc dir (found via ComposeFsDeployEtcDirFn). For ostree-based deployments
+// it goes into the ostree deployment subtree (found via DeploymentDirFn).
 func WriteHostname(target, hostname string) error {
 	var etcDir string
 	if isComposeFsNative(target) {
-		etcDir = filepath.Join(target, "etc")
+		var err error
+		etcDir, err = ComposeFsDeployEtcDirFn(target)
+		if err != nil {
+			return fmt.Errorf("finding composefs deploy etc: %w", err)
+		}
 	} else {
 		deployDir, err := DeploymentDirFn(target)
 		if err != nil {
@@ -201,6 +390,7 @@ func CopyFlatpaks(target string, wantedRefs []string, flatpakVarPath string) err
 	totalBytes := dirSize(src)
 	if totalBytes == 0 {
 		fmt.Fprintf(os.Stdout, "  no system flatpak data found at %s, skipping copy\n", src)
+		removeInstallerFlatpaks(dst)
 		return nil
 	}
 
@@ -284,8 +474,37 @@ func CopyFlatpaks(target string, wantedRefs []string, flatpakVarPath string) err
 
 	fmt.Fprintf(os.Stdout, "  copied %d apps (%d promoted from user)\n",
 		len(allApps), len(userOnly))
+
+	removeInstallerFlatpaks(dst)
+
 	progress.Substep(fmt.Sprintf("Copied %d Flatpak apps", len(allApps)))
 	return nil
+}
+
+// removeInstallerFlatpaks deletes all known installer Flatpak app IDs from dst
+// so the installer is not present on the installed system.
+func removeInstallerFlatpaks(dst string) {
+	installerAppIDs := []string{
+		"org.bootcinstaller.Installer",
+		"org.bootcinstaller.Installer.Devel",
+		"org.tunaos.Installer",
+		"org.tunaos.Installer.Devel",
+	}
+	for _, appID := range installerAppIDs {
+		// Remove app files
+		appDir := filepath.Join(dst, "app", appID)
+		if err := os.RemoveAll(appDir); err == nil {
+			fmt.Fprintf(os.Stdout, "  removed installer app files for %s\n", appID)
+		}
+		// Remove exported desktop entry
+		desktopFile := filepath.Join(dst, "exports", "share", "applications", appID+".desktop")
+		if err := os.Remove(desktopFile); err == nil {
+			fmt.Fprintf(os.Stdout, "  removed installer desktop entry for %s\n", appID)
+		}
+		// Remove exported dbus service
+		dbusFile := filepath.Join(dst, "exports", "share", "dbus-1", "services", appID+".service")
+		_ = os.Remove(dbusFile)
+	}
 }
 
 // countingReader wraps an io.Reader and atomically counts bytes read.
@@ -357,4 +576,162 @@ func flatpakList(installFlag, typeFilter string) []string {
 		}
 	}
 	return refs
+}
+
+// CopyBluetoothPairings copies Bluetooth pairing data from the live environment
+// to the installed system so paired devices (keyboards, mice) reconnect on first
+// boot without re-pairing. Non-fatal: if no pairings exist or the copy fails, the
+// system still boots normally.
+func CopyBluetoothPairings(target string) error {
+	const src = "/var/lib/bluetooth"
+	info, err := os.Stat(src)
+	if err != nil || !info.IsDir() {
+		return nil //nolint:nilerr // no bluetooth data → nothing to do
+	}
+
+	// Check if the directory has any adapter subdirectories.
+	entries, err := os.ReadDir(src)
+	if err != nil || len(entries) == 0 {
+		return nil //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
+	}
+
+	// Resolve the target /var/lib/bluetooth path (composefs-native vs ostree).
+	var dst string
+	if isComposeFsNative(target) {
+		dst = filepath.Join(target, "state", "os", "default", "var", "lib", "bluetooth")
+	} else {
+		dst = filepath.Join(target, "var", "lib", "bluetooth")
+	}
+
+	if err := runner.Run("mkdir", "-p", dst); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dst, err)
+	}
+
+	// Copy preserving permissions and ownership.
+	if err := runner.Run("cp", "-a", src+"/.", dst); err != nil {
+		return fmt.Errorf("copying bluetooth pairings: %w", err)
+	}
+
+	// Fix SELinux context if restorecon is available.
+	_ = runner.Run("restorecon", "-R", dst)
+
+	fmt.Fprintf(os.Stdout, "  copied Bluetooth pairings to %s\n", dst)
+	return nil
+}
+
+// CopyWiFiConnections copies NetworkManager connection profiles from the live
+// session to the installed system so WiFi connects automatically on first boot.
+// Non-fatal: if no connections exist or the copy fails, the system still boots.
+func CopyWiFiConnections(target string) error {
+	const src = "/etc/NetworkManager/system-connections"
+	info, err := os.Stat(src)
+	if err != nil || !info.IsDir() {
+		return nil //nolint:nilerr // no NM connections → nothing to do
+	}
+
+	entries, err := os.ReadDir(src)
+	if err != nil || len(entries) == 0 {
+		return nil //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
+	}
+
+	// Only copy .nmconnection files (skip other config).
+	var hasConnections bool
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".nmconnection") {
+			hasConnections = true
+			break
+		}
+	}
+	if !hasConnections {
+		return nil
+	}
+
+	// Resolve the target NM connections path (composefs-native vs ostree).
+	var dst string
+	if isComposeFsNative(target) {
+		etcDir, err := ComposeFsDeployEtcDirFn(target)
+		if err != nil {
+			return fmt.Errorf("finding composefs deploy etc for WiFi connections: %w", err)
+		}
+		dst = filepath.Join(etcDir, "NetworkManager", "system-connections")
+	} else {
+		deployDir, err := DeploymentDirFn(target)
+		if err != nil {
+			return fmt.Errorf("finding deployment dir for NM connections: %w", err)
+		}
+		dst = filepath.Join(deployDir, "etc", "NetworkManager", "system-connections")
+	}
+
+	if err := runner.Run("mkdir", "-p", dst); err != nil {
+		return fmt.Errorf("mkdir %s: %w", dst, err)
+	}
+
+	// Copy only .nmconnection files preserving permissions (they contain passwords, mode 0600).
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".nmconnection") {
+			continue
+		}
+		srcFile := filepath.Join(src, e.Name())
+		if err := runner.Run("cp", "-a", srcFile, dst+"/"); err != nil {
+			return fmt.Errorf("copying %s: %w", e.Name(), err)
+		}
+	}
+
+	// Fix SELinux context if restorecon is available.
+	_ = runner.Run("restorecon", "-R", dst)
+
+	fmt.Fprintf(os.Stdout, "  copied WiFi connections to %s\n", dst)
+	return nil
+}
+
+// EnablePrintServices enables cups-browsed, avahi-daemon, and ipp-usb in the
+// installed system so printers are auto-discovered on first boot without any
+// user configuration. All three are non-fatal: if the unit file is missing in
+// the target image the symlink is skipped with a warning.
+func EnablePrintServices(target string) {
+	services := []string{
+		"cups-browsed.service",
+		"avahi-daemon.service",
+		"ipp-usb.service",
+	}
+	for _, svc := range services {
+		enableSystemService(target, svc)
+	}
+	progress.Info("Print services enabled: cups-browsed, avahi-daemon, ipp-usb")
+}
+
+// AppendFstabEntry appends an fstab entry to the installed system at target.
+// Works for both composefs-native and ostree-based deployments.
+func AppendFstabEntry(target, uuid, mountpoint, fstype, options string) error {
+	var etcDir string
+	if isComposeFsNative(target) {
+		var err error
+		etcDir, err = ComposeFsDeployEtcDirFn(target)
+		if err != nil {
+			return fmt.Errorf("finding composefs deploy etc for fstab: %w", err)
+		}
+	} else {
+		deployDir, err := DeploymentDirFn(target)
+		if err != nil {
+			return fmt.Errorf("finding deployment dir for fstab: %w", err)
+		}
+		etcDir = filepath.Join(deployDir, "etc")
+	}
+	if err := os.MkdirAll(etcDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", etcDir, err)
+	}
+	if options == "" {
+		options = "defaults"
+	}
+	fstabPath := filepath.Join(etcDir, "fstab")
+	f, err := os.OpenFile(fstabPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o644)
+	if err != nil {
+		return fmt.Errorf("opening fstab %s: %w", fstabPath, err)
+	}
+	defer f.Close()
+	entry := fmt.Sprintf("UUID=%s\t%s\t%s\t%s\t0 0\n", uuid, mountpoint, fstype, options)
+	if _, err := f.WriteString(entry); err != nil {
+		return fmt.Errorf("writing fstab entry: %w", err)
+	}
+	return nil
 }

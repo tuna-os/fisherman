@@ -16,15 +16,81 @@ var inFlatpak = sync.OnceValue(func() bool {
 	return err == nil
 })
 
+// inFlatpakFn is the sandbox detector consulted by useHost, HostArgs,
+// HostArgsWithEnv, and InFlatpak. It is a variable — like RunFn/OutputFn
+// below — so tests can exercise the flatpak-spawn wrapping paths without
+// actually running inside a sandbox. Swap it and restore via t.Cleanup.
+var inFlatpakFn = inFlatpak
+
+// localCommands is the set of commands that are bundled inside the Flatpak
+// sandbox and should NOT be forwarded to the host via flatpak-spawn --host.
+// These are filesystem formatting and management tools (mkfs.*, btrfs, mkswap)
+// that only need block-device access (already granted by --device=all).
+//
+// Privileged tools (sfdisk, cryptsetup, mount, podman, …) are NOT in this set;
+// they continue to run on the host via flatpak-spawn so they operate in the
+// host mount namespace.
+var localCommands = map[string]bool{
+	"mkfs.fat":   true,
+	"mkfs.vfat":  true,
+	"mkfs.ext4":  true,
+	"mkfs.ext3":  true,
+	"mkfs.ext2":  true,
+	"mkfs.xfs":   true,
+	"mkfs.btrfs": true,
+	"btrfs":      true,
+	"mkswap":     true,
+}
+
+// useHost reports whether a command should be forwarded to the host via
+// flatpak-spawn --host. Returns false for commands that are bundled inside
+// the Flatpak sandbox and can access block devices directly via --device=all.
+func useHost(name string) bool {
+	return !localCommands[name]
+}
+
 // HostArgs prepends "flatpak-spawn --host" when running inside a Flatpak so
 // that privileged host tools (sfdisk, cryptsetup, podman, …) execute in the
 // host mount namespace rather than the sandbox.
+//
+// Commands in the localCommands set (mkfs.*, btrfs, mkswap) are bundled inside
+// the Flatpak sandbox and run directly — they access block devices through the
+// sandbox's --device=all permission and do not need the host mount namespace.
 func HostArgs(name string, args []string) (string, []string) {
-	if inFlatpak() {
+	if inFlatpakFn() && useHost(name) {
 		return "flatpak-spawn", append([]string{"--host", name}, args...)
 	}
 	return name, args
 }
+
+// HostArgsWithEnv is like HostArgs but also forwards the provided env vars
+// to the host process via --env=KEY=VALUE when running inside a Flatpak.
+//
+// Background: flatpak-spawn --host spawns the command in the host mount
+// namespace but does NOT automatically forward the Flatpak sandbox's
+// environment variables to the spawned process. Any env vars that the host
+// command needs (e.g. TMPDIR, CONTAINERS_STORAGE_CONF) must be passed
+// explicitly with --env=KEY=VALUE flags.
+//
+// For non-Flatpak invocations the result is identical to HostArgs; callers
+// are expected to set cmd.Env on the returned command to propagate the vars.
+func HostArgsWithEnv(name string, args []string, envVars []string) (string, []string) {
+	if inFlatpakFn() && useHost(name) {
+		fpArgs := make([]string, 0, 1+len(envVars)+1+len(args))
+		fpArgs = append(fpArgs, "--host")
+		for _, e := range envVars {
+			fpArgs = append(fpArgs, "--env="+e)
+		}
+		fpArgs = append(fpArgs, name)
+		fpArgs = append(fpArgs, args...)
+		return "flatpak-spawn", fpArgs
+	}
+	return name, args
+}
+
+// InFlatpak reports whether the current process is running inside a Flatpak
+// sandbox. Exported for use in conditional code paths outside this package.
+func InFlatpak() bool { return inFlatpakFn() }
 
 // DefaultRun is the real subprocess implementation. It applies flatpak-spawn
 // wrapping when running inside a Flatpak sandbox, then streams the command's
@@ -61,14 +127,24 @@ func RunWithStdin(stdin io.Reader, name string, args ...string) error {
 	return RunFn(stdin, name, args...)
 }
 
-// Output runs a command and returns its combined stdout output as bytes.
-// Unlike Run, this does not stream output to os.Stdout. Flatpak-spawn wrapping
-// is applied when running inside a sandbox.
-func Output(name string, args ...string) ([]byte, error) {
+// DefaultOutput is the real implementation of Output. Tests can replace
+// OutputFn to intercept calls without executing them.
+func DefaultOutput(name string, args ...string) ([]byte, error) {
 	name, args = HostArgs(name, args)
 	out, err := exec.Command(name, args...).Output()
 	if err != nil {
 		return nil, fmt.Errorf("%s %s: %w", name, strings.Join(args, " "), err)
 	}
 	return out, nil
+}
+
+// OutputFn is the function invoked by Output. Tests replace it with a
+// recording function to intercept calls without executing them.
+var OutputFn = DefaultOutput
+
+// Output runs a command and returns its combined stdout output as bytes.
+// Unlike Run, this does not stream output to os.Stdout. Flatpak-spawn wrapping
+// is applied when running inside a sandbox.
+func Output(name string, args ...string) ([]byte, error) {
+	return OutputFn(name, args...)
 }

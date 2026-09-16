@@ -8,7 +8,6 @@ import (
 	"github.com/tuna-os/fisherman/internal/runner"
 )
 
-
 func TestRunFn_DefaultIsNonNil(t *testing.T) {
 	if runner.RunFn == nil {
 		t.Error("RunFn must not be nil at startup")

@@ -20,6 +20,9 @@ var procMountsPath = "/proc/mounts"
 
 const GPTPartTypeLinuxRootX86_64 = "4f68bce3-e8cd-4db1-96e7-fbcaf984b709"
 
+// GetProcMountsPath returns the current mounts file path. For testing only.
+func GetProcMountsPath() string { return procMountsPath }
+
 // SetProcMountsPath overrides the mounts file path. For testing only.
 func SetProcMountsPath(p string) { procMountsPath = p }
 func PartSuffix(disk string) string {
@@ -40,6 +43,57 @@ func PartName(disk string, num int) string {
 	return fmt.Sprintf("%s%s%d", disk, PartSuffix(disk), num)
 }
 
+// UnmountPartition releases kernel and userspace references to a specific partition
+// in preparation for modifying its GPT attributes (e.g., retagging). This is less
+// destructive than unmountAll() — it only affects the specific partition, not the
+// entire disk. It does NOT deactivate LVM or kill processes.
+func UnmountPartition(disk string, partNum int) error {
+	partPath := PartName(disk, partNum)
+	data, err := os.ReadFile(procMountsPath)
+	if err != nil {
+		return fmt.Errorf("reading /proc/mounts: %w", err)
+	}
+
+	// Find and unmount any mounts for this specific partition.
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		dev := fields[0]
+		mp := fields[1]
+
+		// Only process mounts for this specific partition.
+		if dev != partPath {
+			continue
+		}
+
+		// swap entries have mount point "none" and fstype "swap".
+		if mp == "none" || (len(fields) >= 3 && fields[2] == "swap") {
+			fmt.Fprintf(os.Stdout, "+ swapoff %s\n", dev)
+			_ = runner.Run("swapoff", dev)
+			continue
+		}
+
+		fmt.Fprintf(os.Stdout, "+ unmount %s (%s)\n", mp, dev)
+		// Try udisksctl first — properly releases udisksd's open FD.
+		if err := runner.Run("udisksctl", "unmount", "--no-user-interaction", "--block-device", dev); err != nil {
+			// Fall back to umount -l for mounts not managed by udisks.
+			_ = runner.Run("umount", "-l", mp)
+		}
+	}
+
+	// Flush pending I/O so the kernel can drop its internal references.
+	fmt.Fprintf(os.Stdout, "+ blockdev --flushbufs %s\n", partPath)
+	_ = runner.Run("blockdev", "--flushbufs", partPath)
+
+	// Give udev and udisksd time to release all device references.
+	fmt.Fprintf(os.Stdout, "+ udevadm settle\n")
+	_ = runner.Run("udevadm", "settle")
+
+	return nil
+}
+
 // SetPartitionType rewrites the GPT type for a single partition on disk.
 func SetPartitionType(disk string, partNum int, partType string) error {
 	if err := runner.Run("sfdisk", "--part-type", disk, strconv.Itoa(partNum), partType); err != nil {
@@ -50,14 +104,16 @@ func SetPartitionType(disk string, partNum int, partType string) error {
 
 // Partition wipes disk and creates a three-partition GPT layout using sfdisk:
 //
-//	Partition 1 – EFI System (512 MiB)
-//	Partition 2 – /boot     (1 GiB, ext4 — bootloader reads this)
+//	Partition 1 – EFI System (2 GiB)
+//	Partition 2 – /boot     (2 GiB, ext4 — GRUB reads this)
 //	Partition 3 – Linux root (remaining space)
 //
-// A separate /boot partition is required because GRUB's built-in XFS driver
-// does not support the newer XFS features enabled by mkfs.xfs on el10
-// (nrext64, exchange, rmapbt). By keeping /boot on ext4, GRUB never needs
-// to parse XFS. This matches what bootc install to-disk always does.
+// 2 GiB ESP for fleet consistency with dakota (systemd-boot). Fedora/Anaconda
+// defaults to 500-600 MiB but that's for interactive installs that don't need
+// to hold multiple kernels on the ESP. Uniform 2 GiB simplifies fleet tooling.
+//
+// A separate /boot (ext4) is required because GRUB's built-in XFS driver
+// does not support newer XFS features (nrext64, rmapbt) on el10.
 //
 // On real block devices sfdisk notifies the kernel via BLKRRPART, so
 // partition devices appear after udevadm settle. Loop devices reject
@@ -67,8 +123,8 @@ func Partition(disk string) error {
 	script := strings.Join([]string{
 		"label: gpt",
 		"",
-		`size=512MiB, type=uefi, name="EFI-SYSTEM"`,
-		`size=1GiB,   type=linux, name="boot"`,
+		`size=2GiB, type=uefi, name="EFI-SYSTEM"`,
+		`size=2GiB,   type=linux, name="boot"`,
 		`type=linux, name="root"`,
 	}, "\n") + "\n"
 	return partition(disk, script)
@@ -171,7 +227,7 @@ func partition(disk, script string) error {
 // `bootc install to-disk` with systemd-boot. bootc creates a 3-partition GPT:
 //
 //	p1 = BIOS boot (1 MiB)
-//	p2 = EFI System (512 MiB, FAT32)
+//	p2 = EFI System (2 GiB, FAT32)
 //	p3 = Linux root (remainder, btrfs/xfs/ext4)
 //
 // It uses lsblk to confirm the layout rather than hardcoding partition numbers.
@@ -234,6 +290,10 @@ func RescanPartitions(d string) error {
 
 // loopRescan detaches a loop device and re-attaches it with --partscan (-P)
 // so the kernel creates partition block devices (/dev/loopNpM).
+// After re-attach, partprobe forces a partition-table re-read to eliminate a
+// race where the kernel hasn't finished populating the partition nodes before
+// subsequent mkfs/mount calls access them (observed as "No such device or
+// address" on /dev/loopNpM in CI, especially under load with large images).
 func loopRescan(disk string) error {
 	spawnArgs := func(name string, args ...string) (string, []string) {
 		if inFlatpakEnv() {
@@ -258,6 +318,11 @@ func loopRescan(disk string) error {
 		return fmt.Errorf("reattach with partscan: %w", err)
 	}
 
+	// partprobe forces the kernel to re-read the partition table even
+	// when udev is still processing the loop-attach event. Without this,
+	// a busy CI runner can hit a window where losetup -P has returned but
+	// /dev/loopNpM nodes don't exist yet → mkfs fails with ENOENT.
+	_ = runner.Run("partprobe", disk)
 	_ = runner.Run("udevadm", "settle")
 	return nil
 }
@@ -322,8 +387,19 @@ func unmountAll(disk string) error {
 
 	// Kill any processes still holding FDs open on any partition of this disk.
 	// fuser exits non-zero when no processes are found — that is fine.
-	fmt.Fprintf(os.Stdout, "+ fuser -km %s (kill remaining holders)\n", disk)
-	_ = runner.Run("fuser", "-km", disk)
+	//
+	// EXCEPTION: network block devices (/dev/nbd*) are served by a userspace
+	// process (qemu-nbd --connect) that holds the device open by design.
+	// fuser -km would SIGKILL that server, tearing down the connection and
+	// leaving sfdisk with "cannot open /dev/nbd0: Invalid argument". A
+	// freshly attached NBD device has no stale holders to evict anyway, so
+	// skip the kill entirely for it.
+	if isNBD(disk) {
+		fmt.Fprintf(os.Stdout, "+ skipping fuser -km on %s (NBD server must survive)\n", disk)
+	} else {
+		fmt.Fprintf(os.Stdout, "+ fuser -km %s (kill remaining holders)\n", disk)
+		_ = runner.Run("fuser", "-km", disk)
+	}
 
 	// Flush pending I/O so the kernel can drop its internal references.
 	_ = runner.Run("blockdev", "--flushbufs", disk)
@@ -331,6 +407,12 @@ func unmountAll(disk string) error {
 	// Give udev and udisksd time to release all device references.
 	_ = runner.Run("udevadm", "settle")
 	return nil
+}
+
+// isNBD reports whether disk is a network block device (/dev/nbd*),
+// which is served by a userspace qemu-nbd process that must not be killed.
+func isNBD(disk string) bool {
+	return strings.HasPrefix(filepath.Base(disk), "nbd")
 }
 
 // deactivateLVM removes LVM volume groups and device-mapper (dm-crypt, LUKS)

@@ -13,19 +13,14 @@ type storageDriverCandidate struct {
 	reason string // human-readable explanation
 }
 
-// selectStorageDriver chooses a storage driver for the composefs path.
-// If composefs is not enabled, returns ("vfs", "reason") unconditionally for backward compat.
-// If composefs is enabled, returns ("overlay", "reason") when safe, or ("vfs", "reason") as fallback.
+// selectStorageDriver chooses a storage driver for podman when --root is redirected
+// to a scratch directory (needed for both composefs and non-composefs installs when
+// the host's /var/lib/containers is space- or memory-constrained).
+// Returns ("overlay", "reason") when safe, or ("vfs", "reason") as fallback.
 // Checks include:
-// - Filesystem type of scratchPath (rejects BTRFS, overlayfs, tmpfs)
+// - Filesystem type of scratchPath (rejects overlayfs, tmpfs)
 // - Explicit podman overlay probe to verify the driver works on the target root
-func selectStorageDriver(scratchPath string, composefs bool) (driver, reason string) {
-	if !composefs {
-		// Non-composefs installs always use vfs, unchanged from current behavior.
-		return "vfs", "standard containers-storage (non-composefs path)"
-	}
-
-	// Composefs path: try overlay, but carefully.
+func selectStorageDriver(scratchPath string) (driver, reason string) {
 	candidate := overlayCandidate(scratchPath)
 	if candidate.driver == "vfs" {
 		return candidate.driver, candidate.reason
@@ -36,7 +31,7 @@ func selectStorageDriver(scratchPath string, composefs bool) (driver, reason str
 		return "vfs", fmt.Sprintf("podman overlay probe failed: %v", err)
 	}
 
-	return "overlay", "overlay-backed composefs temporary storage on safe filesystem"
+	return "overlay", "overlay-backed storage on safe filesystem"
 }
 
 // overlayCandidate checks if the scratch filesystem is safe for overlay, returning either
@@ -46,22 +41,28 @@ func overlayCandidate(scratchPath string) storageDriverCandidate {
 	if err != nil {
 		return storageDriverCandidate{"vfs", fmt.Sprintf("could not detect filesystem type: %v", err)}
 	}
+	return overlaySafe(fsType)
+}
 
+// overlaySafe is the pure filesystem-type → driver decision, split out so it
+// can be tested deterministically without depending on the ambient
+// filesystem type of any real path (e.g. /tmp is tmpfs on dev machines but
+// ext4 on CI runners).
+func overlaySafe(fsType string) storageDriverCandidate {
 	// Filesystems where overlay should NOT be used.
 	unsafeFS := map[string]bool{
-		"btrfs":    true,
 		"overlayfs": true,
-		"tmpfs":    true,
+		"tmpfs":     true,
 	}
-
 	if unsafeFS[fsType] {
 		return storageDriverCandidate{"vfs", fmt.Sprintf("scratch filesystem %s does not support overlay", fsType)}
 	}
 
 	// Unknown filesystem: be conservative and use vfs.
 	knownSafeFS := map[string]bool{
-		"ext4": true,
-		"xfs":  true,
+		"ext4":  true,
+		"xfs":   true,
+		"btrfs": true,
 	}
 	if !knownSafeFS[fsType] {
 		return storageDriverCandidate{"vfs", fmt.Sprintf("scratch filesystem %s is not known to be overlay-safe", fsType)}
@@ -88,11 +89,12 @@ func filesystemType(path string) (string, error) {
 		0xf995e849: "hpfs",
 		0x9660:     "isofs",
 		0x137d:     "ext",
-		0xef53:     "ext2/ext3/ext4",
+		0xef53:     "ext4", // ext2/ext3/ext4 share this magic; modern systems are ext4
 		0xf2f52010: "ubifs",
 		0x58465342: "xfs",
 		0x794c7630: "overlayfs",
 		0x01021994: "tmpfs",
+		0x858458f6: "ramfs",
 		0x6969:     "nfs",
 	}
 
@@ -101,6 +103,23 @@ func filesystemType(path string) (string, error) {
 	}
 
 	return fmt.Sprintf("unknown(0x%x)", st.Type), nil
+}
+
+// defaultStorageSpaceConstrained reports whether podman's default storage
+// location lives on a memory-backed filesystem (tmpfs/ramfs/overlayfs) where
+// a multi-gigabyte image pull would exhaust RAM. When the host has already
+// provided disk-backed storage there (e.g. the wootc deployer bind-mounts an
+// ext4 loop at /var/lib/containers), redirecting storage into the target disk
+// is wasteful: it forces the OCI-export path, which lands three copies of the
+// image inside the target (containers-root + oci-cache + the deployment) and
+// overflows fixed-size targets.
+func defaultStorageSpaceConstrained() bool {
+	for _, p := range []string{"/var/lib/containers", "/var"} {
+		if fsType, err := filesystemType(p); err == nil {
+			return fsType == "tmpfs" || fsType == "ramfs" || fsType == "overlayfs"
+		}
+	}
+	return false
 }
 
 // probeOverlay attempts to verify that podman can use the overlay driver on the target root.
@@ -114,9 +133,9 @@ func probeOverlay(scratchPath string) error {
 	}
 	defer os.RemoveAll(probeRoot)
 
-	// Run `podman --root <probeRoot> info --format json` to check overlay support.
+	// Run `podman --root <probeRoot> --storage-driver overlay info` to check overlay support.
 	// If overlay is not available or doesn't work on this root, podman will error.
-	cmd := exec.Command("podman", "--root", probeRoot, "info", "--format", "json")
+	cmd := exec.Command("podman", "--root", probeRoot, "--storage-driver", "overlay", "info", "--format", "json")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("podman probe failed: %w (output: %s)", err, output)
 	}

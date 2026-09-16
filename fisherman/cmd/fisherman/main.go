@@ -13,15 +13,28 @@ import (
 	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
+	"github.com/tuna-os/fisherman/internal/slurp"
 )
 
 const (
-	targetMount = "/mnt/fisherman-target"
-	luksMapper  = "fisherman-root"
+	defaultTargetMount = "/mnt/fisherman-target"
+	defaultLuksMapper  = "fisherman-root"
+)
+
+// These are resolved from the recipe in main(); package-level vars rather than
+// constants so the rest of this file (which references them by short name)
+// stays readable. Tests don't touch these directly — they exercise the helper
+// functions in disk/, luks/, post/ which take the paths as arguments.
+var (
+	targetMount = defaultTargetMount
+	luksMapper  = defaultLuksMapper
 )
 
 // cleanup is global so fatal() can tear everything down on any error path.
 var cleanup = &post.Cleanup{}
+
+// bindMount is disk.BindMount by default; tests replace it to avoid real mounts.
+var bindMount = disk.BindMount
 
 type stepProfile struct {
 	cumulativePct int
@@ -31,7 +44,7 @@ type stepProfile struct {
 // buildProfile returns per-step weight profiles based on timing data from a
 // yellowfin gnome-hwe loop-device install (264s uncached, ~111s cached).
 // Weights sum to 100. cumulativePct is the bar position at step start.
-func buildProfile(needsPull, hasLUKS, hasTPM2enrolment bool) []stepProfile {
+func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) []stepProfile {
 	osWeight := 87
 	flatpakWeight := 11
 	if !needsPull {
@@ -49,7 +62,10 @@ func buildProfile(needsPull, hasLUKS, hasTPM2enrolment bool) []stepProfile {
 	if hasLUKS {
 		weights = append(weights, 1) // LUKS setup
 	}
-	weights = append(weights, 0, 0)     // format root, mount
+	weights = append(weights, 0, 0) // format root, mount
+	if hasVarDiskFormat {
+		weights = append(weights, 0) // format /var disk (fast)
+	}
 	weights = append(weights, osWeight) // install OS
 	if hasTPM2enrolment {
 		weights = append(weights, 1) // TPM2 enrolment
@@ -97,6 +113,30 @@ func isSpaceConstrained(path string) bool {
 	return st.Type == tmpfsMagic || st.Type == overlayMagic
 }
 
+func prepareScratchDir(activeTargetMount string, liveISO bool) (string, error) {
+	scratchDir := "/var/fisherman-tmp"
+	if liveISO {
+		scratchDir = filepath.Join(activeTargetMount, ".fisherman-scratch")
+		progress.Info("Live environment detected (/var is space-constrained) — using target disk for scratch I/O")
+	}
+	if err := os.MkdirAll(scratchDir, 0o700); err != nil {
+		return "", err
+	}
+	if liveISO {
+		// Self-bind so bootc sees a mount point, not a plain directory.
+		if err := bindMount(scratchDir, scratchDir); err != nil {
+			return "", err
+		}
+		cleanup.AddMount(scratchDir)
+		// Removal is registered as a post-removal so it runs *after* the
+		// unmount above and after the LUKS close — and crucially it still
+		// fires on the fatal() error path, where os.Exit(1) would otherwise
+		// skip a deferred RemoveAll and leak the OCI cache on the target disk.
+		cleanup.AddPostRemoval(scratchDir)
+	}
+	return scratchDir, nil
+}
+
 // expandPath prepends standard sbin directories and any tools staged alongside
 // this binary to PATH.  pkexec strips the user's PATH to a minimal safe set
 // that omits /usr/sbin and /sbin on many immutable distros (e.g. GnomeOS).
@@ -135,6 +175,10 @@ func checkRequiredTools(r *recipe.Recipe) error {
 		{"zpool", "zfsutils-linux", r.Filesystem == "zfs"},
 		{"zfs", "zfsutils-linux", r.Filesystem == "zfs"},
 		{"cryptsetup", "cryptsetup", r.Encryption.Type != "" && r.Encryption.Type != "none"},
+		// systemd-cryptenroll is required for TPM2 auto-unlock enrolment.
+		// Check before touching any disks — a missing tool at step 9 (after
+		// partitioning and OS install) would leave the disk partially modified.
+		{"systemd-cryptenroll", "systemd", r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"},
 		{"skopeo", "skopeo", true},
 		{"podman", "podman", true},
 	}
@@ -158,6 +202,7 @@ Usage:
   fisherman <recipe.json>          run an installation from a recipe file
   fisherman validate <recipe.json> validate a recipe without installing
   fisherman images [<query>]       list or search the image catalog
+  fisherman scan <disk>            scan disk for Windows data available to migrate
   fisherman version                print version information
   fisherman help                   show this help
 
@@ -169,9 +214,10 @@ Examples:
   fisherman /tmp/recipe.json
   fisherman validate /tmp/recipe.json
   fisherman images
-  fisherman images TunaOS
+  fisherman images Bluefin
   fisherman images "GNOME 50"
   fisherman images --plain yellowfin
+  fisherman scan /dev/nvme0n1
 `)
 }
 
@@ -194,6 +240,18 @@ func main() {
 	case "validate":
 		runValidate(os.Args[2:])
 		return
+	case "scan":
+		if len(os.Args) < 3 {
+			fmt.Fprintf(os.Stderr, "Usage: fisherman scan <disk>\n")
+			os.Exit(1)
+		}
+		output, err := slurp.ScanJSON(os.Args[2])
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "scan: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println(output)
+		return
 	}
 
 	r, err := recipe.Load(os.Args[1])
@@ -203,6 +261,18 @@ func main() {
 	if err := r.Validate(); err != nil {
 		fatal("invalid recipe: %v", err)
 	}
+
+	// Recipe-level overrides for the otherwise-shared global mount paths.
+	// Keeps two parallel installs on the same host from colliding.
+	if r.TargetMount != "" {
+		targetMount = r.TargetMount
+	}
+	if r.LuksMapperName != "" {
+		luksMapper = r.LuksMapperName
+	}
+
+	// Log fisherman version for CI diagnostics
+	fmt.Fprintf(os.Stderr, "[fisherman] version: %s\n", version)
 
 	// Expand PATH to cover all standard sbin locations and any tools staged
 	// alongside this binary (e.g. by the tuna-installer Flatpak).  pkexec
@@ -218,7 +288,6 @@ func main() {
 
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
-	hasTPM2enrolment := r.Encryption.Type == "tpm2-luks-passphrase"
 	isManual := len(r.CustomMounts) > 0
 	isSystemdBoot := r.Bootloader == "systemd" || r.Filesystem == "zfs"
 
@@ -236,7 +305,7 @@ func main() {
 		}
 	}
 
-	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2enrolment)
+	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2, r.VarDisk != nil && !r.VarDisk.KeepExisting)
 	pi := 0 // profile index, incremented at each progress.Step call
 
 	// Compute total step count up front so the GUI can show accurate progress.
@@ -248,15 +317,76 @@ func main() {
 	if hasEncryption && !isManual {
 		totalSteps++ // extra step for LUKS setup (auto mode only)
 	}
-	if hasTPM2 && r.Encryption.Type == "tpm2-luks-passphrase" {
-		totalSteps++ // extra step for TPM2 enrolment
+	if hasTPM2 {
+		totalSteps++ // extra step for TPM2 enrolment (both tpm2-luks and tpm2-luks-passphrase)
+	}
+	hasVarDisk := r.VarDisk != nil
+	if hasVarDisk && !r.VarDisk.KeepExisting {
+		totalSteps++ // extra step to format the /var disk
 	}
 	step := 1
 
+	// ── Immediate: Apply friendly audio names to live session ─────────────
+	// Detect hardware, rename ugly ALSA names, hide S/PDIF etc. Takes effect
+	// immediately via WirePlumber restart. Non-fatal.
+	if err := post.ApplyAudioConfigLive(); err != nil {
+		progress.Info(fmt.Sprintf("Live audio config skipped: %v", err))
+	}
+
+	// ── Pre-partition: Wallpaper slurp (easter egg) ──────────────────────────
+	// Extract Windows wallpapers from any NTFS partition on the target disk
+	// before partitioning destroys them. Held in RAM (/run). Entirely non-fatal.
+	var wallpaperResult *slurp.WallpaperResult
+	var dataResult *slurp.DataSlurpResult
+
+	if r.Slurp != nil && !isManual {
+		// Full data slurp: user selected specific categories in the GUI
+		progress.Info("Migrating Windows user data before partitioning...")
+		cfg := &slurp.SlurpConfig{
+			SourcePartition: r.Slurp.SourcePartition,
+		}
+		for _, u := range r.Slurp.Users {
+			cfg.Users = append(cfg.Users, slurp.SlurpUserConfig{
+				Name:       u.Name,
+				Categories: u.Categories,
+			})
+		}
+		result, err := slurp.ExtractData(cfg)
+		if err != nil {
+			progress.Info(fmt.Sprintf("Data migration skipped: %v", err))
+		} else {
+			dataResult = result
+		}
+	} else if r.SlurpWallpapers && !isManual {
+		// Wallpaper-only easter egg (no explicit slurp config)
+		progress.Info("Checking for Windows wallpapers to migrate...")
+		ntfsPartitions, err := slurp.DetectNTFS(r.Disk)
+		if err != nil {
+			progress.Info(fmt.Sprintf("NTFS detection skipped: %v", err))
+		} else if len(ntfsPartitions) > 0 {
+			progress.Info(fmt.Sprintf("Found %d NTFS partition(s), extracting wallpapers", len(ntfsPartitions)))
+			for _, part := range ntfsPartitions {
+				result, err := slurp.ExtractWallpapers(part)
+				if err != nil {
+					progress.Info(fmt.Sprintf("Wallpaper extraction from %s skipped: %v", part, err))
+					continue
+				}
+				if result.Found {
+					wallpaperResult = result
+					break // take first successful extraction
+				}
+			}
+		}
+		if wallpaperResult == nil {
+			progress.Info("No Windows wallpapers found — continuing normally")
+		}
+	}
+
 	var activeTargetMount string
 	var activeEfiPart string
-	var activeRootPart string // only used for TPM2 enrolment, empty in manual mode
-	var activeLuksUUID string // LUKS partition UUID for boot entry injection; empty if no encryption
+	var activeRootPart string  // only used for TPM2 enrolment, empty in manual mode
+	var activeLuksUUID string  // LUKS partition UUID for boot entry injection; empty if no encryption
+	var luksRecoveryKey string // random passphrase for tpm2-luks (emitted as recovery key)
 
 	if isManual {
 		// ── Step 1 (manual): Format and mount user-specified partitions ────────
@@ -355,7 +485,8 @@ func main() {
 				passphrase = r.Encryption.Passphrase
 			case "tpm2-luks":
 				passphrase = luks.RandomPassphrase()
-				progress.Info("TPM2-LUKS: using a temporary passphrase; TPM2 will be enrolled after install")
+				luksRecoveryKey = passphrase // emitted later so user can write it down
+				progress.Info("TPM2-LUKS: generated random recovery passphrase; TPM2 will be enrolled after install")
 			}
 
 			// A previous interrupted run may have left the mapper open. Close it
@@ -415,7 +546,7 @@ func main() {
 				fatal("setting up btrfs subvolumes: %v", err)
 			}
 		} else {
-			if err := disk.Mount(rootDev, targetMount, ""); err != nil {
+			if err := disk.MountType(rootDev, targetMount, r.Filesystem, ""); err != nil {
 				fatal("mounting root: %v", err)
 			}
 		}
@@ -441,6 +572,30 @@ func main() {
 		activeEfiPart = efiPart
 	}
 
+	// ── Step 5.5: Mount /var disk (optional) ─────────────────────────────────
+	// Must happen before bootc install so bootc populates /var on the right disk.
+	if hasVarDisk {
+		varDir := filepath.Join(activeTargetMount, "var")
+		if err := os.MkdirAll(varDir, 0o755); err != nil {
+			fatal("creating /var mount point: %v", err)
+		}
+		if !r.VarDisk.KeepExisting {
+			progress.Step(step, totalSteps, "Formatting data disk (/var)", profile[pi].cumulativePct, profile[pi].weightPct)
+			pi++
+			step++
+			if err := disk.FormatVar(r.VarDisk.Disk); err != nil {
+				fatal("formatting /var disk: %v", err)
+			}
+		} else {
+			progress.Info(fmt.Sprintf("Keeping existing data on /var disk %s", r.VarDisk.Disk))
+		}
+		if err := disk.Mount(r.VarDisk.Disk, varDir, ""); err != nil {
+			fatal("mounting /var disk: %v", err)
+		}
+		cleanup.AddMount(varDir)
+		progress.Info(fmt.Sprintf("Mounted /var disk %s at /var", r.VarDisk.Disk))
+	}
+
 	// Bind-mount a host-side scratch directory at /var/tmp so bootc has
 	// disk-backed space for layer blobs. We deliberately use a path OUTSIDE
 	// the target tree so bootc's "empty rootfs" check doesn't find stray
@@ -453,27 +608,26 @@ func main() {
 	// target disk instead. A self-bind mount makes bootc's empty-rootdir
 	// check see a mount point (which it tolerates) rather than a plain
 	// directory (which it rejects).
-	scratchDir := "/var/fisherman-tmp"
 	liveISO := isSpaceConstrained("/var") && activeTargetMount != ""
-	if liveISO {
-		scratchDir = filepath.Join(activeTargetMount, ".fisherman-scratch")
-		progress.Info("Live environment detected (/var is space-constrained) — using target disk for scratch I/O")
+	scratchDir, err := prepareScratchDir(activeTargetMount, liveISO)
+	if err != nil {
+		fatal("preparing scratch dir: %v", err)
 	}
-	if err := os.MkdirAll(scratchDir, 0o1777); err != nil {
-		fatal("creating scratch dir: %v", err)
+	// Note: bootc container gets this directory mounted at /var/tmp via -v flag in podman call.
+	// The container runs in its own mount namespace, so the host-level /var/tmp mount is not
+	// necessary. We skip it here to avoid conflicts when /var/tmp is already a separate
+	// filesystem on the host.
+	//
+	// For the live-ISO path scratchDir is on the target disk and removal is
+	// handled by cleanup.AddPostRemoval (registered in prepareScratchDir),
+	// which also fires on the fatal() error path. For the non-live path the
+	// directory is /var/fisherman-tmp on the host and is cleaned up here
+	// AND via cleanup.AddPostRemoval so it also fires on fatal() paths
+	// (os.Exit bypasses defers).
+	if !liveISO {
+		cleanup.AddPostRemoval(scratchDir)
+		defer os.RemoveAll(scratchDir)
 	}
-	if liveISO {
-		// Self-bind so bootc sees a mount point, not a plain directory.
-		if err := disk.BindMount(scratchDir, scratchDir); err != nil {
-			fatal("self-bind scratch dir: %v", err)
-		}
-		cleanup.AddMount(scratchDir)
-	}
-	if err := disk.BindMount(scratchDir, "/var/tmp"); err != nil {
-		fatal("bind-mounting scratch dir at /var/tmp: %v", err)
-	}
-	cleanup.AddMount("/var/tmp")
-	defer os.RemoveAll(scratchDir)
 
 	// ── Step 6: Install OS ────────────────────────────────────────────────────
 	progress.Step(step, totalSteps, "Installing OS", profile[pi].cumulativePct, profile[pi].weightPct)
@@ -494,16 +648,18 @@ func main() {
 	}
 
 	if err := install.BootcInstall(install.Options{
-		SourceImgref:     r.Image,
-		TargetImgref:     targetImgref,
-		SelinuxDisabled:  r.SelinuxDisabled,
-		UnifiedStorage:   r.UnifiedStorage,
-		ComposeFsBackend: composeFsBackend,
-		Bootloader:       r.Bootloader,
-		Target:           activeTargetMount,
-		ScratchDir:       scratchDir,
-		NeedsPull:        imageCheck.NeedsPull,
-		LayerCount:       imageCheck.LayerCount,
+		SourceImgref:          r.Image,
+		TargetImgref:          targetImgref,
+		SelinuxDisabled:       r.SelinuxDisabled,
+		UnifiedStorage:        r.UnifiedStorage,
+		ComposeFsBackend:      composeFsBackend,
+		GenericImage:          r.GenericImage,
+		Bootloader:            r.Bootloader,
+		Target:                activeTargetMount,
+		ScratchDir:            scratchDir,
+		NeedsPull:             imageCheck.NeedsPull,
+		LayerCount:            imageCheck.LayerCount,
+		AdditionalImageStores: r.AdditionalImageStores,
 	}); err != nil {
 		fatal("bootc install: %v", err)
 	}
@@ -513,23 +669,79 @@ func main() {
 	// Linux root GUID so the installed system can find /sysroot on first boot.
 	if !isManual && isSystemdBoot && !hasEncryption && r.ComposeFsBackend {
 		progress.Info("Retagging root partition for systemd GPT auto-discovery")
+
+		// Ensure BOOTX64.EFI is on the ESP before we touch the mount stack.
+		// Newer bootctl (e.g. arch-bootc systemd ≥ v255) enables --graceful when
+		// running in a container and silently skips writing to the ESP. Copying
+		// directly from the ostree deployment is a reliable fallback and a no-op
+		// when bootctl ran correctly (EFI/BOOT/BOOTX64.EFI already present).
+		if err := install.InstallSystemdBoot(activeTargetMount); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not ensure systemd-boot EFI binary: %v", err))
+		}
+
+		// Unmount the EFI partition explicitly so the FAT32 state is flushed to
+		// the page cache before the root lazy-unmount below orphans the submount.
+		if err := disk.UnmountPartition(r.Disk, 1); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not unmount EFI partition before retag: %v\n", err)
+		}
+
+		// Release kernel and userspace references to the root partition before
+		// modifying its GPT type. bootc install may have left active references.
+		if err := disk.UnmountPartition(r.Disk, 2); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not fully clean partition references: %v\n", err)
+		}
 		if err := disk.SetPartitionType(r.Disk, 2, disk.GPTPartTypeLinuxRootX86_64); err != nil {
 			fatal("retagging root partition: %v", err)
 		}
+		// Remount root so finalization and post-install writes can proceed.
+		// udisksctl unmount (used by UnmountPartition above) removes the
+		// mountpoint directory it manages, and disk.Mount — unlike
+		// MountTmpfs/BindMount — does not create its target, so recreate it
+		// or the plain `mount` syscall below fails with ENOENT.
+		if err := os.MkdirAll(activeTargetMount, 0o755); err != nil {
+			fatal("recreating target mountpoint before remount: %v", err)
+		}
+		rootPart := disk.PartName(r.Disk, 2)
+		if err := disk.Mount(rootPart, activeTargetMount, ""); err != nil {
+			fatal("remounting root partition after retagging: %v", err)
+		}
+		// Remount EFI so that Plymouth/LUKS arg writes land on the real ESP
+		// instead of the empty /boot/efi directory in the XFS root.
+		if err := disk.MountEFI(activeTargetMount, activeEfiPart); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: could not remount EFI partition after retag: %v\n", err)
+		}
 	}
 
-	// ── TPM2 enrolment (tpm2-luks-passphrase only) ────────────────────────────
-	// For plain tpm2-luks the random passphrase is ephemeral; no enrolment step.
-	// For tpm2-luks-passphrase the user's passphrase unlocks LUKS; we add a
-	// TPM2 token on top so the system auto-unlocks, with the password as fallback.
-	if r.Encryption.Type == "tpm2-luks-passphrase" {
+	// ── TPM2 enrolment ────────────────────────────────────────────────────────
+	// Both tpm2-luks and tpm2-luks-passphrase add a TPM2 auto-unlock token so
+	// the system boots without a passphrase prompt. The difference:
+	//   tpm2-luks:            random passphrase (recovery key) + TPM2
+	//   tpm2-luks-passphrase: user passphrase (fallback) + TPM2
+	if hasTPM2 && activeRootPart != "" {
 		progress.Step(step, totalSteps, "Enrolling TPM2 auto-unlock", profile[pi].cumulativePct, profile[pi].weightPct)
 		pi++
 		step++
 
-		if err := luks.EnrollTPM2(activeRootPart, r.Encryption.Passphrase); err != nil {
-			// Non-fatal: TPM2 hardware may not be present (e.g. VMs).
-			progress.Info(fmt.Sprintf("Warning: TPM2 enrolment failed (password unlock still works): %v", err))
+		unlockPassphrase := r.Encryption.Passphrase
+		if r.Encryption.Type == "tpm2-luks" {
+			unlockPassphrase = luksRecoveryKey
+		}
+		// Enroll TPM2 on the FIRST BOOT of the installed system, not here:
+		// --tpm2-pcrs=7 seals against PCR 7 as measured in the live
+		// installer, but the installed system boots a different chain and
+		// measures a different PCR 7 — so an install-time enrollment can
+		// never unseal on first boot. Staging a first-boot oneshot captures
+		// the correct PCR 7. The recovery/passphrase key unlocks until then.
+		if err := luks.StageFirstBootEnrollment(activeTargetMount, activeLuksUUID, unlockPassphrase); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not stage first-boot TPM2 enrollment (recovery key unlock still works): %v", err))
+		} else {
+			progress.Info("TPM2 auto-unlock will be enrolled on first boot")
+		}
+
+		// For tpm2-luks the user never chose a passphrase, so we emit the
+		// random one as a recovery key they must save before rebooting.
+		if luksRecoveryKey != "" {
+			progress.RecoveryKey(luksRecoveryKey)
 		}
 	}
 
@@ -551,6 +763,20 @@ func main() {
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
 	if err := post.WriteHostname(activeTargetMount, r.Hostname); err != nil {
 		fatal("writing hostname: %v", err)
+	}
+
+	// Write /var fstab entry if a separate /var disk was used.
+	if hasVarDisk {
+		varUUID := disk.UUID(r.VarDisk.Disk)
+		if varUUID == "" {
+			progress.Info(fmt.Sprintf("Warning: could not determine UUID for /var disk %s — skipping fstab entry", r.VarDisk.Disk))
+		} else {
+			if err := post.AppendFstabEntry(activeTargetMount, varUUID, "/var", "xfs", "defaults"); err != nil {
+				progress.Info(fmt.Sprintf("Warning: could not write /var fstab entry: %v", err))
+			} else {
+				progress.Info(fmt.Sprintf("Added /var fstab entry (UUID=%s)", varUUID))
+			}
+		}
 	}
 
 	// Create a user account if the recipe requests one (e.g. Bazzite has no OOBE).
@@ -587,6 +813,69 @@ func main() {
 			progress.Info(fmt.Sprintf("Injected rd.luks.name into %d boot entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
 		}
 	}
+
+	// Copy Bluetooth pairings from live session so paired keyboards/mice
+	// reconnect on first boot without re-pairing. Non-fatal.
+	if err := post.CopyBluetoothPairings(activeTargetMount); err != nil {
+		progress.Info(fmt.Sprintf("Warning: could not copy Bluetooth pairings: %v", err))
+	}
+
+	// Copy WiFi connections from live session so network reconnects on first boot. Non-fatal.
+	if err := post.CopyWiFiConnections(activeTargetMount); err != nil {
+		progress.Info(fmt.Sprintf("Warning: could not copy WiFi connections: %v", err))
+	}
+
+	// Generate friendly audio device names and hide useless outputs (S/PDIF,
+	// Pro Audio, monitor loopbacks). Writes WirePlumber rules to /etc/ so no
+	// GNOME extensions are needed. Non-fatal.
+	if err := post.GenerateAudioConfig(activeTargetMount); err != nil {
+		progress.Info(fmt.Sprintf("Warning: could not configure audio devices: %v", err))
+	}
+
+	// Inject slurped Windows data into the installed system. Non-fatal.
+	if dataResult != nil && dataResult.Found {
+		composefs := post.IsComposeFsNativeExported(activeTargetMount)
+		if err := slurp.InjectData(activeTargetMount, dataResult, composefs); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not inject user data: %v", err))
+		}
+	}
+	if wallpaperResult != nil && wallpaperResult.Found {
+		composefs := post.IsComposeFsNativeExported(activeTargetMount)
+		if err := slurp.InjectWallpapers(activeTargetMount, wallpaperResult, composefs); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not inject wallpapers: %v", err))
+		}
+	}
+	// Cleanup scratch space (both data and wallpaper slurps use /run/fisherman-slurp)
+	if dataResult != nil || wallpaperResult != nil {
+		slurp.CleanupScratch()
+	}
+
+	// Pre-generate thumbnails for ALL wallpapers (system + user-injected) so
+	// the GNOME wallpaper capplet opens instantly on first boot. Non-fatal.
+	{
+		composefs := post.IsComposeFsNativeExported(activeTargetMount)
+		progress.Substep("Pre-generating wallpaper thumbnails")
+		n := slurp.GenerateSystemThumbnails(activeTargetMount, composefs)
+		if n > 0 {
+			progress.Info(fmt.Sprintf("Pre-generated %d wallpaper thumbnail(s)", n))
+		}
+	}
+
+	// Detect OEM hardware (ASUS, Framework) and queue vendor-specific packages
+	// for first-login install via brew. Also enables required system services. Non-fatal.
+	if err := post.InstallOEMPackages(activeTargetMount, r.DistroID, r.BrewTap); err != nil {
+		progress.Info(fmt.Sprintf("Warning: OEM package setup: %v", err))
+	}
+
+	// Enable print auto-discovery services (cups-browsed, avahi-daemon, ipp-usb)
+	// so USB and network printers are found on first boot without configuration.
+	// Non-fatal: services are skipped if their unit files are absent from the image.
+	post.EnablePrintServices(activeTargetMount)
+
+	// Warm all system caches (fonts, icons, schemas, pixbuf, ldconfig, man-db,
+	// flatpak appstream) so first boot is instant. Non-fatal.
+	progress.Substep("Pre-warming system caches for first boot")
+	post.WarmCaches(activeTargetMount)
 
 	// ── Step 9: Finalize ─────────────────────────────────────────────────────
 	// bootc's --skip-finalize kept the target writable for post-install writes.

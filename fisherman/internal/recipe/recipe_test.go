@@ -82,8 +82,13 @@ func TestValidate(t *testing.T) {
 			r:    recipe.Recipe{Disk: diskPath, Filesystem: "btrfs", Hostname: "h", ComposeFsBackend: true},
 		},
 		{
-			name: "valid composefs_backend with xfs",
-			r:    recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ComposeFsBackend: true},
+			name: "valid composefs_backend with ext4",
+			r:    recipe.Recipe{Disk: diskPath, Filesystem: "ext4", Hostname: "h", ComposeFsBackend: true},
+		},
+		{
+			name:    "composefs_backend rejected with xfs (no fs-verity)",
+			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "h", ComposeFsBackend: true},
+			wantErr: "composefs-backend requires fs-verity",
 		},
 		{
 			name: "valid bootloader empty (default grub2)",
@@ -117,9 +122,8 @@ func TestValidate(t *testing.T) {
 			wantErr: `filesystem must be`,
 		},
 		{
-			name:    "unsupported filesystem ext4",
-			r:       recipe.Recipe{Disk: diskPath, Filesystem: "ext4", Hostname: "h"},
-			wantErr: `filesystem must be`,
+			name: "ext4 filesystem valid",
+			r:    recipe.Recipe{Disk: diskPath, Filesystem: "ext4", Hostname: "h"},
 		},
 		{
 			name:    "btrfsSubvolumes without btrfs",
@@ -241,6 +245,35 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("additional image stores + mount overrides round-trip", func(t *testing.T) {
+		body := []byte(`{
+            "disk": "/dev/sda",
+            "filesystem": "xfs",
+            "hostname": "h",
+            "additionalImageStores": ["/var/lib/superiso-store", "/srv/extra"],
+            "targetMount": "/mnt/altroot",
+            "luksMapperName": "altmapper"
+        }`)
+		path := filepath.Join(dir, "stores.json")
+		if err := os.WriteFile(path, body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded, err := recipe.Load(path)
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if got := loaded.AdditionalImageStores; len(got) != 2 ||
+			got[0] != "/var/lib/superiso-store" || got[1] != "/srv/extra" {
+			t.Errorf("AdditionalImageStores = %v, want [/var/lib/superiso-store /srv/extra]", got)
+		}
+		if loaded.TargetMount != "/mnt/altroot" {
+			t.Errorf("TargetMount = %q, want /mnt/altroot", loaded.TargetMount)
+		}
+		if loaded.LuksMapperName != "altmapper" {
+			t.Errorf("LuksMapperName = %q, want altmapper", loaded.LuksMapperName)
+		}
+	})
+
 	t.Run("malformed JSON", func(t *testing.T) {
 		path := filepath.Join(dir, "bad.json")
 		if err := os.WriteFile(path, []byte("{not valid json"), 0o600); err != nil {
@@ -254,4 +287,78 @@ func TestLoad(t *testing.T) {
 			t.Errorf("error = %q, want containing 'parsing recipe'", err.Error())
 		}
 	})
+}
+
+// Manual (customMounts) layouts: two ways a recipe can be accepted here and
+// then do the wrong thing later. Both were hit in practice by
+// tuna-os/bootc-installer-asahi.
+
+func manualRecipe(t *testing.T, fstype string, enc string) *recipe.Recipe {
+	t.Helper()
+	// Validate() stats the partition paths, so use files that exist.
+	root := filepath.Join(t.TempDir(), "root")
+	if err := os.WriteFile(root, []byte{}, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &recipe.Recipe{
+		Image:        "example.invalid/img:latest",
+		Hostname:     "validate-test",
+		CustomMounts: []recipe.CustomMount{{Partition: root, Target: "/", Fstype: fstype}},
+	}
+	r.Encryption.Type = enc
+	return r
+}
+
+func TestValidateRejectsUnsupportedCustomMountFstype(t *testing.T) {
+	// "vfat" is the obvious spelling for an ESP and is NOT accepted:
+	// formatPartition knows "fat32". Previously this passed Validate() and
+	// failed mid-install, after the caller had already committed to the recipe.
+	err := manualRecipe(t, "vfat", "none").Validate()
+	if err == nil {
+		t.Fatal("expected an unsupported-fstype error, got nil")
+	}
+	if !strings.Contains(err.Error(), "vfat") {
+		t.Errorf("error should name the offending value, got: %v", err)
+	}
+}
+
+func TestValidateAcceptsSkipFormatSentinels(t *testing.T) {
+	// An existing ESP must be mountable WITHOUT being reformatted: it already
+	// holds the bootloader and, on Apple Silicon, non-redistributable vendor
+	// firmware. Both spellings must survive validation.
+	for _, fstype := range []string{"", "unformatted"} {
+		if err := manualRecipe(t, fstype, "none").Validate(); err != nil {
+			t.Errorf("fstype %q should be accepted, got: %v", fstype, err)
+		}
+	}
+}
+
+func TestValidateAcceptsSupportedCustomMountFstypes(t *testing.T) {
+	for _, fstype := range []string{"fat32", "ext3", "ext4", "xfs", "btrfs"} {
+		if err := manualRecipe(t, fstype, "none").Validate(); err != nil {
+			t.Errorf("fstype %q should be accepted, got: %v", fstype, err)
+		}
+	}
+}
+
+func TestValidateRejectsEncryptionWithCustomMounts(t *testing.T) {
+	// The manual path never runs luksFormat, so an encrypted manual recipe
+	// installs UNENCRYPTED while the caller believes otherwise. Fail closed.
+	for _, enc := range []string{"luks-passphrase", "tpm2-luks"} {
+		err := manualRecipe(t, "xfs", enc).Validate()
+		if err == nil {
+			t.Fatalf("encryption %q with customMounts must be rejected", enc)
+		}
+		if !strings.Contains(err.Error(), "unencrypted") {
+			t.Errorf("error should explain the consequence, got: %v", err)
+		}
+	}
+}
+
+func TestValidateAllowsNoEncryptionWithCustomMounts(t *testing.T) {
+	for _, enc := range []string{"", "none"} {
+		if err := manualRecipe(t, "xfs", enc).Validate(); err != nil {
+			t.Errorf("encryption %q should be accepted, got: %v", enc, err)
+		}
+	}
 }

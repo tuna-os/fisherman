@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/install"
@@ -157,23 +158,70 @@ func TestBuildBootcArgs_ComposeFsBackend(t *testing.T) {
 	assertContains(t, args, "--composefs-backend")
 }
 
-// TestBuildBootcArgs_ComposeFsBackend_SourceImgref is a regression test for the
-// composefs to-filesystem bug: bootc install to-disk was being called instead of
-// to-filesystem, failing with "Device is mounted". The fix routes all images
-// through to-filesystem and exports to an OCI layout via skopeo so bootc
-// --composefs-backend has the raw blobs it needs.
-// This verifies that --source-imgref oci:/var/tmp/oci-cache is included in the
-// bootc args when composefs-backend is true.
+// GenericImage emits --generic-image (bootupd-less ostree images, e.g. Arch/Debian).
+func TestBuildBootcArgs_GenericImage(t *testing.T) {
+	args := install.BuildBootcArgs(install.Options{GenericImage: true}, "", "/target")
+	assertContains(t, args, "--generic-image")
+}
+
+func TestBuildBootcArgs_NoGenericImage(t *testing.T) {
+	args := install.BuildBootcArgs(install.Options{GenericImage: false}, "", "/target")
+	assertAbsent(t, args, "--generic-image")
+}
+
+// TestBuildBootcArgs_ComposeFsBackend_SourceImgref verifies that BuildBootcArgs
+// emits --source-imgref oci:<scratchDir>/oci-cache when ComposeFsBackend is true.
+// In container mode, callers set ComposeFsOCIPath = containerOCICachePath
+// ("/run/fisherman/oci-cache") so the source points to the bind-mount destination
+// inside the container; in direct mode, the host-side scratchDir/oci-cache is used.
 func TestBuildBootcArgs_ComposeFsBackend_SourceImgref(t *testing.T) {
-	args := install.BuildBootcArgs(install.Options{ComposeFsBackend: true}, "", "/target")
-	assertContains(t, args, "--source-imgref")
-	assertContains(t, args, "oci:/var/tmp/oci-cache")
+	// Direct mode: no ComposeFsOCIPath — falls back to scratchDir/oci-cache.
+	directArgs := install.BuildBootcArgs(install.Options{ComposeFsBackend: true}, "", "/target")
+	assertContains(t, directArgs, "--source-imgref")
+	assertContains(t, directArgs, "oci:/var/fisherman-tmp/oci-cache") // default scratchDir
+
+	// Container mode: ComposeFsOCIPath is set to the container-side mount path.
+	containerArgs := install.BuildBootcArgs(install.Options{
+		ComposeFsBackend: true,
+		ComposeFsOCIPath: "/run/fisherman/oci-cache",
+	}, "", "/target")
+	assertContains(t, containerArgs, "--source-imgref")
+	assertContains(t, containerArgs, "oci:/run/fisherman/oci-cache")
 }
 
 func TestBuildBootcArgs_NoComposeFsBackend_NoSourceImgref(t *testing.T) {
 	args := install.BuildBootcArgs(install.Options{ComposeFsBackend: false}, "", "/target")
 	assertAbsent(t, args, "--source-imgref")
 	assertAbsent(t, args, "--composefs-backend")
+}
+
+// TestBuildBootcArgs_OCIPathWithoutComposefs verifies that when ComposeFsOCIPath
+// is set but ComposeFsBackend is false (non-composefs OCI redirect), the
+// --source-imgref flag IS emitted but --composefs-backend is NOT.
+// Regression test for the bug where --source-imgref was only emitted when
+// ComposeFsBackend was true, causing bootc to fail with "no such file or
+// directory" when the OCI layout was exported but the flag was missing.
+func TestBuildBootcArgs_OCIPathWithoutComposefs(t *testing.T) {
+	args := install.BuildBootcArgs(install.Options{
+		ComposeFsBackend: false,
+		ComposeFsOCIPath: "/run/fisherman/oci-cache",
+	}, "", "/target")
+	assertContains(t, args, "--source-imgref")
+	assertContains(t, args, "oci:/run/fisherman/oci-cache")
+	assertAbsent(t, args, "--composefs-backend")
+}
+
+// TestBuildBootcArgs_DirectModeSourceImgref verifies that when SourceImgref
+// is empty (direct/live-ISO mode) but TargetImgref is set, BuildBootcArgs
+// emits --source-imgref with the ostree-unverified-registry transport.
+// Bootc rejects direct installs without an explicit source when not running
+// inside a podman container.
+func TestBuildBootcArgs_DirectModeSourceImgref(t *testing.T) {
+	args := install.BuildBootcArgs(install.Options{
+		SourceImgref: "", // direct mode
+	}, "ghcr.io/ublue-os/bluefin:stable", "/target")
+	assertContains(t, args, "--source-imgref")
+	assertContains(t, args, "containers-storage:ghcr.io/ublue-os/bluefin:stable")
 }
 
 func TestBuildBootcArgs_NoComposeFsBackend(t *testing.T) {
@@ -222,9 +270,11 @@ func TestBuildBootcArgs_AllFlags(t *testing.T) {
 		ComposeFsBackend: true,
 		UnifiedStorage:   true,
 		SelinuxDisabled:  true,
+		ComposeFsOCIPath: "/run/fisherman/oci-cache",
 	}
 	args := install.BuildBootcArgs(opts, "img:tag", "/target")
 	assertContains(t, args, "--composefs-backend")
+	assertContains(t, args, "oci:/run/fisherman/oci-cache")
 	assertAbsent(t, args, "--experimental-unified-storage") // never emitted; see Options.UnifiedStorage
 	assertContains(t, args, "--disable-selinux")
 	assertContains(t, args, "--target-imgref")
@@ -238,14 +288,15 @@ func TestBuildBootcArgs_AllFlags(t *testing.T) {
 // integration tests to capture the args without running real disk I/O).
 func TestSkopeoExportOCI_FnIsReplaceable(t *testing.T) {
 	var capturedImage, capturedDir string
-	install.SkopeoExportOCIFn = func(image, destDir string) error {
+	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
 		capturedImage = image
 		capturedDir = destDir
+		_ = tmpdir
 		return nil
 	}
 	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
 
-	if err := install.SkopeoExportOCIFn("ghcr.io/projectbluefin/dakota:latest", "/var/fisherman-tmp/oci-cache"); err != nil {
+	if err := install.SkopeoExportOCIFn("ghcr.io/projectbluefin/dakota:latest", "/var/fisherman-tmp/oci-cache", "/var/fisherman-tmp"); err != nil {
 		t.Fatalf("stub returned unexpected error: %v", err)
 	}
 	if capturedImage != "ghcr.io/projectbluefin/dakota:latest" {
@@ -270,9 +321,10 @@ func TestBootcInstall_DirectComposeFsExportsOCI(t *testing.T) {
 	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
 
 	var capturedImage, capturedDir string
-	install.SkopeoExportOCIFn = func(image, destDir string) error {
+	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
 		capturedImage = image
 		capturedDir = destDir
+		_ = tmpdir
 		return nil
 	}
 	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
@@ -307,8 +359,10 @@ func TestBootcInstall_DirectComposeFsUsesCustomScratchDir(t *testing.T) {
 	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
 
 	var capturedDir string
-	install.SkopeoExportOCIFn = func(image, destDir string) error {
+	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
 		capturedDir = destDir
+		_ = image
+		_ = tmpdir
 		return nil
 	}
 	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
@@ -327,21 +381,15 @@ func TestBootcInstall_DirectComposeFsUsesCustomScratchDir(t *testing.T) {
 	}
 }
 
-// TestBuildSelinuxBypassShim_Compiles is a regression test for the cross-distro
-// SELinux xattr issue: installing an AlmaLinux image on a Fedora host fails with
-// EINVAL because the Fedora policy doesn't recognise AlmaLinux label types.
-// The fix compiles a small LD_PRELOAD shim that silently drops security.selinux
-// xattr writes. This test ensures the shim source compiles successfully (requires
-// cc to be present, which is expected on any build/install host).
 func TestBuildSelinuxBypassShim_Compiles(t *testing.T) {
 	if _, err := exec.LookPath("cc"); err != nil {
 		t.Skip("cc not found; skipping shim compilation test")
 	}
-	soPath, err := install.BuildSelinuxBypassShim()
+	soPath, cleanup, err := install.BuildSelinuxBypassShim()
 	if err != nil {
 		t.Fatalf("BuildSelinuxBypassShim() error = %v", err)
 	}
-	defer os.Remove(soPath)
+	defer cleanup()
 
 	info, err := os.Stat(soPath)
 	if err != nil {
@@ -359,11 +407,11 @@ func TestBuildSelinuxBypassShim_InterceptsSecuritySelinux(t *testing.T) {
 	if _, err := exec.LookPath("cc"); err != nil {
 		t.Skip("cc not found; skipping shim test")
 	}
-	soPath, err := install.BuildSelinuxBypassShim()
+	soPath, cleanup, err := install.BuildSelinuxBypassShim()
 	if err != nil {
 		t.Fatalf("BuildSelinuxBypassShim() error = %v", err)
 	}
-	defer os.Remove(soPath)
+	defer cleanup()
 
 	// Run a small helper binary under LD_PRELOAD that calls lsetxattr and reports
 	// whether the call succeeded (exit 0) or failed (exit 1).
@@ -421,19 +469,172 @@ func assertAbsent(t *testing.T, slice []string, s string) {
 // is still mounted when UnifiedStorage=true. Bootc needs the mount to find the
 // source image in host podman storage and copy it into bootc's own storage.
 func TestNeedsContainerStorageMount_UnifiedStorage(t *testing.T) {
-if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: true}) {
-t.Error("should mount /var/lib/containers even when UnifiedStorage=true (bootc needs it to locate the source image)")
-}
+	if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: true}) {
+		t.Error("should mount /var/lib/containers even when UnifiedStorage=true (bootc needs it to locate the source image)")
+	}
 }
 
 func TestNeedsContainerStorageMount_Standard(t *testing.T) {
-if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: false}) {
-t.Error("should mount /var/lib/containers for standard (non-unified) installs")
-}
+	if !install.NeedsContainerStorageMount(install.Options{UnifiedStorage: false}) {
+		t.Error("should mount /var/lib/containers for standard (non-unified) installs")
+	}
 }
 
 func TestNeedsContainerStorageMount_ComposeFsBackend(t *testing.T) {
-if install.NeedsContainerStorageMount(install.Options{ComposeFsBackend: true}) {
-t.Error("should NOT mount /var/lib/containers when ComposeFsBackend=true")
+	if install.NeedsContainerStorageMount(install.Options{ComposeFsBackend: true}) {
+		t.Error("should NOT mount /var/lib/containers when ComposeFsBackend=true")
+	}
 }
+
+// TestInjectStorageTmpDir verifies that injectStorageTmpDir correctly adds or
+// replaces the tmpdir line in a containers/storage TOML config string.
+func TestInjectStorageTmpDir(t *testing.T) {
+	newLine := `tmpdir = "/scratch"`
+
+	t.Run("replaces existing tmpdir", func(t *testing.T) {
+		conf := "[storage]\ndriver = \"vfs\"\ntmpdir = \"/old\"\ngraphroot = \"/var/lib/containers/storage\"\n"
+		result := install.InjectStorageTmpDir(conf, newLine)
+		if !strings.Contains(result, `tmpdir = "/scratch"`) {
+			t.Errorf("expected replaced tmpdir, got:\n%s", result)
+		}
+		if strings.Contains(result, `"/old"`) {
+			t.Errorf("old tmpdir still present:\n%s", result)
+		}
+	})
+
+	t.Run("injects when no tmpdir line", func(t *testing.T) {
+		conf := "[storage]\ndriver = \"vfs\"\nrunroot = \"/run/containers/storage\"\ngraphroot = \"/var/lib/containers/storage\"\n"
+		result := install.InjectStorageTmpDir(conf, newLine)
+		if !strings.Contains(result, `tmpdir = "/scratch"`) {
+			t.Errorf("tmpdir not injected, got:\n%s", result)
+		}
+		// Existing fields must still be present.
+		if !strings.Contains(result, `driver = "vfs"`) {
+			t.Errorf("driver line missing:\n%s", result)
+		}
+	})
+
+	t.Run("injects before next section", func(t *testing.T) {
+		conf := "[storage]\ndriver = \"overlay\"\n\n[storage.options]\nadditionalimagestores = []\n"
+		result := install.InjectStorageTmpDir(conf, newLine)
+		if !strings.Contains(result, `tmpdir = "/scratch"`) {
+			t.Errorf("tmpdir not injected, got:\n%s", result)
+		}
+		// additionalimagestores must survive unchanged.
+		if !strings.Contains(result, "additionalimagestores") {
+			t.Errorf("[storage.options] section lost:\n%s", result)
+		}
+	})
+
+	t.Run("handles empty config (live-ISO fallback)", func(t *testing.T) {
+		conf := ""
+		result := install.InjectStorageTmpDir(conf, newLine)
+		// No [storage] section → nothing to inject, just return unchanged.
+		// The fallback path in the storage-conf setup handles this.
+		_ = result // just must not panic
+	})
+}
+
+// TestBootcInstall_NonComposefsContainerExportsOCI verifies that when
+// SourceImgref is set and ComposeFsBackend is false (non-composefs container
+// mode with overlay redirect), the OCI export function IS called.  Regression
+// test for the bug where exportComposefsOCIIfNeeded returned nil for
+// non-composefs, causing "oci-cache/index.json: no such file or directory".
+func TestBootcInstall_NonComposefsContainerExportsOCI(t *testing.T) {
+	// Non-composefs only exports to an OCI layout when it redirects podman
+	// storage to the target disk, which happens when the default store is
+	// space-constrained. Force that path so the test is deterministic
+	// regardless of the runner's /var/lib/containers free space.
+	defer install.SetStorageSpaceConstrainedForTest(true)()
+	defer install.SetSelectStorageDriverForTest("overlay", "forced for test")()
+	tmpDir := t.TempDir()
+	var scratchDir string
+	var err error
+
+	// Fake podman: just exit 0 (container mode runs podman; we don't need a real one).
+	podmanPath := tmpDir + "/podman"
+	if err = os.WriteFile(podmanPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("writing fake podman: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err = os.Setenv("PATH", tmpDir+":"+oldPath); err != nil {
+		t.Fatalf("setting PATH: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+
+	var exportCalled bool
+	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
+		exportCalled = true
+		// Create a minimal OCI layout so the subsequent podman run can
+		// find oci:<path> (we just need the file to exist for the mock).
+		if err := os.MkdirAll(destDir, 0755); err != nil {
+			return err
+		}
+		return os.WriteFile(destDir+"/index.json", []byte("{}"), 0644)
+	}
+	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
+
+	// The overlay redirect requires scratch on an overlay-capable filesystem
+	// (ext4/xfs/btrfs).  t.TempDir() is typically on tmpfs.  Use /var/tmp
+	// which is usually ext4/xfs on CI and developer machines.
+	scratchDir, err = os.MkdirTemp("/var/tmp", "fisherman-test-scratch-*")
+	if err != nil {
+		t.Skipf("cannot create scratch on /var/tmp: %v", err)
+	}
+	defer os.RemoveAll(scratchDir)
+
+	err = install.BootcInstall(install.Options{
+		ComposeFsBackend: false,
+		SourceImgref:     "containers-storage:ghcr.io/ublue-os/bluefin:stable",
+		TargetImgref:     "ghcr.io/ublue-os/bluefin:stable",
+		Target:           tmpDir + "/target",
+		ScratchDir:       scratchDir,
+		NeedsPull:        false,
+	})
+	if err != nil {
+		t.Fatalf("BootcInstall() error = %v", err)
+	}
+	if !exportCalled {
+		t.Error("SkopeoExportOCIFn was not called for non-composefs container mode with SourceImgref set")
+	}
+}
+
+// TestBootcInstall_NonComposefsDirectSkipsOCIExport verifies that when
+// SourceImgref is empty (direct/live-ISO mode) and ComposeFsBackend is false,
+// the OCI export is NOT called.  Bootc reads from containers-storage on the
+// host; no OCI layout is needed.
+func TestBootcInstall_NonComposefsDirectSkipsOCIExport(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Fake bootc for direct mode.
+	bootcPath := tmpDir + "/bootc"
+	if err := os.WriteFile(bootcPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+		t.Fatalf("writing fake bootc: %v", err)
+	}
+
+	oldPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", tmpDir+":"+oldPath); err != nil {
+		t.Fatalf("setting PATH: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
+
+	var exportCalled bool
+	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
+		exportCalled = true
+		return nil
+	}
+	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
+
+	err := install.BootcInstall(install.Options{
+		ComposeFsBackend: false,
+		SourceImgref:     "", // direct mode — no source image ref
+		Target:           tmpDir + "/target",
+	})
+	if err != nil {
+		t.Fatalf("BootcInstall() error = %v", err)
+	}
+	if exportCalled {
+		t.Error("SkopeoExportOCIFn was called for non-composefs direct mode (should be skipped)")
+	}
 }

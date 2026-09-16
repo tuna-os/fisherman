@@ -93,8 +93,10 @@
       "default_hostname": "aurora",
       "filesystems": [
         "btrfs",
-        "xfs"
-      ]
+        "xfs",
+        "ext4"
+      ],
+      "filesystem": "btrfs"
     },
     {
       "name": "Bazzite",
@@ -748,8 +750,10 @@
       "default_hostname": "bazzite",
       "filesystems": [
         "btrfs",
-        "xfs"
-      ]
+        "xfs",
+        "ext4"
+      ],
+      "filesystem": "btrfs"
     },
     {
       "name": "Bluefin",
@@ -772,6 +776,7 @@
         {
           "name": "Dakota",
           "imgref": "ghcr.io/projectbluefin/dakota:latest",
+          "nvidia_imgref": "ghcr.io/projectbluefin/dakota-nvidia:latest",
           "desc": "GNOME workstation on GnomeOS — composefs + systemd-boot",
           "search_extra": "gnomeos composefs systemd-boot experimental",
           "icon": "resource:///org/bootcinstaller/Installer/images/dakota.png",
@@ -789,17 +794,29 @@
             {
               "name": "GDX",
               "imgref": "ghcr.io/ublue-os/bluefin-gdx:lts",
-              "desc": "NVIDIA edition for AI/ML professionals"
+              "desc": "NVIDIA edition for AI/ML professionals",
+              "filesystems": [
+                "xfs",
+                "ext4"
+              ]
             },
             {
               "name": "HWE Kernel",
               "imgref": "ghcr.io/ublue-os/bluefin:lts-hwe",
-              "desc": "Latest kernel for new hardware"
+              "desc": "Latest kernel for new hardware",
+              "filesystems": [
+                "xfs",
+                "ext4"
+              ]
             },
             {
               "name": "Standard",
               "imgref": "ghcr.io/ublue-os/bluefin:lts",
-              "desc": "Standard LTS edition with AMD or Intel graphics"
+              "desc": "Standard LTS edition with AMD or Intel graphics",
+              "filesystems": [
+                "xfs",
+                "ext4"
+              ]
             }
           ],
           "filesystems": [
@@ -821,6 +838,12 @@
               "imgref": "ghcr.io/ublue-os/bluefin:stable",
               "desc": "Standard edition with AMD or Intel graphics"
             }
+          ],
+          "filesystem": "btrfs",
+          "filesystems": [
+            "btrfs",
+            "xfs",
+            "ext4"
           ]
         }
       ],
@@ -843,10 +866,18 @@
           "composefs": true,
           "needs_user_creation": false,
           "tag": "latest",
-          "default_hostname": "snow"
+          "default_hostname": "snow",
+          "filesystems": [
+            "btrfs",
+            "ext4"
+          ]
         }
       ],
-      "registry": "ghcr.io/frostyard/snow"
+      "registry": "ghcr.io/frostyard/snow",
+      "filesystems": [
+        "btrfs",
+        "ext4"
+      ]
     },
     {
       "name": "TunaOS",
@@ -953,9 +984,11 @@
           "registry": "ghcr.io/tuna-os/albacore",
           "default_hostname": "albacore",
           "filesystems": [
+            "btrfs",
             "xfs",
-            "btrfs"
-          ]
+            "ext4"
+          ],
+          "filesystem": "btrfs"
         },
         {
           "name": "Bonito",
@@ -1023,9 +1056,11 @@
           "registry": "ghcr.io/tuna-os/bonito",
           "default_hostname": "bonito",
           "filesystems": [
+            "btrfs",
             "xfs",
-            "btrfs"
-          ]
+            "ext4"
+          ],
+          "filesystem": "btrfs"
         },
         {
           "name": "Skipjack",
@@ -1118,9 +1153,11 @@
           "registry": "ghcr.io/tuna-os/skipjack",
           "default_hostname": "skipjack",
           "filesystems": [
+            "btrfs",
             "xfs",
-            "btrfs"
-          ]
+            "ext4"
+          ],
+          "filesystem": "btrfs"
         },
         {
           "name": "Yellowfin",
@@ -1233,9 +1270,11 @@
           "registry": "ghcr.io/tuna-os/yellowfin",
           "default_hostname": "yellowfin",
           "filesystems": [
+            "btrfs",
             "xfs",
-            "btrfs"
-          ]
+            "ext4"
+          ],
+          "filesystem": "btrfs"
         }
       ],
       "icon": "resource:///org/bootcinstaller/Installer/images/tunaos.svg",
@@ -1255,7 +1294,13 @@
           "title": "Ready Soon",
           "description": "Sit back and relax. Your new system will be ready shortly."
         }
-      ]
+      ],
+      "filesystems": [
+        "btrfs",
+        "xfs",
+        "ext4"
+      ],
+      "filesystem": "btrfs"
     },
     {
       "name": "Zirconium",
@@ -1282,7 +1327,8 @@
           "filesystems": [
             "xfs",
             "btrfs"
-          ]
+          ],
+          "filesystem": "btrfs"
         },
         {
           "name": "Zirconium mkosi",
@@ -1294,7 +1340,13 @@
               "tag": "latest"
             }
           ],
-          "registry": "ghcr.io/zirconium-dev/zirconium-mkosi"
+          "registry": "ghcr.io/zirconium-dev/zirconium-mkosi",
+          "filesystem": "btrfs",
+          "filesystems": [
+            "btrfs",
+            "xfs",
+            "ext4"
+          ]
         },
         {
           "name": "Zirconium NVIDIA",
@@ -1306,13 +1358,44 @@
               "tag": "latest"
             }
           ],
-          "registry": "ghcr.io/zirconium-dev/zirconium-nvidia"
+          "registry": "ghcr.io/zirconium-dev/zirconium-nvidia",
+          "filesystem": "btrfs",
+          "filesystems": [
+            "btrfs",
+            "xfs",
+            "ext4"
+          ]
         }
       ],
       "default_hostname": "zirconium",
       "filesystems": [
+        "btrfs",
         "xfs",
-        "btrfs"
+        "ext4"
+      ],
+      "filesystem": "btrfs"
+    },
+    {
+      "name": "Ubuntu",
+      "search_extra": "ubuntu canonical desktop gnome",
+      "icon": "org.gnome.Software",
+      "children": [
+        {
+          "name": "26.04 Desktop",
+          "desc": "Ubuntu 26.04 LTS with GNOME — ZFS root filesystem support",
+          "search_extra": "26.04 lts zfs",
+          "registry": "ghcr.io/canonical/ubuntu",
+          "tag": "26.04",
+          "filesystems": [
+            "btrfs",
+            "xfs",
+            "ext4",
+            "zfs"
+          ],
+          "filesystem": "ext4",
+          "default_hostname": "ubuntu",
+          "needs_user_creation": true
+        }
       ]
     }
   ]

@@ -62,6 +62,110 @@
       ]
     },
     {
+      "name": "e2fsprogs",
+      "buildsystem": "autotools",
+      "config-opts": [
+        "--enable-elf-shlibs=no",
+        "--disable-libblkid",
+        "--disable-libuuid",
+        "--disable-fsck",
+        "--disable-uuidd",
+        "--disable-tls",
+        "--disable-backtrace",
+        "--disable-debugfs",
+        "--disable-imager",
+        "--disable-resizer",
+        "--disable-defrag",
+        "--disable-tdb",
+        "--disable-testio-debug"
+      ],
+      "make-install-args": [
+        "install-exec-am"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://mirrors.edge.kernel.org/pub/linux/kernel/people/tytso/e2fsprogs/v1.47.2/e2fsprogs-1.47.2.tar.xz",
+          "sha256": "08242fc1edbe9e1e1b1307e5d7a05fa2dd60b9d1f164ff747cfce8f93e92c8e2"
+        }
+      ],
+      "cleanup": [
+        "/lib*",
+        "/share",
+        "/include",
+        "/etc"
+      ]
+    },
+    {
+      "name": "xfsprogs",
+      "buildsystem": "autotools",
+      "config-opts": [
+        "--disable-shared",
+        "--disable-readline",
+        "--disable-lib64"
+      ],
+      "make-install-args": [
+        "install-exec-am"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://mirrors.edge.kernel.org/pub/linux/utils/fs/xfs/xfsprogs/xfsprogs-6.13.0.tar.xz",
+          "sha256": "24ce2b36c8edc9c389b50e2441d0513dd71a6c7a6853fa9e07422fb3bce14ea0"
+        }
+      ],
+      "cleanup": [
+        "/lib*",
+        "/share",
+        "/include"
+      ]
+    },
+    {
+      "name": "dosfstools",
+      "buildsystem": "autotools",
+      "make-install-args": [
+        "install-exec-am"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://github.com/dosfstools/dosfstools/releases/download/v4.2/dosfstools-4.2.tar.gz",
+          "sha256": "64926eebf7d504f7f81a7c01aa302d6a504a04a28aa8d51bd40f1e3c6a5eae45"
+        }
+      ],
+      "cleanup": [
+        "/lib*",
+        "/share",
+        "/include"
+      ]
+    },
+    {
+      "name": "btrfs-progs",
+      "buildsystem": "autotools",
+      "config-opts": [
+        "--disable-python",
+        "--disable-zoned",
+        "--disable-backtrace",
+        "--disable-convert",
+        "--disable-libudev"
+      ],
+      "make-install-args": [
+        "install-exec-am"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://mirrors.edge.kernel.org/pub/linux/kernel/kdave/btrfs-progs/btrfs-progs-v6.13.tar.xz",
+          "sha256": "fab19ab7bb28f984967a7c5e3c2d3f1195af5e1e93d4fb9bb3760916cd7a06a1"
+        }
+      ],
+      "cleanup": [
+        "/lib*",
+        "/share",
+        "/include"
+      ]
+    },
+    {
       "name": "bootc-installer",
       "buildsystem": "meson",
       "sources": [

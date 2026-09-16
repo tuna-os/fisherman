@@ -34,6 +34,11 @@ type substepEvent struct {
 	Message string `json:"message"`
 }
 
+type recoveryKeyEvent struct {
+	Type string `json:"type"`
+	Key  string `json:"key"`
+}
+
 // Step emits a JSON step-progress line to stdout.
 // cumulativePct is the bar position (0–100) at the start of this step.
 // weightPct is the estimated share of total install time this step occupies.
@@ -70,6 +75,13 @@ func Info(message string) {
 // string when it is unknown so the field is omitted from the JSON.
 func Complete(message, bootID string) {
 	write(completeEvent{Type: "complete", Message: message, BootID: bootID})
+}
+
+// RecoveryKey emits the LUKS recovery passphrase for `tpm2-luks` installs.
+// The GUI displays this key so the user can write it down before rebooting.
+// Only emit when a random (non-user-chosen) passphrase is the sole fallback.
+func RecoveryKey(key string) {
+	write(recoveryKeyEvent{Type: "recovery_key", Key: key})
 }
 
 func write(v any) {
