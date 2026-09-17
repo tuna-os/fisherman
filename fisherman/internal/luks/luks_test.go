@@ -3,6 +3,7 @@ package luks_test
 import (
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"testing"
 
@@ -256,6 +257,31 @@ func TestUUID_ReturnsEmptyOnError(t *testing.T) {
 	}
 }
 
+func TestStageFirstBootEnrollment(t *testing.T) {
+	target := t.TempDir()
+	uuid := "12345678-1234-1234-1234-123456789abc"
+	key := "secret-passphrase"
+
+	if err := luks.StageFirstBootEnrollment(target, uuid, key); err != nil {
+		t.Fatalf("StageFirstBootEnrollment: %v", err)
+	}
+
+	keyPath := target + "/etc/fisherman/tpm2-enroll.key"
+	info, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatalf("key file does not exist: %v", err)
+	}
+
+	if mode := info.Mode().Perm(); mode != 0o600 {
+		t.Errorf("key file mode = %v, want 0600", mode)
+	}
+
+	gotKey, err := os.ReadFile(keyPath)
+	if err != nil || string(gotKey) != key {
+		t.Errorf("key file content = %q, want %q", gotKey, key)
+	}
+}
+
 func equalSlice(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -267,3 +293,4 @@ func equalSlice(a, b []string) bool {
 	}
 	return true
 }
+
