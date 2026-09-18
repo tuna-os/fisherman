@@ -1,6 +1,6 @@
 #!/bin/bash
 # Verify system boot via SSH and query bootc status
-# Usage: ./boot-verify.sh [SSH_PORT] [SSH_KEY] [VM_TIMEOUT] [VM_MEMORY] [LOOPDEV] [IMAGE_NAME]
+# Usage: ./boot-verify.sh [SSH_PORT] [SSH_KEY] [VM_TIMEOUT] [VM_MEMORY] [LOOPDEV] [IMAGE_NAME] [LUKS_PASSPHRASE]
 # Works with dynamic tool discovery for both CI and local environments
 
 set -e
