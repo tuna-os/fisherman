@@ -131,6 +131,9 @@ func StageFirstBootEnrollment(targetMount, luksUUID, key string) error {
 	if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
 		return fmt.Errorf("write transient key: %w", err)
 	}
+	if err := os.Chmod(keyPath, 0o600); err != nil {
+		return fmt.Errorf("chmod transient key: %w", err)
+	}
 
 	// The oneshot: enroll against the running system's PCR 7, shred the key,
 	// and disable itself so it never runs again. Idempotent — a second run
