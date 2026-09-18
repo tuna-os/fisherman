@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -14,8 +15,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/tuna-os/fisherman/tui/internal/config"
 )
-
-const recipePath = "/tmp/bootc-installer-recipe.json"
 
 type fishermanEvent struct {
 	Type          string `json:"type"`
@@ -137,6 +136,16 @@ func (m *progressModel) startInstall() tea.Cmd {
 		return m.startDryRun()
 	}
 	return func() tea.Msg {
+		f, err := os.CreateTemp("", "bootc-installer-recipe-*.json")
+		if err != nil {
+			m.sub <- fmt.Sprintf("ERROR: creating temp recipe file: %v", err)
+			close(m.sub)
+			return progressDoneMsg{err: err}
+		}
+		recipePath := f.Name()
+		_ = f.Close()
+		defer os.Remove(recipePath)
+
 		if err := m.cfg.WriteRecipe(recipePath); err != nil {
 			m.sub <- fmt.Sprintf("ERROR: writing recipe: %v", err)
 			close(m.sub)
@@ -173,7 +182,7 @@ func (m *progressModel) startInstall() tea.Cmd {
 
 		<-done
 		<-done
-		err := cmd.Wait()
+		err = cmd.Wait()
 		close(m.sub)
 		return progressDoneMsg{err: err}
 	}
