@@ -113,6 +113,24 @@ func TestComplete(t *testing.T) {
 	}
 }
 
+func TestError(t *testing.T) {
+	out := captureStdout(t, func() {
+		progress.Error("partitioning disk: device busy")
+	})
+
+	var event map[string]interface{}
+	if err := json.Unmarshal([]byte(out[:len(out)-1]), &event); err != nil {
+		t.Fatalf("invalid JSON: %v\noutput: %q", err, out)
+	}
+
+	if event["type"] != "error" {
+		t.Errorf("type = %v, want error", event["type"])
+	}
+	if event["message"] != "partitioning disk: device busy" {
+		t.Errorf("message = %v, want 'partitioning disk: device busy'", event["message"])
+	}
+}
+
 // TestOutputIsNewlineTerminated ensures every emitter appends a newline,
 // which the GUI relies on for line-by-line JSON parsing.
 func TestOutputIsNewlineTerminated(t *testing.T) {
@@ -124,6 +142,7 @@ func TestOutputIsNewlineTerminated(t *testing.T) {
 		{"Substep", func() { progress.Substep("x") }},
 		{"Info", func() { progress.Info("x") }},
 		{"Complete", func() { progress.Complete("x", "") }},
+		{"Error", func() { progress.Error("x") }},
 	}
 	for _, f := range fns {
 		t.Run(f.name, func(t *testing.T) {
