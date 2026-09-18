@@ -85,6 +85,10 @@ func EnrollTPM2(partition, passphrase string) error {
 		return fmt.Errorf("creating temp key file: %w", err)
 	}
 	defer os.Remove(f.Name())
+	if err := os.Chmod(f.Name(), 0o600); err != nil {
+		f.Close()
+		return fmt.Errorf("setting temp key file permissions: %w", err)
+	}
 	if _, err := f.WriteString(passphrase); err != nil {
 		f.Close()
 		return fmt.Errorf("writing temp key file: %w", err)
