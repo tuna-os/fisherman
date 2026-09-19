@@ -46,6 +46,12 @@ jobs:
       - name: Validation harness
         run: bash tests/check-validation.sh
 
+      # The release version is derived from commit subjects, so a bug here
+      # ships a wrong tag silently -- nothing else would catch it. Runs in
+      # throwaway git repos; no network, about a second.
+      - name: Version derivation
+        run: bash tests/test-next-version.sh
+
   setup:
     runs-on: ubuntu-24.04
     timeout-minutes: 5

@@ -1,0 +1,128 @@
+name: Reconcile prod with dev (one-shot)
+
+# Repairs a `prod` that has diverged from `dev`, so promote.yml can
+# fast-forward again.
+#
+# Why this exists: #220 was squash-merged into prod. A squash writes one new
+# commit that shares no ancestry with the commits it flattened, so prod reads
+# as permanently diverged -- one commit "ahead", hundreds behind, with a tree
+# that may be byte-identical to dev. promote.yml refuses to move prod to a
+# commit that is not a descendant of it, and rightly so, which means it
+# refuses forever until someone reconciles the two.
+#
+# This is deliberately NOT part of promote.yml. Reconciling is a merge that
+# discards prod's side, and that must be a decision someone makes on purpose,
+# not something the hourly gate does quietly the next time prod looks wrong.
+#
+# The safety property is the diff check: the reconciled tree must be
+# byte-identical to dev's, or the push does not happen. That is what makes
+# taking dev's side wholesale safe to automate -- not an assumption that
+# prod holds nothing, but a proof of it, computed at the time.
+#
+# Run it from the Actions tab. It needs no arguments, and it is a no-op when
+# prod is already an ancestor of dev.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report what would happen without pushing
+        required: false
+        default: true
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: promote-fisherman
+  cancel-in-progress: false
+
+jobs:
+  reconcile:
+    name: Reconcile
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Reconcile prod onto dev
+        env:
+          DRY_RUN: ${{ inputs.dry_run == false && 'false' || 'true' }}
+        run: |
+          set -euo pipefail
+          git fetch -q origin dev prod
+
+          DEV=$(git rev-parse origin/dev)
+          PROD=$(git rev-parse origin/prod)
+          echo "dev:  $DEV"
+          echo "prod: $PROD"
+
+          if git merge-base --is-ancestor "$PROD" "$DEV"; then
+            echo "prod is already an ancestor of dev — nothing to reconcile."
+            echo "promote.yml can fast-forward; this workflow has no work to do." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          echo "::warning::prod is not an ancestor of dev. Reconciling."
+
+          # What prod holds that dev does not. Reported before anything is
+          # changed, because this is the number that decides whether taking
+          # dev's side wholesale is safe.
+          echo "--- commits on prod but not dev ---"
+          git log --oneline "$DEV".."$PROD" || true
+          echo "--- content prod has that dev does not ---"
+          git diff --stat "$DEV" "$PROD" | tail -20 || true
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git checkout -q -B reconcile "$PROD"
+          # A merge that keeps prod's history as a parent, with dev's tree as
+          # the result. --no-commit because the conflicts are expected; the
+          # read-tree below is what resolves them, all at once, in dev's
+          # favour.
+          git merge --no-commit --no-ff "$DEV" || true
+          git read-tree --reset -u "$DEV"
+          git commit -q -m "Reconcile prod with dev
+
+          prod diverged when a promotion PR was squashed rather than merged,
+          so it shares no ancestry with the commits it flattened. This merge
+          keeps prod's history as a parent and takes dev's tree wholesale, so
+          the next promotion is an ordinary fast-forward again.
+
+          Verified before pushing: the resulting tree is byte-identical to
+          dev at $DEV."
+
+          # The proof. If the reconciled tree differs from dev's in any way,
+          # something was dropped and this must not ship.
+          if ! git diff --quiet "$DEV" HEAD; then
+            echo "::error::reconciled tree differs from dev — refusing to push"
+            git diff --stat "$DEV" HEAD | tail -20
+            exit 1
+          fi
+          echo "✅ reconciled tree is byte-identical to dev"
+
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "dry_run: not pushing. Re-run with dry_run unchecked to apply."
+            {
+              echo "## Reconcile (dry run)"
+              echo
+              echo "- prod \`$PROD\` is not an ancestor of dev \`$DEV\`"
+              echo "- a reconcile commit was built and verified byte-identical to dev"
+              echo "- **nothing was pushed** — re-run with \`dry_run\` unchecked"
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git push origin HEAD:refs/heads/prod
+          NEW=$(git rev-parse HEAD)
+          echo "prod -> $NEW"
+          {
+            echo "## Reconcile"
+            echo
+            echo "- prod was \`$PROD\`, now \`$NEW\`"
+            echo "- tree verified byte-identical to dev \`$DEV\` before pushing"
+            echo "- promote.yml can fast-forward from here"
+          } >> "$GITHUB_STEP_SUMMARY"
