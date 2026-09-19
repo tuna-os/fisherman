@@ -7,7 +7,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🔒 Security
+
+- **Transient TPM2 enrolment key is pinned to 0600** (#221): `StageFirstBootEnrollment`
+  wrote the plaintext LUKS unlock key with `os.WriteFile(…, 0o600)`, whose mode
+  applies only to a file it creates and is masked by the process umask. An explicit
+  `os.Chmod` now guarantees root-only access in the window before the first-boot
+  oneshot shreds the key.
+
 ### 🐛 Bug Fixes
+
+- **Root partition carries the DPS type from creation** (#219): sealed composefs
+  images boot from a UKI with no `root=` on its command line, so
+  `systemd-gpt-auto-generator` has to discover the root by GPT type.
+  `PartitionSystemdBoot` typed it generically and only unencrypted installs were
+  retagged afterwards, so encrypted sealed-composefs installs hung ~90s on
+  `/dev/gpt-auto-root` and dropped to an emergency shell. The type is now set when
+  the table is written, which covers the encrypted layout the post-install retag
+  cannot reach, and it is architecture-aware (x86-64 and aarch64).
+- **ENOSPC installing a large image from a live ISO** (#211): in direct mode
+  (no podman wrapper) `bootc` staged layer blobs under the RAM-backed `/var/tmp`
+  of the dracut overlay while the OCI cache itself sat on the target disk, so a
+  ~10 GiB image died part way through "Copying blob". Direct mode now gets the
+  same scratch-backed `/var/tmp` and `TMPDIR` the OCI export already used.
+- **TUI started the backend with a command that does not exist** (#178): it ran
+  `fisherman install --recipe <path>`, but the backend takes the recipe as a bare
+  positional argument, so it tried to load a recipe named "install" and every
+  non-dry-run install failed before touching the disk. The argv is now built by
+  one function covered by a cross-module contract test against a fake backend.
+- **Unknown subcommands are named** (#178): `fisherman install …` fell through to
+  `recipe.Load("install")` and reported a missing file, pointing at the wrong
+  thing. A flag, or a bare word that is not a file, now reports an unknown command
+  and prints help; the bare recipe-path form is untouched.
+
+### 🧪 CI
+
+- **Invalid bootcrew matrix entries removed** (#106): `ubuntu-bootc` and
+  `opensuse-bootc` still paired `filesystem: xfs` with `composefs_backend: true`,
+  which the recipe validator rejects outright ("composefs-backend requires
+  fs-verity, which XFS does not support"), so those installs exited before they
+  started. #97 dropped the same pair from three other entries but did not reach
+  these two, because `vm_boot: false` keeps them out of the PR gate while nightly
+  still runs every entry. `tests/check-validation.sh` now fails on the pair so it
+  cannot come back quietly.
+- **The validation harness runs in CI** (#106): `tests/check-validation.sh` is
+  what AGENTS.md asks contributors to run before every push, but no workflow
+  executed it, so nothing enforced it. It is now a step in `bootcrew-vm.yml`'s
+  `lint` job — no disk, VM or network, about a second.
+- **`tui/` runs in CI** (#204): the module had real tests and no workflow ever
+  executed them — every job scoped to `fisherman/`. `bootcrew-vm.yml` gains a
+  `tui-unit-tests` job running `go vet` and `go test -race` with coverage upload.
 
 - **OCI layout for non-composefs installs**: Non-composefs images (bluefin, lts,
   lts-hwe) now export to an OCI layout at scratch and use `--source-imgref oci:...`

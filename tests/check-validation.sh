@@ -175,6 +175,75 @@ BootOrder: "
 expect_exit "efibootmgr: EFI supported but no entries (pre-PR#2 state) → bug caught (exit 1)" 1 \
   check_efiboot_output "$PRE_PR2"
 
+# ── bootcrew matrix validity (tests/bootcrew-matrix.yaml) ──────────────────
+#
+# The recipe validator rejects composefs_backend with an xfs filesystem:
+# composefs needs fs-verity and XFS has none, so the install exits before it
+# starts. #97 dropped that pair from three entries; ubuntu-bootc and
+# opensuse-bootc kept it for another month because vm_boot: false keeps them
+# out of the PR gate while nightly still runs them (#106). This check makes
+# the pair impossible to reintroduce quietly.
+#
+# Parsed with awk rather than a YAML library so the harness keeps its "no
+# dependencies, runs anywhere" property. Entries are `  - name:` at two
+# spaces; commented-out entries are indented past that and are skipped.
+check_matrix_combos() {
+  local file="$1"
+  [ -f "$file" ] || return 2
+  local bad
+  bad=$(awk '
+    /^  - name:/            { check(); name=$3; fs=""; cf="" }
+    /^    filesystem:/      { fs=$2 }
+    /^    composefs_backend:/ { cf=$2 }
+    END                     { check() }
+    function check() {
+      if (name != "" && fs == "xfs" && cf == "true") print name
+    }
+  ' "$file")
+  if [ -n "$bad" ]; then
+    printf 'xfs + composefs_backend is rejected by the recipe validator: %s\n' "$bad" >&2
+    return 1
+  fi
+  return 0
+}
+
+MATRIX_GOOD=$(mktemp)
+cat > "$MATRIX_GOOD" <<'YAML'
+images:
+  - name: good-ext4
+    filesystem: ext4
+    composefs_backend: true
+  - name: good-xfs
+    filesystem: xfs
+    composefs_backend: false
+YAML
+
+MATRIX_BAD=$(mktemp)
+cat > "$MATRIX_BAD" <<'YAML'
+images:
+  - name: good-ext4
+    filesystem: ext4
+    composefs_backend: true
+  - name: bad-xfs-composefs
+    filesystem: xfs
+    composefs_backend: true
+YAML
+
+# Test 13 – a matrix with no invalid pair passes.
+expect_exit "matrix: no xfs+composefs pair → pass (exit 0)" 0 \
+  check_matrix_combos "$MATRIX_GOOD"
+
+# Test 14 – the pair #97 removed is caught, including in the last entry
+# (the END-of-file case the awk parser has to handle explicitly).
+expect_exit "matrix: xfs+composefs pair → caught (exit 1)" 1 \
+  check_matrix_combos "$MATRIX_BAD"
+
+# Test 15 – the real matrix this repository ships.
+expect_exit "matrix: tests/bootcrew-matrix.yaml is valid (exit 0)" 0 \
+  check_matrix_combos "$(dirname "$0")/bootcrew-matrix.yaml"
+
+rm -f "$MATRIX_GOOD" "$MATRIX_BAD"
+
 # ── summary ────────────────────────────────────────────────────────────────
 
 echo ""

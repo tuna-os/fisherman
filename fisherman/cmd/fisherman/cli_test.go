@@ -146,3 +146,39 @@ func TestPrintHelp(t *testing.T) {
 		}
 	}
 }
+
+// TestLooksLikeSubcommand pins the dispatch contract: a recipe path (the
+// install entry point) falls through to recipe.Load, a flag or a bare unknown
+// word is named as an unknown command instead (#178).
+func TestLooksLikeSubcommand(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "recipe"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(cwd) })
+
+	cases := []struct {
+		arg  string
+		want bool
+	}{
+		{"install", true},              // the TUI's old invocation
+		{"--recipe", true},             // and its flag
+		{"-h", true},                   // any flag main() did not handle above
+		{"recipe", false},              // extensionless file in cwd: a recipe
+		{"missing.json", false},        // a recipe path; recipe.Load reports it
+		{"/tmp/does-not-exist", false}, // a path; recipe.Load reports it
+		{filepath.Join(dir, "x"), false},
+	}
+	for _, c := range cases {
+		if got := looksLikeSubcommand(c.arg); got != c.want {
+			t.Errorf("looksLikeSubcommand(%q) = %v, want %v", c.arg, got, c.want)
+		}
+	}
+}
