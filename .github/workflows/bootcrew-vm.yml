@@ -35,6 +35,17 @@ jobs:
           # .golangci.yml at the repo root configures the linter set.
           args: --config=${{ github.workspace }}/.golangci.yml --timeout=5m
 
+      # tests/check-validation.sh verifies that the E2E checks in
+      # verify-installation.sh and boot-verify.sh actually catch the bugs they
+      # claim to, and that tests/bootcrew-matrix.yaml holds no combination the
+      # recipe validator rejects. AGENTS.md says it should pass before every
+      # push, but no workflow ran it, so nothing enforced that — which is how
+      # the xfs+composefs entries in #106 survived a month after #97 removed
+      # the same pair elsewhere. It needs no disk, VM or network and takes
+      # about a second, so it rides along here rather than in its own job.
+      - name: Validation harness
+        run: bash tests/check-validation.sh
+
   setup:
     runs-on: ubuntu-24.04
     timeout-minutes: 5

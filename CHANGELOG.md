@@ -42,6 +42,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 CI
 
+- **Invalid bootcrew matrix entries removed** (#106): `ubuntu-bootc` and
+  `opensuse-bootc` still paired `filesystem: xfs` with `composefs_backend: true`,
+  which the recipe validator rejects outright ("composefs-backend requires
+  fs-verity, which XFS does not support"), so those installs exited before they
+  started. #97 dropped the same pair from three other entries but did not reach
+  these two, because `vm_boot: false` keeps them out of the PR gate while nightly
+  still runs every entry. `tests/check-validation.sh` now fails on the pair so it
+  cannot come back quietly.
+- **The validation harness runs in CI** (#106): `tests/check-validation.sh` is
+  what AGENTS.md asks contributors to run before every push, but no workflow
+  executed it, so nothing enforced it. It is now a step in `bootcrew-vm.yml`'s
+  `lint` job — no disk, VM or network, about a second.
 - **`tui/` runs in CI** (#204): the module had real tests and no workflow ever
   executed them — every job scoped to `fisherman/`. `bootcrew-vm.yml` gains a
   `tui-unit-tests` job running `go vet` and `go test -race` with coverage upload.
