@@ -30,6 +30,9 @@ permissions:
 jobs:
   cut:
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_push_triggers_publish: ${{ steps.token.outputs.is_pat }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -37,6 +40,25 @@ jobs:
           # Use a PAT so the tag push can trigger release-publish.yml
           # (GITHUB_TOKEN-created tags/commits don't re-trigger workflows)
           token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Whether the checkout above got a PAT or fell back to GITHUB_TOKEN.
+      # GitHub does not start workflow runs from GITHUB_TOKEN-authored
+      # events, so with the fallback the tag push below cannot trigger
+      # release-publish.yml — the publish job at the end calls it instead.
+      # With a real PAT the push does trigger it, and calling it as well
+      # would publish the same tag twice, so that job is skipped.
+      - name: Detect push credential
+        id: token
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -n "$RELEASE_TOKEN" ]; then
+            echo "is_pat=true" >> "$GITHUB_OUTPUT"
+            echo "RELEASE_TOKEN is set — the tag push will trigger release-publish.yml"
+          else
+            echo "is_pat=false" >> "$GITHUB_OUTPUT"
+            echo "No RELEASE_TOKEN — this workflow will call release-publish.yml directly"
+          fi
 
       - name: Compute next version
         id: version
@@ -111,3 +133,17 @@ jobs:
             --title "Release $NEXT" \
             --body "$BODY" \
             --label "release" || echo "PR may already exist or dev is already up to date with prod"
+
+  # The tag push above cannot start release-publish.yml when it was made
+  # with GITHUB_TOKEN, so call it. Skipped when a PAT did the push, since
+  # then the push event already started it and this would be a second run
+  # against a tag that already has a release.
+  publish:
+    needs: cut
+    if: needs.cut.outputs.tag_push_triggers_publish != 'true'
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      tag: ${{ needs.cut.outputs.version }}
+    permissions:
+      contents: write
+      packages: read
