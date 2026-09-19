@@ -99,8 +99,25 @@ jobs:
             --pretty=format:"- %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" \
             --no-merges)
 
-          # Write to a temp file to avoid quoting issues
+          # Write to a temp file to avoid quoting issues.
+          #
+          # The merge-method warning is first because it is the one thing a
+          # reviewer has to get right and cannot undo: squashing this PR is
+          # what left prod permanently diverged from dev after #220, so every
+          # later promotion conflicted in files touched on both sides.
           {
+            echo "> [!IMPORTANT]"
+            echo "> **Merge this with a merge commit. Do not squash and do not rebase.**"
+            echo ">"
+            echo "> A squash replaces dev's commits with one new commit that shares"
+            echo "> no ancestry with them. prod then looks diverged from dev forever,"
+            echo "> even though the content is identical, and every future promotion"
+            echo "> conflicts. That is what #220 did, and untangling it needed a"
+            echo "> hand-resolved merge across 18 files."
+            echo ">"
+            echo "> A merge commit keeps dev's tip as an ancestor of prod, so the"
+            echo "> next promotion is an ordinary fast-forward."
+            echo ""
             echo "## What's Changed"
             echo ""
             echo "$COMMITS"
