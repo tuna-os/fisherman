@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +19,21 @@ import (
 // procMountsPath is the path to the mounts file. Overridden in tests.
 var procMountsPath = "/proc/mounts"
 
+// GPTPartTypeLinuxRootX86_64 and GPTPartTypeLinuxRootAArch64 are the
+// Discoverable Partitions Specification root types. systemd-gpt-auto-generator
+// only auto-discovers a root filesystem — or the LUKS container holding one —
+// whose GPT type matches the running architecture.
 const GPTPartTypeLinuxRootX86_64 = "4f68bce3-e8cd-4db1-96e7-fbcaf984b709"
+const GPTPartTypeLinuxRootAArch64 = "b921b045-1df0-41c3-af44-4c6f280d3fae"
+
+// LinuxRootPartType returns the DPS root partition type for the architecture
+// fisherman was built for, which is the one the installed system boots on.
+func LinuxRootPartType() string {
+	if runtime.GOARCH == "arm64" {
+		return GPTPartTypeLinuxRootAArch64
+	}
+	return GPTPartTypeLinuxRootX86_64
+}
 
 // GetProcMountsPath returns the current mounts file path. For testing only.
 func GetProcMountsPath() string { return procMountsPath }
@@ -151,12 +166,21 @@ func PartitionEncrypted(disk string) error {
 // without running out of space even if stale entries accumulate.
 // This layout is used for both unencrypted and encrypted systemd-boot installs
 // (encrypted: LUKS wraps partition 2).
+//
+// The root partition carries the architecture's DPS root type from the start.
+// Sealed composefs images boot from a UKI whose command line carries no root=,
+// so systemd-gpt-auto-generator has to find the root — plain or LUKS — by that
+// GPT type; a generic "linux" type leaves the boot waiting on
+// /dev/gpt-auto-root until it times out (#219). Setting it here rather than
+// retagging after the install also covers the encrypted case, where the raw
+// partition is hidden behind the LUKS mapping and cannot be unmounted and
+// remounted around an sfdisk rewrite.
 func PartitionSystemdBoot(disk string) error {
 	script := strings.Join([]string{
 		"label: gpt",
 		"",
 		`size=2GiB, type=uefi, name="EFI-SYSTEM"`,
-		`type=linux, name="root"`,
+		fmt.Sprintf(`type=%s, name="root"`, LinuxRootPartType()),
 	}, "\n") + "\n"
 	return partition(disk, script)
 }
