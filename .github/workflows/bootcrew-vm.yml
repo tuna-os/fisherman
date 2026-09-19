@@ -52,6 +52,9 @@ jobs:
       - name: Version derivation
         run: bash tests/test-next-version.sh
 
+      - name: Reconcile direction
+        run: bash tests/test-reconcile-direction.sh
+
   setup:
     runs-on: ubuntu-24.04
     timeout-minutes: 5

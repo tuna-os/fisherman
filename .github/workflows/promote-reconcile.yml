@@ -10,17 +10,25 @@ name: Reconcile prod with dev (one-shot)
 # commit that is not a descendant of it, and rightly so, which means it
 # refuses forever until someone reconciles the two.
 #
-# This is deliberately NOT part of promote.yml. Reconciling is a merge that
-# discards prod's side, and that must be a decision someone makes on purpose,
-# not something the hourly gate does quietly the next time prod looks wrong.
+# The direction matters, and getting it backwards deadlocks the repo.
+# promote.yml pushes a dev commit onto prod, so what it needs is `prod` to be
+# an ancestor of `dev`. Merging dev INTO prod gives the opposite: prod ends up
+# a descendant of dev, every future dev commit is still not a descendant of
+# prod, and the gate refuses exactly as before -- while this workflow no longer
+# reads as a no-op either, so it would stack another merge and change nothing.
+# The reconcile therefore lands on `dev`: it merges prod's history into dev and
+# keeps dev's tree, which is what makes prod an ancestor again.
+#
+# It goes in through a pull request rather than a direct push, because dev is
+# protected and because a human should see the (empty) diff before it lands.
 #
 # The safety property is the diff check: the reconciled tree must be
-# byte-identical to dev's, or the push does not happen. That is what makes
-# taking dev's side wholesale safe to automate -- not an assumption that
-# prod holds nothing, but a proof of it, computed at the time.
+# byte-identical to dev's, or nothing is pushed. That is what makes taking
+# dev's side wholesale safe to automate -- not an assumption that prod holds
+# nothing, but a proof of it, computed at the time.
 #
-# Run it from the Actions tab. It needs no arguments, and it is a no-op when
-# prod is already an ancestor of dev.
+# Run it from the Actions tab. It is a no-op when prod is already an ancestor
+# of dev.
 
 on:
   workflow_dispatch:
@@ -33,6 +41,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 concurrency:
   group: promote-fisherman
@@ -47,9 +56,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Reconcile prod onto dev
+      - name: Reconcile prod into dev
         env:
           DRY_RUN: ${{ inputs.dry_run == false && 'false' || 'true' }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           git fetch -q origin dev prod
@@ -78,22 +88,25 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git checkout -q -B reconcile "$PROD"
-          # A merge that keeps prod's history as a parent, with dev's tree as
-          # the result. --no-commit because the conflicts are expected; the
-          # read-tree below is what resolves them, all at once, in dev's
-          # favour.
-          git merge --no-commit --no-ff "$DEV" || true
+          BRANCH="reconcile/prod-into-dev-$(git rev-parse --short "$PROD")"
+          # Built on dev, so merging it is an ordinary fast-forward of dev and
+          # prod becomes an ancestor of dev the moment it lands.
+          git checkout -q -B "$BRANCH" "$DEV"
+          # --no-commit because the conflicts are expected: prod's side is
+          # stale by construction. The read-tree below resolves them all at
+          # once, in dev's favour.
+          git merge --no-commit --no-ff "$PROD" || true
           git read-tree --reset -u "$DEV"
-          git commit -q -m "Reconcile prod with dev
+          git commit -q -m "Reconcile prod into dev
 
           prod diverged when a promotion PR was squashed rather than merged,
           so it shares no ancestry with the commits it flattened. This merge
-          keeps prod's history as a parent and takes dev's tree wholesale, so
-          the next promotion is an ordinary fast-forward again.
+          brings prod's history into dev and keeps dev's tree unchanged, so
+          prod is an ancestor of dev again and the next promotion is an
+          ordinary fast-forward.
 
           Verified before pushing: the resulting tree is byte-identical to
-          dev at $DEV."
+          dev at $DEV, so this changes no files."
 
           # The proof. If the reconciled tree differs from dev's in any way,
           # something was dropped and this must not ship.
@@ -102,7 +115,7 @@ jobs:
             git diff --stat "$DEV" HEAD | tail -20
             exit 1
           fi
-          echo "✅ reconciled tree is byte-identical to dev"
+          echo "✅ reconciled tree is byte-identical to dev (the PR will show no file changes)"
 
           if [ "$DRY_RUN" = "true" ]; then
             echo "dry_run: not pushing. Re-run with dry_run unchecked to apply."
@@ -110,19 +123,33 @@ jobs:
               echo "## Reconcile (dry run)"
               echo
               echo "- prod \`$PROD\` is not an ancestor of dev \`$DEV\`"
-              echo "- a reconcile commit was built and verified byte-identical to dev"
+              echo "- a reconcile commit was built on dev and verified to change no files"
               echo "- **nothing was pushed** — re-run with \`dry_run\` unchecked"
             } >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
-          git push origin HEAD:refs/heads/prod
-          NEW=$(git rev-parse HEAD)
-          echo "prod -> $NEW"
+          git push -u origin "$BRANCH"
+          gh pr create \
+            --base dev \
+            --head "$BRANCH" \
+            --title "Reconcile prod into dev" \
+            --body "Restores the ancestry \`promote.yml\` needs.
+
+          \`prod\` (\`$PROD\`) is not an ancestor of \`dev\` (\`$DEV\`), so the
+          promotion gate refuses to move prod and will keep refusing until
+          this lands. This merge brings prod's history into dev and keeps
+          dev's tree exactly as it is.
+
+          **This PR changes no files** — that is the point, and it was
+          verified in CI before the branch was pushed. Merge it with a merge
+          commit; a squash would recreate the divergence it repairs." \
+            || echo "PR may already exist"
+
           {
             echo "## Reconcile"
             echo
-            echo "- prod was \`$PROD\`, now \`$NEW\`"
-            echo "- tree verified byte-identical to dev \`$DEV\` before pushing"
-            echo "- promote.yml can fast-forward from here"
+            echo "- opened a PR from \`$BRANCH\` into \`dev\`"
+            echo "- it changes no files; merging it makes prod \`$PROD\` an ancestor of dev"
+            echo "- promote.yml can fast-forward prod once that PR is merged"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -62,11 +62,24 @@ content is identical. That is what #220 did.
 `promote-reconcile.yml` repairs it. Run it from the Actions tab with
 `dry_run` on first; it builds the reconciling merge, proves the resulting
 tree is byte-identical to `dev`, and reports without pushing. Re-run with
-`dry_run` off to apply.
+`dry_run` off to open the PR.
+
+**The direction is the whole point, and it is easy to get backwards.** The
+gate needs `prod` to be an ancestor of `dev`, so the reconcile merges `prod`
+**into `dev`** and keeps `dev`'s tree — it lands as a PR against `dev` that
+changes no files. Merging `dev` into `prod` instead produces a `prod` whose
+tree also matches, which looks like it worked and is not: it makes `prod` a
+*descendant* of `dev`, no future `dev` commit is a descendant of `prod`, and
+the gate refuses exactly as before while the reconcile no longer reads as a
+no-op either. `tests/test-reconcile-direction.sh` asserts both halves of
+that, because the backwards version shipped once.
 
 It is a separate, manual workflow on purpose. Reconciling discards `prod`'s
 side of the history, and that should be something someone decides, not
 something the hourly gate does quietly the next time `prod` looks wrong.
+
+Merge the reconcile PR with a **merge commit**. Squashing it would recreate
+the divergence it repairs.
 
 ### Recovering a tag that was never published
 
