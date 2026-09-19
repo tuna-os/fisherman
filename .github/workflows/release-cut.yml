@@ -1,7 +1,10 @@
 name: Cut Release
 
-# Run this manually on the `dev` branch to prepare a new release.
-# It will:
+# The manual path. promote.yml is the normal one -- it cuts a release on
+# its own once dev is green and has soaked. Use this to force a release
+# outside that flow, or to pin an exact version.
+#
+# Run it on `dev`. It will:
 #   1. Compute the next semver from the last git tag
 #   2. Create and push the tag (this triggers release-publish.yml)
 #   3. Open a PR from dev → prod with a generated changelog
@@ -10,11 +13,12 @@ on:
   workflow_dispatch:
     inputs:
       bump:
-        description: Version bump type
+        description: "Version bump (auto = derive from conventional commits)"
         required: true
-        default: patch
+        default: auto
         type: choice
         options:
+          - auto
           - patch
           - minor
           - major
@@ -30,6 +34,9 @@ permissions:
 jobs:
   cut:
     runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag_push_triggers_publish: ${{ steps.token.outputs.is_pat }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -37,6 +44,25 @@ jobs:
           # Use a PAT so the tag push can trigger release-publish.yml
           # (GITHUB_TOKEN-created tags/commits don't re-trigger workflows)
           token: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # Whether the checkout above got a PAT or fell back to GITHUB_TOKEN.
+      # GitHub does not start workflow runs from GITHUB_TOKEN-authored
+      # events, so with the fallback the tag push below cannot trigger
+      # release-publish.yml — the publish job at the end calls it instead.
+      # With a real PAT the push does trigger it, and calling it as well
+      # would publish the same tag twice, so that job is skipped.
+      - name: Detect push credential
+        id: token
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          if [ -n "$RELEASE_TOKEN" ]; then
+            echo "is_pat=true" >> "$GITHUB_OUTPUT"
+            echo "RELEASE_TOKEN is set — the tag push will trigger release-publish.yml"
+          else
+            echo "is_pat=false" >> "$GITHUB_OUTPUT"
+            echo "No RELEASE_TOKEN — this workflow will call release-publish.yml directly"
+          fi
 
       - name: Compute next version
         id: version
@@ -47,8 +73,11 @@ jobs:
 
           if [ -n "${{ inputs.version }}" ]; then
             NEXT="v${{ inputs.version }}"
+          elif [ "${{ inputs.bump }}" = "auto" ]; then
+            # Same derivation promote.yml uses, so a hand-cut release and an
+            # automatic one cannot disagree about what the next version is.
+            NEXT=$(./scripts/next-version.sh)
           else
-            # Strip leading v, split into parts
             IFS='.' read -r MAJOR MINOR PATCH <<< "${LAST#v}"
             case "${{ inputs.bump }}" in
               major) NEXT="v$((MAJOR+1)).0.0" ;;
@@ -77,8 +106,25 @@ jobs:
             --pretty=format:"- %s ([%h](https://github.com/${{ github.repository }}/commit/%H))" \
             --no-merges)
 
-          # Write to a temp file to avoid quoting issues
+          # Write to a temp file to avoid quoting issues.
+          #
+          # The merge-method warning is first because it is the one thing a
+          # reviewer has to get right and cannot undo: squashing this PR is
+          # what left prod permanently diverged from dev after #220, so every
+          # later promotion conflicted in files touched on both sides.
           {
+            echo "> [!IMPORTANT]"
+            echo "> **Merge this with a merge commit. Do not squash and do not rebase.**"
+            echo ">"
+            echo "> A squash replaces dev's commits with one new commit that shares"
+            echo "> no ancestry with them. prod then looks diverged from dev forever,"
+            echo "> even though the content is identical, and every future promotion"
+            echo "> conflicts. That is what #220 did, and untangling it needed a"
+            echo "> hand-resolved merge across 18 files."
+            echo ">"
+            echo "> A merge commit keeps dev's tip as an ancestor of prod, so the"
+            echo "> next promotion is an ordinary fast-forward."
+            echo ""
             echo "## What's Changed"
             echo ""
             echo "$COMMITS"
@@ -111,3 +157,17 @@ jobs:
             --title "Release $NEXT" \
             --body "$BODY" \
             --label "release" || echo "PR may already exist or dev is already up to date with prod"
+
+  # The tag push above cannot start release-publish.yml when it was made
+  # with GITHUB_TOKEN, so call it. Skipped when a PAT did the push, since
+  # then the push event already started it and this would be a second run
+  # against a tag that already has a release.
+  publish:
+    needs: cut
+    if: needs.cut.outputs.tag_push_triggers_publish != 'true'
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      tag: ${{ needs.cut.outputs.version }}
+    permissions:
+      contents: write
+      packages: read

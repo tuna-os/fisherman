@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -302,8 +303,25 @@ func TestPartitionSystemdBoot_SfdiskScript(t *testing.T) {
 	if strings.Contains(rootLine, "size=") {
 		t.Errorf("root partition should have no size= (fills remaining space), got: %q", rootLine)
 	}
-	if !strings.Contains(rootLine, "type=linux") {
-		t.Errorf("root partition missing type=linux: %q", rootLine)
+	// The root carries the DPS root type from creation so gpt-auto discovery
+	// works with and without LUKS on sealed composefs images (#219).
+	if !strings.Contains(rootLine, "type="+disk.LinuxRootPartType()) {
+		t.Errorf("root partition missing type=%s: %q", disk.LinuxRootPartType(), rootLine)
+	}
+	if strings.Contains(rootLine, "type=linux,") {
+		t.Errorf("root partition still carries the generic linux type: %q", rootLine)
+	}
+}
+
+// TestLinuxRootPartType pins the DPS root GUID to the build architecture.
+func TestLinuxRootPartType(t *testing.T) {
+	got := disk.LinuxRootPartType()
+	want := disk.GPTPartTypeLinuxRootX86_64
+	if runtime.GOARCH == "arm64" {
+		want = disk.GPTPartTypeLinuxRootAArch64
+	}
+	if got != want {
+		t.Errorf("LinuxRootPartType() = %q on %s, want %q", got, runtime.GOARCH, want)
 	}
 }
 

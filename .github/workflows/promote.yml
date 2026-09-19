@@ -1,0 +1,269 @@
+name: Promote dev → prod
+
+# The automatic release gate. `dev` is where work lands; `prod` is what
+# shipped. This moves `prod` forward to a `dev` commit once every check on
+# that commit is green and it has soaked, then tags it and publishes.
+#
+# Ported from tuna-os/bootc-installer's promote.yml, which has been running
+# this shape for a while; the guards below are its guards, and the reasons
+# they exist are its reasons.
+#
+# How it fires: whenever a validation workflow completes on dev
+# (workflow_run), hourly as a catch-up, and by hand. Only the LAST workflow
+# to finish on a commit sees "everything is complete", so earlier firings
+# report "not yet" and exit green -- that is normal, not a failure.
+#
+# What it refuses to do:
+#   - move prod to a commit that is not a descendant of prod (never rewinds,
+#     never forks). While prod is diverged this refuses every time, and
+#     promote-reconcile.yml is the one-shot that fixes that;
+#   - promote while any check is still running, or any required check is not
+#     green;
+#   - promote a commit younger than SOAK_MINUTES, so a fix-up push has time
+#     to land before the previous commit ships. fisherman partitions disks;
+#     the soak is cheap insurance;
+#   - rely on a push to prod triggering anything. GITHUB_TOKEN pushes never
+#     start workflows, so release-publish.yml is called, not awaited.
+#
+# `force: true` skips the soak and the check gate. It exists for the day the
+# gate is wrong. It is not the normal path.
+
+on:
+  workflow_run:
+    workflows:
+      - Bootcrew VM Boot (E2E tests)
+      - Workflow lint
+      - customMounts E2E (manual layout)
+    types: [completed]
+    branches: [dev]
+  schedule:
+    - cron: "0 * * * *"
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Specific dev commit to promote (default: newest)"
+        required: false
+        type: string
+      force:
+        description: Skip the soak and the check gate
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+  actions: write
+  checks: read
+
+concurrency:
+  group: promote-fisherman
+  cancel-in-progress: false
+
+env:
+  DEV_BRANCH: dev
+  PROD_BRANCH: prod
+  # Every one of these must be present AND green on the candidate.
+  # required-canaries is the aggregate the branch protection uses; the
+  # others are named so a promotion cannot happen on a commit where they
+  # were skipped entirely.
+  REQUIRED_CHECKS: |
+    required-canaries
+    lint
+    unit-tests
+    actionlint
+  SOAK_MINUTES: "30"
+
+jobs:
+  gate:
+    name: Gate
+    runs-on: ubuntu-24.04
+    outputs:
+      promote: ${{ steps.decide.outputs.promote }}
+      sha: ${{ steps.candidate.outputs.sha }}
+      reason: ${{ steps.decide.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: dev
+          fetch-depth: 0
+
+      - name: Pick the candidate
+        id: candidate
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$PROD_BRANCH" 2>/dev/null || true
+          if [ -n "$INPUT_SHA" ]; then
+            SHA=$(git rev-parse --verify "$INPUT_SHA^{commit}")
+            git merge-base --is-ancestor "$SHA" "origin/$DEV_BRANCH" \
+              || { echo "::error::$SHA is not on $DEV_BRANCH"; exit 1; }
+          else
+            SHA=$(git rev-parse "origin/$DEV_BRANCH")
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          if git rev-parse --verify -q "origin/$PROD_BRANCH" >/dev/null; then
+            echo "prod=$(git rev-parse "origin/$PROD_BRANCH")" >> "$GITHUB_OUTPUT"
+            echo "prod_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prod=" >> "$GITHUB_OUTPUT"
+            echo "prod_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Decide
+        id: decide
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.candidate.outputs.sha }}
+          PROD: ${{ steps.candidate.outputs.prod }}
+          PROD_EXISTS: ${{ steps.candidate.outputs.prod_exists }}
+          FORCE: ${{ inputs.force == true && 'true' || 'false' }}
+          INPUT_SHA: ${{ inputs.sha }}
+          OWN_WORKFLOW: ${{ github.workflow }}
+        run: |
+          set -euo pipefail
+          say() { echo "promote=$1" >> "$GITHUB_OUTPUT"; echo "reason=$2" >> "$GITHUB_OUTPUT"; echo "$2"; }
+
+          if [ "$PROD_EXISTS" = "true" ]; then
+            if [ "$PROD" = "$SHA" ]; then
+              say false "prod is already at $SHA"; exit 0
+            fi
+            if ! git merge-base --is-ancestor "$PROD" "$SHA"; then
+              echo "::error::prod ($PROD) is not an ancestor of $SHA."
+              echo "::error::Refusing to rewind or fork prod. If prod is diverged"
+              echo "::error::(a squashed promotion), run promote-reconcile.yml once."
+              say false "prod is not an ancestor of the candidate"; exit 1
+            fi
+          fi
+
+          if [ "$FORCE" = "true" ]; then
+            echo "::warning::force=true: skipping soak and check gate"
+            say true "forced"; exit 0
+          fi
+
+          # Sleep out the remainder of the soak rather than exiting and
+          # hoping a later firing arrives: the workflow_run firings all land
+          # within minutes of the push, and GitHub's cron ticks are unreliable
+          # enough that the hourly catch-up cannot be counted on.
+          age=$(( $(date -u +%s) - $(git show -s --format=%ct "$SHA") ))
+          remaining=$(( SOAK_MINUTES * 60 - age ))
+          if [ "$remaining" -gt 0 ]; then
+            echo "candidate is $((age / 60)) min old; soak is ${SOAK_MINUTES} min; sleeping $((remaining / 60 + 1)) min"
+            sleep "$remaining"
+            git fetch -q origin "$DEV_BRANCH"
+            NEWEST=$(git rev-parse "origin/$DEV_BRANCH")
+            if [ -z "$INPUT_SHA" ] && [ "$NEWEST" != "$SHA" ]; then
+              say false "superseded by $NEWEST while soaking"; exit 0
+            fi
+          fi
+
+          gh api --paginate -H "Accept: application/vnd.github+json" \
+            "/repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?per_page=100" \
+            --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv' \
+            | grep -v -F "$OWN_WORKFLOW" | grep -v -E '^(Gate|Promote)\b' > /tmp/checks.tsv || true
+
+          if [ ! -s /tmp/checks.tsv ]; then
+            say false "no check runs recorded on $SHA yet"; exit 0
+          fi
+          echo "--- check runs on $SHA ---"; cat /tmp/checks.tsv
+
+          pending=$(awk -F'\t' '$2 != "completed" {print $1}' /tmp/checks.tsv || true)
+          if [ -n "$pending" ]; then
+            say false "still running: $(echo "$pending" | tr '\n' ',' | sed 's/,$//')"; exit 0
+          fi
+
+          # `cancelled` is not treated as red: a run superseded inside its own
+          # concurrency group stays cancelled on the candidate forever. The
+          # required checks below must still be `success`, so a cancelled
+          # required check is caught there, by name.
+          bad=$(awk -F'\t' '$3 == "failure" || $3 == "timed_out" || $3 == "action_required" || $3 == "startup_failure" {print $1" ("$3")"}' /tmp/checks.tsv || true)
+          if [ -n "$bad" ]; then
+            echo "::error::checks not green on $SHA: $(echo "$bad" | tr '\n' ';')"
+            say false "red checks: $(echo "$bad" | tr '\n' ';')"; exit 0
+          fi
+
+          missing=""
+          while IFS= read -r name; do
+            [ -z "$name" ] && continue
+            if ! awk -F'\t' -v n="$name" '$1 == n && $3 == "success"' /tmp/checks.tsv | grep -q .; then
+              missing="$missing$name; "
+            fi
+          done <<< "$REQUIRED_CHECKS"
+          if [ -n "$missing" ]; then
+            say false "required checks not green/present: $missing"; exit 0
+          fi
+
+          say true "all checks green, soak elapsed"
+
+      - name: Summary
+        if: always()
+        env:
+          REASON: ${{ steps.decide.outputs.reason }}
+          SHA: ${{ steps.candidate.outputs.sha }}
+          PROMOTE: ${{ steps.decide.outputs.promote }}
+        run: |
+          {
+            echo "## Promote dev → prod"
+            echo
+            echo "- candidate: \`$SHA\`"
+            echo "- decision: **${PROMOTE:-false}** — $REASON"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Promote
+    needs: gate
+    if: needs.gate.outputs.promote == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.gate.outputs.sha }}
+          fetch-depth: 0
+
+      - name: Compute the next version
+        id: version
+        run: |
+          set -euo pipefail
+          git fetch -q --tags origin
+          NEXT=$(./scripts/next-version.sh "${{ needs.gate.outputs.sha }}")
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "next version: $NEXT"
+
+      # Fast-forward only; the gate already proved prod is an ancestor.
+      - name: Fast-forward prod
+        env:
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git push origin "$SHA:refs/heads/$PROD_BRANCH"
+          echo "prod -> $SHA"
+
+      - name: Tag the release
+        env:
+          NEXT: ${{ steps.version.outputs.version }}
+          SHA: ${{ needs.gate.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$NEXT" -m "Release $NEXT" "$SHA"
+          git push origin "$NEXT"
+          {
+            echo "- promoted \`$SHA\` to \`$PROD_BRANCH\`"
+            echo "- tagged \`$NEXT\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # Called rather than awaited: the tag above was pushed with GITHUB_TOKEN,
+  # and GitHub does not start workflow runs from GITHUB_TOKEN-authored
+  # events. That is exactly how v0.3.0 got a tag and no release.
+  publish:
+    name: Publish
+    needs: promote
+    uses: ./.github/workflows/release-publish.yml
+    with:
+      tag: ${{ needs.promote.outputs.version }}
+    permissions:
+      contents: write
+      packages: read

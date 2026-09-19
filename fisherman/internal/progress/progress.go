@@ -39,6 +39,11 @@ type recoveryKeyEvent struct {
 	Key  string `json:"key"`
 }
 
+type errorEvent struct {
+	Type    string `json:"type"`
+	Message string `json:"message"`
+}
+
 // Step emits a JSON step-progress line to stdout.
 // cumulativePct is the bar position (0–100) at the start of this step.
 // weightPct is the estimated share of total install time this step occupies.
@@ -82,6 +87,15 @@ func Complete(message, bootID string) {
 // Only emit when a random (non-user-chosen) passphrase is the sole fallback.
 func RecoveryKey(key string) {
 	write(recoveryKeyEvent{Type: "recovery_key", Key: key})
+}
+
+// Error emits a JSON terminal-failure event to stdout. Callers still write a
+// plain-text summary to stderr for terminal/log visibility; this event lets
+// consumers that parse the stdout protocol (GUIs, install logs) capture the
+// same failure programmatically instead of only seeing an unstructured
+// stderr line.
+func Error(message string) {
+	write(errorEvent{Type: "error", Message: message})
 }
 
 func write(v any) {

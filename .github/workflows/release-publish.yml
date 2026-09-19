@@ -1,12 +1,34 @@
 name: Publish Release
 
-# Triggered automatically when release-cut.yml pushes a version tag.
 # Builds fisherman binaries and creates a GitHub Release via GoReleaser.
-
+#
+# Three ways in, because the `push` trigger alone does not work for the
+# intended flow: release-cut.yml pushes the tag with GITHUB_TOKEN when
+# RELEASE_TOKEN is unset, and GitHub deliberately does not start workflow
+# runs from GITHUB_TOKEN-authored events. So the tag lands and nothing
+# publishes — which is what happened to v0.3.0.
+#
+#   workflow_call     release-cut.yml calls this directly after tagging, so
+#                     the chain no longer depends on who pushed the tag.
+#   workflow_dispatch recovery. A tag that exists but was never published
+#                     (v0.2.0, v0.3.0) can be published by naming it here.
+#   push              a tag pushed by a person with their own credentials.
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to publish (e.g. v0.3.0)
+        required: true
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        description: The tag release-cut.yml just pushed
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -19,6 +41,11 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+          # On a push this is empty and github.ref is already the tag. On a
+          # call or a dispatch it is the tag to publish. GoReleaser derives
+          # the version from the tag at HEAD, so this must be the tag ref
+          # and not a branch.
+          ref: ${{ inputs.tag || github.ref }}
 
       - uses: actions/setup-go@v7
         with:

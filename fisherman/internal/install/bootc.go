@@ -584,14 +584,57 @@ func bootcDirect(opts Options) error {
 
 	bargs := BuildBootcArgs(opts, opts.TargetImgref, opts.Target)
 
-	name, args := runner.HostArgs("bootc", bargs)
+	// bootc stages every layer blob it copies out of the OCI cache under
+	// /var/tmp before it lands in the target's image storage. On a live ISO
+	// /var/tmp is the RAM-backed dracut overlay, so a multi-gigabyte image
+	// dies with ENOSPC part way through "Copying blob" even though the OCI
+	// cache itself already sits on the target disk (#211). Give bootc the
+	// same scratch-backed /var/tmp the export uses.
+	scratch := opts.scratchDir()
+	restoreVarTmp := overrideVarTmp(scratch)
+	defer restoreVarTmp()
+	tmpEnv := "TMPDIR=" + scratch
+
+	name, args := runner.HostArgsWithEnv("bootc", bargs, []string{tmpEnv})
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
+	fmt.Fprintf(os.Stdout, "# %s\n", tmpEnv)
 
 	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), tmpEnv)
 	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("bootc install to-filesystem: %w", err)
 	}
 	return nil
+}
+
+// overrideVarTmp bind-mounts a directory under tmpdir over /var/tmp and
+// returns the function that undoes it.
+//
+// Root cause: containers/image's TypeBigFiles path calls store.TmpDir(),
+// which returns /var/tmp (containers/storage hardcoded default) regardless of
+// the TMPDIR env var. On live ISOs /var/tmp is on the dracut overlayfs
+// (~1.4 GiB) — too small for 5-6 GiB layer blobs. podman, skopeo and bootc
+// all hit this when they copy image layers.
+//
+// The bind mount makes that hardcoded path disk-backed. When the mount cannot
+// be made the returned function is a no-op and a warning is printed; the
+// caller proceeds and ENOSPC stays possible, which is what happened before.
+func overrideVarTmp(tmpdir string) func() {
+	varTmpOverride := filepath.Join(tmpdir, "var-tmp-override")
+	if err := os.MkdirAll(varTmpOverride, 0o1777); err != nil {
+		fmt.Fprintf(os.Stdout, "# warning: cannot create %s (%v) — /var/tmp left as is\n", varTmpOverride, err)
+		return func() {}
+	}
+	mntName, mntArgs := runner.HostArgs("mount", []string{"--bind", varTmpOverride, "/var/tmp"})
+	if exec.Command(mntName, mntArgs...).Run() != nil {
+		fmt.Fprintf(os.Stdout, "# warning: /var/tmp bind-mount failed — ENOSPC likely on overlay tmpfs\n")
+		return func() {}
+	}
+	fmt.Fprintf(os.Stdout, "# /var/tmp bind-mounted → %s for blob staging\n", varTmpOverride)
+	return func() {
+		umName, umArgs := runner.HostArgs("umount", []string{"/var/tmp"})
+		_ = exec.Command(umName, umArgs...).Run()
+	}
 }
 
 // BootcToDisk installs a bootc image directly to a block device using
@@ -868,29 +911,10 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 		tmpdir = "/tmp"
 	}
 
-	// Redirect /var/tmp to the disk-backed scratch dir before the export.
-	//
-	// Root cause: containers/image's TypeBigFiles path calls store.TmpDir()
-	// which returns /var/tmp (containers/storage hardcoded default) regardless
-	// of the TMPDIR env var. On live ISOs /var/tmp is on the dracut overlayfs
-	// (~1.4 GiB) — too small for 5-6 GiB layer blobs. Both podman and skopeo
-	// hit this when reading from containers-storage.
-	//
-	// Fix: bind-mount the scratch dir over /var/tmp so the hardcoded path
-	// becomes disk-backed. Deferred umount restores it after export.
-	varTmpOverride := filepath.Join(tmpdir, "var-tmp-override")
-	if err := os.MkdirAll(varTmpOverride, 0o1777); err == nil {
-		mntName, mntArgs := runner.HostArgs("mount", []string{"--bind", varTmpOverride, "/var/tmp"})
-		if exec.Command(mntName, mntArgs...).Run() == nil {
-			fmt.Fprintf(os.Stdout, "# /var/tmp bind-mounted → %s for blob staging\n", varTmpOverride)
-			defer func() {
-				umName, umArgs := runner.HostArgs("umount", []string{"/var/tmp"})
-				_ = exec.Command(umName, umArgs...).Run()
-			}()
-		} else {
-			fmt.Fprintf(os.Stdout, "# warning: /var/tmp bind-mount failed — ENOSPC likely on overlay tmpfs\n")
-		}
-	}
+	// Redirect /var/tmp to the disk-backed scratch dir before the export
+	// (see overrideVarTmp for why TMPDIR alone is not enough).
+	restoreVarTmp := overrideVarTmp(tmpdir)
+	defer restoreVarTmp()
 
 	skopeoArgs := []string{
 		"copy",

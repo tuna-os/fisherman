@@ -35,6 +35,23 @@ jobs:
           # .golangci.yml at the repo root configures the linter set.
           args: --config=${{ github.workspace }}/.golangci.yml --timeout=5m
 
+      # tests/check-validation.sh verifies that the E2E checks in
+      # verify-installation.sh and boot-verify.sh actually catch the bugs they
+      # claim to, and that tests/bootcrew-matrix.yaml holds no combination the
+      # recipe validator rejects. AGENTS.md says it should pass before every
+      # push, but no workflow ran it, so nothing enforced that — which is how
+      # the xfs+composefs entries in #106 survived a month after #97 removed
+      # the same pair elsewhere. It needs no disk, VM or network and takes
+      # about a second, so it rides along here rather than in its own job.
+      - name: Validation harness
+        run: bash tests/check-validation.sh
+
+      # The release version is derived from commit subjects, so a bug here
+      # ships a wrong tag silently -- nothing else would catch it. Runs in
+      # throwaway git repos; no network, about a second.
+      - name: Version derivation
+        run: bash tests/test-next-version.sh
+
   setup:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -82,6 +99,39 @@ jobs:
         with:
           name: unit-test-coverage
           path: fisherman/coverage.out
+          if-no-files-found: ignore
+          retention-days: 14
+
+  # tui/ is a separate Go module (github.com/tuna-os/fisherman/tui) with its
+  # own tests, and nothing here ran them: every job above scopes to fisherman/
+  # (working-directory, go-version-file). Its only automated execution was a
+  # downstream consumer testing whatever commit its submodule pin happened to
+  # be on — not this repo checking its own code before merge (#204). None of
+  # tui's tests need root. Deliberately not in required-canaries' needs, so
+  # the gate's summary line keeps its shape; a failure here still fails the
+  # workflow run.
+  tui-unit-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tui/go.mod
+          cache: true
+          cache-dependency-path: tui/go.sum
+      - name: Vet
+        run: go vet ./...
+        working-directory: tui
+      - name: Unit tests (race + coverage)
+        run: go test -race -coverprofile=coverage.out -covermode=atomic ./...
+        working-directory: tui
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tui-unit-test-coverage
+          path: tui/coverage.out
           if-no-files-found: ignore
           retention-days: 14
 

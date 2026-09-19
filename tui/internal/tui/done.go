@@ -24,10 +24,14 @@ func newDoneModel(cfg *config.InstallConfig, dryRun bool) *doneModel {
 
 	if dryRun {
 		// Pre-render the recipe JSON for display; write it to a temp file too.
-		tmp := "/tmp/bootc-installer-recipe.json"
-		_ = cfg.WriteRecipe(tmp)
-		if data, err := os.ReadFile(tmp); err == nil {
-			m.recipeJSON = string(data)
+		f, err := os.CreateTemp("", "bootc-installer-recipe-*.json")
+		if err == nil {
+			tmp := f.Name()
+			_ = cfg.WriteRecipe(tmp)
+			if data, err := os.ReadFile(tmp); err == nil {
+				m.recipeJSON = string(data)
+			}
+			_ = f.Close()
 		}
 		m.form = huh.NewForm(
 			huh.NewGroup(
@@ -93,7 +97,7 @@ func (m *doneModel) View() string {
 			Foreground(colorText)
 		sb.WriteString(codeStyle.Render(m.recipeJSON))
 		sb.WriteString("\n\n")
-		sb.WriteString(mutedStyle.Render("  Pass this to: fisherman install --recipe /tmp/bootc-installer-recipe.json"))
+		sb.WriteString(mutedStyle.Render("  Recipe rendered successfully during dry run."))
 	} else {
 		sb.WriteString(successStyle.Render("  ✓ Installation Complete!"))
 		sb.WriteString("\n\n")

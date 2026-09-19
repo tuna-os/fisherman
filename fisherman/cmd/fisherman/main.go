@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/tuna-os/fisherman/internal/disk"
@@ -87,8 +88,10 @@ func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) [
 }
 
 func fatal(format string, args ...any) {
+	msg := fmt.Sprintf(format, args...)
+	progress.Error(msg)
 	cleanup.Run()
-	fmt.Fprintf(os.Stderr, "fisherman: fatal: "+format+"\n", args...)
+	fmt.Fprintf(os.Stderr, "fisherman: fatal: %s\n", msg)
 	os.Exit(1)
 }
 
@@ -221,6 +224,23 @@ Examples:
 `)
 }
 
+// looksLikeSubcommand reports whether arg is a mistyped command rather than a
+// recipe path. The bare positional form (`fisherman recipe.json`) is the
+// install entry point, so the fall-through to recipe.Load must stay; but a
+// flag, or a bare word with no path separator and no file behind it, is a
+// command this backend does not have (`fisherman install --recipe …`, #178).
+// Naming it beats "loading recipe: open install: no such file or directory".
+func looksLikeSubcommand(arg string) bool {
+	if strings.HasPrefix(arg, "-") {
+		return true
+	}
+	if strings.ContainsAny(arg, `/\`) || strings.HasSuffix(arg, ".json") {
+		return false
+	}
+	_, err := os.Stat(arg)
+	return err != nil
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		printHelp()
@@ -252,6 +272,12 @@ func main() {
 		}
 		fmt.Println(output)
 		return
+	}
+
+	if looksLikeSubcommand(os.Args[1]) {
+		fmt.Fprintf(os.Stderr, "fisherman: unknown command %q, and no such recipe file\n\n", os.Args[1])
+		printHelp()
+		os.Exit(2)
 	}
 
 	r, err := recipe.Load(os.Args[1])
@@ -664,20 +690,35 @@ func main() {
 		fatal("bootc install: %v", err)
 	}
 
-	// systemd-boot composefs installs rely on GPT auto-discovery for the root
-	// filesystem. Keep the auto-partitioned root on the architecture-specific
-	// Linux root GUID so the installed system can find /sysroot on first boot.
-	if !isManual && isSystemdBoot && !hasEncryption && r.ComposeFsBackend {
-		progress.Info("Retagging root partition for systemd GPT auto-discovery")
-
-		// Ensure BOOTX64.EFI is on the ESP before we touch the mount stack.
-		// Newer bootctl (e.g. arch-bootc systemd ≥ v255) enables --graceful when
-		// running in a container and silently skips writing to the ESP. Copying
-		// directly from the ostree deployment is a reliable fallback and a no-op
-		// when bootctl ran correctly (EFI/BOOT/BOOTX64.EFI already present).
+	// Ensure BOOTX64.EFI is on the ESP before anything touches the mount stack.
+	// Newer bootctl (e.g. arch-bootc systemd ≥ v255) enables --graceful when
+	// running in a container and silently skips writing to the ESP. Copying
+	// directly from the ostree deployment is a reliable fallback and a no-op
+	// when bootctl ran correctly (EFI/BOOT/BOOTX64.EFI already present).
+	//
+	// This used to be reached only on the unencrypted branch below, so an
+	// encrypted systemd-boot install whose bootctl skipped the ESP got no
+	// bootloader at all. Nothing about that bootctl behaviour depends on
+	// encryption, and the call is idempotent and warning-only, so it runs for
+	// every systemd-boot composefs install.
+	if !isManual && isSystemdBoot && r.ComposeFsBackend {
 		if err := install.InstallSystemdBoot(activeTargetMount); err != nil {
 			progress.Info(fmt.Sprintf("Warning: could not ensure systemd-boot EFI binary: %v", err))
 		}
+	}
+
+	// systemd-boot composefs installs rely on GPT auto-discovery for the root
+	// filesystem, so the root partition must carry the architecture's Linux
+	// root GUID. disk.PartitionSystemdBoot now writes that type when it creates
+	// the table, which is what makes the encrypted layout boot (#219) — behind
+	// a LUKS mapping the raw partition is not what is mounted, so the
+	// unmount/rewrite/remount dance below cannot run there at all.
+	//
+	// It stays here for the unencrypted layout as a belt-and-braces pass: a
+	// disk reused from an earlier install can reach this point with a stale
+	// type when bootc rewrites the table itself.
+	if !isManual && isSystemdBoot && !hasEncryption && r.ComposeFsBackend {
+		progress.Info("Retagging root partition for systemd GPT auto-discovery")
 
 		// Unmount the EFI partition explicitly so the FAT32 state is flushed to
 		// the page cache before the root lazy-unmount below orphans the submount.
@@ -690,7 +731,7 @@ func main() {
 		if err := disk.UnmountPartition(r.Disk, 2); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: could not fully clean partition references: %v\n", err)
 		}
-		if err := disk.SetPartitionType(r.Disk, 2, disk.GPTPartTypeLinuxRootX86_64); err != nil {
+		if err := disk.SetPartitionType(r.Disk, 2, disk.LinuxRootPartType()); err != nil {
 			fatal("retagging root partition: %v", err)
 		}
 		// Remount root so finalization and post-install writes can proceed.
