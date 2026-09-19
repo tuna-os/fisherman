@@ -76,7 +76,7 @@ env:
 jobs:
   gate:
     name: Gate
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       promote: ${{ steps.decide.outputs.promote }}
       sha: ${{ steps.candidate.outputs.sha }}
@@ -213,7 +213,7 @@ jobs:
     name: Promote
     needs: gate
     if: needs.gate.outputs.promote == 'true'
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
