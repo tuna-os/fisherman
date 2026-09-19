@@ -9,43 +9,74 @@ Thank you for your interest in contributing to `fisherman`, the universal bootc 
 
 ## Releasing
 
-A release is two steps, both deliberate. Nothing promotes on its own — this
-repository has no `promote.yml`.
+Releases are automatic. `promote.yml` watches `dev`, and when a commit has
+every required check green and has sat for 30 minutes, it fast-forwards
+`prod` to that commit, tags it, and publishes the binaries.
 
-1. **Cut it.** Dispatch `release-cut.yml` on `dev` with a `bump` of `patch`,
-   `minor` or `major`. It computes the next version from the last tag, pushes
-   the tag, calls `release-publish.yml` to build and attach the binaries, and
-   opens a `dev` → `prod` promotion PR.
-2. **Promote it.** Review and merge that PR.
+Nothing needs a human in the normal case. What used to be two deliberate
+steps — dispatch the cut, then merge a promotion PR — is now the gate.
 
-### Merge the promotion PR with a merge commit
+### How the version is chosen
 
-**Never squash or rebase the `dev` → `prod` PR.** This is the one irreversible
-choice in the process.
+From the conventional-commit subjects since the last tag, by
+`scripts/next-version.sh`:
 
-A squash discards dev's commits and writes a single new one that shares no
-ancestry with them. `prod` then reads as diverged from `dev` permanently, even
-though the two hold identical content, and every later promotion conflicts in
-any file touched on both sides.
+| in the range | bump |
+|---|---|
+| a `!` before the colon, or a `BREAKING CHANGE:` trailer | major |
+| any `feat:` | minor |
+| anything else | patch |
 
-That is not hypothetical: #220 was squashed into `prod`, which left `prod` one
-commit "ahead" and 261 behind with a byte-identical tree, and the next
-promotion (#226) conflicted across 18 files. Recovering needs a hand-resolved
-merge that takes dev's tree wholesale.
+Two deliberate wrinkles:
 
-A merge commit keeps dev's tip as an ancestor of `prod`, so the next promotion
-is an ordinary fast-forward.
+- **Bot prefixes are stripped first.** Commits arrive as
+  `[sec-check] fix: ...`; without stripping, every one of them reads as an
+  unknown type and quietly becomes a patch — wrong for a `feat`.
+- **Before 1.0.0 a breaking change bumps the minor**, not the major. Major 0
+  is the statement that the API is not stable yet, and spending it on the
+  first `feat!:` would claim a stability this project has not declared.
 
-`release-cut.yml` repeats this warning at the top of every promotion PR it
-opens. GitHub cannot enforce a merge method per branch — the setting is
-repository-wide and `dev` deliberately uses squash — so the PR body and this
-section are the control.
+`tests/test-next-version.sh` covers both, plus the case where a body merely
+mentions "BREAKING CHANGE:" mid-sentence and must *not* trigger a major.
+
+So write conventional commits. A `feat:` that lands as `chore:` ships as a
+patch, and nobody finds out until they read the tag.
+
+### The manual path
+
+`release-cut.yml` is still there for forcing a release outside the gate, or
+pinning an exact version. Its `bump` input defaults to `auto`, which calls
+the same script, so a hand-cut release and an automatic one cannot disagree.
+
+### When prod diverges
+
+`promote.yml` refuses to move `prod` to a commit that is not a descendant of
+it — it will never rewind or fork the branch. That guard is also why a
+diverged `prod` stops promotion dead.
+
+`prod` diverges when a promotion PR is **squashed** instead of merged: the
+squash writes one new commit sharing no ancestry with the commits it
+flattened, so `prod` reads as permanently ahead-and-behind even when the
+content is identical. That is what #220 did.
+
+`promote-reconcile.yml` repairs it. Run it from the Actions tab with
+`dry_run` on first; it builds the reconciling merge, proves the resulting
+tree is byte-identical to `dev`, and reports without pushing. Re-run with
+`dry_run` off to apply.
+
+It is a separate, manual workflow on purpose. Reconciling discards `prod`'s
+side of the history, and that should be something someone decides, not
+something the hourly gate does quietly the next time `prod` looks wrong.
 
 ### Recovering a tag that was never published
 
-`release-publish.yml` accepts `workflow_dispatch` with a `tag` input. If a tag
-exists but its release has no assets, dispatch it with that tag rather than
-cutting a new version.
+A tag can exist with no release behind it — v0.2.0 and v0.3.0 both did,
+because `release-cut.yml` pushed them with `GITHUB_TOKEN` and GitHub does
+not start workflow runs from `GITHUB_TOKEN`-authored events. Dispatch
+`release-publish.yml` and give it the tag.
+
+That is also why `promote.yml` *calls* `release-publish.yml` rather than
+pushing a tag and hoping: the call does not depend on who pushed.
 
 ## Development Workflow
 
