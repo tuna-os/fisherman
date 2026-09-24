@@ -256,7 +256,8 @@ func partition(disk, script string) error {
 //
 // It uses lsblk to confirm the layout rather than hardcoding partition numbers.
 func FindSystemdBootPartitions(diskDev string) (efiPart, rootPart string, err error) {
-	out, err := exec.Command("lsblk", "-J", "-p", "-o", "NAME,PARTTYPE", diskDev).Output()
+	name, args := runner.HostArgs("lsblk", []string{"-J", "-p", "-o", "NAME,PARTTYPE", diskDev})
+	out, err := exec.Command(name, args...).Output()
 	if err != nil {
 		return "", "", fmt.Errorf("lsblk: %w", err)
 	}
@@ -319,25 +320,18 @@ func RescanPartitions(d string) error {
 // subsequent mkfs/mount calls access them (observed as "No such device or
 // address" on /dev/loopNpM in CI, especially under load with large images).
 func loopRescan(disk string) error {
-	spawnArgs := func(name string, args ...string) (string, []string) {
-		if inFlatpakEnv() {
-			return "flatpak-spawn", append([]string{"--host", name}, args...)
-		}
-		return name, args
-	}
-
-	qname, qargs := spawnArgs("losetup", "--noheadings", "-O", "BACK-FILE", disk)
+	qname, qargs := runner.HostArgs("losetup", []string{"--noheadings", "-O", "BACK-FILE", disk})
 	out, err := exec.Command(qname, qargs...).Output()
 	if err != nil {
 		return fmt.Errorf("query backing file: %w", err)
 	}
 	backFile := strings.TrimSpace(string(out))
 
-	dname, dargs := spawnArgs("losetup", "-d", disk)
+	dname, dargs := runner.HostArgs("losetup", []string{"-d", disk})
 	if err := exec.Command(dname, dargs...).Run(); err != nil {
 		return fmt.Errorf("detach: %w", err)
 	}
-	rname, rargs := spawnArgs("losetup", "-P", disk, backFile)
+	rname, rargs := runner.HostArgs("losetup", []string{"-P", disk, backFile})
 	if err := exec.Command(rname, rargs...).Run(); err != nil {
 		return fmt.Errorf("reattach with partscan: %w", err)
 	}
@@ -451,7 +445,8 @@ func deactivateLVM(disk string) {
 	// Step 1: deactivate any LVM VGs that contain a PV on this disk.
 	// `pvs` lists physical volumes; we match those whose PV name starts with
 	// the disk path (e.g. /dev/sda1, /dev/sda2 ...).
-	pvOut, err := exec.Command("pvs", "--noheadings", "-o", "pv_name,vg_name").Output()
+	pvsName, pvsArgs := runner.HostArgs("pvs", []string{"--noheadings", "-o", "pv_name,vg_name"})
+	pvOut, err := exec.Command(pvsName, pvsArgs...).Output()
 	if err == nil {
 		for _, line := range strings.Split(string(pvOut), "\n") {
 			fields := strings.Fields(line)
@@ -469,24 +464,20 @@ func deactivateLVM(disk string) {
 	// Step 2: remove any device-mapper devices (LUKS, dm-crypt, LVM LVs)
 	// whose block-device dependency includes a partition of this disk.
 	// `dmsetup deps -o devname` prints the underlying devices for each mapper.
-	dmList, err := exec.Command("dmsetup", "ls").Output()
+	lsName, lsArgs := runner.HostArgs("dmsetup", []string{"ls"})
+	dmList, err := exec.Command(lsName, lsArgs...).Output()
 	if err == nil {
 		for _, line := range strings.Split(string(dmList), "\n") {
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
 			dmName := strings.Fields(line)[0]
-			deps, err := exec.Command("dmsetup", "deps", "-o", "devname", dmName).Output()
+			depsName, depsArgs := runner.HostArgs("dmsetup", []string{"deps", "-o", "devname", dmName})
+			deps, err := exec.Command(depsName, depsArgs...).Output()
 			if err == nil && strings.Contains(string(deps), base) {
 				fmt.Fprintf(os.Stdout, "+ dmsetup remove --force %s (backed by %s)\n", dmName, disk)
 				_ = runner.Run("dmsetup", "remove", "--force", dmName)
 			}
 		}
 	}
-}
-
-// inFlatpakEnv reports whether the current process is inside a Flatpak sandbox.
-func inFlatpakEnv() bool {
-	_, err := os.Stat("/.flatpak-info")
-	return err == nil
 }
