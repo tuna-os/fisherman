@@ -564,8 +564,10 @@ func TestBootcInstall_NonComposefsContainerExportsOCI(t *testing.T) {
 	t.Cleanup(func() { _ = os.Setenv("PATH", oldPath) })
 
 	var exportCalled bool
+	var exportedFrom string
 	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
 		exportCalled = true
+		exportedFrom = image
 		// Create a minimal OCI layout so the subsequent podman run can
 		// find oci:<path> (we just need the file to exist for the mock).
 		if err := os.MkdirAll(destDir, 0755); err != nil {
@@ -597,6 +599,12 @@ func TestBootcInstall_NonComposefsContainerExportsOCI(t *testing.T) {
 	}
 	if !exportCalled {
 		t.Error("SkopeoExportOCIFn was not called for non-composefs container mode with SourceImgref set")
+	}
+	// The source is local and was not pulled, so it is only in the live
+	// system's store. Exporting from the (empty) redirected root instead made
+	// every offline Utah install fail with "does not resolve to an image ID".
+	if want := "containers-storage:ghcr.io/ublue-os/bluefin:stable"; exportedFrom != want {
+		t.Errorf("exported from %q, want the unpulled local ref %q", exportedFrom, want)
 	}
 }
 

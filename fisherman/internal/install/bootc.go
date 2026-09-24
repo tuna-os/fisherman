@@ -432,11 +432,19 @@ func bootcViaContainer(opts Options) error {
 	// pressure).
 	if useOciLayout {
 		exportRef := opts.SourceImgref
-		if nonComposefsRoot != "" {
+		if nonComposefsRoot != "" && opts.NeedsPull {
 			// The image was pulled into the redirected root; qualify the
 			// containers-storage reference so skopeo reads that store instead
 			// of the default /var/lib/containers (where the image is absent —
 			// the unqualified ref made skopeo copy fail with exit status 2).
+			//
+			// Only when it was pulled there. An offline containers-storage:
+			// source is never pulled (see above), so it lives in the live
+			// system's store -- typically an additional image store on the
+			// ISO -- and the redirected root is empty. Qualifying it anyway
+			// broke every offline non-composefs install from a live ISO:
+			//   reference "[overlay@.../containers-root+...]ghcr.io/
+			//   projectbluefin/utah:testing" does not resolve to an image ID
 			exportRef = fmt.Sprintf("containers-storage:[%s@%s+%s]%s",
 				nonComposefsDriver, nonComposefsRoot, nonComposefsRunRoot, bareImageRef(opts.SourceImgref))
 		}
