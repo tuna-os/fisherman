@@ -155,6 +155,12 @@ type Options struct {
 	// When empty, BuildBootcArgs falls back to the host-side OCI cache
 	// (scratchDir/oci-cache), which is correct for bootcDirect (no container).
 	ComposeFsOCIPath string
+
+	// directLocalSource is set by BootcInstall when a local
+	// containers-storage: SourceImgref is installed with the host's bootc
+	// instead of inside a podman container (see useDirectForLocalSource).
+	// BuildBootcArgs then passes SourceImgref as --source-imgref.
+	directLocalSource bool
 }
 
 // scratchDir returns the host-side scratch directory from opts, falling back
@@ -200,6 +206,10 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	}
 	if opts.ComposeFsBackend || opts.ComposeFsOCIPath != "" {
 		args = append(args, "--source-imgref", "oci:"+ociPath)
+	} else if opts.directLocalSource {
+		// Direct mode from an explicit local source, which may differ from
+		// the target (an NVIDIA image on the ISO, tracking the base image).
+		args = append(args, "--source-imgref", containersStorageSource(opts.SourceImgref))
 	} else if resolvedTargetImgref != "" && opts.SourceImgref == "" {
 		// Direct mode: bootc runs natively (not in a container) and needs
 		// an explicit --source-imgref.  Use containers-storage transport
@@ -341,10 +351,38 @@ func appendImageStoreArgs(podmanArgs []string, scratch string, opts Options) ([]
 // If opts.SourceImgref is empty (live-ISO mode), bootc is called directly —
 // bootc auto-detects the running container image as the install source.
 func BootcInstall(opts Options) error {
-	if opts.SourceImgref != "" {
+	if opts.SourceImgref != "" && !useDirectForLocalSource(opts) {
 		return bootcViaContainer(opts)
 	}
+	opts.directLocalSource = opts.SourceImgref != ""
 	return bootcDirect(opts)
+}
+
+// hostHasBootcFn reports whether bootc runs on the host (a live ISO of a bootc
+// image). A package var so tests do not depend on the machine running them.
+var hostHasBootcFn = func() bool {
+	name, args := runner.HostArgs("bootc", []string{"--version"})
+	return exec.Command(name, args...).Run() == nil
+}
+
+// useDirectForLocalSource decides whether a non-composefs install from an
+// image already in local containers-storage runs the host's bootc directly.
+//
+// The container path cannot do this job on a live ISO. It redirects podman
+// storage to the target disk, exports the image to an OCI layout, and
+// `podman run`s bootc from it; on an 8 GiB machine that podman was OOM-killed
+// with 6.5 GB of anonymous memory during `bootc install to-filesystem`
+// (Utah live ISO, 2026-09-24). The direct path reads the same image straight
+// from the live store -- the shape Utah's install e2e has always used, and
+// passes in 8 GiB. The installer GUI, though, always sends the live-ISO
+// local_imgref as the source, so it took the container path every time.
+//
+// Composefs keeps the container path: it needs the exported OCI layout either
+// way, and Dakota's installs pass through it.
+func useDirectForLocalSource(opts Options) bool {
+	return !opts.ComposeFsBackend &&
+		strings.HasPrefix(opts.SourceImgref, "containers-storage:") &&
+		hostHasBootcFn()
 }
 
 func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
@@ -352,7 +390,9 @@ func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
 	// Non-composefs only needs it in container mode with overlay redirect.
 	// In direct mode (bootcDirect) for non-composefs, bootc reads from
 	// containers-storage on the host — no OCI export needed.
-	if !opts.ComposeFsBackend && opts.SourceImgref == "" {
+	if !opts.ComposeFsBackend && (opts.SourceImgref == "" || opts.directLocalSource) {
+		// A direct install from local storage reads the store itself; an OCI
+		// copy of a multi-gigabyte image would only cost time and disk.
 		return nil
 	}
 	if sourceImgref == "" {
