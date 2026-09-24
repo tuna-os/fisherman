@@ -547,6 +547,8 @@ func TestBootcInstall_NonComposefsContainerExportsOCI(t *testing.T) {
 	// regardless of the runner's /var/lib/containers free space.
 	defer install.SetStorageSpaceConstrainedForTest(true)()
 	defer install.SetSelectStorageDriverForTest("overlay", "forced for test")()
+	// Without a host bootc, a local source still takes the container path.
+	defer install.SetHostHasBootcForTest(false)()
 	tmpDir := t.TempDir()
 	var scratchDir string
 	var err error
@@ -644,5 +646,51 @@ func TestBootcInstall_NonComposefsDirectSkipsOCIExport(t *testing.T) {
 	}
 	if exportCalled {
 		t.Error("SkopeoExportOCIFn was called for non-composefs direct mode (should be skipped)")
+	}
+}
+
+// TestBootcInstall_LocalSourceInstallsDirectly is the installer GUI's live-ISO
+// shape: a local containers-storage: source for a non-composefs image. It must
+// run the host's bootc against the live store -- no OCI export and no podman,
+// which on an 8 GiB Utah live ISO was OOM-killed.
+func TestBootcInstall_LocalSourceInstallsDirectly(t *testing.T) {
+	defer install.SetHostHasBootcForTest(true)()
+	defer install.SetStorageSpaceConstrainedForTest(true)()
+	defer install.SetSelectStorageDriverForTest("overlay", "forced for test")()
+	tmpDir := t.TempDir()
+
+	for _, tool := range []string{"bootc", "podman"} {
+		script := "#!/bin/sh\necho \"" + tool + " $*\" >> " + tmpDir + "/calls\nexit 0\n"
+		if err := os.WriteFile(tmpDir+"/"+tool, []byte(script), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", tmpDir+":"+oldPath)
+
+	exported := false
+	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error { exported = true; return nil }
+	defer func() { install.SkopeoExportOCIFn = install.DefaultSkopeoExportOCI }()
+
+	err := install.BootcInstall(install.Options{
+		SourceImgref: "containers-storage:ghcr.io/projectbluefin/utah:testing",
+		TargetImgref: "ghcr.io/projectbluefin/utah:testing",
+		Target:       tmpDir + "/target",
+		ScratchDir:   tmpDir,
+		Bootloader:   "grub2",
+	})
+	if err != nil {
+		t.Fatalf("BootcInstall() error = %v", err)
+	}
+	calls, _ := os.ReadFile(tmpDir + "/calls")
+	if strings.Contains(string(calls), "podman") {
+		t.Errorf("local source ran podman; want the host bootc only:\n%s", calls)
+	}
+	if !strings.Contains(string(calls), "bootc install to-filesystem") ||
+		!strings.Contains(string(calls), "--source-imgref containers-storage:ghcr.io/projectbluefin/utah:testing") {
+		t.Errorf("bootc not run against the local store:\n%s", calls)
+	}
+	if exported {
+		t.Error("a direct install from local storage exported an OCI copy")
 	}
 }
