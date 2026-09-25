@@ -705,6 +705,16 @@ func main() {
 		if err := install.InstallSystemdBoot(activeTargetMount); err != nil {
 			progress.Info(fmt.Sprintf("Warning: could not ensure systemd-boot EFI binary: %v", err))
 		}
+	} else if !isSystemdBoot {
+		// Ensure fallback EFI bootloader (EFI/BOOT/BOOTX64.EFI and grubx64.efi) is
+		// present on the ESP for GRUB installs (#233). bootc/bootupctl writes to
+		// EFI/<vendor>/ (e.g. EFI/fedora/, EFI/hummingbird/) and sets an NVRAM
+		// entry, but omits the UEFI fallback loader at EFI/BOOT/BOOTX64.EFI.
+		// If NVRAM is reset or the drive is moved to another system, UEFI auto-
+		// discovery requires EFI/BOOT/BOOTX64.EFI to boot without existing NVRAM.
+		if err := install.InstallGrubFallback(activeTargetMount, r.DistroID); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not ensure GRUB fallback EFI binary: %v", err))
+		}
 	}
 
 	// systemd-boot composefs installs rely on GPT auto-discovery for the root
