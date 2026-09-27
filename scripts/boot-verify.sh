@@ -1,6 +1,6 @@
 #!/bin/bash
 # Verify system boot via SSH and query bootc status
-# Usage: ./boot-verify.sh [SSH_PORT] [SSH_KEY] [VM_TIMEOUT] [VM_MEMORY] [LOOPDEV] [IMAGE_NAME]
+# Usage: ./boot-verify.sh [SSH_PORT] [SSH_KEY] [VM_TIMEOUT] [VM_MEMORY] [LOOPDEV] [IMAGE_NAME] [LUKS_PASSPHRASE]
 # Works with dynamic tool discovery for both CI and local environments
 
 set -e
@@ -186,16 +186,27 @@ if [ -n "$LUKS_PASSPHRASE" ]; then
   echo ""
 fi
 
-# Wait for SSH to be ready (using password auth)
+# Authenticate with the ephemeral key injected into this CI target.
+ssh_root() {
+  "$SSH_BIN" -i "$SSH_KEY" -o BatchMode=yes -o StrictHostKeyChecking=no \
+    -o UserKnownHostsFile=/dev/null -o ConnectTimeout=1 \
+    -p "$SSH_PORT" root@127.0.0.1 "$@"
+}
+
+# Wait for SSH to be ready (using public-key auth)
 # For LUKS VMs, luks-unlock.py runs concurrently and injects the passphrase;
 # SSH becomes available once the system has fully booted after unlock.
-echo "Waiting for VM to boot and SSH to be ready (up to 240s)..."
+SSH_WAIT_ITERS=180  # 360s: observed boots landing at 246-253s vs the prior 240s budget (issue #193)
+echo "Waiting for VM to boot and SSH to be ready (up to $((SSH_WAIT_ITERS * 2))s)..."
 SSH_READY=0
-for i in {1..120}; do
+# Keep the stderr of the most recent probe. Discarding it left "SSH connection
+# failed (timeout)" indistinguishable between "port forward never answered"
+# and "sshd answered and rejected the key" — which is what every post-#172
+# failure actually was.
+SSH_ERR_LOG="$ARTIFACTS_DIR/ssh-probe-stderr-$RUN_TAG.log"
+for i in $(seq 1 "$SSH_WAIT_ITERS"); do
   sleep 2
-  if sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-         -o ConnectTimeout=1 -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" \
-         "echo OK" 2>/dev/null; then
+  if ssh_root "echo OK" 2>"$SSH_ERR_LOG"; then
     echo "✅ SSH connection successful"
     SSH_READY=1
     # Capture a screendump as visual evidence the guest reached login.
@@ -207,7 +218,7 @@ for i in {1..120}; do
     break
   fi
   if [ $((i % 10)) -eq 0 ]; then
-    echo "  Waiting... ($i/120)"
+    echo "  Waiting... ($i/$SSH_WAIT_ITERS)"
   fi
 done
 
@@ -227,6 +238,17 @@ fi
 if [ $SSH_READY -eq 0 ]; then
   echo "❌ SSH connection failed (timeout)"
   FAIL_PATH=1
+
+  echo ""
+  echo "=== Last SSH probe stderr ==="
+  cat "$SSH_ERR_LOG" 2>/dev/null || echo "(none captured)"
+  # One more attempt with client debugging on, so the log shows whether the
+  # TCP connection was refused/timed out or sshd replied and declined the key
+  # ("Permission denied (publickey)", "Authentications that can continue").
+  echo ""
+  echo "=== Final SSH probe (verbose) ==="
+  ssh_root -v "echo OK" > "$ARTIFACTS_DIR/ssh-probe-verbose-$RUN_TAG.log" 2>&1 || true
+  tail -40 "$ARTIFACTS_DIR/ssh-probe-verbose-$RUN_TAG.log" 2>/dev/null || true
 
   if [ -f "$SERIAL_LOG" ]; then
     echo ""
@@ -279,19 +301,16 @@ fi
 
 echo ""
 echo "=== System Information ==="
-sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "uname -a" || true
+ssh_root "uname -a" || true
 
 echo ""
 echo "=== bootc status ==="
-sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "bootc status" 2>/dev/null \
+ssh_root "bootc status" 2>/dev/null \
     | tee "$ARTIFACTS_DIR/bootc-status-$RUN_TAG.log" || echo "⚠️  bootc not available"
 
 echo ""
 echo "=== bootctl status ==="
-sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "bootctl status" 2>/dev/null \
+ssh_root "bootctl status" 2>/dev/null \
     | tee "$ARTIFACTS_DIR/bootctl-status-$RUN_TAG.log" || echo "⚠️  bootctl not available"
 
 # Verify UEFI boot entries were written by efibootmgr (PR #2: -v /sys:/sys).
@@ -301,9 +320,7 @@ sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHo
 # the test covers both GRUB and systemd-boot images.
 echo ""
 echo "=== UEFI boot entry verification (efibootmgr) ==="
-EFIBOOT_OUT=$(sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no \
-    -o UserKnownHostsFile=/dev/null -o PubkeyAuthentication=no \
-    root@127.0.0.1 -p "$SSH_PORT" "efibootmgr" 2>/dev/null || true)
+EFIBOOT_OUT=$(ssh_root "efibootmgr" 2>/dev/null || true)
 if [ -n "$EFIBOOT_OUT" ]; then
   echo "$EFIBOOT_OUT" | tee "$ARTIFACTS_DIR/efibootmgr-$RUN_TAG.log"
   # Assert at least one boot entry exists (e.g. "Boot0000*" line).
@@ -328,8 +345,7 @@ echo ""
 echo "=== journalctl -b (last boot) ==="
 # Capture into artifacts always (cheap; ~1-2 MB) but only echo the tail to
 # the CI log so we don't drown the rest of the workflow output.
-sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "journalctl -b --no-pager" 2>/dev/null \
+ssh_root "journalctl -b --no-pager" 2>/dev/null \
     > "$ARTIFACTS_DIR/journal-$RUN_TAG.log" \
     && echo "(saved to $ARTIFACTS_DIR/journal-$RUN_TAG.log; tail follows)" \
     && tail -80 "$ARTIFACTS_DIR/journal-$RUN_TAG.log" \
@@ -337,18 +353,15 @@ sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHo
 
 echo ""
 echo "=== bootc status (JSON) ==="
-sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "bootc status --json-pretty" 2>/dev/null || echo "⚠️  json output not available"
+ssh_root "bootc status --json-pretty" 2>/dev/null || echo "⚠️  json output not available"
 
 echo ""
 echo "=== Checking for upgrade availability ==="
-sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "bootc upgrade --check" 2>/dev/null || echo "⚠️  upgrade check not available"
+ssh_root "bootc upgrade --check" 2>/dev/null || echo "⚠️  upgrade check not available"
 
 echo ""
 echo "=== Shutting down VM ==="
-sshpass -p "bootcrew-test" "$SSH_BIN" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-    -o PubkeyAuthentication=no root@127.0.0.1 -p "$SSH_PORT" "shutdown -h now" 2>/dev/null || true
+ssh_root "shutdown -h now" 2>/dev/null || true
 
 sleep 5
 kill $QEMU_PID 2>/dev/null || true

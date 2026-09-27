@@ -2,6 +2,7 @@ package install
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -51,28 +52,49 @@ int fsetxattr(int fd, const char *name, const void *value, size_t size, int flag
 }
 `
 
-// BuildSelinuxBypassShim compiles selinuxBypassCSrc into a shared library
-// at /tmp/fisherman-selinux-bypass.so and returns its path.
+// BuildSelinuxBypassShim compiles selinuxBypassCSrc into a shared library and
+// returns its path together with a cleanup func that removes it.
 // Returns an error if cc is not available or compilation fails.
-func BuildSelinuxBypassShim() (string, error) {
-	const (
-		srcPath = "/tmp/fisherman-selinux-bypass.c"
-		soPath  = "/tmp/fisherman-selinux-bypass.so"
-	)
+//
+// The shim is built inside a fresh private directory rather than at fixed
+// /tmp paths, because both the source and the object file are handled by a
+// process running as root and the object file is then LD_PRELOADed into the
+// privileged bootc container. With constant, world-writable paths an
+// unprivileged local user could pre-create /tmp/fisherman-selinux-bypass.so
+// and have root preload it, or symlink /tmp/fisherman-selinux-bypass.c at an
+// arbitrary file and have root truncate it. os.MkdirTemp creates the
+// directory 0700 with O_EXCL semantics, so neither file can be pre-planted or
+// swapped by anyone but root.
+func BuildSelinuxBypassShim() (string, func(), error) {
+	dir, err := os.MkdirTemp("", "fisherman-selinux-bypass-")
+	if err != nil {
+		return "", nil, fmt.Errorf("creating shim directory: %w", err)
+	}
+	cleanup := func() { os.RemoveAll(dir) }
+
+	srcPath := filepath.Join(dir, "bypass.c")
+	soPath := filepath.Join(dir, "bypass.so")
+
 	if err := os.WriteFile(srcPath, []byte(selinuxBypassCSrc), 0644); err != nil {
-		return "", fmt.Errorf("writing shim source: %w", err)
+		cleanup()
+		return "", nil, fmt.Errorf("writing shim source: %w", err)
 	}
 	defer os.Remove(srcPath)
 
-	out, err := exec.Command("cc", "-shared", "-fPIC", "-O2", "-nostartfiles", "-ldl",
-		"-o", soPath, srcPath).CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("compiling SELinux bypass shim: %w\n%s", err, out)
+	cmd := Exec.Command("cc", "-shared", "-fPIC", "-O2", "-nostartfiles", "-ldl",
+		"-o", soPath, srcPath)
+	var out bytes.Buffer
+	cmd.SetStdout(&out)
+	cmd.SetStderr(&out)
+	if err := cmd.Run(); err != nil {
+		cleanup()
+		return "", nil, fmt.Errorf("compiling SELinux bypass shim: %w\n%s", err, out.Bytes())
 	}
 	if err := os.Chmod(soPath, 0755); err != nil {
-		return "", fmt.Errorf("chmod shim: %w", err)
+		cleanup()
+		return "", nil, fmt.Errorf("chmod shim: %w", err)
 	}
-	return soPath, nil
+	return soPath, cleanup, nil
 }
 
 // Options configures a bootc installation.
@@ -133,6 +155,12 @@ type Options struct {
 	// When empty, BuildBootcArgs falls back to the host-side OCI cache
 	// (scratchDir/oci-cache), which is correct for bootcDirect (no container).
 	ComposeFsOCIPath string
+
+	// directLocalSource is set by BootcInstall when a local
+	// containers-storage: SourceImgref is installed with the host's bootc
+	// instead of inside a podman container (see useDirectForLocalSource).
+	// BuildBootcArgs then passes SourceImgref as --source-imgref.
+	directLocalSource bool
 }
 
 // scratchDir returns the host-side scratch directory from opts, falling back
@@ -178,6 +206,10 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	}
 	if opts.ComposeFsBackend || opts.ComposeFsOCIPath != "" {
 		args = append(args, "--source-imgref", "oci:"+ociPath)
+	} else if opts.directLocalSource {
+		// Direct mode from an explicit local source, which may differ from
+		// the target (an NVIDIA image on the ISO, tracking the base image).
+		args = append(args, "--source-imgref", containersStorageSource(opts.SourceImgref))
 	} else if resolvedTargetImgref != "" && opts.SourceImgref == "" {
 		// Direct mode: bootc runs natively (not in a container) and needs
 		// an explicit --source-imgref.  Use containers-storage transport
@@ -319,10 +351,38 @@ func appendImageStoreArgs(podmanArgs []string, scratch string, opts Options) ([]
 // If opts.SourceImgref is empty (live-ISO mode), bootc is called directly —
 // bootc auto-detects the running container image as the install source.
 func BootcInstall(opts Options) error {
-	if opts.SourceImgref != "" {
+	if opts.SourceImgref != "" && !useDirectForLocalSource(opts) {
 		return bootcViaContainer(opts)
 	}
+	opts.directLocalSource = opts.SourceImgref != ""
 	return bootcDirect(opts)
+}
+
+// hostHasBootcFn reports whether bootc runs on the host (a live ISO of a bootc
+// image). A package var so tests do not depend on the machine running them.
+var hostHasBootcFn = func() bool {
+	name, args := runner.HostArgs("bootc", []string{"--version"})
+	return exec.Command(name, args...).Run() == nil
+}
+
+// useDirectForLocalSource decides whether a non-composefs install from an
+// image already in local containers-storage runs the host's bootc directly.
+//
+// The container path cannot do this job on a live ISO. It redirects podman
+// storage to the target disk, exports the image to an OCI layout, and
+// `podman run`s bootc from it; on an 8 GiB machine that podman was OOM-killed
+// with 6.5 GB of anonymous memory during `bootc install to-filesystem`
+// (Utah live ISO, 2026-09-24). The direct path reads the same image straight
+// from the live store -- the shape Utah's install e2e has always used, and
+// passes in 8 GiB. The installer GUI, though, always sends the live-ISO
+// local_imgref as the source, so it took the container path every time.
+//
+// Composefs keeps the container path: it needs the exported OCI layout either
+// way, and Dakota's installs pass through it.
+func useDirectForLocalSource(opts Options) bool {
+	return !opts.ComposeFsBackend &&
+		strings.HasPrefix(opts.SourceImgref, "containers-storage:") &&
+		hostHasBootcFn()
 }
 
 func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
@@ -330,7 +390,9 @@ func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
 	// Non-composefs only needs it in container mode with overlay redirect.
 	// In direct mode (bootcDirect) for non-composefs, bootc reads from
 	// containers-storage on the host — no OCI export needed.
-	if !opts.ComposeFsBackend && opts.SourceImgref == "" {
+	if !opts.ComposeFsBackend && (opts.SourceImgref == "" || opts.directLocalSource) {
+		// A direct install from local storage reads the store itself; an OCI
+		// copy of a multi-gigabyte image would only cost time and disk.
 		return nil
 	}
 	if sourceImgref == "" {
@@ -414,11 +476,19 @@ func bootcViaContainer(opts Options) error {
 	// pressure).
 	if useOciLayout {
 		exportRef := opts.SourceImgref
-		if nonComposefsRoot != "" && !localSource {
+		if nonComposefsRoot != "" && opts.NeedsPull && !localSource {
 			// The image was pulled into the redirected root; qualify the
 			// containers-storage reference so skopeo reads that store instead
 			// of the default /var/lib/containers (where the image is absent —
 			// the unqualified ref made skopeo copy fail with exit status 2).
+			//
+			// Only when it was pulled there. An offline containers-storage:
+			// source is never pulled (see above), so it lives in the live
+			// system's store -- typically an additional image store on the
+			// ISO -- and the redirected root is empty. Qualifying it anyway
+			// broke every offline non-composefs install from a live ISO:
+			//   reference "[overlay@.../containers-root+...]ghcr.io/
+			//   projectbluefin/utah:testing" does not resolve to an image ID
 			exportRef = fmt.Sprintf("containers-storage:[%s@%s+%s]%s",
 				nonComposefsDriver, nonComposefsRoot, nonComposefsRunRoot, bareImageRef(opts.SourceImgref))
 		}
@@ -522,11 +592,11 @@ func bootcViaContainer(opts Options) error {
 	// (fsetxattr). Since the target has selinux=disabled, missing per-file
 	// labels are harmless.
 	if opts.SelinuxDisabled && selinuxActive() {
-		shimPath, shimErr := BuildSelinuxBypassShim()
+		shimPath, shimCleanup, shimErr := BuildSelinuxBypassShim()
 		if shimErr != nil {
 			progress.Info(fmt.Sprintf("warning: SELinux bypass shim unavailable (%v); install may fail on cross-policy images", shimErr))
 		} else {
-			defer os.Remove(shimPath)
+			defer shimCleanup()
 			podmanArgs = append(podmanArgs,
 				"-v", shimPath+":/fisherman-selinux-bypass.so:z",
 				"-e", "LD_PRELOAD=/fisherman-selinux-bypass.so",
@@ -566,14 +636,57 @@ func bootcDirect(opts Options) error {
 
 	bargs := BuildBootcArgs(opts, opts.TargetImgref, opts.Target)
 
-	name, args := runner.HostArgs("bootc", bargs)
+	// bootc stages every layer blob it copies out of the OCI cache under
+	// /var/tmp before it lands in the target's image storage. On a live ISO
+	// /var/tmp is the RAM-backed dracut overlay, so a multi-gigabyte image
+	// dies with ENOSPC part way through "Copying blob" even though the OCI
+	// cache itself already sits on the target disk (#211). Give bootc the
+	// same scratch-backed /var/tmp the export uses.
+	scratch := opts.scratchDir()
+	restoreVarTmp := overrideVarTmp(scratch)
+	defer restoreVarTmp()
+	tmpEnv := "TMPDIR=" + scratch
+
+	name, args := runner.HostArgsWithEnv("bootc", bargs, []string{tmpEnv})
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
+	fmt.Fprintf(os.Stdout, "# %s\n", tmpEnv)
 
 	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), tmpEnv)
 	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("bootc install to-filesystem: %w", err)
 	}
 	return nil
+}
+
+// overrideVarTmp bind-mounts a directory under tmpdir over /var/tmp and
+// returns the function that undoes it.
+//
+// Root cause: containers/image's TypeBigFiles path calls store.TmpDir(),
+// which returns /var/tmp (containers/storage hardcoded default) regardless of
+// the TMPDIR env var. On live ISOs /var/tmp is on the dracut overlayfs
+// (~1.4 GiB) — too small for 5-6 GiB layer blobs. podman, skopeo and bootc
+// all hit this when they copy image layers.
+//
+// The bind mount makes that hardcoded path disk-backed. When the mount cannot
+// be made the returned function is a no-op and a warning is printed; the
+// caller proceeds and ENOSPC stays possible, which is what happened before.
+func overrideVarTmp(tmpdir string) func() {
+	varTmpOverride := filepath.Join(tmpdir, "var-tmp-override")
+	if err := os.MkdirAll(varTmpOverride, 0o1777); err != nil {
+		fmt.Fprintf(os.Stdout, "# warning: cannot create %s (%v) — /var/tmp left as is\n", varTmpOverride, err)
+		return func() {}
+	}
+	mntName, mntArgs := runner.HostArgs("mount", []string{"--bind", varTmpOverride, "/var/tmp"})
+	if exec.Command(mntName, mntArgs...).Run() != nil {
+		fmt.Fprintf(os.Stdout, "# warning: /var/tmp bind-mount failed — ENOSPC likely on overlay tmpfs\n")
+		return func() {}
+	}
+	fmt.Fprintf(os.Stdout, "# /var/tmp bind-mounted → %s for blob staging\n", varTmpOverride)
+	return func() {
+		umName, umArgs := runner.HostArgs("umount", []string{"/var/tmp"})
+		_ = exec.Command(umName, umArgs...).Run()
+	}
 }
 
 // BootcToDisk installs a bootc image directly to a block device using
@@ -850,29 +963,10 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 		tmpdir = "/tmp"
 	}
 
-	// Redirect /var/tmp to the disk-backed scratch dir before the export.
-	//
-	// Root cause: containers/image's TypeBigFiles path calls store.TmpDir()
-	// which returns /var/tmp (containers/storage hardcoded default) regardless
-	// of the TMPDIR env var. On live ISOs /var/tmp is on the dracut overlayfs
-	// (~1.4 GiB) — too small for 5-6 GiB layer blobs. Both podman and skopeo
-	// hit this when reading from containers-storage.
-	//
-	// Fix: bind-mount the scratch dir over /var/tmp so the hardcoded path
-	// becomes disk-backed. Deferred umount restores it after export.
-	varTmpOverride := filepath.Join(tmpdir, "var-tmp-override")
-	if err := os.MkdirAll(varTmpOverride, 0o1777); err == nil {
-		mntName, mntArgs := runner.HostArgs("mount", []string{"--bind", varTmpOverride, "/var/tmp"})
-		if exec.Command(mntName, mntArgs...).Run() == nil {
-			fmt.Fprintf(os.Stdout, "# /var/tmp bind-mounted → %s for blob staging\n", varTmpOverride)
-			defer func() {
-				umName, umArgs := runner.HostArgs("umount", []string{"/var/tmp"})
-				_ = exec.Command(umName, umArgs...).Run()
-			}()
-		} else {
-			fmt.Fprintf(os.Stdout, "# warning: /var/tmp bind-mount failed — ENOSPC likely on overlay tmpfs\n")
-		}
-	}
+	// Redirect /var/tmp to the disk-backed scratch dir before the export
+	// (see overrideVarTmp for why TMPDIR alone is not enough).
+	restoreVarTmp := overrideVarTmp(tmpdir)
+	defer restoreVarTmp()
 
 	skopeoArgs := []string{
 		"copy",
@@ -903,8 +997,7 @@ func containersStorageSource(image string) string {
 
 // loopBackingFile returns the backing file path for a loop device.
 func loopBackingFile(loopDev string) (string, error) {
-	name, args := runner.HostArgs("losetup", []string{"--noheadings", "-O", "BACK-FILE", loopDev})
-	out, err := exec.Command(name, args...).Output()
+	out, err := Exec.Command("losetup", "--noheadings", "-O", "BACK-FILE", loopDev).Output()
 	if err != nil {
 		return "", err
 	}
@@ -913,22 +1006,19 @@ func loopBackingFile(loopDev string) (string, error) {
 
 // loopDetach detaches a loop device.
 func loopDetach(loopDev string) error {
-	name, args := runner.HostArgs("losetup", []string{"-d", loopDev})
-	return exec.Command(name, args...).Run()
+	return Exec.Command("losetup", "-d", loopDev).Run()
 }
 
 // loopReattach attaches backingFile to loopDev with --partscan so partition
 // nodes are visible on the host.
 func loopReattach(loopDev, backingFile string) error {
-	name, args := runner.HostArgs("losetup", []string{"-P", loopDev, backingFile})
-	return exec.Command(name, args...).Run()
+	return Exec.Command("losetup", "-P", loopDev, backingFile).Run()
 }
 
 // loopAttachFile attaches file to a free loop device with partscan and returns
 // the assigned device path (e.g. /dev/loop2).
 func loopAttachFile(file string) (string, error) {
-	name, args := runner.HostArgs("losetup", []string{"--find", "--partscan", "--show", file})
-	out, err := exec.Command(name, args...).Output()
+	out, err := Exec.Command("losetup", "--find", "--partscan", "--show", file).Output()
 	if err != nil {
 		return "", err
 	}
@@ -1064,9 +1154,9 @@ type ImageCheck struct {
 
 // DefaultSkopeoInspect runs `skopeo inspect <args>` and returns stdout.
 func DefaultSkopeoInspect(args ...string) ([]byte, error) {
-	name, hargs := runner.HostArgs("skopeo", append([]string{"inspect"}, args...))
-	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(hargs, " "))
-	return exec.Command(name, hargs...).Output()
+	fullArgs := append([]string{"inspect"}, args...)
+	fmt.Fprintf(os.Stdout, "+ skopeo %s\n", strings.Join(fullArgs, " "))
+	return Exec.Command("skopeo", fullArgs...).Output()
 }
 
 // SkopeoInspectFn is the function used by CheckImage to call skopeo inspect.

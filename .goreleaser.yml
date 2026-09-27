@@ -2,8 +2,16 @@ version: 2
 
 before:
   hooks:
-    - go mod tidy
-  dir: fisherman
+    # `go -C fisherman`, not a bare `go mod tidy`: hooks run from the repo
+    # root and the only go.mod is in fisherman/, so the bare form exits
+    # non-zero ("go.mod file not found"). The `dir: fisherman` key this
+    # previously carried was not a field of config.Before — GoReleaser
+    # rejected the whole file with "field dir not found in type
+    # config.Before", so `release --clean` died before building anything on
+    # every tag push. That is why v0.2.0 carries no assets. `before.hooks`
+    # is a list of plain strings here (additionalProperties: false), so the
+    # directory has to move into the command itself.
+    - go -C fisherman mod tidy
 
 builds:
   - id: fisherman

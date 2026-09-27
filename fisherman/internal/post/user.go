@@ -74,12 +74,18 @@ func CreateUser(sysroot string, u UserConfig) error {
 	// exists during deploy; --root only edits the passwd files, and the
 	// booted-host PAM problem that forced chroot is ostree-only — composefs
 	// deploys happen in the initramfs).
+	//
+	// useradd exits 6 when a --groups entry does not exist on the target
+	// (e.g. libvirt on images without virt-manager), aborting the whole
+	// install. Drop missing groups with a warning instead: the account is
+	// created with the groups the image actually has.
+	groups := filterExistingGroups(root, u.Groups)
 	tail := []string{"useradd", "--create-home", "--shell", "/bin/bash"}
 	if u.Fullname != "" {
 		tail = append(tail, "--comment", u.Fullname)
 	}
-	if len(u.Groups) > 0 {
-		tail = append(tail, "--groups", strings.Join(u.Groups, ","))
+	if len(groups) > 0 {
+		tail = append(tail, "--groups", strings.Join(groups, ","))
 	}
 	tail = append(tail, u.Username)
 
@@ -173,6 +179,35 @@ func CreateUser(sysroot string, u UserConfig) error {
 
 	fmt.Printf("  created user %q in installed system\n", u.Username)
 	return nil
+}
+
+// filterExistingGroups drops groups absent from <root>/etc/group. When the
+// group file cannot be read at all, nothing can be verified — keep every
+// group and let useradd decide, rather than silently creating an account
+// with no supplementary groups on a transient read error.
+func filterExistingGroups(root string, groups []string) []string {
+	if len(groups) == 0 {
+		return groups
+	}
+	data, err := os.ReadFile(filepath.Join(root, "etc", "group"))
+	if err != nil {
+		return groups
+	}
+	present := map[string]bool{}
+	for _, line := range strings.Split(string(data), "\n") {
+		if name, _, ok := strings.Cut(line, ":"); ok && name != "" {
+			present[name] = true
+		}
+	}
+	kept := make([]string, 0, len(groups))
+	for _, g := range groups {
+		if present[g] {
+			kept = append(kept, g)
+		} else {
+			fmt.Printf("  warning: group %q not present on target, skipping\n", g)
+		}
+	}
+	return kept
 }
 
 // writeHomeTmpfiles drops a tmpfiles.d snippet under <root>/etc/tmpfiles.d that

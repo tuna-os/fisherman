@@ -9,27 +9,30 @@ Boots a QEMU VM with the installed disk and verifies system state via SSH.
 
 **Usage:**
 ```bash
-./boot-verify.sh [SSH_PORT] [SSH_KEY] [VM_TIMEOUT] [VM_MEMORY] [LOOPDEV]
+./boot-verify.sh [SSH_PORT] [SSH_KEY] [VM_TIMEOUT] [VM_MEMORY] [LOOPDEV] [IMAGE_NAME] [LUKS_PASSPHRASE]
 ```
 
 **Defaults:**
 - SSH_PORT: 2222
 - SSH_KEY: /tmp/bootcrew-ssh/id_rsa
-- VM_TIMEOUT: 300 seconds
+- VM_TIMEOUT: 600 seconds
 - VM_MEMORY: 2G
 - LOOPDEV: read from /tmp/bootcrew-loopdev.txt if not provided
+- IMAGE_NAME: empty; pass the matrix image name when image-specific boot handling is needed
+- LUKS_PASSPHRASE: empty; when set, injects the passphrase at the Plymouth prompt
 
 **What it does:**
 1. Starts QEMU with KVM acceleration
 2. Forwards SSH port from host:2222 → guest:22
-3. Polls SSH until connection succeeds (up to 60s)
-4. Runs `bootc status` and captures JSON output
-5. Runs `bootc upgrade --check`
-6. Gracefully shuts down VM via SSH
+3. Optionally injects a LUKS passphrase through the QEMU monitor
+4. Polls SSH until connection succeeds
+5. Runs `bootc status` and captures JSON output
+6. Runs `bootc upgrade --check`
+7. Gracefully shuts down VM via SSH
 
 **Example:**
 ```bash
-./boot-verify.sh 2222 /tmp/id_rsa 300 2G /dev/loop0
+./boot-verify.sh 2222 /tmp/id_rsa 600 2G /dev/loop0 dakota hunter2
 ```
 
 ### `prepare-ssh-image.sh`
@@ -61,29 +64,33 @@ Takes a container image and adds sshd + SSH public key authentication.
 ```
 
 ### `verify-installation.sh`
-Verifies that fisherman created a valid 3-partition layout with correct content.
+Verifies that fisherman created a valid systemd-boot or GRUB partition layout with the expected content.
 
 **Usage:**
 ```bash
-./verify-installation.sh LOOPDEV [COMPOSEFS]
+./verify-installation.sh LOOPDEV [COMPOSEFS] [LUKS_PASSPHRASE]
 ```
 
 **Defaults:**
 - COMPOSEFS: false
+- LUKS_PASSPHRASE: empty; when set and the root partition is LUKS, opens it for verification
 
 **What it does:**
-1. Checks for 3 labeled partitions (EFI-SYSTEM, boot, root)
-2. Mounts boot partition and verifies layout
-3. Mounts root partition and verifies:
+1. Accepts either a 2-partition systemd-boot layout (EFI, root) or a 3-partition GRUB layout (EFI, boot, root)
+2. Verifies the fallback EFI executable and reports discovered boot entries
+3. Opens an encrypted root partition when a passphrase is supplied
+4. Mounts the boot and root partitions and verifies:
    - Hostname configuration (composefs-native: `/etc/hostname`, ostree: deployment structure)
    - Filesystem structure
-4. Unmounts both partitions
-5. Exits 0 if all checks pass, 1 if any check fails
+   - Installer Flatpak removal
+5. Unmounts partitions and closes any LUKS mapping
+6. Exits 0 if all checks pass, 1 if any check fails
 
 **Example:**
 ```bash
 ./verify-installation.sh /dev/loop0 false
 ./verify-installation.sh /dev/loop0 true  # composefs backend
+./verify-installation.sh /dev/loop0 false hunter2  # encrypted root
 ```
 
 ## Integration with justfile
@@ -102,13 +109,20 @@ bash scripts/boot-verify.sh
 bash scripts/verify-installation.sh /dev/loop0 false
 ```
 
-## Environment Variables
+## Boot verification inputs
+
+The `just boot-verify` recipe supplies these positional script inputs:
 
 - `SSH_PORT`: Port for QEMU SSH forwarding (default: 2222)
-- `SSH_KEY`: Path to SSH private key (default: /tmp/bootcrew-ssh/id_rsa)
-- `VM_TIMEOUT`: QEMU timeout in seconds (default: 300)
+- `SSH_KEY`: Path to SSH private key (default: `/tmp/bootcrew-ssh/id_rsa`)
+- `VM_TIMEOUT`: QEMU timeout in seconds (script default: 600; `just` recipe default: 300)
 - `VM_MEMORY`: QEMU memory allocation (default: 2G)
-- `LOOPDEV`: Loop device path (default: read from /tmp/bootcrew-loopdev.txt)
+- `LOOPDEV`: Loop device path (default: read from `/tmp/bootcrew-loopdev.txt`)
+
+The script also reads these environment variables:
+
+- `ARTIFACTS_DIR`: Directory for QEMU serial and stdout logs (default: `/tmp/bootcrew-artifacts`)
+- `BOOTCREW_KEEP_VM`: Set to `1` to leave a failed VM and monitor socket running for local debugging
 
 ## CI Usage
 

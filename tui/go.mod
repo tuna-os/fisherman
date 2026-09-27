@@ -1,4 +1,4 @@
-module github.com/projectbluefin/fisherman/tui
+module github.com/tuna-os/fisherman/tui
 
 go 1.26.2
 

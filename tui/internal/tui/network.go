@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
-	"github.com/projectbluefin/fisherman/tui/internal/config"
-	"github.com/projectbluefin/fisherman/tui/internal/network"
+	"github.com/tuna-os/fisherman/tui/internal/config"
+	"github.com/tuna-os/fisherman/tui/internal/network"
 )
 
 type networkModel struct {

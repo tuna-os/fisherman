@@ -32,9 +32,9 @@ go build -o bootc-installer-tui ./cmd/bootc-installer-tui
 The installer writes a recipe to `/tmp/bootc-installer-recipe.json` and runs:
 
 ```
-fisherman install --recipe /tmp/bootc-installer-recipe.json
+fisherman /tmp/bootc-installer-recipe.json
 ```
 
 ---
 
-Part of the [TunaOS](https://tunaos.org) ecosystem. [Docs](https://tunaos.org) · [Contributing](CONTRIBUTING.md)
+Part of the [TunaOS](https://tunaos.org) ecosystem. [Docs](https://tunaos.org) · [Contributing](../CONTRIBUTING.md)
