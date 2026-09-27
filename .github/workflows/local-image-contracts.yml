@@ -1,0 +1,42 @@
+name: Local image installer contracts
+on:
+  pull_request:
+    paths:
+      - fisherman/internal/install/**
+      - fisherman/cmd/fisherman/**
+      - tests/native-local-id.py
+      - tui/**
+      - .github/workflows/local-image-contracts.yml
+permissions:
+  contents: read
+jobs:
+  local-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: tui/go.mod
+          cache-dependency-path: tui/go.sum
+      - name: Exercise actual CLI and installer source routes
+        working-directory: fisherman
+        run: go test ./internal/install ./cmd/fisherman
+      - name: Build and test the inherited TUI module
+        working-directory: tui
+        run: |
+          go test -mod=readonly ./...
+          go build -mod=readonly -o "$RUNNER_TEMP/fisherman-tui" ./cmd/bootc-installer-tui
+      - name: Install native local-store tools without acquiring an OS
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq podman skopeo
+      - name: Observe real image-ID transport and compiled cache consumer
+        run: sudo --preserve-env=PATH python3 tests/native-local-id.py > "$RUNNER_TEMP/fisherman-local-id.json"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: fisherman-local-id-proof
+          path: ${{ runner.temp }}/fisherman-local-id.json
+          if-no-files-found: warn
+          retention-days: 14
