@@ -3,7 +3,6 @@ package install
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"syscall"
 )
 
@@ -135,7 +134,7 @@ func probeOverlay(scratchPath string) error {
 
 	// Run `podman --root <probeRoot> --storage-driver overlay info` to check overlay support.
 	// If overlay is not available or doesn't work on this root, podman will error.
-	cmd := exec.Command("podman", "--root", probeRoot, "--storage-driver", "overlay", "info", "--format", "json")
+	cmd := CommandFn("podman", "--root", probeRoot, "--storage-driver", "overlay", "info", "--format", "json")
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("podman probe failed: %w (output: %s)", err, output)
 	}
