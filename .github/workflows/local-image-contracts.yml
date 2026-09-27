@@ -5,6 +5,8 @@ on:
       - fisherman/internal/install/**
       - fisherman/cmd/fisherman/**
       - tests/native-local-id.py
+      - tests/native-process.py
+      - tests/test-native-process.py
       - tui/**
       - .github/workflows/local-image-contracts.yml
 permissions:
@@ -31,8 +33,10 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq podman skopeo
+      - name: Verify owned native process deadlines and reap
+        run: python3 tests/test-native-process.py -v
       - name: Observe real image-ID transport and compiled cache consumer
-        run: sudo --preserve-env=PATH python3 tests/native-local-id.py > "$RUNNER_TEMP/fisherman-local-id.json"
+        run: sudo --preserve-env=PATH,GITHUB_SHA,GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT python3 tests/native-local-id.py > "$RUNNER_TEMP/fisherman-local-id.json"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
