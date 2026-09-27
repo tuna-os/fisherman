@@ -347,6 +347,10 @@ func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
 // bootcViaContainer runs bootc from inside the source container image.
 // This is the required approach when not already running inside the image.
 func bootcViaContainer(opts Options) error {
+	localSource := strings.HasPrefix(opts.SourceImgref, "containers-storage:")
+	if localSource && opts.NeedsPull {
+		return fmt.Errorf("required local source is absent; refusing registry fallback")
+	}
 	targetImgref := opts.TargetImgref
 	if targetImgref == "" {
 		targetImgref = opts.SourceImgref
@@ -410,7 +414,7 @@ func bootcViaContainer(opts Options) error {
 	// pressure).
 	if useOciLayout {
 		exportRef := opts.SourceImgref
-		if nonComposefsRoot != "" {
+		if nonComposefsRoot != "" && !localSource {
 			// The image was pulled into the redirected root; qualify the
 			// containers-storage reference so skopeo reads that store instead
 			// of the default /var/lib/containers (where the image is absent —
@@ -431,7 +435,7 @@ func bootcViaContainer(opts Options) error {
 
 	// Build the podman run invocation.
 	var podmanArgs []string
-	podmanImageRef := opts.SourceImgref
+	podmanImageRef := bareImageRef(opts.SourceImgref)
 
 	if useOciLayout {
 		ociCacheHost := filepath.Join(scratch, "oci-cache")
@@ -1069,6 +1073,18 @@ func DefaultSkopeoInspect(args ...string) ([]byte, error) {
 // Replace in tests to avoid network calls.
 var SkopeoInspectFn = DefaultSkopeoInspect
 
+func validSHA256Digest(digest string) bool {
+	if len(digest) != 71 || !strings.HasPrefix(digest, "sha256:") {
+		return false
+	}
+	for _, ch := range digest[7:] {
+		if !(ch >= '0' && ch <= '9') && !(ch >= 'a' && ch <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // CheckImage compares the remote and local (containers-storage) image digests
 // to determine whether a pull is required. It also returns the remote layer count.
 //
@@ -1080,6 +1096,16 @@ func CheckImage(image string) ImageCheck {
 	type manifest struct {
 		Digest string   `json:"Digest"`
 		Layers []string `json:"Layers"`
+	}
+
+	// An explicit local source must never query or fall back to a registry.
+	if strings.HasPrefix(image, "containers-storage:") {
+		localOut, err := SkopeoInspectFn(image)
+		var local manifest
+		if err != nil || json.Unmarshal(localOut, &local) != nil || !validSHA256Digest(local.Digest) {
+			return ImageCheck{NeedsPull: true}
+		}
+		return ImageCheck{NeedsPull: false, LayerCount: len(local.Layers), Offline: true}
 	}
 
 	// 1. Fetch remote normalized manifest (resolves fat/multi-arch manifests).

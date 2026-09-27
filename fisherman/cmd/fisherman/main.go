@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/tuna-os/fisherman/internal/disk"
@@ -296,6 +297,9 @@ func main() {
 	if r.Image != "" {
 		progress.Info("Checking image cache...")
 		imageCheck = install.CheckImage(r.Image)
+		if strings.HasPrefix(r.Image, "containers-storage:") && imageCheck.NeedsPull {
+			fatal("required local source is absent or unreadable; refusing installation")
+		}
 		if imageCheck.NeedsPull {
 			progress.Info(fmt.Sprintf("Image pull required (%d layers)", imageCheck.LayerCount))
 		} else if imageCheck.Offline {
