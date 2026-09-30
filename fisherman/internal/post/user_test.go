@@ -169,3 +169,100 @@ func TestCreateUserComposeFsUsesRootFlag(t *testing.T) {
 		t.Errorf("expected useradd --root %s; calls: %v", wantRoot, calls)
 	}
 }
+
+// Groups that do not exist on the target must be skipped, not passed to
+// useradd (which exits 6 and aborts the install — e.g. libvirt on images
+// without virt-manager).
+func TestCreateUserSkipsMissingGroups(t *testing.T) {
+	sysroot := t.TempDir()
+	deployDir := filepath.Join(sysroot, "ostree", "deploy", "default", "deploy", "abc123.0")
+	if err := os.MkdirAll(filepath.Join(deployDir, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	groupFile := "root:x:0:\nwheel:x:10:alice\ndialout:x:18:\n"
+	if err := os.WriteFile(filepath.Join(deployDir, "etc", "group"), []byte(groupFile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	origDeployFn := DeploymentDirFn
+	defer func() { DeploymentDirFn = origDeployFn }()
+	DeploymentDirFn = func(string) (string, error) { return deployDir, nil }
+
+	var calls [][]string
+	origRunFn := runner.RunFn
+	defer func() { runner.RunFn = origRunFn }()
+	runner.RunFn = func(_ io.Reader, name string, args ...string) error {
+		calls = append(calls, append([]string{name}, args...))
+		if name == "ls" {
+			if _, err := os.Stat(args[len(args)-1]); err != nil {
+				return err
+			}
+			return nil
+		}
+		if name == "mkdir" {
+			return os.MkdirAll(args[len(args)-1], 0o755)
+		}
+		return nil
+	}
+
+	u := UserConfig{Username: "dave", Groups: []string{"wheel", "libvirt", "dialout", "docker"}}
+	if err := CreateUser(sysroot, u); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	for _, c := range calls {
+		if c[0] == "chroot" && len(c) > 2 && c[2] == "useradd" {
+			joined := strings.Join(c, " ")
+			if strings.Contains(joined, "libvirt") || strings.Contains(joined, "docker") {
+				t.Errorf("missing groups passed to useradd: %v", c)
+			}
+			if !strings.Contains(joined, "--groups wheel,dialout") {
+				t.Errorf("existing groups not passed through: %v", c)
+			}
+			return
+		}
+	}
+	t.Errorf("no chroot useradd call recorded: %v", calls)
+}
+
+// When the target group file cannot be read, verification is impossible —
+// keep every group and let useradd decide rather than stripping them all.
+func TestCreateUserKeepsGroupsWhenGroupFileMissing(t *testing.T) {
+	sysroot := t.TempDir()
+	deployDir := filepath.Join(sysroot, "ostree", "deploy", "default", "deploy", "abc123.0")
+	if err := os.MkdirAll(deployDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origDeployFn := DeploymentDirFn
+	defer func() { DeploymentDirFn = origDeployFn }()
+	DeploymentDirFn = func(string) (string, error) { return deployDir, nil }
+
+	var calls [][]string
+	origRunFn := runner.RunFn
+	defer func() { runner.RunFn = origRunFn }()
+	runner.RunFn = func(_ io.Reader, name string, args ...string) error {
+		calls = append(calls, append([]string{name}, args...))
+		if name == "ls" {
+			if _, err := os.Stat(args[len(args)-1]); err != nil {
+				return err
+			}
+			return nil
+		}
+		if name == "mkdir" {
+			return os.MkdirAll(args[len(args)-1], 0o755)
+		}
+		return nil
+	}
+
+	u := UserConfig{Username: "erin", Groups: []string{"wheel"}}
+	if err := CreateUser(sysroot, u); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	for _, c := range calls {
+		if c[0] == "chroot" && len(c) > 2 && c[2] == "useradd" {
+			if !strings.Contains(strings.Join(c, " "), "--groups wheel") {
+				t.Errorf("groups stripped without a group file to check: %v", c)
+			}
+			return
+		}
+	}
+	t.Errorf("no chroot useradd call recorded: %v", calls)
+}

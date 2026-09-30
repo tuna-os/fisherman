@@ -257,28 +257,32 @@ func TestUUID_ReturnsEmptyOnError(t *testing.T) {
 	}
 }
 
-func TestStageFirstBootEnrollment(t *testing.T) {
+// TestStageFirstBootEnrollment_KeyIsRootOnly pins the transient key's mode,
+// including when a world-readable file already sits at the path (#221).
+func TestStageFirstBootEnrollment_KeyIsRootOnly(t *testing.T) {
 	target := t.TempDir()
-	uuid := "12345678-1234-1234-1234-123456789abc"
-	key := "secret-passphrase"
+	keyPath := target + "/etc/fisherman/tpm2-enroll.key"
+	if err := os.MkdirAll(target+"/etc/fisherman", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyPath, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	if err := luks.StageFirstBootEnrollment(target, uuid, key); err != nil {
+	if err := luks.StageFirstBootEnrollment(target, "12345678-1234-1234-1234-123456789abc", "secret"); err != nil {
 		t.Fatalf("StageFirstBootEnrollment: %v", err)
 	}
 
-	keyPath := target + "/etc/fisherman/tpm2-enroll.key"
 	info, err := os.Stat(keyPath)
 	if err != nil {
-		t.Fatalf("key file does not exist: %v", err)
+		t.Fatalf("key file: %v", err)
 	}
-
 	if mode := info.Mode().Perm(); mode != 0o600 {
-		t.Errorf("key file mode = %v, want 0600", mode)
+		t.Errorf("key file mode = %o, want 600", mode)
 	}
-
-	gotKey, err := os.ReadFile(keyPath)
-	if err != nil || string(gotKey) != key {
-		t.Errorf("key file content = %q, want %q", gotKey, key)
+	got, err := os.ReadFile(keyPath)
+	if err != nil || string(got) != "secret" {
+		t.Errorf("key file content = %q (%v), want %q", got, err, "secret")
 	}
 }
 

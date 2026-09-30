@@ -1,0 +1,38 @@
+{
+  "earlierTinyTransportProof": {
+    "artifactId": 10939039259,
+    "fullCommandStreamsRetained": false,
+    "runId": 36342575295,
+    "scope": "tiny synthetic local OCI ID transport and compiled cache check",
+    "sourceCommit": "20f192107b2a699463121c7d50baedd93b383094",
+    "testedMerge": "f6b5cc99bde92af19cdc5e82eca51ba4bbe2cb54",
+    "zipSha256": "3400c8c9f488485b304ce04b64e96ed7c6db81cde4c41caf891f615bbb9bfe03"
+  },
+  "evidenceHashes": {
+    "affected-pass.log": "b35b0838c71d4f931daa4d5dbca71a31df6bdcdc2cb111eb3e3300170923d06d",
+    "lint-pass.log": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+    "pass.log": "6d7f6209bed6d33f32eed161d323db4d02ac0686db7686733ca28ca6c23dfceb",
+    "removed-factory-red.log": "b3e5b7817287fc68bb02c8690f914d6b8c024432030c1143d7eb454741f5078d"
+  },
+  "originalFailure": {
+    "jobId": 108686152798,
+    "observedFailure": "TempDir cleanup operation not permitted after uncontrolled native container install into test target",
+    "rawLogSha256": "98c0d5b5d5d2cf01dc1685a9ac8ce2cff5f5bfb8e826a95318ec688adf028cf9",
+    "runId": 36342800448,
+    "sourceCommit": "2f3ffecdaf6cec482db3f4a49911deca640582f9",
+    "test": "TestBootcViaContainer_MountsSys",
+    "toDiskExecutionReadbackRetained": false
+  },
+  "realToolsExecutedByRemovedFactoryControl": false,
+  "reviewedSourceCommit": "f53e4d14a9589e0efbbf8456d1119d04e564e48e",
+  "schemaVersion": 1,
+  "selectedOsAcceptance": false,
+  "selectedOsAcquiredByTheseControls": false,
+  "sourceHashes": {
+    "fisherman/internal/install/bootc.go": "b3e631730dff60b87eb523e1e74b7f8b6e864660761693c6fe408d7c974d4d20",
+    "fisherman/internal/install/bootc_mount_test.go": "4f0536e4f157c00bb2301bf5ca5b36da431d5ea3a135fc58f9ecdfb599be9e28",
+    "fisherman/internal/install/bootc_test.go": "ad052a5fa3fc5c4031cb5c029940889478874839211b72ce3f434705a696b5ef",
+    "fisherman/internal/install/storage_driver.go": "23d1872a63f515b7c959b1376c390a3b0ffabd7ae6239e2007691a95490f6352"
+  },
+  "vmExecutedByTheseControls": false
+}

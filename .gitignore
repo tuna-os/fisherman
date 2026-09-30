@@ -10,3 +10,6 @@ flatpak/build/
 
 # Go test coverage output (regenerated on every run)
 coverage.out
+
+# GoReleaser build output (`goreleaser release`, `goreleaser build`).
+dist/

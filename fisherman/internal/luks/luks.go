@@ -85,6 +85,10 @@ func EnrollTPM2(partition, passphrase string) error {
 		return fmt.Errorf("creating temp key file: %w", err)
 	}
 	defer os.Remove(f.Name())
+	if err := os.Chmod(f.Name(), 0o600); err != nil {
+		f.Close()
+		return fmt.Errorf("setting temp key file permissions: %w", err)
+	}
 	if _, err := f.WriteString(passphrase); err != nil {
 		f.Close()
 		return fmt.Errorf("writing temp key file: %w", err)
@@ -127,6 +131,10 @@ func StageFirstBootEnrollment(targetMount, luksUUID, key string) error {
 	if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
 		return fmt.Errorf("write transient key: %w", err)
 	}
+	// WriteFile applies its mode only to a file it creates, and even then the
+	// umask masks it; a file already at this path keeps whatever mode it had.
+	// Pin 0600 explicitly so the plaintext unlock key is never readable by
+	// anyone but root in the window before the oneshot shreds it (#221).
 	if err := os.Chmod(keyPath, 0o600); err != nil {
 		return fmt.Errorf("chmod transient key: %w", err)
 	}

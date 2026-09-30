@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"time"
@@ -14,8 +15,6 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/tuna-os/fisherman/tui/internal/config"
 )
-
-const recipePath = "/tmp/bootc-installer-recipe.json"
 
 type fishermanEvent struct {
 	Type          string `json:"type"`
@@ -60,6 +59,17 @@ func newProgressModel(cfg *config.InstallConfig, dryRun bool) *progressModel {
 		sub:      make(chan string, 200),
 		dryRun:   dryRun,
 	}
+}
+
+// fishermanArgs is the backend's install contract: one positional argument,
+// the recipe path (`fisherman <recipe.json>`). There is no `install`
+// subcommand and no `--recipe` flag, so `fisherman install --recipe x` made
+// the backend try to load a recipe named "install" and every non-dry-run
+// install started here failed before touching the disk (#178). Both call
+// sites go through this function so the two modules cannot drift apart
+// silently again; progress_test.go runs its output against a fake backend.
+func fishermanArgs(recipePath string) []string {
+	return []string{recipePath}
 }
 
 func findFisherman() string {
@@ -137,6 +147,16 @@ func (m *progressModel) startInstall() tea.Cmd {
 		return m.startDryRun()
 	}
 	return func() tea.Msg {
+		f, err := os.CreateTemp("", "bootc-installer-recipe-*.json")
+		if err != nil {
+			m.sub <- fmt.Sprintf("ERROR: creating temp recipe file: %v", err)
+			close(m.sub)
+			return progressDoneMsg{err: err}
+		}
+		recipePath := f.Name()
+		_ = f.Close()
+		defer os.Remove(recipePath)
+
 		if err := m.cfg.WriteRecipe(recipePath); err != nil {
 			m.sub <- fmt.Sprintf("ERROR: writing recipe: %v", err)
 			close(m.sub)
@@ -144,7 +164,7 @@ func (m *progressModel) startInstall() tea.Cmd {
 		}
 
 		fishermanPath := findFisherman()
-		cmd := exec.Command(fishermanPath, "install", "--recipe", recipePath)
+		cmd := exec.Command(fishermanPath, fishermanArgs(recipePath)...)
 
 		stdoutPipe, _ := cmd.StdoutPipe()
 		stderrPipe, _ := cmd.StderrPipe()
@@ -173,7 +193,7 @@ func (m *progressModel) startInstall() tea.Cmd {
 
 		<-done
 		<-done
-		err := cmd.Wait()
+		err = cmd.Wait()
 		close(m.sub)
 		return progressDoneMsg{err: err}
 	}

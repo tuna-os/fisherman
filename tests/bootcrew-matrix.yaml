@@ -57,10 +57,16 @@ images:
     vm_boot: true   # exercises Flatpak-copy + installer-app-exclusion (PR #1)
     build_ssh_image: true
 
+  # composefs_backend must stay false while filesystem is xfs: the recipe
+  # validator rejects the pair outright ("composefs-backend requires
+  # fs-verity, which XFS does not support"), so the install never starts.
+  # #97 dropped the same combo from arch-bootc/arch-bootc-luks-xfs/debian-bootc
+  # but did not reach here, because vm_boot: false keeps these two out of the
+  # PR gate — nightly still processes every entry regardless of vm_boot (#106).
   - name: ubuntu-bootc
     image: ghcr.io/bootcrew/ubuntu-bootc:latest
     filesystem: xfs
-    composefs_backend: true
+    composefs_backend: false
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
@@ -76,10 +82,11 @@ images:
   #   unified_storage: false
   #   selinux_disabled: false
 
+  # composefs_backend false for the same reason as ubuntu-bootc above.
   - name: opensuse-bootc
     image: ghcr.io/bootcrew/opensuse-bootc:latest
     filesystem: xfs
-    composefs_backend: true
+    composefs_backend: false
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
