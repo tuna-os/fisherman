@@ -48,9 +48,8 @@ against a single caller.
   promotion PR to a merge commit; `prod` is now 4 commits behind `dev`, 0
   ahead — not the 255-ahead gap recorded here previously.
 - **6 branches** exist in the repository (`gh api repos/tuna-os/fisherman/branches --paginate`), down from the 80 recorded at the last refresh.
-- **`CHANGELOG.md` has no `[0.3.0]`/`[0.4.0]` heading yet** — the entries that
-  shipped in those releases are still sitting under `[Unreleased]`. Tracked in
-  #239.
+- **`CHANGELOG.md` has `[0.3.0]` and `[0.4.0]` sections** (#239); `[Unreleased]`
+  holds only what landed on `dev` after `v0.4.0`.
 - Historical context, superseded by the above: `release-cut.yml` (manual, on
   `dev`) used to compute the next semver, push the tag, and open the
   `dev` → `prod` PR; the tag push triggered `release-publish.yml`, which ran
