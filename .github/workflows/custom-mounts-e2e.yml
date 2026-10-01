@@ -16,7 +16,7 @@ concurrency:
 jobs:
   custom-mounts-e2e:
     name: customMounts E2E disk layout
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     timeout-minutes: 15
 
     steps:
