@@ -33,7 +33,7 @@ permissions:
 
 jobs:
   cut:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag_push_triggers_publish: ${{ steps.token.outputs.is_pat }}
