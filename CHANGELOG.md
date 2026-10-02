@@ -7,6 +7,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Bug Fixes
+
+- **Missing supplementary groups no longer abort the install** (#231): `useradd`
+  exits 6 when a `--groups` entry does not exist on the target (e.g. `libvirt` on
+  images without virt-manager). Requested groups are now filtered against the
+  target `/etc/group`, and missing ones are skipped with a warning.
+- **Offline non-composefs installs from a live ISO export from the right store**
+  (#236): a `containers-storage:` source is never pulled into the redirected
+  podman root, so the OCI export now uses the original ref unless the image was
+  actually pulled there.
+- **Local non-composefs images install with the host's bootc** (#237): a GUI
+  install of a live ISO's embedded GRUB/ostree image now runs `bootc` directly
+  against the live store with that source as `--source-imgref`, avoiding the OCI
+  export and the podman OOM seen in 8 GiB VMs. Composefs keeps the container path.
+- **Explicit local image identity survives storage redirects** (#244): an
+  explicit `containers-storage:` source is checked locally, and a missing or
+  malformed one is refused before any disk work instead of triggering a registry
+  lookup.
+
+### 📝 Documentation
+
+- ROADMAP release/branch status refreshed after v0.3.0/v0.4.0 (#240).
+
+---
+
+## [0.4.0] - 2026-09-19
+
+Release-process-only release; no installer behaviour changed since 0.3.0.
+
+### 🚀 Release Automation
+
+- **Cut publishes the tag it just made** (#227): `release-cut.yml` now calls
+  `release-publish.yml` via `workflow_call` instead of relying on a tag-push
+  trigger that never fires for `GITHUB_TOKEN`-pushed tags, and a
+  `workflow_dispatch` recovery path republishes a tag that has no assets.
+- **Automatic promotion**: `promote.yml` promotes `dev` to `prod` and releases
+  once `dev` is green; `promote-reconcile.yml` reconciles `prod` back into `dev`
+  (not the reverse). `scripts/next-version.sh` computes the next version, with
+  tests.
+- **Two-step release documented** (#228): `CONTRIBUTING.md` gains a Releasing
+  section, and the promotion PR body warns that it must be merge-committed, never
+  squashed, into `prod`.
+
+---
+
+## [0.3.0] - 2026-09-19
+
 ### 🔒 Security
 
 - **Transient TPM2 enrolment key is pinned to 0600** (#221): `StageFirstBootEnrollment`
@@ -76,6 +123,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **2 GiB ESP for all fleet images**: grub2 EFI System Partition increased from
   512 MiB → 2 GiB for fleet consistency with systemd-boot (dakota) images.
 
+### 🔒 Security (other)
+
+- Temporary LUKS passphrase file in `EnrollTPM2` is created 0600 (#213); the TUI
+  writes its installer recipe through a secure temporary file (#216).
+- The SELinux bypass shim is built in a private temp dir (#161); test images
+  require SSH key auth (#172); the debian-bootc base image is pinned by digest
+  (#76); `GITHUB_TOKEN` is passed via env in `bootcrew-vm.yml` (#78); Renovate
+  automerge is restricted to patch/pin/digest updates (#109).
+
+### ✨ Features
+
+- **Structured error event on fatal install failure** (#195) in the progress
+  stream.
+- **TPM2 enrolment moved to first boot** of the installed system instead of
+  during install (#48).
+- `customMount` fstypes are validated and encryption is rejected on manual
+  layouts (#58); ext4 verity is enabled on the manual layout path (#70).
+
+### 🧹 Maintenance
+
+- TUI Go module renamed `projectbluefin` → `tuna-os` (#113); the orphaned Python
+  GTK installer copy (`tuna_installer/`) was removed (#114); the TUI stays on the
+  charmbracelet v1 APIs (#130, #135).
+- Release config repaired so a tag can publish (#225).
+- Unit/E2E coverage expanded across `disk`, `install`, `post`, `images` and
+  `customMounts` (#94, #100, #107, #115, #118, #119, #125, #142, #148, #149,
+  #151).
+- Added ROADMAP (#163), CONTRIBUTING (#169), agent guide/CODEOWNERS/EditorConfig
+  (#201); switched from Dependabot to Renovate.
+
 ---
 
 ## [0.2.0] - 2026-05-08
@@ -130,7 +207,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.1.0] - 2026-03-XX
+## [0.1.0] - 2026-03-27
 
 ### Initial Release
 - First stable release of fisherman bootc installer backend
