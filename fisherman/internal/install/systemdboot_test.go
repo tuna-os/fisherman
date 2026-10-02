@@ -24,6 +24,7 @@ func makeDeployTree(t *testing.T, target string) string {
 	if err := os.WriteFile(bin, []byte("EFI"), 0o755); err != nil {
 		t.Fatalf("write efi binary: %v", err)
 	}
+	_ = os.Chmod(bin, 0o755)
 	return bin
 }
 
