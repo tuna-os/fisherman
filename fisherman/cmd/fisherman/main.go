@@ -15,6 +15,7 @@ import (
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
 	"github.com/tuna-os/fisherman/internal/slurp"
+	"github.com/tuna-os/fisherman/fisherman/cmd/fisherman/workflows"
 )
 
 const (
