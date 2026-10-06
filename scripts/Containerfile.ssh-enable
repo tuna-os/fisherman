@@ -8,9 +8,12 @@ RUN if command -v dnf >/dev/null 2>&1; then \
       systemctl enable sshd; \
     elif command -v apt-get >/dev/null 2>&1; then \
       # Debian/Ubuntu - initialize dpkg/apt structure first (needed for minimal debian-bootc)
+      export DEBIAN_FRONTEND=noninteractive && \
       mkdir -p /var/lib/dpkg/status.d /var/lib/apt/lists/partial /var/cache/apt/archives/partial /var/log/apt && \
-      touch /var/lib/dpkg/status /var/lib/apt/extended_states && \
+      [ -f /var/lib/dpkg/status ] || touch /var/lib/dpkg/status && \
+      [ -f /var/lib/apt/extended_states ] || touch /var/lib/apt/extended_states && \
       apt-get update && \
+      apt-get install -y --no-install-recommends debconf && \
       apt-get install -y openssh-server && \
       systemctl enable ssh; \
     elif command -v pacman >/dev/null 2>&1; then \
