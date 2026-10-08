@@ -282,8 +282,12 @@ func main() {
 	}
 
 	// From here on this is an install. SIGTERM, SIGINT and SIGHUP cancel it
-	// through the same teardown as fatal() and exit with exitCancelled.
+	// through the same teardown as fatal() and exit with exitCancelled. So
+	// does the death of fisherman's parent (the frontend's wrapper), which is
+	// how an unprivileged frontend cancels a root fisherman; see
+	// parentdeath_linux.go.
 	term.watchSignals()
+	term.armParentDeathCancel()
 
 	r, err := recipe.Load(os.Args[1])
 	if err != nil {

@@ -20,6 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it; teardown is bounded at 3 minutes instead. A teardown failure is now
   appended to the error message (`…; cleanup failed, …`), and on the failure
   path the `error` event is emitted after teardown rather than before it.
+- **Cancel by killing the wrapper**: frontends run fisherman as root through
+  `pkexec`, so their SIGTERM gets EPERM and never reaches it. fisherman now
+  sets `PR_SET_PDEATHSIG` to SIGTERM, so when its parent (the frontend's
+  `bash` wrapper, `sudo`, or the shell) dies, it cancels through the same path
+  and exits 130. Frontend contract: kill the wrapper you spawned, in its own
+  process group, and fisherman cancels cleanly.
 
 ### 🐛 Bug Fixes
 

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -350,6 +351,53 @@ func TestTerminateHelperProcess(t *testing.T) {
 	term.watchSignals()
 
 	switch mode {
+	case "intermediate", "intermediate-exit":
+		// Stand-in for the frontend's wrapper (bash, or pkexec's caller):
+		// start fisherman and either wait for it or die straight away.
+		standIn := exec.Command(os.Args[0], "-test.run=^TestTerminateHelperProcess$", "-test.count=1")
+		standIn.Env = append(os.Environ(), helperEnv+"="+os.Getenv("FISHERMAN_TERMINATE_CHILD_MODE"))
+		standIn.Stdout = os.Stdout
+		standIn.Stderr = os.Stderr
+		if err := standIn.Start(); err != nil {
+			fmt.Fprintf(os.Stderr, "starting stand-in: %v\n", err)
+			os.Exit(3)
+		}
+		fmt.Fprintf(os.Stderr, "STANDIN %d\n", standIn.Process.Pid)
+		if mode == "intermediate-exit" {
+			// Exit only once the stand-in has read startPPID, so the test
+			// hits the window between that and armParentDeathCancel rather
+			// than the earlier one before Go code runs at all.
+			waitForLine(os.Getenv("FISHERMAN_TERMINATE_STDERR"), "INITIALISED")
+			os.Exit(0)
+		}
+		_ = standIn.Wait()
+		os.Exit(0)
+	case "pdeath", "pdeath-late":
+		// As in main(): the signal handler first, then the parent-death
+		// signal, armed on a thread that never exits.
+		runtime.LockOSThread()
+		if mode == "pdeath-late" {
+			// Let the parent die before arming: the race armParentDeathCancel
+			// closes by comparing getppid() with startPPID.
+			fmt.Fprintln(os.Stderr, "INITIALISED")
+			for deadline := time.Now().Add(10 * time.Second); os.Getppid() == startPPID && time.Now().Before(deadline); {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
+		term.armParentDeathCancel()
+		if mode == "pdeath-late" {
+			fmt.Fprintln(os.Stderr, "READY 0")
+			parkForever()
+		}
+		child := exec.Command("sleep", "60")
+		if err := child.Start(); err != nil {
+			fatal("starting child: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "READY %d\n", child.Process.Pid)
+		if err := child.Wait(); err != nil {
+			fatal("bootc install: %v", err)
+		}
+		fatal("child exited cleanly; it should have been stopped")
 	case "cancel":
 		// Mimic a pipeline step: run a child and call fatal() if it fails.
 		child := exec.Command("sleep", "60")
@@ -563,5 +611,216 @@ func TestRealSignal_DuringFatal(t *testing.T) {
 	}
 	if res.cleanups != 1 {
 		t.Errorf("cleanup ran %d times, want 1", res.cleanups)
+	}
+}
+
+// ── Parent death ───────────────────────────────────────────────────────────
+//
+// A frontend cannot signal a root fisherman (kill(2) returns EPERM), but it
+// can kill the wrapper it spawned. These tests run test → wrapper →
+// fisherman stand-in, kill or lose the wrapper, and check the stand-in
+// cancels through the normal path. The test process becomes a child
+// subreaper so the orphaned stand-in is re-parented to it and its real exit
+// status can be collected with wait4.
+
+const prSetChildSubreaper = 36 // PR_SET_CHILD_SUBREAPER
+
+func runOrphanedStandIn(t *testing.T, wrapperMode, standInMode string, act func(wrapper *exec.Cmd)) helperResult {
+	t.Helper()
+	if testing.Short() {
+		t.Skip("re-exec signal test")
+	}
+	if _, _, errno := syscall.RawSyscall(syscall.SYS_PRCTL, prSetChildSubreaper, 1, 0); errno != 0 {
+		t.Skipf("PR_SET_CHILD_SUBREAPER: %v", errno)
+	}
+	t.Cleanup(func() { _, _, _ = syscall.RawSyscall(syscall.SYS_PRCTL, prSetChildSubreaper, 0, 0) })
+
+	dir := t.TempDir()
+	marker := filepath.Join(dir, "cleanup.marker")
+	stdout, err := os.Create(filepath.Join(dir, "stdout"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdout.Close()
+	stderrPath := filepath.Join(dir, "stderr")
+	stderr, err := os.Create(stderrPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stderr.Close()
+
+	wrapper := exec.Command(os.Args[0], "-test.run=^TestTerminateHelperProcess$", "-test.count=1")
+	wrapper.Env = append(os.Environ(),
+		helperEnv+"="+wrapperMode,
+		"FISHERMAN_TERMINATE_CHILD_MODE="+standInMode,
+		"FISHERMAN_TERMINATE_MARKER="+marker,
+		"FISHERMAN_TERMINATE_STDERR="+stderrPath)
+	wrapper.Stdout = stdout
+	wrapper.Stderr = stderr
+	if err := wrapper.Start(); err != nil {
+		t.Fatal(err)
+	}
+
+	standIn := waitForPID(t, stderrPath, "STANDIN ")
+	t.Cleanup(func() { _ = syscall.Kill(standIn, syscall.SIGKILL) })
+	childPID := waitForPID(t, stderrPath, "READY ")
+
+	act(wrapper)
+	_ = wrapper.Wait()
+
+	type waited struct {
+		ws  syscall.WaitStatus
+		err error
+	}
+	ch := make(chan waited, 1)
+	go func() {
+		var ws syscall.WaitStatus
+		_, err := syscall.Wait4(standIn, &ws, 0, nil)
+		ch <- waited{ws, err}
+	}()
+	var res helperResult
+	select {
+	case w := <-ch:
+		if w.err != nil {
+			t.Fatalf("wait4 stand-in: %v", w.err)
+		}
+		if w.ws.Signaled() {
+			res.exitCode = -int(w.ws.Signal())
+		} else {
+			res.exitCode = w.ws.ExitStatus()
+		}
+	case <-time.After(20 * time.Second):
+		data, _ := os.ReadFile(stderrPath)
+		t.Fatalf("stand-in did not exit after losing its parent; stderr:\n%s", data)
+	}
+
+	data, _ := os.ReadFile(stderrPath)
+	res.stderr = string(data)
+	out, _ := os.ReadFile(stdout.Name())
+	for _, l := range strings.Split(string(out), "\n") {
+		var ev map[string]any
+		if json.Unmarshal([]byte(l), &ev) == nil {
+			res.events = append(res.events, ev)
+		}
+	}
+	if m, err := os.ReadFile(marker); err == nil {
+		res.cleanups = strings.Count(string(m), "cleanup")
+	}
+	if childPID > 0 {
+		assertGone(t, childPID)
+	}
+	return res
+}
+
+// waitForPID polls a log file for "<prefix><pid>" and returns the pid.
+func waitForPID(t *testing.T, path, prefix string) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		data, _ := os.ReadFile(path)
+		for _, l := range strings.Split(string(data), "\n") {
+			if strings.HasPrefix(l, prefix) {
+				if pid, err := strconv.Atoi(strings.TrimPrefix(l, prefix)); err == nil {
+					return pid
+				}
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	data, _ := os.ReadFile(path)
+	t.Fatalf("no %q line; stderr so far:\n%s", prefix, data)
+	return 0
+}
+
+func assertCancelled(t *testing.T, res helperResult) {
+	t.Helper()
+	if res.exitCode != exitCancelled {
+		t.Errorf("exit code = %d, want %d\nstderr:\n%s", res.exitCode, exitCancelled, res.stderr)
+	}
+	errs := errorEvents(res.events)
+	if len(errs) != 1 || errs[0] != "installation cancelled (SIGTERM)" {
+		t.Errorf("error events = %q, want exactly one cancel event", errs)
+	}
+	if res.cleanups != 1 {
+		t.Errorf("cleanup ran %d times, want 1", res.cleanups)
+	}
+}
+
+// TestParentDeath_KillingWrapperCancels is the frontend contract: SIGKILL
+// the wrapper (the frontend's direct child), never fisherman itself.
+func TestParentDeath_KillingWrapperCancels(t *testing.T) {
+	res := runOrphanedStandIn(t, "intermediate", "pdeath", func(wrapper *exec.Cmd) {
+		if err := wrapper.Process.Kill(); err != nil {
+			t.Fatal(err)
+		}
+	})
+	assertCancelled(t, res)
+}
+
+// TestParentDeath_ParentGoneBeforeArming covers the parent dying between
+// fisherman's start and the prctl call, when no signal would ever arrive.
+func TestParentDeath_ParentGoneBeforeArming(t *testing.T) {
+	res := runOrphanedStandIn(t, "intermediate-exit", "pdeath-late", func(*exec.Cmd) {})
+	assertCancelled(t, res)
+	if !strings.Contains(res.stderr, "exited before startup finished") {
+		t.Errorf("race not reported on stderr:\n%s", res.stderr)
+	}
+}
+
+func TestArmParentDeathCancel_Seams(t *testing.T) {
+	origSet, origPPID, origRaise := setParentDeathSignal, getppid, raiseToSelf
+	t.Cleanup(func() { setParentDeathSignal, getppid, raiseToSelf = origSet, origPPID, origRaise })
+
+	var armed syscall.Signal
+	var raised []syscall.Signal
+	setParentDeathSignal = func(sig syscall.Signal) error { armed = sig; return nil }
+	raiseToSelf = func(sig syscall.Signal) error { raised = append(raised, sig); return nil }
+
+	t.Run("parent alive", func(t *testing.T) {
+		raised = nil
+		getppid = func() int { return startPPID }
+		tm, _ := newRecorded(t)
+		tm.armParentDeathCancel()
+		if armed != syscall.SIGTERM {
+			t.Errorf("armed %v, want SIGTERM", armed)
+		}
+		if len(raised) != 0 {
+			t.Errorf("raised %v with the parent still alive", raised)
+		}
+	})
+	t.Run("parent already gone", func(t *testing.T) {
+		raised = nil
+		getppid = func() int { return 1 }
+		tm, _ := newRecorded(t)
+		tm.armParentDeathCancel()
+		if len(raised) != 1 || raised[0] != syscall.SIGTERM {
+			t.Errorf("raised %v, want [SIGTERM]", raised)
+		}
+	})
+	t.Run("prctl fails", func(t *testing.T) {
+		raised = nil
+		setParentDeathSignal = func(syscall.Signal) error { return syscall.EINVAL }
+		getppid = func() int { return 1 }
+		tm, r := newRecorded(t)
+		tm.armParentDeathCancel()
+		if len(raised) != 0 {
+			t.Errorf("raised %v after prctl failed", raised)
+		}
+		if !strings.Contains(r.stderr.String(), "PR_SET_PDEATHSIG") {
+			t.Errorf("prctl failure not reported: %q", r.stderr.String())
+		}
+	})
+}
+
+// waitForLine polls a file until it holds a line equal to want (helper side).
+func waitForLine(path, want string) {
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); {
+		data, _ := os.ReadFile(path)
+		for _, l := range strings.Split(string(data), "\n") {
+			if l == want {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
