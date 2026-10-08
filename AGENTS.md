@@ -2,7 +2,7 @@
 
 A universal **bootc installer backend**: a Go CLI that reads a JSON recipe and
 executes a 9-step disk install pipeline, emitting newline-delimited JSON
-progress on stdout. It is driven by a frontend (the `tuna-installer-*` repos),
+progress on stdout. It is driven by a frontend (the five in `tuna-os/bootc-installer`),
 runs as root against real block devices, and is distro-agnostic.
 
 Human docs: [`README.md`](README.md) (pipeline table, recipe format, partition
