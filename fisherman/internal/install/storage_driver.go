@@ -3,7 +3,6 @@ package install
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"syscall"
 
 	"github.com/tuna-os/fisherman/internal/runner"
@@ -138,7 +137,7 @@ func probeOverlay(scratchPath string) error {
 	// Run `podman --root <probeRoot> --storage-driver overlay info` to check overlay support.
 	// If overlay is not available or doesn't work on this root, podman will error.
 	name, args := runner.HostArgs("podman", []string{"--root", probeRoot, "--storage-driver", "overlay", "info", "--format", "json"})
-	cmd := exec.Command(name, args...)
+	cmd := CommandFn(name, args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("podman probe failed: %w (output: %s)", err, output)
 	}
