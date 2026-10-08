@@ -288,6 +288,12 @@ func main() {
 		fatal("invalid recipe: %v", err)
 	}
 
+	// This recipe has no durable rescue-store contract. RAM copies disappear
+	// after interruption, so an explicit data request must stop before writes.
+	if r.Slurp != nil {
+		fatal("requested data migration requires a verified durable rescue store; refusing installation before disk work")
+	}
+
 	// Recipe-level overrides for the otherwise-shared global mount paths.
 	// Keeps two parallel installs on the same host from colliding.
 	if r.TargetMount != "" {
