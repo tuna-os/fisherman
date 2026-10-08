@@ -13,8 +13,14 @@ RUN if command -v dnf >/dev/null 2>&1; then \
       [ -f /var/lib/dpkg/status ] || touch /var/lib/dpkg/status && \
       [ -f /var/lib/apt/extended_states ] || touch /var/lib/apt/extended_states && \
       apt-get update && \
-      apt-get install -y --no-install-recommends debconf && \
-      apt-get install -y openssh-server && \
+      # dpkg conffile prompts (e.g. login.defs on debian unstable) are not
+      # covered by DEBIAN_FRONTEND; force keeping existing config files.
+      apt-get install -y --no-install-recommends \
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+        debconf && \
+      apt-get install -y \
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+        openssh-server && \
       systemctl enable ssh; \
     elif command -v pacman >/dev/null 2>&1; then \
       # Arch
