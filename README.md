@@ -47,6 +47,17 @@ When running inside a Flatpak sandbox, fisherman automatically wraps host subpro
 sudo fisherman <recipe.json>
 ```
 
+### Commands
+
+| Command | Root? | What it does |
+|---|---|---|
+| `fisherman <recipe.json>` | yes | run an installation from a recipe |
+| `fisherman validate <recipe.json>` | no | validate a recipe without installing |
+| `fisherman images [<query>]` | no | list or search the image catalog |
+| `fisherman scan <disk>` | yes | scan a disk for Windows data available to migrate |
+| `fisherman probe --json` | no | print disks, TPM, RAM/CPU/UEFI, live-media and offline-store facts as one JSON object; read-only. Schema and an example: [`docs/PROBE.md`](docs/PROBE.md) |
+| `fisherman version` | no | print the version |
+
 ## Recipe format
 
 ```json

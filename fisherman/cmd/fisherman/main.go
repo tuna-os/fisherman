@@ -206,6 +206,7 @@ Usage:
   fisherman validate <recipe.json> validate a recipe without installing
   fisherman images [<query>]       list or search the image catalog
   fisherman scan <disk>            scan disk for Windows data available to migrate
+  fisherman probe --json           print disks, TPM, RAM/CPU/UEFI, live and offline facts
   fisherman version                print version information
   fisherman help                   show this help
 
@@ -221,6 +222,7 @@ Examples:
   fisherman images "GNOME 50"
   fisherman images --plain yellowfin
   fisherman scan /dev/nvme0n1
+  fisherman probe --json
 `)
 }
 
@@ -260,6 +262,8 @@ func main() {
 	case "validate":
 		runValidate(os.Args[2:])
 		return
+	case "probe":
+		os.Exit(runProbe(os.Args[2:], os.Stdout, os.Stderr))
 	case "scan":
 		if len(os.Args) < 3 {
 			fmt.Fprintf(os.Stderr, "Usage: fisherman scan <disk>\n")

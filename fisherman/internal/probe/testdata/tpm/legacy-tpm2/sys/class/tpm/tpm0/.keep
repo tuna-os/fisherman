@@ -1,0 +1,1 @@
+a TPM device node with no tpm_version_major (kernel < 5.5)
