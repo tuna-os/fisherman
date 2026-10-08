@@ -710,6 +710,17 @@ func main() {
 		}
 	}
 
+	// GRUB installs: bootupctl writes EFI/<vendor>/ and an NVRAM entry but
+	// can leave no fallback loader at EFI/BOOT/BOOTX64.EFI, so a reset NVRAM
+	// or a disk moved to another machine falls through to PXE (#233). Fill
+	// that gap from the vendor directory. Never on a manual layout: that ESP
+	// may be shared, and its EFI/BOOT belongs to whoever set it up.
+	if !isManual && !isSystemdBoot {
+		if err := install.InstallGrubFallback(activeTargetMount, r.DistroID); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not ensure the UEFI fallback loader: %v", err))
+		}
+	}
+
 	// systemd-boot composefs installs rely on GPT auto-discovery for the root
 	// filesystem, so the root partition must carry the architecture's Linux
 	// root GUID. disk.PartitionSystemdBoot now writes that type when it creates
