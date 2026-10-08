@@ -1,193 +1,367 @@
 # JSON Progress Event Format
 
-fisherman emits installation progress as newline-delimited JSON events to stdout. This document describes the format for frontends and other consumers of the fisherman backend.
+fisherman reports install progress as newline-delimited JSON on stdout. This
+document describes that format and fisherman's exit codes for frontends and
+other consumers.
+
+The emitter is `fisherman/internal/progress/progress.go`. The callers are
+`fisherman/cmd/fisherman/main.go` (steps, errors, completion) and the packages
+under `fisherman/internal/` (substeps and info lines).
+
+Reference consumer: bootc-installer's
+[`shared/progress/README.md`](https://github.com/tuna-os/bootc-installer/blob/dev/shared/progress/README.md)
+and
+[`shared/progress/progress_parser.py`](https://github.com/tuna-os/bootc-installer/blob/dev/shared/progress/progress_parser.py).
+All bootc-installer frontends parse the stream the way that parser does.
 
 ## Overview
 
-Each line of output is a valid JSON object representing a single event. The protocol is *streaming* — parse line-by-line rather than reading the entire output and parsing it as a JSON array.
+Each event is one JSON object on one line. Read the stream line by line. Do
+not try to parse the whole output as one JSON document.
+
+**stdout also carries lines that are not JSON.** fisherman echoes the commands
+it runs (`+ sfdisk ...`, `+ podman ...`), relays raw bootc, podman and tar
+output, and prints short notes such as `  wrote hostname ...`. A consumer must
+skip every line that does not parse as a JSON object. The reference parser
+skips any line that does not start with `{`.
 
 **Common fields (present in every event):**
-- `type` — event type identifier (string)
-- `timestamp` — RFC3339Nano timestamp (UTC)
-- `elapsed_ms` — milliseconds elapsed since fisherman started (integer)
+- `type` — event type (string)
+- `timestamp` — time the event was written, RFC 3339 with nanoseconds, UTC (string)
+- `elapsed_ms` — milliseconds since the fisherman process started (integer)
+
+**Key order is not guaranteed.** `write()` marshals each event, decodes it
+into a map, adds `timestamp` and `elapsed_ms`, and marshals the map again.
+Today that yields alphabetical keys, but that is a side effect of Go's map
+encoding. Do not rely on it.
 
 ## Event Types
 
 ### `step`
 
-Marks the start of a major installation phase.
+A pipeline step has started.
 
 **Fields:**
 - `type` — `"step"`
-- `step` — current step number (1-based integer)
-- `total_steps` — total number of steps in the pipeline (always 9)
-- `step_name` — human-readable step name (string)
-- `weight_pct` — estimated percentage of total install time this step occupies (0–100)
-- `cumulative_pct` — progress bar position at the start of this step (0–100)
+- `step` — number of this step, starting at 1 (integer)
+- `total_steps` — number of steps this install will emit (integer, 5–11; see [Step count](#step-count))
+- `step_name` — fisherman's English name for the step (string; see [Pipeline](#pipeline))
+- `weight_pct` — this step's share of the total install time, in percent (integer)
+- `cumulative_pct` — progress bar position at the start of this step, in percent (integer, at most 99)
 - `timestamp`, `elapsed_ms` — as above
 
 **Example:**
 ```json
-{"type":"step","step":1,"total_steps":9,"step_name":"Partition disk","weight_pct":5,"cumulative_pct":0,"timestamp":"2026-10-07T19:05:30.123456Z","elapsed_ms":245}
+{"cumulative_pct":0,"elapsed_ms":2310,"step":1,"step_name":"Partitioning disk","timestamp":"2026-10-07T19:05:30.123456Z","total_steps":8,"type":"step","weight_pct":0}
+{"cumulative_pct":1,"elapsed_ms":9874,"step":5,"step_name":"Installing OS","timestamp":"2026-10-07T19:05:37.687123Z","total_steps":8,"type":"step","weight_pct":87}
 ```
 
-**Usage:** Use `cumulative_pct` + `weight_pct` to display an overall progress bar. The final percentage at the end of this step will be approximately `cumulative_pct + weight_pct`.
+**Usage:** Drive the progress bar from `cumulative_pct` and `weight_pct`. See
+[Progress bar](#progress-bar).
 
 ### `substep`
 
-Provides detailed progress within a step (e.g., bootc's internal status messages).
+Progress inside the current step.
 
 **Fields:**
 - `type` — `"substep"`
-- `message` — detailed status message (string)
+- `message` — status message (string)
 - `timestamp`, `elapsed_ms` — as above
 
 **Example:**
 ```json
-{"type":"substep","message":"Pulling image layers: 512 MiB / 2048 MiB","timestamp":"2026-10-07T19:05:35.456789Z","elapsed_ms":5678}
+{"elapsed_ms":61210,"message":"Pulling image: layer 23/71","timestamp":"2026-10-07T19:06:29.023456Z","type":"substep"}
 ```
 
-**Usage:** Display substeps as real-time log output beneath the main progress bar.
+Messages you will see include:
+
+- `Pulling container image`
+- `Pulling image: 71 layers to download`
+- `Pulling image: layer 23/71` (one per finished layer; `Pulling image: layer 23` when the total is unknown)
+- `Pulling image: copying config`, `Pulling image: writing manifest`, `Image pulled successfully`
+- `Image already up to date, skipping pull`
+- `Exporting image to OCI layout for composefs install`, `OCI export complete`
+- `Deploying image`, `Initializing ostree layout`, `Installing bootloader`, `bootc installation complete` (classified from bootc's own output by `ClassifyLine` in `internal/install/bootc.go`)
+- `Copying Flatpak data: 45%`
+- `Pre-generating wallpaper thumbnails`, `Pre-warming system caches for first boot`
+
+`Pulling image: layer N/M` is the one that matters for the bar: the pull is
+most of a cold install.
 
 ### `info`
 
-Informational messages about the installation process (not errors).
+An informational line. Many `info` messages start with `Warning:`. These
+report non-fatal problems; the install continues.
 
 **Fields:**
 - `type` — `"info"`
-- `message` — informational message (string)
+- `message` — message (string)
 - `timestamp`, `elapsed_ms` — as above
 
 **Example:**
 ```json
-{"type":"info","message":"Mounted /mnt/fisherman-target","timestamp":"2026-10-07T19:05:40.789012Z","elapsed_ms":10901}
+{"elapsed_ms":412,"message":"Checking image cache...","timestamp":"2026-10-07T19:05:28.225558Z","type":"info"}
 ```
 
-**Usage:** Log informational messages to the installation log or verbose output.
+Other examples: `Image pull required (71 layers)`,
+`Image already up to date in local cache`,
+`Offline: registry unreachable, using locally cached image`,
+`Writing hostname: <hostname>`,
+`EFI boot entry for installed system: Boot0001`.
 
-### `error`
-
-Terminal error — the installation has failed.
-
-**Fields:**
-- `type` — `"error"`
-- `message` — human-readable error description (string)
-- `timestamp`, `elapsed_ms` — as above
-
-**Example:**
-```json
-{"type":"error","message":"Failed to mount root filesystem: No space left on device","timestamp":"2026-10-07T19:06:15.234567Z","elapsed_ms":45123}
-```
-
-**Usage:** Stop reading events and display the error to the user. A plain-text version of the same error is also written to stderr for terminal/log visibility.
+Several `info` events can arrive before the first `step` event. The image
+cache check, live-session audio setup and Windows data migration all run
+before partitioning.
 
 ### `recovery_key`
 
-LUKS recovery passphrase for TPM2-protected encryption.
+The LUKS recovery passphrase for a `tpm2-luks` install.
 
 **Fields:**
 - `type` — `"recovery_key"`
-- `key` — recovery passphrase (string; typically 128–256 characters)
+- `key` — the passphrase (string)
 - `timestamp`, `elapsed_ms` — as above
 
-**Note:** This event is emitted **only** when a random (non-user-chosen) passphrase is the sole fallback for TPM2-protected encryption. The user should write this passphrase down before rebooting.
+The key is 64 lowercase hexadecimal characters: 32 bytes from `crypto/rand`,
+hex-encoded by `luks.RandomPassphrase()`.
 
 **Example:**
 ```json
-{"type":"recovery_key","key":"abc123def456...","timestamp":"2026-10-07T19:06:20.567890Z","elapsed_ms":50456}
+{"elapsed_ms":402117,"key":"3f9c0a7e5b1d2c4e6f8a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e","timestamp":"2026-10-07T19:12:10.240117Z","type":"recovery_key"}
 ```
 
-**Usage:** Display this key prominently to the user in a readable format (QR code, large text, etc.). Do not proceed past this event until the user acknowledges they have recorded the key.
+**When it is emitted:** only when the recipe's encryption type is
+`tpm2-luks`. For that type fisherman generates the passphrase itself, so the
+user has no other way to unlock the disk if TPM2 unlock fails. It is not
+emitted for `luks-passphrase` or `tpm2-luks-passphrase`, where the user chose
+the passphrase.
+
+**Where it appears:** at most once, inside the `Enrolling TPM2 auto-unlock`
+step, after the `info` line that reports the first-boot enrolment, and before
+the `Copying system Flatpaks` step.
+
+**Usage:** Keep the key and show it to the user before they reboot.
+fisherman does not pause after this event. The install keeps running, so the
+frontend must hold the key and present it itself, for example on the
+completion screen.
 
 ### `complete`
 
-Installation finished successfully.
+The install finished. fisherman has already unmounted the target and closed
+LUKS. It exits 0 right after this event.
 
 **Fields:**
 - `type` — `"complete"`
-- `message` — completion message (string)
-- `boot_id` — EFI boot entry number (4-digit string, e.g. `"0001"`); omitted if unknown
+- `message` — always `"Installation complete!"` (string)
+- `boot_id` — EFI boot entry number of the installed system, 4 hex digits (string, e.g. `"0001"`). Omitted when fisherman could not determine it.
 - `timestamp`, `elapsed_ms` — as above
 
 **Example (with boot ID):**
 ```json
-{"type":"complete","message":"Installation complete. System will boot from entry 0001.","boot_id":"0001","timestamp":"2026-10-07T19:06:30.890123Z","elapsed_ms":60789}
+{"boot_id":"0001","elapsed_ms":512345,"message":"Installation complete!","timestamp":"2026-10-07T19:14:00.358345Z","type":"complete"}
 ```
 
 **Example (without boot ID):**
 ```json
-{"type":"complete","message":"Installation complete.","timestamp":"2026-10-07T19:06:30.890123Z","elapsed_ms":60789}
+{"elapsed_ms":512345,"message":"Installation complete!","timestamp":"2026-10-07T19:14:00.358345Z","type":"complete"}
 ```
 
-**Usage:** Mark the installation as successful and optionally display the boot entry number to the user.
+**Usage:** Set the bar to 100% and mark the install successful. A frontend
+can use `boot_id` to set `BootNext` before rebooting.
 
-## Installation Pipeline
+### `error`
 
-fisherman always emits exactly 9 `step` events in this order:
+The install failed.
 
-1. **Partition disk** — Create GPT partition table
-2. **Format EFI** — Create FAT32 EFI System Partition
-3. **Format /boot** — Create ext4 /boot partition (GRUB images only)
-4. **Set up LUKS** — Format and open encrypted root (if encryption is enabled)
-5. **Format root** — Create XFS or Btrfs root filesystem
-6. **Mount filesystems** — Mount everything at `/mnt/fisherman-target`
-7. **Install image** — Run `bootc install to-filesystem`
-8. **Copy Flatpaks** — Copy Flatpak data from host to target
-9. **Finalize** — Write hostname, finalize boot entries, fstrim, fsfreeze
+**Fields:**
+- `type` — `"error"`
+- `message` — what failed (string)
+- `timestamp`, `elapsed_ms` — as above
 
-## Parsing Examples
+**Example:**
+```json
+{"elapsed_ms":45123,"message":"partitioning disk: exit status 1","timestamp":"2026-10-07T19:06:15.234567Z","type":"error"}
+```
 
-### Python
+Only `fatal()` in `cmd/fisherman/main.go` emits this event. `fatal()` writes
+the event, runs cleanup (unmounts, closes LUKS), writes
+`fisherman: fatal: <message>` to stderr, and exits 1.
+
+The message is a short context prefix followed by the underlying error, for
+example `loading recipe: ...`, `invalid recipe: ...`,
+`missing required host tool: ...`, `LUKS format: ...` or `bootc install: ...`.
+
+`error` can be the only event in the stream. Recipe loading, recipe
+validation and the host tool check all run before the first step.
+
+`error` is **not** emitted when fisherman exits 2 (unknown command) or
+panics, or when it is killed by a signal. See [Exit codes](#exit-codes).
+
+**Usage:** Stop and report the failure. No further events follow.
+
+## Pipeline
+
+The steps depend on the recipe. They run in this order:
+
+| `step_name` | When |
+|---|---|
+| `Preparing disk` | Manual layout only (`customMounts` set). Replaces partitioning, EFI, root and mounting (4 steps) with one: formats and mounts the user's partitions. |
+| `Partitioning disk` | Auto layout. Writes a 2-partition GPT (systemd-boot, ZFS) or a 3-partition GPT (GRUB2: EFI, ext4 `/boot`, root). |
+| `Formatting EFI partition` | Auto layout. Formats the FAT32 ESP and, on GRUB2 layouts, the ext4 `/boot` partition. There is no separate `/boot` step. |
+| `Setting up disk encryption` | Auto layout with encryption. LUKS format and open of the root partition. |
+| `Formatting root filesystem` | Auto layout. XFS, Btrfs, ext4 or a ZFS pool. |
+| `Mounting filesystem` | Auto layout. Mounts root, `/boot` and the ESP at the target. |
+| `Formatting data disk (/var)` | A separate `/var` disk is set and `keepExisting` is false. |
+| `Installing OS` | Always. Image pull, `bootc install to-filesystem`, bootloader. |
+| `Enrolling TPM2 auto-unlock` | `tpm2-luks` or `tpm2-luks-passphrase`. Stages TPM2 enrolment for first boot. |
+| `Copying system Flatpaks` | Always. |
+| `Configuring installed system` | Always. Hostname, user, kernel arguments, network and Bluetooth copy, caches. |
+| `Finalizing installation` | Always. fstrim, remount read-only, fsfreeze/thaw (skipped on ZFS). |
+
+Step numbers are assigned in order to the steps that run, so `step` has no
+fixed meaning. Match on `step_name`, and fall back to showing the raw name for
+names you do not know.
+
+Manual layouts reject encryption (`recipe.Validate`), so a manual install
+never has the encryption or TPM2 steps.
+
+### Step count
+
+`total_steps` is computed before the first step:
+
+- start at 8
+- minus 3 for a manual layout
+- plus 1 for encryption (auto layout only)
+- plus 1 for `tpm2-luks` or `tpm2-luks-passphrase`
+- plus 1 when a `/var` disk is formatted
+
+The range is 5 (manual, no `/var` format) to 11 (encryption, TPM2 and a
+`/var` format).
+
+## Progress bar
+
+**Drive the bar from `cumulative_pct` and `weight_pct`. Do not derive it from
+`step / total_steps`.** The step count changes with the recipe, and the steps
+are very unequal: most of them carry 0%.
+
+The weights come from `buildProfile` in `cmd/fisherman/main.go`. They were
+measured on a loop-device install.
+
+| `step_name` | `weight_pct`, image pulled | `weight_pct`, image cached |
+|---|---|---|
+| `Partitioning disk` | 0 | 0 |
+| `Formatting EFI partition` | 1 | 1 |
+| `Setting up disk encryption` | 1 | 1 |
+| `Formatting root filesystem` | 0 | 0 |
+| `Mounting filesystem` | 0 | 0 |
+| `Formatting data disk (/var)` | 0 | 0 |
+| `Installing OS` | 87 | 68 |
+| `Enrolling TPM2 auto-unlock` | 1 | 1 |
+| `Copying system Flatpaks` | 11 | 29 |
+| `Configuring installed system` | 0 | 0 |
+| `Finalizing installation` | rest (1) | rest (2) |
+
+`Installing OS` loses 1 point for encryption and 1 for TPM2, to pay for those
+steps. `Finalizing installation` takes whatever is left so the weights sum to
+100. "Cached" means the image check found nothing to pull, or the recipe had
+no image.
+
+`cumulative_pct` is the sum of the weights of the steps before this one. It
+reaches at most 99, on the last step. Only `complete` means 100%.
+
+Inside a step, interpolate from substeps. For the image pull:
+
+```
+fraction = (cumulative_pct + (done / total) * weight_pct) / 100
+```
+
+where `done/total` comes from `Pulling image: layer done/total`. The reference
+parser gives the pull the first 60% of `Installing OS` and places the later
+bootc phases at fixed points in the rest.
+
+**Known limitation:** a manual layout (`Preparing disk`) uses the same weight
+table as an auto layout without re-indexing it, so its steps carry the wrong
+weights. For example, `Installing OS` arrives with `cumulative_pct` 0 or 1 and
+`weight_pct` 0 or 1. On a manual install the bar barely moves until
+`complete`.
+
+## Exit codes
+
+These are the `os.Exit` paths in `cmd/fisherman/main.go` and what the stream
+looks like for each.
+
+| Exit | When | Events on stdout |
+|---|---|---|
+| 0 | Install succeeded. | Ends with `complete`. |
+| 0 | `help`, `version`, `images`, `validate` or `scan` succeeded. | None (plain-text output). |
+| 1 | `fatal()`: any install failure, including an unreadable or invalid recipe and a missing host tool. | Ends with `error`. |
+| 1 | No arguments. Help is printed to stdout. | None. |
+| 1 | `scan` without a disk, or `scan` failed. Message on stderr. | None. |
+| 2 | The argument looks like a command, not a recipe path (a flag, or a bare word with no file behind it). Message and help on stderr and stdout. | None. |
+
+The `images` and `validate` subcommands (in `images.go` and `validate.go`)
+also exit 1 on failure. They do not emit progress events.
+
+Other ways the process can end:
+
+- **Panic.** A Go panic exits 2 and prints a stack trace to stderr. No
+  `error` event is written and cleanup does not run, so mounts and the LUKS
+  mapper can stay open. One explicit panic exists:
+  `luks.RandomPassphrase()` panics if `crypto/rand` fails.
+- **Signals.** fisherman installs no signal handler. SIGINT, SIGTERM and
+  SIGKILL end it with the default action: no `error` event, no cleanup.
+- **pkexec.** Frontends run fisherman through `pkexec`. pkexec returns
+  fisherman's exit code, but exits 126 when the user dismisses the
+  authentication dialog and 127 when authorization fails. fisherman never
+  starts in those cases.
+
+If the stream ends without `complete` or `error`, treat the install as
+failed. Use the exit code to tell the cases apart.
+
+## Parsing example
+
 ```python
 import json
 import sys
 
 for line in sys.stdin:
-    event = json.loads(line)
-    if event['type'] == 'step':
-        print(f"Step {event['step']}/{event['total_steps']}: {event['step_name']}")
-        print(f"Progress: {event['cumulative_pct']}%")
-    elif event['type'] == 'error':
-        print(f"Error: {event['message']}")
-        break
-    elif event['type'] == 'complete':
-        print(f"Success: {event['message']}")
-        break
+    line = line.strip()
+    if not line.startswith("{"):
+        continue  # command echo or raw tool output
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    kind = event.get("type")
+    if kind == "step":
+        print(f"{event['cumulative_pct']}%  {event['step_name']}")
+    elif kind == "recovery_key":
+        recovery_key = event["key"]  # keep it; show it before reboot
+    elif kind == "error":
+        print(f"failed: {event['message']}")
+    elif kind == "complete":
+        print(f"100%  {event['message']}")
+    # ignore substep, info and any type you do not know
 ```
 
-### JavaScript
-```javascript
-const readline = require('readline');
-const rl = readline.createInterface({ input: process.stdin });
+## Consumer rules
 
-rl.on('line', (line) => {
-  const event = JSON.parse(line);
-  switch (event.type) {
-    case 'step':
-      console.log(`Step ${event.step}/${event.total_steps}: ${event.step_name}`);
-      break;
-    case 'error':
-      console.error(`Error: ${event.message}`);
-      process.exit(1);
-    case 'complete':
-      console.log(`Success: ${event.message}`);
-      process.exit(0);
-  }
-});
-```
+- Skip lines that are not JSON objects.
+- Ignore unknown event types and unknown fields.
+- Do not depend on key order.
+- Match steps by `step_name`, not by `step`.
+- Use `cumulative_pct` for the bar. Only `complete` means 100%.
+- Treat EOF without `complete` or `error` as a failure, and check the exit code.
 
-## Error Handling
+## Compatibility
 
-- **Unknown event types:** Ignore them (forward compatibility).
-- **Malformed JSON:** Log the line to stderr and continue reading.
-- **Error event:** Stop processing and report the failure; do not wait for further events.
-- **No completion event:** If EOF is reached without a `complete` or `error` event, the process was interrupted (e.g., killed by signal) — treat as an error.
+There is no versioned protocol and no stability promise. The format has
+grown over time:
 
-## Protocol Stability
+- v0.1.0: `step`, `info` and `complete`.
+- v0.2.0: the `substep` event; `weight_pct` and `cumulative_pct` on `step`; `timestamp` and
+  `elapsed_ms` on every event; `boot_id` on `complete`.
+- v0.3.0: the `recovery_key` event and the `error` event (#195).
 
-This protocol is considered stable as of fisherman v0.1.0. Changes to event fields are governed by semantic versioning:
-- **New event types or fields:** Minor version bump (v0.2.0).
-- **Removing fields:** Major version bump (v1.0.0).
-- **Changing field semantics:** Major version bump.
-
-Consumers should gracefully ignore unknown event types and unknown fields within known event types.
+New event types and fields may appear in any release. Consumers must ignore
+event types and fields they do not know.
