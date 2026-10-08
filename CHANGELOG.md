@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicit `containers-storage:` source is checked locally, and a missing or
   malformed one is refused before any disk work instead of triggering a registry
   lookup.
+- **debian-bootc SSH build no longer fails on debconf/apt-extracttemplates drift**
+  (#256): the weekly rebuild picked up a drifted `ghcr.io/bootcrew/debian-bootc`
+  base whose minimal apt layout made `openssh-server`'s debconf templates fail
+  with `debconf: apt-extracttemplates failed: 25600`. The SSH-enable Containerfile
+  now sets `DEBIAN_FRONTEND=noninteractive`, initializes the dpkg/apt structure
+  only when it is missing, and installs `debconf` explicitly before
+  `openssh-server` so template extraction succeeds on the minimal base.
 
 ### 📝 Documentation
 

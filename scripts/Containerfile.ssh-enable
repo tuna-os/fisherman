@@ -1,16 +1,32 @@
 ARG BASE_IMAGE
 FROM ${BASE_IMAGE}
 
+# Debian/Ubuntu packages ship debconf templates. Without a noninteractive
+# front-end, apt tries to configure them interactively and, on the minimal
+# debian-bootc base, debconf/apt-extracttemplates then fails (exit 25600)
+# during openssh-server install. Force the noninteractive front-end for the
+# whole build so every apt invocation auto-accepts defaults.
+ENV DEBIAN_FRONTEND=noninteractive
+
 # Install and enable SSH for all supported distributions
 RUN if command -v dnf >/dev/null 2>&1; then \
       # RHEL/CentOS/Fedora
       dnf install -y openssh-server openssh-clients && \
       systemctl enable sshd; \
     elif command -v apt-get >/dev/null 2>&1; then \
-      # Debian/Ubuntu - initialize dpkg/apt structure first (needed for minimal debian-bootc)
-      mkdir -p /var/lib/dpkg/status.d /var/lib/apt/lists/partial /var/cache/apt/archives/partial /var/log/apt && \
-      touch /var/lib/dpkg/status /var/lib/apt/extended_states && \
+      # Debian/Ubuntu - initialize dpkg/apt structure first (needed for minimal
+      # debian-bootc). Create only what is missing so a base image that already
+      # ships a complete dpkg/apt layout is left untouched.
+      if [ ! -e /var/lib/dpkg/status ]; then mkdir -p /var/lib/dpkg/status.d && touch /var/lib/dpkg/status; fi && \
+      if [ ! -d /var/lib/apt/lists/partial ]; then mkdir -p /var/lib/apt/lists/partial; fi && \
+      if [ ! -d /var/cache/apt/archives/partial ]; then mkdir -p /var/cache/apt/archives/partial; fi && \
+      if [ ! -d /var/log/apt ]; then mkdir -p /var/log/apt; fi && \
       apt-get update && \
+      # Install debconf explicitly so its front-end and database are present and
+      # configured before openssh-server (which ships debconf templates) is
+      # pulled; on the drifted minimal base the template extraction otherwise
+      # fails with "apt-extracttemplates failed: 25600".
+      apt-get install -y debconf && \
       apt-get install -y openssh-server && \
       systemctl enable ssh; \
     elif command -v pacman >/dev/null 2>&1; then \
