@@ -87,12 +87,13 @@ func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) [
 	return profile
 }
 
+// fatal ends the install: it stops child processes, tears down every mount
+// and LUKS mapping registered on cleanup, emits one {"type":"error"} event
+// (noting any teardown failure) and exits with exitFailure. If a cancel
+// signal is already being handled it defers to that path instead. See
+// terminator in terminate.go.
 func fatal(format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	progress.Error(msg)
-	cleanup.Run()
-	fmt.Fprintf(os.Stderr, "fisherman: fatal: %s\n", msg)
-	os.Exit(1)
+	term.fail(fmt.Sprintf(format, args...))
 }
 
 // lookPath is exec.LookPath by default; replaced in tests.
@@ -244,7 +245,7 @@ func looksLikeSubcommand(arg string) bool {
 func main() {
 	if len(os.Args) < 2 {
 		printHelp()
-		os.Exit(1)
+		os.Exit(exitFailure)
 	}
 
 	switch os.Args[1] {
@@ -263,12 +264,12 @@ func main() {
 	case "scan":
 		if len(os.Args) < 3 {
 			fmt.Fprintf(os.Stderr, "Usage: fisherman scan <disk>\n")
-			os.Exit(1)
+			os.Exit(exitFailure)
 		}
 		output, err := slurp.ScanJSON(os.Args[2])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "scan: %v\n", err)
-			os.Exit(1)
+			os.Exit(exitFailure)
 		}
 		fmt.Println(output)
 		return
@@ -277,8 +278,12 @@ func main() {
 	if looksLikeSubcommand(os.Args[1]) {
 		fmt.Fprintf(os.Stderr, "fisherman: unknown command %q, and no such recipe file\n\n", os.Args[1])
 		printHelp()
-		os.Exit(2)
+		os.Exit(exitUsage)
 	}
+
+	// From here on this is an install. SIGTERM, SIGINT and SIGHUP cancel it
+	// through the same teardown as fatal() and exit with exitCancelled.
+	term.watchSignals()
 
 	r, err := recipe.Load(os.Args[1])
 	if err != nil {
@@ -959,8 +964,13 @@ func main() {
 		}
 	}
 
-	// Tear down mounts and LUKS before declaring success.
-	cleanup.Run()
+	// Tear down mounts and LUKS before declaring success. Claiming the exit
+	// first means a cancel signal from here on is ignored (the install has
+	// finished), and a cancel that already started keeps the exit to itself.
+	term.claimSuccess()
+	if err := cleanup.Run(); err != nil {
+		progress.Info(fmt.Sprintf("Warning: teardown after install was incomplete: %v", err))
+	}
 
 	// Find the EFI boot entry so the frontend can set BootNext before rebooting.
 	// Non-fatal: on VMs or systems without efibootmgr this may return empty.

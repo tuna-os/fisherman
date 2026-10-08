@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Features
+
+- **Clean cancel on SIGTERM, SIGINT and SIGHUP**: fisherman used to die at once
+  when a frontend cancelled an install, leaving the target mounted, the LUKS
+  mapping open and the `/var/fisherman-tmp` bind mount in place, with no JSON
+  event. It now stops its child processes (SIGTERM, then SIGKILL after 10 s,
+  grandchildren included), runs the same teardown as a fatal error, emits one
+  `{"type":"error","message":"installation cancelled (SIGTERM)"}` event and
+  exits with the new code **130**. Failures still exit 1 and bad usage 2. A
+  second signal during teardown is logged and ignored rather than aborting
+  it; teardown is bounded at 3 minutes instead. A teardown failure is now
+  appended to the error message (`…; cleanup failed, …`), and on the failure
+  path the `error` event is emitted after teardown rather than before it.
+
 ### 🐛 Bug Fixes
 
 - **Missing supplementary groups no longer abort the install** (#231): `useradd`

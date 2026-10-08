@@ -1107,6 +1107,10 @@ func pullImageOnce(image string, layerCount int, root, runRoot, storageDriver st
 	cmd.Stdout = pw
 	cmd.Stderr = pw
 
+	if runner.Halted() {
+		pw.Close()
+		return runner.ErrHalted
+	}
 	if err := cmd.Start(); err != nil {
 		pw.Close()
 		return err
@@ -1250,6 +1254,10 @@ func runWithSubsteps(cmd *exec.Cmd) error {
 	cmd.Stdout = pw
 	cmd.Stderr = pw
 
+	if runner.Halted() {
+		pw.Close()
+		return runner.ErrHalted
+	}
 	if err := cmd.Start(); err != nil {
 		pw.Close()
 		return err
