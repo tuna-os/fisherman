@@ -48,16 +48,18 @@ A pipeline step has started.
 - `step_name` — fisherman's English name for the step (string; see [Pipeline](#pipeline))
 - `weight_pct` — this step's share of the total install time, in percent (integer)
 - `cumulative_pct` — progress bar position at the start of this step, in percent (integer, at most 99)
+- `step_id` — stable id for the step (string; see [Pipeline](#pipeline)). Omitted for a step name that has no id.
+- `overall_pct` — the progress bar after this event, 0–100 with two decimals (number; see [Progress bar](#progress-bar))
 - `timestamp`, `elapsed_ms` — as above
 
 **Example:**
 ```json
-{"cumulative_pct":0,"elapsed_ms":2310,"step":1,"step_name":"Partitioning disk","timestamp":"2026-10-07T19:05:30.123456Z","total_steps":8,"type":"step","weight_pct":0}
-{"cumulative_pct":1,"elapsed_ms":9874,"step":5,"step_name":"Installing OS","timestamp":"2026-10-07T19:05:37.687123Z","total_steps":8,"type":"step","weight_pct":87}
+{"cumulative_pct":0,"elapsed_ms":2310,"overall_pct":0,"step":1,"step_id":"partition","step_name":"Partitioning disk","timestamp":"2026-10-07T19:05:30.123456Z","total_steps":8,"type":"step","weight_pct":0}
+{"cumulative_pct":1,"elapsed_ms":9874,"overall_pct":1,"step":5,"step_id":"install_os","step_name":"Installing OS","timestamp":"2026-10-07T19:05:37.687123Z","total_steps":8,"type":"step","weight_pct":87}
 ```
 
-**Usage:** Drive the progress bar from `cumulative_pct` and `weight_pct`. See
-[Progress bar](#progress-bar).
+**Usage:** Set the progress bar to `overall_pct`. Label the step by `step_id`.
+See [Progress bar](#progress-bar).
 
 ### `substep`
 
@@ -66,11 +68,12 @@ Progress inside the current step.
 **Fields:**
 - `type` — `"substep"`
 - `message` — status message (string)
+- `overall_pct` — the progress bar after this event, 0–100 with two decimals (number). A message that does not move the bar repeats the previous value.
 - `timestamp`, `elapsed_ms` — as above
 
 **Example:**
 ```json
-{"elapsed_ms":61210,"message":"Pulling image: layer 23/71","timestamp":"2026-10-07T19:06:29.023456Z","type":"substep"}
+{"elapsed_ms":61210,"message":"Pulling image: layer 23/71","overall_pct":17.91,"timestamp":"2026-10-07T19:06:29.023456Z","type":"substep"}
 ```
 
 Messages you will see include:
@@ -154,16 +157,17 @@ LUKS. It exits 0 right after this event.
 - `type` — `"complete"`
 - `message` — always `"Installation complete!"` (string)
 - `boot_id` — EFI boot entry number of the installed system, 4 hex digits (string, e.g. `"0001"`). Omitted when fisherman could not determine it.
+- `overall_pct` — always `100` (number)
 - `timestamp`, `elapsed_ms` — as above
 
 **Example (with boot ID):**
 ```json
-{"boot_id":"0001","elapsed_ms":512345,"message":"Installation complete!","timestamp":"2026-10-07T19:14:00.358345Z","type":"complete"}
+{"boot_id":"0001","elapsed_ms":512345,"message":"Installation complete!","overall_pct":100,"timestamp":"2026-10-07T19:14:00.358345Z","type":"complete"}
 ```
 
 **Example (without boot ID):**
 ```json
-{"elapsed_ms":512345,"message":"Installation complete!","timestamp":"2026-10-07T19:14:00.358345Z","type":"complete"}
+{"elapsed_ms":512345,"message":"Installation complete!","overall_pct":100,"timestamp":"2026-10-07T19:14:00.358345Z","type":"complete"}
 ```
 
 **Usage:** Set the bar to 100% and mark the install successful. A frontend
@@ -183,9 +187,13 @@ The install failed.
 {"elapsed_ms":45123,"message":"partitioning disk: exit status 1","timestamp":"2026-10-07T19:06:15.234567Z","type":"error"}
 ```
 
-Only `fatal()` in `cmd/fisherman/main.go` emits this event. `fatal()` writes
-the event, runs cleanup (unmounts, closes LUKS), writes
-`fisherman: fatal: <message>` to stderr, and exits 1.
+Two paths emit this event: `fatal()` in `cmd/fisherman/main.go` (any
+failure, exit 1) and a cancel (exit 130). Both go through the same teardown in
+`cmd/fisherman/terminate.go`: stop child processes, run cleanup (unmounts,
+close LUKS), then write the event, then write `fisherman: fatal: <message>`
+(or `fisherman: cancelled: <message>`) to stderr and exit. Cleanup runs before
+the event so that, if it fails, the message can say so: it then ends with
+`; cleanup failed, the target may still be mounted or unlocked: …`.
 
 The message is a short context prefix followed by the underlying error, for
 example `loading recipe: ...`, `invalid recipe: ...`,
@@ -195,7 +203,7 @@ example `loading recipe: ...`, `invalid recipe: ...`,
 validation and the host tool check all run before the first step.
 
 `error` is **not** emitted when fisherman exits 2 (unknown command) or
-panics, or when it is killed by a signal. See [Exit codes](#exit-codes).
+panics, or when it is killed with SIGKILL. See [Exit codes](#exit-codes).
 
 **Usage:** Stop and report the failure. No further events follow.
 
@@ -203,24 +211,30 @@ panics, or when it is killed by a signal. See [Exit codes](#exit-codes).
 
 The steps depend on the recipe. They run in this order:
 
-| `step_name` | When |
-|---|---|
-| `Preparing disk` | Manual layout only (`customMounts` set). Replaces partitioning, EFI, root and mounting (4 steps) with one: formats and mounts the user's partitions. |
-| `Partitioning disk` | Auto layout. Writes a 2-partition GPT (systemd-boot, ZFS) or a 3-partition GPT (GRUB2: EFI, ext4 `/boot`, root). |
-| `Formatting EFI partition` | Auto layout. Formats the FAT32 ESP and, on GRUB2 layouts, the ext4 `/boot` partition. There is no separate `/boot` step. |
-| `Setting up disk encryption` | Auto layout with encryption. LUKS format and open of the root partition. |
-| `Formatting root filesystem` | Auto layout. XFS, Btrfs, ext4 or a ZFS pool. |
-| `Mounting filesystem` | Auto layout. Mounts root, `/boot` and the ESP at the target. |
-| `Formatting data disk (/var)` | A separate `/var` disk is set and `keepExisting` is false. |
-| `Installing OS` | Always. Image pull, `bootc install to-filesystem`, bootloader. |
-| `Enrolling TPM2 auto-unlock` | `tpm2-luks` or `tpm2-luks-passphrase`. Stages TPM2 enrolment for first boot. |
-| `Copying system Flatpaks` | Always. |
-| `Configuring installed system` | Always. Hostname, user, kernel arguments, network and Bluetooth copy, caches. |
-| `Finalizing installation` | Always. fstrim, remount read-only, fsfreeze/thaw (skipped on ZFS). |
+| `step_name` | `step_id` | When |
+|---|---|---|
+| `Preparing disk` | `prepare_disk` | Manual layout only (`customMounts` set). Replaces partitioning, EFI, root and mounting (4 steps) with one: formats and mounts the user's partitions. |
+| `Partitioning disk` | `partition` | Auto layout. Writes a 2-partition GPT (systemd-boot, ZFS) or a 3-partition GPT (GRUB2: EFI, ext4 `/boot`, root). |
+| `Formatting EFI partition` | `format_efi` | Auto layout. Formats the FAT32 ESP and, on GRUB2 layouts, the ext4 `/boot` partition. There is no separate `/boot` step. |
+| `Setting up disk encryption` | `luks` | Auto layout with encryption. LUKS format and open of the root partition. |
+| `Formatting root filesystem` | `format_root` | Auto layout. XFS, Btrfs, ext4 or a ZFS pool. |
+| `Mounting filesystem` | `mount` | Auto layout. Mounts root, `/boot` and the ESP at the target. |
+| `Formatting data disk (/var)` | `format_var` | A separate `/var` disk is set and `keepExisting` is false. |
+| `Installing OS` | `install_os` | Always. Image pull, `bootc install to-filesystem`, bootloader. |
+| `Enrolling TPM2 auto-unlock` | `tpm2_enroll` | `tpm2-luks` or `tpm2-luks-passphrase`. Stages TPM2 enrolment for first boot. |
+| `Copying system Flatpaks` | `flatpaks` | Always. |
+| `Configuring installed system` | `configure` | Always. Hostname, user, kernel arguments, network and Bluetooth copy, caches. |
+| `Finalizing installation` | `finalize` | Always. fstrim, remount read-only, fsfreeze/thaw (skipped on ZFS). |
 
 Step numbers are assigned in order to the steps that run, so `step` has no
-fixed meaning. Match on `step_name`, and fall back to showing the raw name for
-names you do not know.
+fixed meaning. Match on `step_id`, and fall back to showing `step_name` for an
+id you do not know or an event without one.
+
+`step_id` is a public contract: frontends key their translated, rebrandable
+step labels on it. An id is never renamed or reused. A renamed step keeps its
+old id and a new step gets a new one. `step_name` stays fisherman's English
+name and may change. The table is `stepIDs` in
+`internal/progress/bar.go`.
 
 Manual layouts reject encryption (`recipe.Validate`), so a manual install
 never has the encryption or TPM2 steps.
@@ -242,9 +256,36 @@ The range is 5 (manual, no `/var` format) to 11 (encryption, TPM2 and a
 
 ## Progress bar
 
-**Drive the bar from `cumulative_pct` and `weight_pct`. Do not derive it from
-`step / total_steps`.** The step count changes with the recipe, and the steps
-are very unequal: most of them carry 0%.
+**Set the bar to `overall_pct`.** fisherman computes it on every `step`,
+`substep` and `complete` event (`Tracker` in `internal/progress/bar.go`), so a
+frontend only renders it. It:
+
+- never decreases;
+- stays at or below 99 until `complete`, which alone reports 100;
+- starts each step at that step's `cumulative_pct`, or holds where it is if
+  the bar is already past it;
+- moves inside a step only on the substep messages below. Any other message,
+  and any message in a 0% step, repeats the previous value.
+
+Inside a step:
+
+- `Pulling image: layer N/M` fills the first 60% of the step.
+- The bootc phases after the pull sit at fixed points in what is left of the
+  step: `Exporting image to OCI layout` 5%, `OCI export complete` 30%,
+  `Using …` 32%, `Initializing ostree layout`, `Writing …` and
+  `Deploying image` 35%, `OS deployed, installing bootloader` 90%,
+  `Detected bootloader` and `Installing bootloader` 92%,
+  `Configuring EFI boot entry`, `Configuring GRUB`, `Configuring SELinux` and
+  `Generating initramfs` 95%, `bootc installation complete` 100%. On an
+  offline install nothing is pulled, so these span the whole step.
+- `Copying Flatpak data: N%` fills the whole `Copying system Flatpaks` step.
+
+The rest of this section describes the inputs to that calculation. Before
+`overall_pct` existed, every frontend repeated it; a consumer that must also
+read an older fisherman can fall back to it.
+
+**Do not derive the bar from `step / total_steps`.** The step count changes
+with the recipe, and the steps are very unequal: most of them carry 0%.
 
 The weights come from `buildProfile` in `cmd/fisherman/main.go`. They were
 measured on a loop-device install.
@@ -272,7 +313,8 @@ no image.
 `cumulative_pct` is the sum of the weights of the steps before this one. It
 reaches at most 99, on the last step. Only `complete` means 100%.
 
-Inside a step, interpolate from substeps. For the image pull:
+Without `overall_pct`, interpolate inside a step from substeps. For the image
+pull:
 
 ```
 fraction = (cumulative_pct + (done / total) * weight_pct) / 100
@@ -301,10 +343,15 @@ looks like for each.
 | 1 | `fatal()`: any install failure, including an unreadable or invalid recipe and a missing host tool. | Ends with `error`. |
 | 1 | No arguments. Help is printed to stdout. | None. |
 | 1 | `scan` without a disk, or `scan` failed. Message on stderr. | None. |
+| 130 | Cancelled: SIGTERM, SIGINT or SIGHUP, or the parent process (the frontend's wrapper) died. Children are stopped and the target is torn down first; see [Cancelling an install](#cancelling-an-install). | Ends with `error`: `installation cancelled (SIGTERM)` (the signal name varies). |
 | 2 | The argument looks like a command, not a recipe path (a flag, or a bare word with no file behind it). Message and help on stderr and stdout. | None. |
 
 The `images` and `validate` subcommands (in `images.go` and `validate.go`)
 also exit 1 on failure. They do not emit progress events.
+
+`probe --json` (see [PROBE.md](PROBE.md)) exits 0 with its JSON on stdout, 1
+if the probe or the encoding failed, and 2 for a missing `--json` or an
+unknown argument. It does not emit progress events either.
 
 Other ways the process can end:
 
@@ -312,8 +359,9 @@ Other ways the process can end:
   `error` event is written and cleanup does not run, so mounts and the LUKS
   mapper can stay open. One explicit panic exists:
   `luks.RandomPassphrase()` panics if `crypto/rand` fails.
-- **Signals.** fisherman installs no signal handler. SIGINT, SIGTERM and
-  SIGKILL end it with the default action: no `error` event, no cleanup.
+- **Signals.** SIGTERM, SIGINT and SIGHUP cancel the install and exit 130;
+  see [Cancelling an install](#cancelling-an-install). SIGKILL cannot be
+  handled: no `error` event, no cleanup.
 - **pkexec.** Frontends run fisherman through `pkexec`. pkexec returns
   fisherman's exit code, but exits 126 when the user dismisses the
   authentication dialog and 127 when authorization fails. fisherman never
@@ -321,6 +369,44 @@ Other ways the process can end:
 
 If the stream ends without `complete` or `error`, treat the install as
 failed. Use the exit code to tell the cases apart.
+
+## Cancelling an install
+
+A frontend runs fisherman as root through `pkexec`, so it cannot signal
+fisherman itself: `kill(2)` returns `EPERM`. Instead, fisherman asks the
+kernel (`PR_SET_PDEATHSIG`) to send it SIGTERM when its parent dies. To
+cancel, kill the process you spawned. Every frontend uses the same wrapper:
+
+```sh
+bash -c 'pkexec /usr/local/bin/fisherman "$1"; exit $?' -- /path/to/recipe.json
+```
+
+Spawn it in its own process group (under Flatpak, prefix it with
+`flatpak-spawn --host`) and kill that group to cancel. Do not kill your own
+group. bash is fisherman's parent, because pkexec execs fisherman in place,
+so its death reaches fisherman. A terminal run (`sudo fisherman recipe.json`)
+behaves the same way when sudo or its shell dies.
+
+On a cancel, fisherman:
+
+1. stops its children with SIGTERM, then SIGKILL after 10 seconds;
+2. unmounts the target and closes the LUKS mapping, for at most 3 minutes;
+3. writes one `error` event, `installation cancelled (<SIGNAL>)`, with
+   `; cleanup failed, the target may still be mounted or unlocked: …` appended
+   if teardown did not finish;
+4. exits 130.
+
+A second signal during teardown is logged and ignored, so it cannot leave
+the disk half torn down. A signal that arrives after the install has
+succeeded is ignored too. When a step fails, fisherman waits 300 ms before
+exiting 1, in case the failure was the start of a cancel: a child killed
+with the group can fail a moment before fisherman sees its own SIGTERM.
+
+If fisherman cannot set the parent-death signal, it prints
+`fisherman: warning: cannot cancel on parent exit (prctl PR_SET_PDEATHSIG): …`
+to stderr and runs on. In that case, killing the wrapper leaves the install
+running. If the parent has already exited by the time the signal is set,
+fisherman cancels at once.
 
 ## Parsing example
 
@@ -338,7 +424,7 @@ for line in sys.stdin:
         continue
     kind = event.get("type")
     if kind == "step":
-        print(f"{event['cumulative_pct']}%  {event['step_name']}")
+        print(f"{event['overall_pct']}%  {event.get('step_id', event['step_name'])}")
     elif kind == "recovery_key":
         recovery_key = event["key"]  # keep it; show it before reboot
     elif kind == "error":
@@ -353,8 +439,8 @@ for line in sys.stdin:
 - Skip lines that are not JSON objects.
 - Ignore unknown event types and unknown fields.
 - Do not depend on key order.
-- Match steps by `step_name`, not by `step`.
-- Use `cumulative_pct` for the bar. Only `complete` means 100%.
+- Match steps by `step_id`, not by `step` or `step_name`.
+- Use `overall_pct` for the bar. Only `complete` means 100%.
 - Treat EOF without `complete` or `error` as a failure, and check the exit code.
 
 ## Compatibility
@@ -366,6 +452,8 @@ grown over time:
 - v0.2.0: the `substep` event; `weight_pct` and `cumulative_pct` on `step`; `timestamp` and
   `elapsed_ms` on every event; `boot_id` on `complete`.
 - v0.3.0: the `recovery_key` event and the `error` event (#195).
+- Unreleased: `overall_pct` on `step`, `substep` and `complete`, and `step_id`
+  on `step` (#270); exit code 130 on cancel (#267).
 
 New event types and fields may appear in any release. Consumers must ignore
 event types and fields they do not know.
