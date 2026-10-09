@@ -1,0 +1,10 @@
+{
+   "blockdevices": [
+      {"name": "/dev/sda", "kname": "/dev/sda", "type": "disk", "size": "256060514304", "model": "INTEL SSDSC2KW256G8", "vendor": "ATA", "tran": "sata", "rm": "0", "hotplug": "0", "ro": "0", "mountpoint": null,
+         "children": [
+            {"name": "/dev/sda2", "kname": "/dev/sda2", "type": "part", "size": "255000000000", "model": null, "vendor": null, "tran": null, "rm": "0", "hotplug": "0", "ro": "0", "mountpoint": "/"}
+         ]
+      },
+      {"name": "/dev/sdb", "kname": "/dev/sdb", "type": "disk", "size": "256060514304", "model": null, "vendor": null, "tran": "usb", "rm": "1", "hotplug": "1", "ro": "0", "mountpoint": null}
+   ]
+}
