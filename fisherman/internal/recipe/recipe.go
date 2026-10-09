@@ -1,7 +1,6 @@
 package recipe
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 )
@@ -67,6 +66,12 @@ type Recipe struct {
 	// store baked into an installer ISO). When the caller provides their own
 	// CONTAINERS_STORAGE_CONF env var, that takes priority and this field is
 	// ignored.
+	//
+	// Absent (or null): fisherman finds the offline stores on the host itself,
+	// with the same discovery as `fisherman probe` (see docs/PROBE.md). A
+	// list, including an empty one, is used exactly as given: [] opts out of
+	// discovery. The nil/empty distinction is the contract, so keep the
+	// field a plain slice decoded by encoding/json.
 	AdditionalImageStores []string `json:"additionalImageStores,omitempty"`
 	// SlurpWallpapers enables pre-partition extraction of wallpapers from an
 	// existing Windows (NTFS) partition on the target disk. The wallpapers are
@@ -159,11 +164,7 @@ func Load(path string) (*Recipe, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading recipe: %w", err)
 	}
-	var r Recipe
-	if err := json.Unmarshal(data, &r); err != nil {
-		return nil, fmt.Errorf("parsing recipe: %w", err)
-	}
-	return &r, nil
+	return Parse(data)
 }
 
 // Validate checks that the recipe fields are coherent and that the disk exists.
@@ -255,7 +256,9 @@ func (r *Recipe) Validate() error {
 	if (r.Encryption.Type == "luks-passphrase" || r.Encryption.Type == "tpm2-luks-passphrase") && r.Encryption.Passphrase == "" {
 		return fmt.Errorf("encryption.passphrase required for %s", r.Encryption.Type)
 	}
-	// image may be empty in live-ISO mode; bootc auto-detects the running container.
+	// image may be empty in live-ISO mode; bootc auto-detects the running
+	// container. Whether this host IS live media is a host fact, so that
+	// check is ValidateImage, called by the CLI with probe's answer.
 	if r.VarDisk != nil {
 		if r.VarDisk.Disk == "" {
 			return fmt.Errorf("varDisk.disk is required")

@@ -73,6 +73,7 @@ func writeValidRecipe(t *testing.T) string {
 			{Partition: rootPart, Target: "/", Fstype: "xfs"},
 			{Partition: efiPart, Target: "/boot/efi", Fstype: "fat32"},
 		},
+		Image:    "ghcr.io/example/os:stable",
 		Hostname: "testhost",
 	}
 	data, err := json.Marshal(r)

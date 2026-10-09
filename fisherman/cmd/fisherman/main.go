@@ -218,7 +218,8 @@ func printHelp() {
 
 Usage:
   fisherman <recipe.json>          run an installation from a recipe file
-  fisherman validate <recipe.json> validate a recipe without installing
+  fisherman -                      run an installation, reading the recipe JSON from stdin
+  fisherman validate <recipe.json> validate a recipe without installing ("-" reads stdin)
   fisherman images [<query>]       list or search the image catalog
   fisherman scan <disk>            scan disk for Windows data available to migrate
   fisherman probe --json           print disks, TPM, RAM/CPU/UEFI, live and offline facts
@@ -231,6 +232,7 @@ Options for 'images':
 
 Examples:
   fisherman /tmp/recipe.json
+  fisherman - < /tmp/recipe.json
   fisherman validate /tmp/recipe.json
   fisherman images
   fisherman images Bluefin
@@ -248,6 +250,9 @@ Examples:
 // command this backend does not have (`fisherman install --recipe …`, #178).
 // Naming it beats "loading recipe: open install: no such file or directory".
 func looksLikeSubcommand(arg string) bool {
+	if arg == recipe.StdinArg {
+		return false // `fisherman -`: the recipe is on stdin
+	}
 	if strings.HasPrefix(arg, "-") {
 		return true
 	}
@@ -307,11 +312,15 @@ func main() {
 	term.watchSignals()
 	term.armParentDeathCancel()
 
-	r, err := recipe.Load(os.Args[1])
+	r, err := loadRecipe(os.Args[1])
 	if err != nil {
 		fatal("loading recipe: %v", err)
 	}
 	if err := r.Validate(); err != nil {
+		fatal("invalid recipe: %v", err)
+	}
+	live, err := checkImageSource(r)
+	if err != nil {
 		fatal("invalid recipe: %v", err)
 	}
 
@@ -343,6 +352,21 @@ func main() {
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
 	isManual := len(r.CustomMounts) > 0
 	isSystemdBoot := r.Bootloader == "systemd" || r.Filesystem == "zfs"
+
+	if r.Image == "" {
+		// Only reachable on live media (checkImageSource).
+		msg := fmt.Sprintf("Live media (%s): installing the running image", live.DetectedBy)
+		if live.LiveImage != "" {
+			msg += " " + live.LiveImage
+		}
+		progress.Info(msg)
+	}
+
+	// Offline image stores: the recipe's list, or the host's when it has none.
+	imageStores, discoveredStores := resolveImageStores(r)
+	if discoveredStores && len(imageStores) > 0 {
+		progress.Info("Offline image stores found on the host: " + strings.Join(imageStores, ", "))
+	}
 
 	// ── Pre-flight: check image cache ─────────────────────────────────────────
 	var imageCheck install.ImageCheck
@@ -703,7 +727,7 @@ func main() {
 		ScratchDir:            scratchDir,
 		NeedsPull:             imageCheck.NeedsPull,
 		LayerCount:            imageCheck.LayerCount,
-		AdditionalImageStores: r.AdditionalImageStores,
+		AdditionalImageStores: imageStores,
 	}); err != nil {
 		fatal("bootc install: %v", err)
 	}
