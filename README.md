@@ -8,7 +8,7 @@
 > [tuna-os/fisherman#59](https://github.com/tuna-os/fisherman/pull/59)); pick
 > whichever home matches your distro's tooling.
 
-A universal bootc installer backend, designed to be driven by a frontend such as [tuna-installer](https://github.com/tuna-os/tuna-installer).
+A universal bootc installer backend, designed to be driven by a frontend. The GNOME, KDE, COSMIC, Niri and XFCE frontends live in [tuna-os/bootc-installer](https://github.com/tuna-os/bootc-installer), which pins this repository as a submodule.
 
 fisherman handles disk partitioning, formatting, LUKS encryption, and `bootc install to-filesystem` image installation. It works with any bootc-compatible image regardless of distro.
 
