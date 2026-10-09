@@ -1,0 +1,3 @@
+{"disk": "/dev/null", "filesystem": "btrfs", "btrfsSubvolumes": true, "hostname": "my-pc",
+ "encryption": {"type": "luks-passphrase", "passphrase": "correct horse"},
+ "user": {"username": "alice", "password": "pw", "groups": ["wheel"]}}

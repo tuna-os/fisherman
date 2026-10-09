@@ -1,0 +1,11 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "encryption.type",
+      "code": "encryption_tpm_unavailable",
+      "message": "encryption \"tpm2-luks\" needs a TPM 2.0, and this machine has none usable"
+    }
+  ]
+}
