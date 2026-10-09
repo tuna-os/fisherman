@@ -1,7 +1,10 @@
 package post_test
 
 import (
+	"errors"
 	"io"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/post"
@@ -272,5 +275,62 @@ func TestCleanup_NoLUKS(t *testing.T) {
 		if call.name == "cryptsetup" {
 			t.Errorf("unexpected cryptsetup call when no LUKS mapper registered: %v", call)
 		}
+	}
+}
+
+// TestCleanup_ReportsFailuresAndKeepsGoing verifies that Run attempts every
+// step even when one fails, and returns the failures so the caller's final
+// error event can say what was left behind.
+func TestCleanup_ReportsFailuresAndKeepsGoing(t *testing.T) {
+	rec := setupRecorder(t)
+	rec.err = errors.New("target is busy")
+	setupRemoveAllRecorder(t, rec)
+
+	var c post.Cleanup
+	c.AddMount("/mnt/target")
+	c.AddMount("/mnt/target/boot")
+	c.AddPostRemoval("/var/fisherman-tmp")
+	err := c.Run()
+	if err == nil {
+		t.Fatal("Run returned nil although every umount failed")
+	}
+	for _, want := range []string{"/mnt/target/boot", "/mnt/target", "target is busy"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+	if last := rec.calls[len(rec.calls)-1]; last.name != "removeAll" {
+		t.Errorf("post-removal skipped after umount failure; calls = %v", rec.calls)
+	}
+	if again := c.Run(); again == nil || again.Error() != err.Error() {
+		t.Errorf("second Run = %v, want the first result %v", again, err)
+	}
+}
+
+// TestCleanup_ConcurrentRunTearsDownOnce verifies that a cancel signal's Run
+// racing the pipeline's own Run unmounts each path exactly once.
+func TestCleanup_ConcurrentRunTearsDownOnce(t *testing.T) {
+	var mu sync.Mutex
+	umounts := 0
+	runner.RunFn = func(_ io.Reader, name string, _ ...string) error {
+		if name == "umount" {
+			mu.Lock()
+			umounts++
+			mu.Unlock()
+		}
+		return nil
+	}
+	t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
+
+	var c post.Cleanup
+	c.AddMount("/mnt/target")
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = c.Run() }()
+	}
+	wg.Wait()
+	if umounts != 1 {
+		t.Errorf("umount ran %d times, want 1", umounts)
 	}
 }

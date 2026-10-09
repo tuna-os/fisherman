@@ -28,6 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `install_os`, `tpm2_enroll`, `flatpaks`, `configure`, `finalize`), from one
     table in `internal/progress/bar.go`. Ids never change; `step_name` stays
     the English name.
+- **Clean cancel on SIGTERM, SIGINT and SIGHUP**: fisherman used to die at once
+  when a frontend cancelled an install, leaving the target mounted, the LUKS
+  mapping open and the `/var/fisherman-tmp` bind mount in place, with no JSON
+  event. It now stops its child processes (SIGTERM, then SIGKILL after 10 s,
+  grandchildren included), runs the same teardown as a fatal error, emits one
+  `{"type":"error","message":"installation cancelled (SIGTERM)"}` event and
+  exits with the new code **130**. Failures still exit 1 and bad usage 2. A
+  second signal during teardown is logged and ignored rather than aborting
+  it; teardown is bounded at 3 minutes instead. A teardown failure is now
+  appended to the error message (`…; cleanup failed, …`), and on the failure
+  path the `error` event is emitted after teardown rather than before it.
+- **Cancel by killing the wrapper**: frontends run fisherman as root through
+  `pkexec`, so their SIGTERM gets EPERM and never reaches it. fisherman now
+  sets `PR_SET_PDEATHSIG` to SIGTERM, so when its parent (the frontend's
+  `bash` wrapper, `sudo`, or the shell) dies, it cancels through the same path
+  and exits 130. Frontend contract: kill the wrapper you spawned, in its own
+  process group, and fisherman cancels cleanly.
 - **`fisherman probe --json`**: a read-only, no-root command that prints the
   disks (with eligibility and the reason a disk is excluded), TPM, RAM/CPU/UEFI,
   live-media and offline-store facts every installer frontend computed for
