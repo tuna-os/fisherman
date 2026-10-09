@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **`fisherman validate --json`**: every recipe problem as one JSON object,
+  `{"protocol_version":1,"valid":…,"errors":[{"field","code","message"}]}`,
+  with stable codes frontends key their copy on. Exit 0 valid, 1 invalid, 2
+  bad arguments; `-` reads the recipe from stdin. `--partial` checks only the
+  fields present and reads nothing from the machine, so a frontend can
+  validate a page as it is filled in. The plain `fisherman validate` output is
+  unchanged. Schema and codes in `docs/VALIDATE.md`.
+- **One rule set for validate and install** (`internal/recipe/rules.go`):
+  `Recipe.Problems()` reports every problem where `Validate()` still returns
+  the first, with its existing messages. New rules: the hostname (RFC 1123
+  labels, at most 64 characters), the username (at most 32 characters,
+  lowercase letter or `_` first, then `[a-z0-9_-]`, not a reserved system
+  user or group such as `root`, `wheel` or `systemd-*`), and a `tpm2-*`
+  encryption type on a machine without a usable TPM 2.0 (probe's
+  `tpm.usable`).
+- **`data/encryption-choices.json`**: the encryption types, in display order,
+  with `needs_passphrase`, `needs_tpm2` and the branding `copy_key`, generated
+  from the Go table the rules use (a test fails if they differ).
+  bootc-installer copies it to `shared/recipe/encryption-choices.json`.
+
 - **Progress events carry the finished bar position and a stable step id**:
   additive fields on the JSON progress protocol, so frontends render the bar
   instead of re-deriving it. Every existing field and event is unchanged.
@@ -51,6 +71,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself, as one JSON object. Schema and example in `docs/PROBE.md`.
 
 ### 🐛 Bug Fixes
+
+- **A bad username no longer fails after the OS is on disk**: `useradd` in
+  the configure step was the first thing to check it, so `Alice`, `root` or
+  `my user` failed the install after partitioning and the OS install. The
+  install now rejects it with the other recipe rules, before any disk step,
+  and so does the hostname (only one frontend checked it) and a TPM type with
+  no TPM 2.0 (which failed at enrolment).
 
 - **Missing supplementary groups no longer abort the install** (#231): `useradd`
   exits 6 when a `--groups` entry does not exist on the target (e.g. `libvirt` on

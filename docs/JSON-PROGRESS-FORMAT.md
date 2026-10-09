@@ -349,6 +349,11 @@ looks like for each.
 The `images` and `validate` subcommands (in `images.go` and `validate.go`)
 also exit 1 on failure. They do not emit progress events.
 
+`validate --json` (see [VALIDATE.md](VALIDATE.md)) exits 0 for a valid
+recipe, 1 for an invalid one (its problems are the JSON on stdout), and 2 for
+bad arguments. The install runs the same rules first, so an invalid recipe
+ends with an `error` event (`invalid recipe: …`) before any disk step.
+
 `probe --json` (see [PROBE.md](PROBE.md)) exits 0 with its JSON on stdout, 1
 if the probe or the encoding failed, and 2 for a missing `--json` or an
 unknown argument. It does not emit progress events either.
