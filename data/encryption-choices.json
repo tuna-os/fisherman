@@ -1,0 +1,34 @@
+{
+  "$comment": "Generated from EncryptionChoices in fisherman/internal/recipe/rules.go; do not edit. Regenerate: cd fisherman && go test ./internal/recipe -run TestEncryptionChoicesFile -update. Schema: docs/VALIDATE.md.",
+  "protocol_version": 1,
+  "choices": [
+    {
+      "type": "none",
+      "encrypted": false,
+      "needs_passphrase": false,
+      "needs_tpm2": false,
+      "copy_key": "encryption_none"
+    },
+    {
+      "type": "luks-passphrase",
+      "encrypted": true,
+      "needs_passphrase": true,
+      "needs_tpm2": false,
+      "copy_key": "encryption_luks_passphrase"
+    },
+    {
+      "type": "tpm2-luks",
+      "encrypted": true,
+      "needs_passphrase": false,
+      "needs_tpm2": true,
+      "copy_key": "encryption_tpm2_luks"
+    },
+    {
+      "type": "tpm2-luks-passphrase",
+      "encrypted": true,
+      "needs_passphrase": true,
+      "needs_tpm2": true,
+      "copy_key": "encryption_tpm2_luks_passphrase"
+    }
+  ]
+}

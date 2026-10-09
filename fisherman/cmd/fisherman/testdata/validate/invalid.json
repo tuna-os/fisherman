@@ -1,0 +1,3 @@
+{"disk": "/nonexistent/fisherman-golden-disk", "filesystem": "ntfs", "hostname": "my_pc",
+ "encryption": {"type": "tpm2-luks-passphrase", "passphrase": ""},
+ "user": {"username": "Alice", "password": "pw"}}

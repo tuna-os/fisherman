@@ -219,6 +219,8 @@ func printHelp() {
 Usage:
   fisherman <recipe.json>          run an installation from a recipe file
   fisherman validate <recipe.json> validate a recipe without installing
+  fisherman validate --json [--partial] <recipe.json|->
+                                   every problem as JSON (docs/VALIDATE.md)
   fisherman images [<query>]       list or search the image catalog
   fisherman scan <disk>            scan disk for Windows data available to migrate
   fisherman probe --json           print disks, TPM, RAM/CPU/UEFI, live and offline facts
@@ -232,6 +234,7 @@ Options for 'images':
 Examples:
   fisherman /tmp/recipe.json
   fisherman validate /tmp/recipe.json
+  echo '{"hostname":"my-pc"}' | fisherman validate --json --partial -
   fisherman images
   fisherman images Bluefin
   fisherman images "GNOME 50"
@@ -311,8 +314,10 @@ func main() {
 	if err != nil {
 		fatal("loading recipe: %v", err)
 	}
-	if err := r.Validate(); err != nil {
-		fatal("invalid recipe: %v", err)
+	// Every rule `fisherman validate` enforces, including the hostname,
+	// username and TPM checks, runs here: before any disk is touched.
+	if ps := installProblems(r); len(ps) > 0 {
+		fatal("invalid recipe: %v", ps[0])
 	}
 
 	// Recipe-level overrides for the otherwise-shared global mount paths.

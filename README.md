@@ -53,6 +53,7 @@ sudo fisherman <recipe.json>
 |---|---|---|
 | `fisherman <recipe.json>` | yes | run an installation from a recipe |
 | `fisherman validate <recipe.json>` | no | validate a recipe without installing |
+| `fisherman validate --json [--partial] <recipe.json\|->` | no | every problem as one JSON object with stable codes (hostname, username, filesystem, encryption, disk, TPM), the same rules the install enforces before touching a disk; `--partial` checks one page's fields. Schema, codes and the encryption choices file: [`docs/VALIDATE.md`](docs/VALIDATE.md) |
 | `fisherman images [<query>]` | no | list or search the image catalog |
 | `fisherman scan <disk>` | yes | scan a disk for Windows data available to migrate |
 | `fisherman probe --json` | no | print disks, TPM, RAM/CPU/UEFI, live-media and offline-store facts as one JSON object; read-only. Schema and an example: [`docs/PROBE.md`](docs/PROBE.md) |
