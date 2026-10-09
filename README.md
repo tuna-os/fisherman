@@ -8,7 +8,7 @@
 > [tuna-os/fisherman#59](https://github.com/tuna-os/fisherman/pull/59)); pick
 > whichever home matches your distro's tooling.
 
-A universal bootc installer backend, designed to be driven by a frontend such as [tuna-installer](https://github.com/tuna-os/tuna-installer).
+A universal bootc installer backend, designed to be driven by a frontend. The GNOME, KDE, COSMIC, Niri and XFCE frontends live in [tuna-os/bootc-installer](https://github.com/tuna-os/bootc-installer), which pins this repository as a submodule.
 
 fisherman handles disk partitioning, formatting, LUKS encryption, and `bootc install to-filesystem` image installation. It works with any bootc-compatible image regardless of distro.
 
@@ -46,6 +46,17 @@ When running inside a Flatpak sandbox, fisherman automatically wraps host subpro
 ```bash
 sudo fisherman <recipe.json>
 ```
+
+### Commands
+
+| Command | Root? | What it does |
+|---|---|---|
+| `fisherman <recipe.json>` | yes | run an installation from a recipe |
+| `fisherman validate <recipe.json>` | no | validate a recipe without installing |
+| `fisherman images [<query>]` | no | list or search the image catalog |
+| `fisherman scan <disk>` | yes | scan a disk for Windows data available to migrate |
+| `fisherman probe --json` | no | print disks, TPM, RAM/CPU/UEFI, live-media and offline-store facts as one JSON object; read-only. Schema and an example: [`docs/PROBE.md`](docs/PROBE.md) |
+| `fisherman version` | no | print the version |
 
 ## Recipe format
 

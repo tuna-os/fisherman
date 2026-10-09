@@ -26,6 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `bash` wrapper, `sudo`, or the shell) dies, it cancels through the same path
   and exits 130. Frontend contract: kill the wrapper you spawned, in its own
   process group, and fisherman cancels cleanly.
+- **`fisherman probe --json`**: a read-only, no-root command that prints the
+  disks (with eligibility and the reason a disk is excluded), TPM, RAM/CPU/UEFI,
+  live-media and offline-store facts every installer frontend computed for
+  itself, as one JSON object. Schema and example in `docs/PROBE.md`.
 
 ### 🐛 Bug Fixes
 

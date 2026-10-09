@@ -299,6 +299,11 @@ func writeAdditionalStoresConf(scratchDir string, stores []string) (hostPath, co
 // Returns the new args slice and a cleanup function that removes any
 // temporary file created. The cleanup function is always non-nil and safe to
 // defer immediately.
+// LiveMediaImageStore is the SuperISO offline image store. When it is
+// mounted on the host, every install exposes it to bootc, and `fisherman
+// probe` lists it among the offline stores.
+const LiveMediaImageStore = "/var/lib/superiso-store"
+
 func appendImageStoreArgs(podmanArgs []string, scratch string, opts Options) ([]string, func()) {
 	noop := func() {}
 	stores := append([]string{}, opts.AdditionalImageStores...)
@@ -306,16 +311,16 @@ func appendImageStoreArgs(podmanArgs []string, scratch string, opts Options) ([]
 	// on the host, expose it even when the recipe didn't explicitly pass
 	// AdditionalImageStores. This keeps caller-supplied storage.conf files that
 	// reference /var/lib/superiso-store working.
-	if _, err := os.Stat("/var/lib/superiso-store"); err == nil {
+	if _, err := os.Stat(LiveMediaImageStore); err == nil {
 		found := false
 		for _, s := range stores {
-			if s == "/var/lib/superiso-store" {
+			if s == LiveMediaImageStore {
 				found = true
 				break
 			}
 		}
 		if !found {
-			stores = append(stores, "/var/lib/superiso-store")
+			stores = append(stores, LiveMediaImageStore)
 		}
 	}
 	// Bind-mount each additional store read-only at its host path so any

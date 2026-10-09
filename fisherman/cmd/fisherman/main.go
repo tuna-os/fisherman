@@ -45,7 +45,16 @@ type stepProfile struct {
 // buildProfile returns per-step weight profiles based on timing data from a
 // yellowfin gnome-hwe loop-device install (264s uncached, ~111s cached).
 // Weights sum to 100. cumulativePct is the bar position at step start.
-func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) []stepProfile {
+//
+// main() reads the profile by index, one slot per progress.Step call, so the
+// slots must follow exactly the steps main() emits for this recipe. A manual
+// layout (customMounts) emits a single "Preparing disk" step in place of
+// partition/EFI/LUKS/root/mount, which takes their combined weight, and never
+// emits LUKS setup or TPM2 enrolment (both need the auto-partitioned root).
+func buildProfile(needsPull, isManual, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) []stepProfile {
+	if isManual {
+		hasLUKS, hasTPM2enrolment = false, false
+	}
 	osWeight := 87
 	flatpakWeight := 11
 	if !needsPull {
@@ -59,11 +68,16 @@ func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) [
 		osWeight--
 	}
 
-	weights := []int{0, 1} // partition, format EFI
-	if hasLUKS {
-		weights = append(weights, 1) // LUKS setup
+	var weights []int
+	if isManual {
+		weights = []int{1} // prepare disk = partition + EFI + root + mount
+	} else {
+		weights = []int{0, 1} // partition, format EFI
+		if hasLUKS {
+			weights = append(weights, 1) // LUKS setup
+		}
+		weights = append(weights, 0, 0) // format root, mount
 	}
-	weights = append(weights, 0, 0) // format root, mount
 	if hasVarDiskFormat {
 		weights = append(weights, 0) // format /var disk (fast)
 	}
@@ -207,6 +221,7 @@ Usage:
   fisherman validate <recipe.json> validate a recipe without installing
   fisherman images [<query>]       list or search the image catalog
   fisherman scan <disk>            scan disk for Windows data available to migrate
+  fisherman probe --json           print disks, TPM, RAM/CPU/UEFI, live and offline facts
   fisherman version                print version information
   fisherman help                   show this help
 
@@ -222,6 +237,7 @@ Examples:
   fisherman images "GNOME 50"
   fisherman images --plain yellowfin
   fisherman scan /dev/nvme0n1
+  fisherman probe --json
 `)
 }
 
@@ -261,6 +277,8 @@ func main() {
 	case "validate":
 		runValidate(os.Args[2:])
 		return
+	case "probe":
+		os.Exit(runProbe(os.Args[2:], os.Stdout, os.Stderr))
 	case "scan":
 		if len(os.Args) < 3 {
 			fmt.Fprintf(os.Stderr, "Usage: fisherman scan <disk>\n")
@@ -343,25 +361,13 @@ func main() {
 		}
 	}
 
-	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2, r.VarDisk != nil && !r.VarDisk.KeepExisting)
+	hasVarDisk := r.VarDisk != nil
+	profile := buildProfile(imageCheck.NeedsPull, isManual, hasEncryption, hasTPM2, hasVarDisk && !r.VarDisk.KeepExisting)
 	pi := 0 // profile index, incremented at each progress.Step call
 
-	// Compute total step count up front so the GUI can show accurate progress.
-	// Manual layouts collapse the 4 auto disk-setup steps into a single step.
-	totalSteps := 8
-	if isManual {
-		totalSteps -= 3 // partition + format EFI + format root collapse into one step
-	}
-	if hasEncryption && !isManual {
-		totalSteps++ // extra step for LUKS setup (auto mode only)
-	}
-	if hasTPM2 {
-		totalSteps++ // extra step for TPM2 enrolment (both tpm2-luks and tpm2-luks-passphrase)
-	}
-	hasVarDisk := r.VarDisk != nil
-	if hasVarDisk && !r.VarDisk.KeepExisting {
-		totalSteps++ // extra step to format the /var disk
-	}
+	// The profile has one slot per emitted step, so it is also the step count
+	// the GUI shows up front.
+	totalSteps := len(profile)
 	step := 1
 
 	// ── Immediate: Apply friendly audio names to live session ─────────────
