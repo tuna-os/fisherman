@@ -227,12 +227,14 @@ never has the encryption or TPM2 steps.
 
 ### Step count
 
-`total_steps` is computed before the first step:
+`total_steps` is computed before the first step. It is the length of the
+weight table (`len(buildProfile(...))`), so it always matches the steps that
+are emitted:
 
 - start at 8
 - minus 3 for a manual layout
 - plus 1 for encryption (auto layout only)
-- plus 1 for `tpm2-luks` or `tpm2-luks-passphrase`
+- plus 1 for `tpm2-luks` or `tpm2-luks-passphrase` (auto layout only)
 - plus 1 when a `/var` disk is formatted
 
 The range is 5 (manual, no `/var` format) to 11 (encryption, TPM2 and a
@@ -249,6 +251,7 @@ measured on a loop-device install.
 
 | `step_name` | `weight_pct`, image pulled | `weight_pct`, image cached |
 |---|---|---|
+| `Preparing disk` (manual layout) | 1 | 1 |
 | `Partitioning disk` | 0 | 0 |
 | `Formatting EFI partition` | 1 | 1 |
 | `Setting up disk encryption` | 1 | 1 |
@@ -279,11 +282,12 @@ where `done/total` comes from `Pulling image: layer done/total`. The reference
 parser gives the pull the first 60% of `Installing OS` and places the later
 bootc phases at fixed points in the rest.
 
-**Known limitation:** a manual layout (`Preparing disk`) uses the same weight
-table as an auto layout without re-indexing it, so its steps carry the wrong
-weights. For example, `Installing OS` arrives with `cumulative_pct` 0 or 1 and
-`weight_pct` 0 or 1. On a manual install the bar barely moves until
-`complete`.
+A manual layout (`Preparing disk`) has its own weight table: `Preparing disk`
+carries the combined weight of the four steps it replaces (1), so
+`Installing OS` arrives with `cumulative_pct` 1 and `weight_pct` 87 (68 when
+cached). The weights still sum to 100 and `cumulative_pct` still ends at 99 or
+below. Before fisherman #266, a manual layout reused the auto-layout table
+without re-indexing it, so its steps carried the wrong weights.
 
 ## Exit codes
 
