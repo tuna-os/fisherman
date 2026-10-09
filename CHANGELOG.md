@@ -28,6 +28,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `install_os`, `tpm2_enroll`, `flatpaks`, `configure`, `finalize`), from one
     table in `internal/progress/bar.go`. Ids never change; `step_name` stays
     the English name.
+- **`fisherman probe --json`**: a read-only, no-root command that prints the
+  disks (with eligibility and the reason a disk is excluded), TPM, RAM/CPU/UEFI,
+  live-media and offline-store facts every installer frontend computed for
+  itself, as one JSON object. Schema and example in `docs/PROBE.md`.
 
 ### 🐛 Bug Fixes
 

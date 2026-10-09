@@ -1,0 +1,35 @@
+{
+   "blockdevices": [
+      {"name": "/dev/loop0", "kname": "/dev/loop0", "type": "loop", "size": 4294967296, "model": null, "vendor": null, "tran": null, "rm": false, "hotplug": false, "ro": true, "mountpoints": ["/run/rootfsbase"]},
+      {"name": "/dev/sda", "kname": "/dev/sda", "type": "disk", "size": 500107862016, "model": "Samsung SSD 870 EVO 500GB", "vendor": "ATA     ", "tran": "sata", "rm": false, "hotplug": false, "ro": false, "mountpoints": [null],
+         "children": [
+            {"name": "/dev/sda1", "kname": "/dev/sda1", "type": "part", "size": 500106813440, "model": null, "vendor": null, "tran": null, "rm": false, "hotplug": false, "ro": false, "mountpoints": [null]}
+         ]
+      },
+      {"name": "/dev/sdb", "kname": "/dev/sdb", "type": "disk", "size": 15931539456, "model": "Ultra Fit", "vendor": "SanDisk ", "tran": "usb", "rm": true, "hotplug": true, "ro": false, "mountpoints": [null],
+         "children": [
+            {"name": "/dev/sdb1", "kname": "/dev/sdb1", "type": "part", "size": 15930490880, "model": null, "vendor": null, "tran": null, "rm": true, "hotplug": true, "ro": false, "mountpoints": ["/run/initramfs/live"]}
+         ]
+      },
+      {"name": "/dev/sdc", "kname": "/dev/sdc", "type": "disk", "size": 1000204886016, "model": "Extreme SSD", "vendor": "SanDisk ", "tran": "usb", "rm": false, "hotplug": true, "ro": false, "mountpoints": [null]},
+      {"name": "/dev/sdd", "kname": "/dev/sdd", "type": "disk", "size": 64023257088, "model": "Cruzer Blade", "vendor": "SanDisk ", "tran": "usb", "rm": true, "hotplug": true, "ro": false, "mountpoints": [null]},
+      {"name": "/dev/sr0", "kname": "/dev/sr0", "type": "rom", "size": 2147483648, "model": "DVD-RW DRW-24F1ST", "vendor": "ASUS    ", "tran": "sata", "rm": true, "hotplug": true, "ro": false, "mountpoints": [null]},
+      {"name": "/dev/zram0", "kname": "/dev/zram0", "type": "disk", "size": 8589934592, "model": null, "vendor": null, "tran": null, "rm": false, "hotplug": false, "ro": false, "mountpoints": ["[SWAP]"]},
+      {"name": "/dev/ram0", "kname": "/dev/ram0", "type": "disk", "size": 67108864, "model": null, "vendor": null, "tran": null, "rm": false, "hotplug": false, "ro": false, "mountpoints": [null]},
+      {"name": "/dev/mapper/vg-data", "kname": "/dev/dm-3", "type": "lvm", "size": 107374182400, "model": null, "vendor": null, "tran": null, "rm": false, "hotplug": false, "ro": false, "mountpoints": [null]},
+      {"name": "/dev/nvme0n1", "kname": "/dev/nvme0n1", "type": "disk", "size": 1024209543168, "model": "WD_BLACK SN850X 1000GB", "vendor": null, "tran": "nvme", "rm": false, "hotplug": false, "ro": false, "mountpoints": [null]},
+      {"name": "/dev/nvme1n1", "kname": "/dev/nvme1n1", "type": "disk", "size": 2000398934016, "model": null, "vendor": null, "tran": "nvme", "rm": false, "hotplug": false, "ro": false, "mountpoints": [null],
+         "children": [
+            {"name": "/dev/nvme1n1p1", "kname": "/dev/nvme1n1p1", "type": "part", "size": 2147483648, "model": null, "vendor": null, "tran": "nvme", "rm": false, "hotplug": false, "ro": false, "mountpoints": ["/boot/efi"]},
+            {"name": "/dev/nvme1n1p3", "kname": "/dev/nvme1n1p3", "type": "part", "size": 1998251442176, "model": null, "vendor": null, "tran": "nvme", "rm": false, "hotplug": false, "ro": false, "mountpoints": [null],
+               "children": [
+                  {"name": "/dev/mapper/luks-root", "kname": "/dev/dm-0", "type": "crypt", "size": 1998234664960, "model": null, "vendor": null, "tran": null, "rm": false, "hotplug": false, "ro": false, "mountpoints": ["/var", "/sysroot"]}
+               ]
+            }
+         ]
+      },
+      {"name": "/dev/mmcblk0", "kname": "/dev/mmcblk0", "type": "disk", "size": 31914983424, "model": null, "vendor": null, "tran": "mmc", "rm": false, "hotplug": false, "ro": false, "mountpoints": [null]},
+      {"name": "/dev/sde", "kname": "/dev/sde", "type": "disk", "size": 0, "model": "Card  Reader", "vendor": "Generic ", "tran": "usb", "rm": true, "hotplug": true, "ro": false, "mountpoints": [null]},
+      {"name": "/dev/sdf", "kname": "/dev/sdf", "type": "disk", "size": 128035676160, "model": "WP Disk", "vendor": "ATA     ", "tran": "sata", "rm": false, "hotplug": false, "ro": true, "mountpoints": [null]}
+   ]
+}
