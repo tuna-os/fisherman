@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Features
+
+- **Progress events carry the finished bar position and a stable step id**:
+  additive fields on the JSON progress protocol, so frontends render the bar
+  instead of re-deriving it. Every existing field and event is unchanged.
+  - `overall_pct` (number, 0–100, two decimals) on `step`, `substep` and
+    `complete`. It is the bar position after that event, ported from
+    bootc-installer's reference parser (`shared/progress/progress_parser.py`)
+    and checked against its golden `fraction-cases.json`: a step starts at its
+    `cumulative_pct`; `Pulling image: layer N/M` fills the first 60% of the
+    step; the post-pull bootc phases sit at fixed points in the rest; other
+    substeps hold the bar. It never decreases, stays at or below 99 until
+    `complete`, and `complete` is exactly 100.
+  - New over the reference parser: `Copying Flatpak data: N%` now moves the bar
+    across the Flatpak step's weight (11% of the bar, 29% when the image was
+    cached), where every frontend's bar used to stand still.
+  - `step_id` on `step` events: a stable snake_case id per step (`partition`,
+    `format_efi`, `luks`, `format_root`, `mount`, `prepare_disk`, `format_var`,
+    `install_os`, `tpm2_enroll`, `flatpaks`, `configure`, `finalize`), from one
+    table in `internal/progress/bar.go`. Ids never change; `step_name` stays
+    the English name.
+
 ### 🐛 Bug Fixes
 
 - **Missing supplementary groups no longer abort the install** (#231): `useradd`

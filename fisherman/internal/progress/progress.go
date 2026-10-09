@@ -4,10 +4,20 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 )
 
 var startTime = time.Now()
+
+// mu serialises event emission. Substeps arrive from more than one goroutine
+// (the bootc output relay, the Flatpak copy reporter), and overall_pct is
+// computed and written under the same lock so it is monotonic on the wire,
+// not just in the tracker.
+var (
+	mu  sync.Mutex
+	bar = NewTracker()
+)
 
 type stepEvent struct {
 	Type          string `json:"type"`
@@ -16,6 +26,11 @@ type stepEvent struct {
 	StepName      string `json:"step_name"`
 	WeightPct     int    `json:"weight_pct"`
 	CumulativePct int    `json:"cumulative_pct"`
+	// StepID is the stable id for StepName (see stepIDs); omitted for a name
+	// that is not in the table.
+	StepID string `json:"step_id,omitempty"`
+	// OverallPct is the bar position, 0-100 (see Tracker).
+	OverallPct float64 `json:"overall_pct"`
 }
 
 type infoEvent struct {
@@ -24,14 +39,16 @@ type infoEvent struct {
 }
 
 type completeEvent struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
-	BootID  string `json:"boot_id,omitempty"`
+	Type       string  `json:"type"`
+	Message    string  `json:"message"`
+	BootID     string  `json:"boot_id,omitempty"`
+	OverallPct float64 `json:"overall_pct"`
 }
 
 type substepEvent struct {
-	Type    string `json:"type"`
-	Message string `json:"message"`
+	Type       string  `json:"type"`
+	Message    string  `json:"message"`
+	OverallPct float64 `json:"overall_pct"`
 }
 
 type recoveryKeyEvent struct {
@@ -47,14 +64,19 @@ type errorEvent struct {
 // Step emits a JSON step-progress line to stdout.
 // cumulativePct is the bar position (0–100) at the start of this step.
 // weightPct is the estimated share of total install time this step occupies.
+// The event also carries step_id and overall_pct, derived here.
 func Step(step, total int, name string, cumulativePct, weightPct int) {
-	write(stepEvent{
+	mu.Lock()
+	defer mu.Unlock()
+	writeLocked(stepEvent{
 		Type:          "step",
 		Step:          step,
 		TotalSteps:    total,
 		StepName:      name,
 		WeightPct:     weightPct,
 		CumulativePct: cumulativePct,
+		StepID:        StepID(name),
+		OverallPct:    roundPct(bar.Step(step, cumulativePct, weightPct)),
 	})
 }
 
@@ -67,7 +89,13 @@ func Substep(message string) {
 	if SubstepFn != nil {
 		SubstepFn(message)
 	}
-	write(substepEvent{Type: "substep", Message: message})
+	mu.Lock()
+	defer mu.Unlock()
+	writeLocked(substepEvent{
+		Type:       "substep",
+		Message:    message,
+		OverallPct: roundPct(bar.Substep(message)),
+	})
 }
 
 // Info emits a JSON informational message to stdout.
@@ -78,8 +106,16 @@ func Info(message string) {
 // Complete emits the final JSON completion message to stdout.
 // bootID is the 4-digit EFI boot entry number (e.g. "0001"); pass an empty
 // string when it is unknown so the field is omitted from the JSON.
+// overall_pct is always 100.
 func Complete(message, bootID string) {
-	write(completeEvent{Type: "complete", Message: message, BootID: bootID})
+	mu.Lock()
+	defer mu.Unlock()
+	writeLocked(completeEvent{
+		Type:       "complete",
+		Message:    message,
+		BootID:     bootID,
+		OverallPct: roundPct(bar.Complete()),
+	})
 }
 
 // RecoveryKey emits the LUKS recovery passphrase for `tpm2-luks` installs.
@@ -99,6 +135,13 @@ func Error(message string) {
 }
 
 func write(v any) {
+	mu.Lock()
+	defer mu.Unlock()
+	writeLocked(v)
+}
+
+// writeLocked writes one event line; the caller holds mu.
+func writeLocked(v any) {
 	data, err := json.Marshal(v)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "progress: marshal error: %v\n", err)
