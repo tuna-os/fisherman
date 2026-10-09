@@ -31,6 +31,19 @@ func assertNeverStarts(t *testing.T, label string, build func() *exec.Cmd) {
 	}
 }
 
+// assertAllowed checks that the halt gate did not refuse this command.
+//
+// It asserts "not ErrHalted" rather than "cmd.Err == nil": exec.Command sets
+// cmd.Err itself when the program is not on PATH, and the hosts these tests
+// run on carry neither flatpak-spawn nor, necessarily, umount. A lookup error
+// is an environment fact; only ErrHalted is a decision by the gate.
+func assertAllowed(t *testing.T, label string, cmd *exec.Cmd) {
+	t.Helper()
+	if errors.Is(cmd.Err, ErrHalted) {
+		t.Errorf("%s: cmd.Err = %v, want the gate to allow it (teardown is allowed)", label, cmd.Err)
+	}
+}
+
 func TestHostCommand_PassesThroughBeforeHalt(t *testing.T) {
 	resetHaltForTest()
 
@@ -75,10 +88,7 @@ func TestHostCommand_AllowsTeardownAfterHalt(t *testing.T) {
 	Halt()
 	t.Cleanup(resetHaltForTest)
 
-	cmd := HostCommand("umount", "-Rl", "/mnt/root")
-	if cmd.Err != nil {
-		t.Errorf("umount after Halt: cmd.Err = %v, want nil (teardown is allowed)", cmd.Err)
-	}
+	assertAllowed(t, "umount after Halt", HostCommand("umount", "-Rl", "/mnt/root"))
 }
 
 func TestWrappedCommand_NeverStartsAfterHalt(t *testing.T) {
@@ -115,9 +125,7 @@ func TestWrappedCommand_GateSeesOriginalNameInSandbox(t *testing.T) {
 	}
 
 	tname, targs := HostArgs("umount", []string{"-Rl", "/mnt/root"})
-	if err := WrappedCommand(tname, targs...).Err; err != nil {
-		t.Errorf("wrapped umount after Halt: cmd.Err = %v, want nil (teardown is allowed)", err)
-	}
+	assertAllowed(t, "wrapped umount after Halt", WrappedCommand(tname, targs...))
 }
 
 // HostArgsWithEnv inserts --env= flags between --host and the program name,
