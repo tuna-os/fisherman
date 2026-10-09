@@ -99,6 +99,9 @@ func InFlatpak() bool { return inFlatpakFn() }
 // Replace RunFn in tests to intercept subprocess calls; restore it afterwards
 // with runner.RunFn = runner.DefaultRun.
 func DefaultRun(stdin io.Reader, name string, args ...string) error {
+	if err := checkHalted(name, args); err != nil {
+		return err
+	}
 	name, args = HostArgs(name, args)
 	cmd := exec.Command(name, args...)
 	if stdin != nil {
@@ -130,6 +133,9 @@ func RunWithStdin(stdin io.Reader, name string, args ...string) error {
 // DefaultOutput is the real implementation of Output. Tests can replace
 // OutputFn to intercept calls without executing them.
 func DefaultOutput(name string, args ...string) ([]byte, error) {
+	if err := checkHalted(name, args); err != nil {
+		return nil, err
+	}
 	name, args = HostArgs(name, args)
 	out, err := exec.Command(name, args...).Output()
 	if err != nil {
