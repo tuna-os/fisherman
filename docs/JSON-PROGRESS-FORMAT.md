@@ -183,9 +183,13 @@ The install failed.
 {"elapsed_ms":45123,"message":"partitioning disk: exit status 1","timestamp":"2026-10-07T19:06:15.234567Z","type":"error"}
 ```
 
-Only `fatal()` in `cmd/fisherman/main.go` emits this event. `fatal()` writes
-the event, runs cleanup (unmounts, closes LUKS), writes
-`fisherman: fatal: <message>` to stderr, and exits 1.
+Two paths emit this event: `fatal()` in `cmd/fisherman/main.go` (any
+failure, exit 1) and a cancel (exit 130). Both go through the same teardown in
+`cmd/fisherman/terminate.go`: stop child processes, run cleanup (unmounts,
+close LUKS), then write the event, then write `fisherman: fatal: <message>`
+(or `fisherman: cancelled: <message>`) to stderr and exit. Cleanup runs before
+the event so that, if it fails, the message can say so: it then ends with
+`; cleanup failed, the target may still be mounted or unlocked: …`.
 
 The message is a short context prefix followed by the underlying error, for
 example `loading recipe: ...`, `invalid recipe: ...`,
@@ -195,7 +199,7 @@ example `loading recipe: ...`, `invalid recipe: ...`,
 validation and the host tool check all run before the first step.
 
 `error` is **not** emitted when fisherman exits 2 (unknown command) or
-panics, or when it is killed by a signal. See [Exit codes](#exit-codes).
+panics, or when it is killed with SIGKILL. See [Exit codes](#exit-codes).
 
 **Usage:** Stop and report the failure. No further events follow.
 
@@ -301,10 +305,15 @@ looks like for each.
 | 1 | `fatal()`: any install failure, including an unreadable or invalid recipe and a missing host tool. | Ends with `error`. |
 | 1 | No arguments. Help is printed to stdout. | None. |
 | 1 | `scan` without a disk, or `scan` failed. Message on stderr. | None. |
+| 130 | Cancelled: SIGTERM, SIGINT or SIGHUP, or the parent process (the frontend's wrapper) died. Children are stopped and the target is torn down first; see [Cancelling an install](#cancelling-an-install). | Ends with `error`: `installation cancelled (SIGTERM)` (the signal name varies). |
 | 2 | The argument looks like a command, not a recipe path (a flag, or a bare word with no file behind it). Message and help on stderr and stdout. | None. |
 
 The `images` and `validate` subcommands (in `images.go` and `validate.go`)
 also exit 1 on failure. They do not emit progress events.
+
+`probe --json` (see [PROBE.md](PROBE.md)) exits 0 with its JSON on stdout, 1
+if the probe or the encoding failed, and 2 for a missing `--json` or an
+unknown argument. It does not emit progress events either.
 
 Other ways the process can end:
 
@@ -312,8 +321,9 @@ Other ways the process can end:
   `error` event is written and cleanup does not run, so mounts and the LUKS
   mapper can stay open. One explicit panic exists:
   `luks.RandomPassphrase()` panics if `crypto/rand` fails.
-- **Signals.** fisherman installs no signal handler. SIGINT, SIGTERM and
-  SIGKILL end it with the default action: no `error` event, no cleanup.
+- **Signals.** SIGTERM, SIGINT and SIGHUP cancel the install and exit 130;
+  see [Cancelling an install](#cancelling-an-install). SIGKILL cannot be
+  handled: no `error` event, no cleanup.
 - **pkexec.** Frontends run fisherman through `pkexec`. pkexec returns
   fisherman's exit code, but exits 126 when the user dismisses the
   authentication dialog and 127 when authorization fails. fisherman never
@@ -321,6 +331,44 @@ Other ways the process can end:
 
 If the stream ends without `complete` or `error`, treat the install as
 failed. Use the exit code to tell the cases apart.
+
+## Cancelling an install
+
+A frontend runs fisherman as root through `pkexec`, so it cannot signal
+fisherman itself: `kill(2)` returns `EPERM`. Instead, fisherman asks the
+kernel (`PR_SET_PDEATHSIG`) to send it SIGTERM when its parent dies. To
+cancel, kill the process you spawned. Every frontend uses the same wrapper:
+
+```sh
+bash -c 'pkexec /usr/local/bin/fisherman "$1"; exit $?' -- /path/to/recipe.json
+```
+
+Spawn it in its own process group (under Flatpak, prefix it with
+`flatpak-spawn --host`) and kill that group to cancel. Do not kill your own
+group. bash is fisherman's parent, because pkexec execs fisherman in place,
+so its death reaches fisherman. A terminal run (`sudo fisherman recipe.json`)
+behaves the same way when sudo or its shell dies.
+
+On a cancel, fisherman:
+
+1. stops its children with SIGTERM, then SIGKILL after 10 seconds;
+2. unmounts the target and closes the LUKS mapping, for at most 3 minutes;
+3. writes one `error` event, `installation cancelled (<SIGNAL>)`, with
+   `; cleanup failed, the target may still be mounted or unlocked: …` appended
+   if teardown did not finish;
+4. exits 130.
+
+A second signal during teardown is logged and ignored, so it cannot leave
+the disk half torn down. A signal that arrives after the install has
+succeeded is ignored too. When a step fails, fisherman waits 300 ms before
+exiting 1, in case the failure was the start of a cancel: a child killed
+with the group can fail a moment before fisherman sees its own SIGTERM.
+
+If fisherman cannot set the parent-death signal, it prints
+`fisherman: warning: cannot cancel on parent exit (prctl PR_SET_PDEATHSIG): …`
+to stderr and runs on. In that case, killing the wrapper leaves the install
+running. If the parent has already exited by the time the signal is set,
+fisherman cancels at once.
 
 ## Parsing example
 
