@@ -142,10 +142,13 @@ func prepareScratchDir(activeTargetMount string, liveISO bool) (string, error) {
 	}
 	if liveISO {
 		// Self-bind so bootc sees a mount point, not a plain directory.
+		// Register the mount BEFORE attempting the bind so that any error
+		// on bindMount does not leave the mount untracked (and therefore
+		// uncleanable) in cleanup.
+		cleanup.AddMount(scratchDir)
 		if err := bindMount(scratchDir, scratchDir); err != nil {
 			return "", err
 		}
-		cleanup.AddMount(scratchDir)
 		// Removal is registered as a post-removal so it runs *after* the
 		// unmount above and after the LUKS close — and crucially it still
 		// fires on the fatal() error path, where os.Exit(1) would otherwise
