@@ -4,6 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"regexp"
+)
+
+var (
+	hostnamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,62}$`)
+	usernamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,30}$`)
+	distroIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+	brewTapPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 )
 
 // Recipe describes a fisherman installation.
@@ -269,6 +277,18 @@ func (r *Recipe) Validate() error {
 	}
 	if r.Hostname == "" {
 		return fmt.Errorf("hostname is required")
+	}
+	if !hostnamePattern.MatchString(r.Hostname) {
+		return fmt.Errorf("hostname must contain only letters, digits, and hyphens, start with a letter or digit, and be at most 63 characters")
+	}
+	if r.User.Username != "" && !usernamePattern.MatchString(r.User.Username) {
+		return fmt.Errorf("user.username must start with a lowercase letter, contain only lowercase letters, digits, underscores, or hyphens, and be at most 31 characters")
+	}
+	if r.DistroID != "" && !distroIDPattern.MatchString(r.DistroID) {
+		return fmt.Errorf("distroID must start with a lowercase letter, contain only lowercase letters, digits, or hyphens, and be at most 63 characters")
+	}
+	if r.BrewTap != "" && !brewTapPattern.MatchString(r.BrewTap) {
+		return fmt.Errorf("brewTap must be an owner/name pair containing only letters, digits, dots, underscores, or hyphens")
 	}
 	return nil
 }
