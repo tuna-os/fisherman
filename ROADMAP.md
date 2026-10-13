@@ -1,6 +1,6 @@
 # fisherman Roadmap
 
-**Last updated**: 2026-09-25 | **Maintainer**: tuna-os (hanthor) / installer maintainers
+**Last updated**: 2026-10-12 | **Maintainer**: tuna-os (hanthor) / installer maintainers
 
 ---
 
@@ -57,15 +57,15 @@ against a single caller.
   (`linux/amd64`, `linux/arm64`, `CGO_ENABLED=0`). That two-step manual process
   is what shipped `v0.3.0`; `promote.yml` replaced it for everything after.
 - **Fixes reach consumers unevenly.** `wootc` pins `e2b31660` (2026-08-11) —
-  now **70 behind `dev`, 1 ahead**, so diverged rather than merely stale — and
+  now **103 behind `dev`, 1 ahead**, so diverged rather than merely stale — and
   builds fisherman from that submodule in its own CI. `aaca69d` (#161), which
   moved the root-built, `LD_PRELOAD`ed SELinux bypass shim out of predictable
   world-writable `/tmp` paths, merged on 2026-08-23 and is in the behind set.
   So the shipped Windows-hosted installer still builds the pre-fix shim.
   `bootc-installer` pinned a different upstream entirely until D1 was resolved;
   its URL now points here (tuna-os/bootc-installer#73, 2026-09-07) and its pin
-  moved to `027fa25c` (2026-08-29), **15 behind `dev`, 0 ahead**, which does
-  carry #161.
+  moved to `d9a654e` (2026-10-10), **1 behind `dev`, 0 ahead** — current — which
+  carries all security fixes including #161.
 
 **Direction of travel since 2026-08-23**, recorded because every distribution
 line has moved the wrong way while this file said the work was near-term:
@@ -73,12 +73,14 @@ line has moved the wrong way while this file said the work was near-term:
 164 → 179 → 189, `wootc` pin distance 45 → 60 → 70 (measured 08-23, 09-03,
 09-10). The one line that moved the right way is `bootc-installer`, whose pin
 went from a diverged commit reached via the fork's URL (`6092be78`, 140 behind /
-14 ahead) to a commit 15 behind `dev`.
+14 ahead) to a commit 1 behind `dev` (current, 2026-10-10).
 
 **The `prod`-distance and branch-count trend broke on 09-19**: two releases
 shipped, `prod` distance collapsed from 255 to 4, and branches dropped from 80
-to 6. The `wootc` pin distance is not re-measured here — it needs its own
-refresh (#206).
+to 6. **Measured 2026-10-12**: `wootc` pin distance now **103 behind / 1 ahead**
+(was 70 behind on 09-10). This is the divergence blocking #206 — every fix
+merged to `dev` after 2026-08-11 is absent from the Windows installer until
+the pin moves.
 
 ---
 
@@ -131,19 +133,37 @@ tuna-os/bootc-installer#73 (2026-09-07) advanced it from `6092be78` to
 `027fa25c`, so the paragraph above describes the URL realignment, not the
 current pin.
 
-### D2 — What does a consumer pin?
+### D2 — What does a consumer pin? — **PROPOSED RESOLUTION below**
 
 A release with assets, a tag, or a branch — and who is responsible for
 advancing dependents' pins when a fix lands. Today the answer differs per
 consumer, which is why security work on `dev` has no defined path into shipped
 installers.
 
-This is no longer hypothetical. #161 merged on 2026-08-23 and, eighteen days
-later, is still absent from `wootc`, the consumer that builds this repository's
+This is no longer hypothetical. #161 merged on 2026-08-23 and, 50+ days
+later, is **still absent from `wootc`**, the consumer that builds this repository's
 submodule into a shipped installer in its own CI. It reached `bootc-installer`
 only because a D1 URL fix happened to advance the pin, not because a policy
-said it should. The cost of leaving D2 open is now measured in weeks
+said it should. The cost of leaving D2 open is now measured in months
 of exposure per fix, for every fix.
+
+**Proposed resolution**: All consumers pin the latest **released semver tag** (v0.3.0,
+v0.4.0, or later). Commits landed on `dev` are assumed working once CI is green;
+they are released as a new patch or minor semver tag automatically by `promote.yml`
+within 30 minutes of reaching 30 minutes green. This creates a release train that
+consumers can track and plan against.
+
+When a fix lands on `dev` and the corresponding new release is tagged and published,
+the committer or the on-call release person advances each consumer's pin in a single
+PR to that consumer repo (moving the `fisherman` entry in `.gitmodules` from the old
+tag to the new one). This is the only way a merged fix reaches a shipped installer — no
+automated propagation, but a clear responsibility: commit-to-release happens in the
+fisherman repo, release-to-consumer happens in each consumer repo.
+
+**Status**: Ready to implement. `v0.3.0` and `v0.4.0` are published with assets.
+`bootc-installer` is already at `d9a654e` (1 commit behind current dev tip, but
+that 1 is docs). `wootc` needs to move from `e2b31660` → `v0.4.0` and resolve
+the 1-commit divergence in a single PR to `wootc` (#207).
 
 ### D3 — What is `prod` for? — **answered by the tooling, and resolved**
 
@@ -163,9 +183,9 @@ Q3 closes 2026-09-30. Every distribution row below moved away from done between
 | Item | Tracking | Status |
 |------|----------|--------|
 | ~~Dispatch `release-cut.yml` and cut `v0.3.0` from `dev` with assets~~ | #162, #205 | ✅ Done — v0.3.0 and v0.4.0 both published 2026-09-19; `promote.yml` now automates every release after |
-| State the pin policy (D2), then move `wootc`'s diverged pin onto it — this is what carries #161 into a shipped installer | #162, #206 | 🔴 Open — pin now 70 behind / 1 ahead, was 45 then 60 behind |
-| Propagate D1's answer to every surface that still contradicts it | #162 | 🟡 In progress — resolved here (#210) and in `bootc-installer` (#73); GitHub description still says MOVED, `wootc` `ROADMAP.md` still links the fork |
-| SELinux is not silently disabled on install | #160 | 🟡 In progress — #161 on `dev` and in `bootc-installer`'s pin, not in `wootc` |
+| Document the pin policy (D2) in this ROADMAP and decide (human approval) | #162, #206 | 🟡 Proposed — pin policy section added below; awaiting maintainer approval |
+| Propagate D1's answer to every surface that still contradicts it | #162 | 🟢 Mostly done — GitHub description updated; `bootc-installer` (#73) resolved; `wootc` `ROADMAP.md` still links the fork (#207) |
+| SELinux is not silently disabled on install | #160 | 🟡 In progress — #161 on `dev` and in `bootc-installer`'s pin (d9a654e); blocked entering `wootc` by D2 unresolved (#207) |
 | ~~Move `prod`~~ (D3 resolved — releases resumed, gap collapsed to 4 commits) | #205 | 🟢 Mostly done — `prod` 4 behind, 6 branches remain (down from 80); branch-backlog prune itself may still be open, see #205 |
 | Land the `plan.md` punch list: scratch-dir leak on fatal paths, generic `additionalImageStores` in place of the hardcoded `superiso-store` probe, committed-binary removal | `plan.md` | 🟡 In progress |
 
