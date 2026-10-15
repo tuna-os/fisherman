@@ -2,6 +2,7 @@ package recipe
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -64,6 +65,8 @@ const (
 	CodeUsernameInvalidChar           = "username_invalid_char"
 	CodeUsernameReserved              = "username_reserved"
 	CodeSlurpUnsupported              = "slurp_unsupported"
+	CodeDistroIDInvalid               = "distro_id_invalid"
+	CodeBrewTapInvalid                = "brew_tap_invalid"
 )
 
 // Filesystems is the set of root filesystems the auto-partition path can
@@ -225,6 +228,40 @@ func CheckUsername(u string) []Problem {
 			fmt.Sprintf("username %q is already a system user or group on the target", u)}}
 	}
 	return nil
+}
+
+// distroIDPattern and brewTapPattern bound two recipe strings the install
+// writes into generated files: distroID names /etc/<distroID>/oem/, the
+// <distroID>-oem-setup.service unit, its preset and the GRUB fallback
+// entry; brewTap is interpolated into the OEM setup shell script as
+// `brew tap <brewTap>`. Anything outside these sets (a "/" or "..", a
+// newline, a shell metacharacter, a leading "-") would let a recipe write
+// outside those paths, inject unit directives or run commands as root.
+var (
+	distroIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+	brewTapPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
+)
+
+// CheckDistroID applies the distroID rule. Empty is valid (the install uses
+// "bootc"); otherwise 1-63 characters, a lowercase letter first, then
+// lowercase letters, digits and hyphens.
+func CheckDistroID(id string) []Problem {
+	if id == "" || distroIDPattern.MatchString(id) {
+		return nil
+	}
+	return []Problem{{"distroID", CodeDistroIDInvalid,
+		fmt.Sprintf("distroID must start with a lowercase letter and contain only lowercase letters, digits and hyphens (at most 63 characters), got %q", id)}}
+}
+
+// CheckBrewTap applies the brewTap rule. Empty is valid (no tap is added);
+// otherwise an owner/name pair, each part starting with a letter or digit
+// and containing only letters, digits, ".", "_" and "-".
+func CheckBrewTap(tap string) []Problem {
+	if tap == "" || brewTapPattern.MatchString(tap) {
+		return nil
+	}
+	return []Problem{{"brewTap", CodeBrewTapInvalid,
+		fmt.Sprintf("brewTap must be an owner/name pair of letters, digits, \".\", \"_\" and \"-\", got %q", tap)}}
 }
 
 // CheckFilesystem applies the auto-layout filesystem rule.

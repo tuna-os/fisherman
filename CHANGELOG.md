@@ -92,6 +92,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   live-media and offline-store facts every installer frontend computed for
   itself, as one JSON object. Schema and example in `docs/PROBE.md`.
 
+### 🔒 Security
+
+- **`distroID` and `brewTap` are validated before use** (#299): both are
+  written as root into generated paths, unit names and the OEM setup shell
+  script (`/etc/<distroID>/oem/`, `<distroID>-oem-setup.service`,
+  `brew tap <brewTap>`), unchecked, so a recipe could traverse paths, inject
+  unit directives or run shell commands. `distroID` must match
+  `^[a-z][a-z0-9-]{0,62}$` (`distro_id_invalid`) and `brewTap` an
+  `owner/name` pair of letters, digits, `.`, `_` and `-` (`brew_tap_invalid`);
+  empty values keep their defaults.
+
 ### 🐛 Bug Fixes
 
 - **A requested data migration is refused before any disk work** (#245):

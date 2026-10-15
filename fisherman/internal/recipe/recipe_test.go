@@ -181,6 +181,48 @@ func TestValidate(t *testing.T) {
 			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs"},
 			wantErr: "hostname is required",
 		},
+		{
+			name:    "hostname rejects newline injection",
+			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "host\nroot"},
+			wantErr: `hostname "host\nroot" contains '\n'`,
+		},
+		{
+			name: "valid generated identifiers",
+			r: recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "host-1",
+				User: recipe.UserSpec{Username: "test_user-1"}, DistroID: "tuna-os", BrewTap: "ublue-os/tap"},
+		},
+		{
+			name: "username rejects option prefix",
+			r: recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "host",
+				User: recipe.UserSpec{Username: "--root"}},
+			wantErr: "must start with a lowercase letter or an underscore",
+		},
+		{
+			name: "username rejects path traversal",
+			r: recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "host",
+				User: recipe.UserSpec{Username: "../root"}},
+			wantErr: "must start with a lowercase letter or an underscore",
+		},
+		{
+			name:    "distroID rejects path traversal",
+			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "host", DistroID: "../../tmp/persist"},
+			wantErr: "distroID must start",
+		},
+		{
+			name:    "distroID rejects unit injection",
+			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "host", DistroID: "tuna\nExecStart=evil"},
+			wantErr: "distroID must start",
+		},
+		{
+			name:    "brewTap rejects shell metacharacters",
+			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "host", BrewTap: "owner/tap; touch /tmp/pwned"},
+			wantErr: "brewTap must be an owner/name pair",
+		},
+		{
+			name:    "brewTap rejects option prefix",
+			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "host", BrewTap: "--force/tap"},
+			wantErr: "brewTap must be an owner/name pair",
+		},
 	}
 
 	for _, tt := range tests {
