@@ -1,0 +1,11 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "user.username",
+      "code": "username_reserved",
+      "message": "username \"root\" is already a system user or group on the target"
+    }
+  ]
+}

@@ -184,7 +184,7 @@ func TestValidate(t *testing.T) {
 		{
 			name:    "hostname rejects newline injection",
 			r:       recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "host\nroot"},
-			wantErr: "hostname must contain only",
+			wantErr: `hostname "host\nroot" contains '\n'`,
 		},
 		{
 			name: "valid generated identifiers",
@@ -195,13 +195,13 @@ func TestValidate(t *testing.T) {
 			name: "username rejects option prefix",
 			r: recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "host",
 				User: recipe.UserSpec{Username: "--root"}},
-			wantErr: "user.username must start",
+			wantErr: "must start with a lowercase letter or an underscore",
 		},
 		{
 			name: "username rejects path traversal",
 			r: recipe.Recipe{Disk: diskPath, Filesystem: "xfs", Hostname: "host",
 				User: recipe.UserSpec{Username: "../root"}},
-			wantErr: "user.username must start",
+			wantErr: "must start with a lowercase letter or an underscore",
 		},
 		{
 			name:    "distroID rejects path traversal",

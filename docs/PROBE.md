@@ -140,6 +140,10 @@ host has it. When live, `live_image` is `.status.booted.image.image.image`
 from `bootc status --json`, the field every frontend read; empty when bootc
 fails. A non-empty `live_image` means a recipe may omit `image`.
 
+The install and `fisherman validate` use this same detection: a recipe with
+an empty `image` is rejected (`invalid recipe: image is required: …`) unless
+`is_live` would be true.
+
 ### Offline stores
 
 Candidates, in order, de-duplicated; only existing directories are kept:
@@ -154,6 +158,10 @@ Image names come from each store's `overlay-images/images.json` (or
 `vfs-images/images.json`), read directly. The frontends ran
 `podman images --root <store>`, which needs podman on the host and takes the
 store's lock; reading the index needs neither and writes nothing.
+
+An install whose recipe omits `additionalImageStores` exposes exactly
+`stores` to bootc, so a frontend no longer needs to pass them; a recipe that
+sets the field (even to `[]`) is used as given.
 
 All of these are **host** paths. Inside a Flatpak, `/etc` and `/usr` are the
 runtime's, so the host's are read under `/run/host/etc` and `/run/host/usr`

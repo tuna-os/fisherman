@@ -1,17 +1,8 @@
 package recipe
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
-	"regexp"
-)
-
-var (
-	hostnamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,62}$`)
-	usernamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,30}$`)
-	distroIDPattern = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
-	brewTapPattern  = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*$`)
 )
 
 // Recipe describes a fisherman installation.
@@ -75,6 +66,12 @@ type Recipe struct {
 	// store baked into an installer ISO). When the caller provides their own
 	// CONTAINERS_STORAGE_CONF env var, that takes priority and this field is
 	// ignored.
+	//
+	// Absent (or null): fisherman finds the offline stores on the host itself,
+	// with the same discovery as `fisherman probe` (see docs/PROBE.md). A
+	// list, including an empty one, is used exactly as given: [] opts out of
+	// discovery. The nil/empty distinction is the contract, so keep the
+	// field a plain slice decoded by encoding/json.
 	AdditionalImageStores []string `json:"additionalImageStores,omitempty"`
 	// SlurpWallpapers enables pre-partition extraction of wallpapers from an
 	// existing Windows (NTFS) partition on the target disk. The wallpapers are
@@ -167,25 +164,36 @@ func Load(path string) (*Recipe, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading recipe: %w", err)
 	}
-	var r Recipe
-	if err := json.Unmarshal(data, &r); err != nil {
-		return nil, fmt.Errorf("parsing recipe: %w", err)
-	}
-	return &r, nil
+	return Parse(data)
 }
 
-// Validate checks that the recipe fields are coherent and that the disk exists.
+// Validate checks that the recipe fields are coherent and that the disk
+// exists. It returns the first of Problems() (as a Problem), or nil.
 func (r *Recipe) Validate() error {
+	if ps := r.Problems(); len(ps) > 0 {
+		return ps[0]
+	}
+	return nil
+}
+
+// Problems runs every recipe rule (rules.go) plus the existence checks for
+// the disk, the customMounts partitions and the varDisk, and returns every
+// problem found, in a stable order: the layout first, then imageType,
+// bootloader, encryption, varDisk, hostname, user, distroID and brewTap. It
+// does not check the TPM, which needs the machine; see CheckTPM.
+func (r *Recipe) Problems() []Problem {
+	var ps []Problem
 	if len(r.CustomMounts) > 0 {
 		// Manual layout: validate each mount spec instead of the auto-partition fields.
 		hasRoot := false
 		for i, cm := range r.CustomMounts {
 			if cm.Partition == "" {
-				return fmt.Errorf("customMounts[%d]: partition is required", i)
-			}
-			if cm.Target != "swap" && cm.Target != "" {
+				ps = append(ps, Problem{fmt.Sprintf("customMounts[%d].partition", i), CodeCustomMountPartitionRequired,
+					fmt.Sprintf("customMounts[%d]: partition is required", i)})
+			} else if cm.Target != "swap" && cm.Target != "" {
 				if _, err := os.Stat(cm.Partition); err != nil {
-					return fmt.Errorf("customMounts[%d]: partition %s: %w", i, cm.Partition, err)
+					ps = append(ps, Problem{fmt.Sprintf("customMounts[%d].partition", i), CodeCustomMountPartitionNotFound,
+						fmt.Sprintf("customMounts[%d]: partition %s: %v", i, cm.Partition, err)})
 				}
 			}
 			if cm.Target == "/" {
@@ -199,13 +207,15 @@ func (r *Recipe) Validate() error {
 			// not one we accept) got exactly that: validation passed, the
 			// install died mid-flight.
 			if !isSupportedMountFstype(cm.Fstype) {
-				return fmt.Errorf("customMounts[%d]: unsupported fstype %q "+
-					"(supported: fat32, ext3, ext4, xfs, btrfs, swap, or "+
-					"\"unformatted\"/\"\" to mount without formatting)", i, cm.Fstype)
+				ps = append(ps, Problem{fmt.Sprintf("customMounts[%d].fstype", i), CodeCustomMountFstypeUnsupported,
+					fmt.Sprintf("customMounts[%d]: unsupported fstype %q "+
+						"(supported: fat32, ext3, ext4, xfs, btrfs, swap, or "+
+						"\"unformatted\"/\"\" to mount without formatting)", i, cm.Fstype)})
 			}
 		}
 		if !hasRoot {
-			return fmt.Errorf("customMounts: no root (/) partition specified")
+			ps = append(ps, Problem{"customMounts", CodeCustomMountsNoRoot,
+				"customMounts: no root (/) partition specified"})
 		}
 		// Encryption is NOT applied on the manual path: luksFormat/luksOpen run
 		// only in the auto-partition branch below, and TPM enrolment needs an
@@ -213,82 +223,50 @@ func (r *Recipe) Validate() error {
 		// manual recipe therefore produces an install that completes
 		// UNENCRYPTED while the caller believes otherwise — a security-boundary
 		// failure, so fail closed here rather than silently downgrade.
-		// (Same shape as the ZFS+LUKS rejection below.)
+		// (Same shape as the ZFS+LUKS rejection.)
 		if r.Encryption.Type != "" && r.Encryption.Type != "none" {
-			return fmt.Errorf("encryption %q is not supported with customMounts: "+
-				"manual layouts do not run luksFormat, so the install would complete "+
-				"unencrypted", r.Encryption.Type)
+			ps = append(ps, Problem{"encryption.type", CodeEncryptionUnsupportedOnManual,
+				fmt.Sprintf("encryption %q is not supported with customMounts: "+
+					"manual layouts do not run luksFormat, so the install would complete "+
+					"unencrypted", r.Encryption.Type)})
 		}
 	} else {
 		if r.Disk == "" {
-			return fmt.Errorf("disk is required")
+			ps = append(ps, Problem{"disk", CodeDiskRequired, "disk is required"})
+		} else if _, err := os.Stat(r.Disk); err != nil {
+			ps = append(ps, Problem{"disk", CodeDiskNotFound, fmt.Sprintf("disk %s: %v", r.Disk, err)})
 		}
-		if _, err := os.Stat(r.Disk); err != nil {
-			return fmt.Errorf("disk %s: %w", r.Disk, err)
-		}
-		switch r.Filesystem {
-		case "xfs", "ext4", "btrfs", "zfs":
-		default:
-			return fmt.Errorf("filesystem must be \"xfs\", \"ext4\", \"btrfs\", or \"zfs\", got %q", r.Filesystem)
-		}
-		if r.BtrfsSubvolumes && r.Filesystem != "btrfs" {
-			return fmt.Errorf("btrfsSubvolumes requires filesystem=btrfs")
-		}
-		if r.ComposeFsBackend && r.Filesystem == "xfs" {
-			return fmt.Errorf("composefs-backend requires fs-verity, which XFS does not support; use ext4 or btrfs instead")
-		}
-		if r.Filesystem == "zfs" && r.Encryption.Type != "" && r.Encryption.Type != "none" {
-			return fmt.Errorf("ZFS filesystem does not support LUKS encryption in this version")
-		}
+		ps = append(ps, CheckFilesystem(r.Filesystem)...)
+		ps = append(ps, CheckLayoutCombos(r)...)
 	}
-	switch r.ImageType {
-	case "", "bootc":
-		// ok
-	case "ostree":
-		return fmt.Errorf("imageType \"ostree\" is not yet supported; only \"bootc\" is implemented")
-	default:
-		return fmt.Errorf("imageType must be \"bootc\" (or empty), got %q", r.ImageType)
-	}
-	switch r.Bootloader {
-	case "", "grub2", "systemd":
-		// ok
-	default:
-		return fmt.Errorf("bootloader must be \"grub2\" or \"systemd\", got %q", r.Bootloader)
-	}
-	switch r.Encryption.Type {
-	case "", "none", "tpm2-luks", "luks-passphrase", "tpm2-luks-passphrase":
-	default:
-		return fmt.Errorf("encryption.type must be \"none\", \"luks-passphrase\", \"tpm2-luks\", or \"tpm2-luks-passphrase\"")
-	}
-	if (r.Encryption.Type == "luks-passphrase" || r.Encryption.Type == "tpm2-luks-passphrase") && r.Encryption.Passphrase == "" {
-		return fmt.Errorf("encryption.passphrase required for %s", r.Encryption.Type)
-	}
-	// image may be empty in live-ISO mode; bootc auto-detects the running container.
+	ps = append(ps, CheckImageType(r.ImageType)...)
+	ps = append(ps, CheckBootloader(r.Bootloader)...)
+	ps = append(ps, CheckEncryption(r.Encryption)...)
+	// image may be empty in live-ISO mode; bootc auto-detects the running
+	// container. Whether this host IS live media is a host fact, so that
+	// check is ValidateImage, called by the CLI with probe's answer.
 	if r.VarDisk != nil {
 		if r.VarDisk.Disk == "" {
-			return fmt.Errorf("varDisk.disk is required")
+			ps = append(ps, Problem{"varDisk.disk", CodeVarDiskRequired, "varDisk.disk is required"})
+		} else {
+			if _, err := os.Stat(r.VarDisk.Disk); err != nil {
+				ps = append(ps, Problem{"varDisk.disk", CodeVarDiskNotFound,
+					fmt.Sprintf("varDisk.disk %s: %v", r.VarDisk.Disk, err)})
+			}
+			if r.VarDisk.Disk == r.Disk {
+				ps = append(ps, Problem{"varDisk.disk", CodeVarDiskSameAsDisk,
+					"varDisk.disk must differ from the system disk"})
+			}
 		}
-		if _, err := os.Stat(r.VarDisk.Disk); err != nil {
-			return fmt.Errorf("varDisk.disk %s: %w", r.VarDisk.Disk, err)
-		}
-		if r.VarDisk.Disk == r.Disk {
-			return fmt.Errorf("varDisk.disk must differ from the system disk")
-		}
 	}
-	if r.Hostname == "" {
-		return fmt.Errorf("hostname is required")
-	}
-	if !hostnamePattern.MatchString(r.Hostname) {
-		return fmt.Errorf("hostname must contain only letters, digits, and hyphens, start with a letter or digit, and be at most 63 characters")
-	}
-	if r.User.Username != "" && !usernamePattern.MatchString(r.User.Username) {
-		return fmt.Errorf("user.username must start with a lowercase letter, contain only lowercase letters, digits, underscores, or hyphens, and be at most 31 characters")
-	}
-	if r.DistroID != "" && !distroIDPattern.MatchString(r.DistroID) {
-		return fmt.Errorf("distroID must start with a lowercase letter, contain only lowercase letters, digits, or hyphens, and be at most 63 characters")
-	}
-	if r.BrewTap != "" && !brewTapPattern.MatchString(r.BrewTap) {
-		return fmt.Errorf("brewTap must be an owner/name pair containing only letters, digits, dots, underscores, or hyphens")
-	}
-	return nil
+	ps = append(ps, CheckHostname(r.Hostname)...)
+	// The username used to be checked only by useradd in the configure step,
+	// after the OS was already on disk. Checking it here makes the install
+	// refuse it before partitioning.
+	ps = append(ps, CheckUsername(r.User.Username)...)
+	// distroID and brewTap end up in generated paths, unit names and a root
+	// shell script, so they are refused before any disk step too.
+	ps = append(ps, CheckDistroID(r.DistroID)...)
+	ps = append(ps, CheckBrewTap(r.BrewTap)...)
+	return ps
 }
