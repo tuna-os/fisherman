@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/tuna-os/fisherman/internal/recipe"
 )
@@ -28,13 +29,18 @@ type validateResult struct {
 var tpm2Usable = func() bool { return newProber().TPM().Usable }
 
 // installProblems is every rule an install enforces before it touches a
-// disk: the recipe rules and existence checks (recipe.Problems) plus the TPM
-// check, which needs the machine. The install path and both forms of
-// `validate` call it, so validate accepts exactly what the install accepts.
+// disk: the recipe rules and existence checks (recipe.Problems) plus the two
+// checks that need the machine, the TPM and, for an empty image, whether this
+// host booted from live media (checkImageSource). The install path and both
+// forms of `validate` call it, so validate accepts exactly what the install
+// accepts.
 func installProblems(r *recipe.Recipe) []recipe.Problem {
 	ps := r.Problems()
 	if recipe.NeedsTPM2(r.Encryption.Type) {
 		ps = append(ps, r.CheckTPM(tpm2Usable())...)
+	}
+	if _, err := checkImageSource(r); err != nil {
+		ps = append(ps, recipe.Problem{Field: "image", Code: recipe.CodeImageRequired, Message: err.Error()})
 	}
 	return ps
 }
@@ -82,7 +88,7 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	return ps, nil
 }
 
-const validateUsage = `usage: fisherman validate <recipe.json>
+const validateUsage = `usage: fisherman validate <recipe.json | ->
        fisherman validate --json [--partial] <recipe.json | ->
 
 Validate a recipe without running an installation. Needs no root and
@@ -115,7 +121,7 @@ func runValidate(args []string) {
 	}
 
 	path := fs.Arg(0)
-	r, err := recipe.Load(path)
+	r, err := loadRecipe(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "%serror:%s loading %s: %v\n", "\033[31m", "\033[0m", path, err)
 		os.Exit(1)
@@ -125,9 +131,23 @@ func runValidate(args []string) {
 		os.Exit(1)
 	}
 
+	// installProblems has already rejected an empty image off live media;
+	// this asks again only to name the running live image.
+	live, _ := checkImageSource(r)
+	if path == recipe.StdinArg {
+		path = "recipe on stdin"
+	}
+	image := r.Image
+	if image == "" {
+		image = strings.TrimSpace("(the running live image "+live.LiveImage) + ")"
+	}
+	stores, _ := resolveImageStores(r)
 	fmt.Printf("%s✓%s %s is valid\n", "\033[32m", "\033[0m", path)
 	fmt.Printf("  disk:       %s\n", r.Disk)
-	fmt.Printf("  image:      %s\n", r.Image)
+	fmt.Printf("  image:      %s\n", image)
+	if len(stores) > 0 {
+		fmt.Printf("  offline:    %s\n", strings.Join(stores, ", "))
+	}
 	fmt.Printf("  filesystem: %s\n", r.Filesystem)
 	fmt.Printf("  encryption: %s\n", r.Encryption.Type)
 	fmt.Printf("  hostname:   %s\n", r.Hostname)

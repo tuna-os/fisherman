@@ -45,6 +45,7 @@ const (
 	CodeVarDiskRequired               = "var_disk_required"
 	CodeVarDiskNotFound               = "var_disk_not_found"
 	CodeVarDiskSameAsDisk             = "var_disk_same_as_disk"
+	CodeImageRequired                 = "image_required"
 	CodeImageTypeUnsupported          = "image_type_unsupported"
 	CodeBootloaderUnsupported         = "bootloader_unsupported"
 	CodeEncryptionUnsupported         = "encryption_unsupported"

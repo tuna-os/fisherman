@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/recipe"
 )
 
@@ -97,7 +98,7 @@ func TestValidateJSONStdin(t *testing.T) {
 
 	// A whole recipe on stdin, with a usable TPM: valid.
 	out.Reset()
-	stdin = strings.NewReader(`{"disk":"/dev/null","filesystem":"xfs","hostname":"h","encryption":{"type":"tpm2-luks"}}`)
+	stdin = strings.NewReader(`{"disk":"/dev/null","image":"ghcr.io/example/os:stable","filesystem":"xfs","hostname":"h","encryption":{"type":"tpm2-luks"}}`)
 	if got := runValidateJSON([]string{"-", "--json"}, stdin, &out, &bytes.Buffer{}); got != 0 {
 		t.Fatalf("exit %d, want 0: %s", got, out.String())
 	}
@@ -141,7 +142,7 @@ func TestValidateJSONUsage(t *testing.T) {
 // TestInstallProblemsMatchesValidate: the install path and validate share one
 // function, and it adds the TPM check to recipe.Problems.
 func TestInstallProblemsTPM(t *testing.T) {
-	r := &recipe.Recipe{Disk: "/dev/null", Filesystem: "xfs", Hostname: "h", Encryption: recipe.Encryption{Type: "tpm2-luks"}}
+	r := &recipe.Recipe{Disk: "/dev/null", Image: "ghcr.io/example/os:stable", Filesystem: "xfs", Hostname: "h", Encryption: recipe.Encryption{Type: "tpm2-luks"}}
 	stubTPM(t, false)
 	if ps := installProblems(r); len(ps) != 1 || ps[0].Code != recipe.CodeEncryptionTPMUnavailable {
 		t.Errorf("no TPM: %+v", ps)
@@ -233,5 +234,26 @@ func TestInstallRejectsBadUsernameBeforeDiskWork(t *testing.T) {
 		if b, err := os.ReadFile(disk); err != nil || string(b) != "private fixture" {
 			t.Fatal("owned file changed")
 		}
+	}
+}
+
+// TestInstallProblemsEmptyImage pins the F3 rule inside installProblems, so
+// `validate --json` reports it with a code instead of only the install
+// failing: an empty image is "install the running live image" and is an
+// error on any host that did not boot from live media.
+func TestInstallProblemsEmptyImage(t *testing.T) {
+	r := &recipe.Recipe{Disk: "/dev/null", Filesystem: "xfs", Hostname: "h"}
+	old := hostLive
+	t.Cleanup(func() { hostLive = old })
+
+	hostLive = func() probe.Live { return probe.Live{} }
+	ps := installProblems(r)
+	if len(ps) != 1 || ps[0].Code != recipe.CodeImageRequired || ps[0].Field != "image" {
+		t.Errorf("not live: %+v", ps)
+	}
+
+	hostLive = func() probe.Live { return probe.Live{IsLive: true} }
+	if ps := installProblems(r); len(ps) != 0 {
+		t.Errorf("live: %+v", ps)
 	}
 }

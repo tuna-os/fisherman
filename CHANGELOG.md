@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **Recipe on stdin**: `fisherman -` and `fisherman validate -` read the recipe
+  JSON from stdin until EOF. A frontend pipes it through
+  `pkexec`/`sudo`/`flatpak-spawn --host` instead of writing a temporary file
+  that holds the LUKS passphrase and user password. Empty stdin fails with
+  `loading recipe: recipe is empty`; recipes are capped at 1 MiB. A file
+  path works as before, and a lone `-` is no longer reported as an unknown
+  command (exit 2).
+- **fisherman finds offline image stores on the host**: when a recipe omits
+  `additionalImageStores`, fisherman exposes the stores `fisherman probe`
+  reports (`$TUNA_OFFLINE_STORES`, `/etc/tuna-installer/offline-stores`,
+  `/usr/share/tuna-installer/oci-store`, `/var/lib/superiso-store`) and logs
+  them as an `info` event. Four frontends looked for these inside their
+  Flatpak sandbox, where the host's paths are not visible. A recipe that sets
+  the field (`[]` included) is used exactly as given.
+- **Empty `image` is rejected off live media**: it means "install the running
+  live image", so on a host that did not boot from live media (probe's live
+  detection: `/run/ostree-live`, `rd.live.image`/`root=live:`, or
+  `/etc/bootc-installer/live-iso-mode`) the install and `fisherman validate`
+  now fail with `invalid recipe: image is required: …` before touching a disk,
+  instead of reaching `bootc install` with nothing to install after
+  partitioning. On live media the behaviour is unchanged.
 - **`fisherman validate --json`**: every recipe problem as one JSON object,
   `{"protocol_version":1,"valid":…,"errors":[{"field","code","message"}]}`,
   with stable codes frontends key their copy on. Exit 0 valid, 1 invalid, 2
@@ -24,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user or group such as `root`, `wheel` or `systemd-*`), and a `tpm2-*`
   encryption type on a machine without a usable TPM 2.0 (probe's
   `tpm.usable`).
+  An empty `image` off live media (above) is reported as `image_required`.
 - **`data/encryption-choices.json`**: the encryption types, in display order,
   with `needs_passphrase`, `needs_tpm2` and the branding `copy_key`, generated
   from the Go table the rules use (a test fails if they differ).

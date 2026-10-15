@@ -135,6 +135,7 @@ holds both fields.
 | `customMounts[i].fstype` | one of `fat32`, `ext3`, `ext4`, `xfs`, `btrfs`, `swap`, `unformatted`, `""` | `custom_mount_fstype_unsupported` |
 | `customMounts` | one entry targets `/` | `custom_mounts_no_root` |
 | `varDisk.disk` | required, exists, differs from `disk` | `var_disk_required`, `var_disk_not_found`, `var_disk_same_as_disk` |
+| `image` | non-empty unless this host booted from live media (probe's `live.is_live`), where empty means "install the running live image". Full mode only. | `image_required` |
 | `imageType` | `""` or `bootc` | `image_type_unsupported` |
 | `bootloader` | `""`, `grub2` or `systemd` | `bootloader_unsupported` |
 | (whole recipe) | readable, valid JSON | `recipe_unreadable`, `recipe_malformed` |
