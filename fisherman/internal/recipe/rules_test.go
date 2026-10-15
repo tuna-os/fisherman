@@ -220,6 +220,15 @@ func TestCheckImageTypeAndBootloader(t *testing.T) {
 	}
 }
 
+func TestCheckSlurp(t *testing.T) {
+	if got := code(t, recipe.CheckSlurp(nil)); got != "" {
+		t.Errorf("CheckSlurp(nil) = %q, want none", got)
+	}
+	if got := code(t, recipe.CheckSlurp(&recipe.SlurpSpec{SourcePartition: "/dev/sda3"})); got != recipe.CodeSlurpUnsupported {
+		t.Errorf("CheckSlurp(set) = %q, want %q", got, recipe.CodeSlurpUnsupported)
+	}
+}
+
 // TestValidateRejectsBadUsernameBeforeInstall is the regression for the bug
 // F4 removes: useradd used to be the first thing to look at the username, in
 // the configure step after the OS was on disk. Validate() — which the install

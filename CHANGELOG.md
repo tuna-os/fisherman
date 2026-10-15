@@ -94,6 +94,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Bug Fixes
 
+- **A requested data migration is refused before any disk work** (#245):
+  `slurp` copied the selected Windows data into RAM only, and an extraction
+  error or partial copy was logged as "skipped" while the install went on to
+  partition the disk holding the source. A recipe with `slurp` now fails
+  validation (`slurp_unsupported`) in `validate` and in the install, before
+  any tool, audio, data or disk step, until a durable rescue store exists.
+  `slurpWallpapers` is unchanged.
 - **A bad username no longer fails after the OS is on disk**: `useradd` in
   the configure step was the first thing to check it, so `Alice`, `root` or
   `my user` failed the install after partitioning and the OS install. The

@@ -63,6 +63,7 @@ const (
 	CodeUsernameInvalidStart          = "username_invalid_start"
 	CodeUsernameInvalidChar           = "username_invalid_char"
 	CodeUsernameReserved              = "username_reserved"
+	CodeSlurpUnsupported              = "slurp_unsupported"
 )
 
 // Filesystems is the set of root filesystems the auto-partition path can
@@ -292,6 +293,20 @@ func CheckBootloader(b string) []Problem {
 		return []Problem{{"bootloader", CodeBootloaderUnsupported,
 			fmt.Sprintf("bootloader must be \"grub2\" or \"systemd\", got %q", b)}}
 	}
+}
+
+// CheckSlurp applies the slurp rule: a requested user-data migration is
+// refused. The extracted copy lives only in RAM (/run), an extraction error
+// or a partial copy still lets the install reach partitioning, and an
+// interruption loses the copy after the source is gone. Until there is a
+// durable rescue store, an explicit data request must stop before any disk
+// work. slurpWallpapers (best-effort wallpapers) is unaffected.
+func CheckSlurp(s *SlurpSpec) []Problem {
+	if s == nil {
+		return nil
+	}
+	return []Problem{{"slurp", CodeSlurpUnsupported,
+		"requested data migration requires a verified durable rescue store; refusing installation before disk work"}}
 }
 
 // CheckTPM applies the TPM rule: a tpm2-* encryption type needs a usable

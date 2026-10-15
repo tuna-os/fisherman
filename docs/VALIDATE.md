@@ -102,6 +102,7 @@ A rule runs when its key is present:
 |---|---|
 | `hostname` | hostname |
 | `user` with `username` | username |
+| `slurp` | slurp |
 | `filesystem` | filesystem, and its combinations with `btrfsSubvolumes`, `composeFsBackend` and `encryption.type` (absent ones count as false / none) |
 | `encryption` | encryption type, passphrase |
 | `bootloader` | bootloader |
@@ -122,6 +123,7 @@ holds both fields.
 |---|---|---|
 | `hostname` | required; at most 64 characters (the kernel's `HOST_NAME_MAX`, also systemd's limit for `/etc/hostname`); one or more dot-separated RFC 1123 labels, each 1–63 characters of ASCII letters, digits and `-`, not starting or ending with `-`. Upper case is allowed. | `hostname_required`, `hostname_too_long`, `hostname_invalid_char`, `hostname_label_empty`, `hostname_label_too_long`, `hostname_label_hyphen` |
 | `user.username` | empty is valid (no user is created). Otherwise at most 32 characters; a lowercase letter or `_` first; then lowercase letters, digits, `_` and `-`; and not a name the target already has: the base users and groups of Fedora/EL/Debian, common service accounts, the groups frontends add the first user to, and anything starting `systemd-` (`recipe.ReservedUsernames`). This is what `useradd` accepts on every image fisherman installs; it used to be checked only by `useradd` itself, in the configure step. | `username_too_long`, `username_invalid_start`, `username_invalid_char`, `username_reserved` |
+| `slurp` | absent. A requested user-data migration is refused until it has a durable rescue store: the copy lives only in RAM, an extraction error or partial copy still reached partitioning, and an interruption loses it after the source is wiped. `slurpWallpapers` is unaffected. | `slurp_unsupported` |
 | `filesystem` (auto layout) | one of `xfs`, `ext4`, `btrfs`, `zfs` (`recipe.Filesystems`) | `filesystem_unsupported` |
 | `btrfsSubvolumes` | needs `filesystem: btrfs` | `btrfs_subvolumes_require_btrfs` |
 | `composeFsBackend` | needs fs-verity, so not XFS | `composefs_requires_fsverity` |

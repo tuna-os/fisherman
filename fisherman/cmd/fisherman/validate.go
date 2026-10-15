@@ -85,6 +85,9 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 			}
 		}
 	}
+	if has("slurp") {
+		ps = append(ps, recipe.CheckSlurp(r.Slurp)...)
+	}
 	return ps, nil
 }
 
