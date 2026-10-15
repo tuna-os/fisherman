@@ -63,6 +63,26 @@ func HostArgs(name string, args []string) (string, []string) {
 	return name, args
 }
 
+// unwrapHostArgs recovers the original program name and arguments from an
+// argv that HostArgs or HostArgsWithEnv has already rewritten. For an
+// unwrapped argv it returns its input unchanged.
+//
+// The wrapped form is "flatpak-spawn --host [--env=K=V ...] <name> <args...>",
+// so the original name is the first element after the --host flag that is not
+// an --env= assignment.
+func unwrapHostArgs(name string, args []string) (string, []string) {
+	if name != "flatpak-spawn" {
+		return name, args
+	}
+	for i, a := range args {
+		if a == "--host" || strings.HasPrefix(a, "--env=") {
+			continue
+		}
+		return a, args[i+1:]
+	}
+	return name, args
+}
+
 // HostArgsWithEnv is like HostArgs but also forwards the provided env vars
 // to the host process via --env=KEY=VALUE when running inside a Flatpak.
 //
@@ -99,6 +119,9 @@ func InFlatpak() bool { return inFlatpakFn() }
 // Replace RunFn in tests to intercept subprocess calls; restore it afterwards
 // with runner.RunFn = runner.DefaultRun.
 func DefaultRun(stdin io.Reader, name string, args ...string) error {
+	if err := checkHalted(name, args); err != nil {
+		return err
+	}
 	name, args = HostArgs(name, args)
 	cmd := exec.Command(name, args...)
 	if stdin != nil {
@@ -130,6 +153,9 @@ func RunWithStdin(stdin io.Reader, name string, args ...string) error {
 // DefaultOutput is the real implementation of Output. Tests can replace
 // OutputFn to intercept calls without executing them.
 func DefaultOutput(name string, args ...string) ([]byte, error) {
+	if err := checkHalted(name, args); err != nil {
+		return nil, err
+	}
 	name, args = HostArgs(name, args)
 	out, err := exec.Command(name, args...).Output()
 	if err != nil {

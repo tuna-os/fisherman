@@ -1,0 +1,10 @@
+=== RUN   TestComposeFsMountStrategy_Issue38
+--- PASS: TestComposeFsMountStrategy_Issue38 (0.00s)
+=== RUN   TestComposeFsVsStandardMountSeparation
+--- PASS: TestComposeFsVsStandardMountSeparation (0.00s)
+=== RUN   TestBootcViaContainer_MountsSys
+--- PASS: TestBootcViaContainer_MountsSys (0.00s)
+=== RUN   TestBootcToDiskViaContainer_MountsSys
+--- PASS: TestBootcToDiskViaContainer_MountsSys (0.00s)
+PASS
+ok  	github.com/tuna-os/fisherman/internal/install	0.023s

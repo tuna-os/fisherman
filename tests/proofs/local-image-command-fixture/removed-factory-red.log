@@ -1,0 +1,11 @@
+=== RUN   TestBootcViaContainer_MountsSys
+    bootc_mount_test.go:260: default host-command path reached; private sentinel prevented execution
+    bootc_mount_test.go:264: actual command seam did not observe podman/sys args: open /tmp/TestBootcViaContainer_MountsSys1983972199/001/capture: no such file or directory 
+--- FAIL: TestBootcViaContainer_MountsSys (0.00s)
+=== RUN   TestBootcToDiskViaContainer_MountsSys
+    bootc_mount_test.go:260: default host-command path reached; private sentinel prevented execution
+    bootc_mount_test.go:264: actual command seam did not observe podman/sys args: open /tmp/TestBootcToDiskViaContainer_MountsSys4213563252/001/capture: no such file or directory 
+--- FAIL: TestBootcToDiskViaContainer_MountsSys (0.00s)
+FAIL
+FAIL	github.com/tuna-os/fisherman/internal/install	0.012s
+FAIL

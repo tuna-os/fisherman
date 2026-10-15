@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,6 +24,7 @@ import (
 // — a dedicated path under /run that avoids /var/tmp interactions — and keeps
 // --tmpfs /var/tmp for bootc's own ephemeral scratch space.
 func TestComposeFsMountStrategy_Issue38(t *testing.T) {
+	controlledMountCommands(t)
 	tmpDir := t.TempDir()
 
 	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
@@ -92,6 +94,7 @@ func TestComposeFsMountStrategy_Issue38(t *testing.T) {
 // TestComposeFsVsStandardMountSeparation verifies composefs and standard installs
 // use different mount strategies and neither panics.
 func TestComposeFsVsStandardMountSeparation(t *testing.T) {
+	controlledMountCommands(t)
 	tmpDir := t.TempDir()
 
 	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error {
@@ -156,6 +159,7 @@ func TestComposeFsVsStandardMountSeparation(t *testing.T) {
 // Without -v /sys:/sys, efibootmgr cannot read or write UEFI variables from
 // inside the bootc container, so UEFI boot entries are never updated.
 func TestBootcViaContainer_MountsSys(t *testing.T) {
+	controlledMountCommands(t)
 	tmpDir := t.TempDir()
 
 	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error { return nil }
@@ -196,6 +200,7 @@ func TestBootcViaContainer_MountsSys(t *testing.T) {
 // Both container-based install paths (bootcViaContainer and bootcToDiskViaContainer)
 // must bind-mount /sys so that efibootmgr can write firmware UEFI entries.
 func TestBootcToDiskViaContainer_MountsSys(t *testing.T) {
+	controlledMountCommands(t)
 	tmpDir := t.TempDir()
 
 	install.SkopeoExportOCIFn = func(image, destDir, tmpdir string) error { return nil }
@@ -224,4 +229,72 @@ func TestBootcToDiskViaContainer_MountsSys(t *testing.T) {
 	if !strings.Contains(output, "-v /sys:/sys") {
 		t.Errorf("bootcToDiskViaContainer missing '-v /sys:/sys' mount\ngot: %s", output)
 	}
+}
+
+// Both boundaries are mandatory. The command factory records actual calls;
+// private PATH sentinels prevent real host execution if that seam is removed.
+func controlledMountCommands(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	capture := filepath.Join(dir, "capture")
+	fallback := filepath.Join(dir, "unexpected-default-command")
+	script := filepath.Join(dir, "owned-command")
+	raw := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"" + capture + "\"\nexit 93\n"
+	if err := os.WriteFile(script, []byte(raw), 0700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"podman", "mount", "umount", "skopeo", "losetup", "flatpak-spawn"} {
+		guard := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"" + fallback + "\"\nexit 94\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(guard), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir)
+	old := install.CommandFn
+	install.CommandFn = func(name string, args ...string) *exec.Cmd {
+		return exec.Command(script, append([]string{name}, args...)...)
+	}
+	t.Cleanup(func() {
+		install.CommandFn = old
+		if _, err := os.Stat(fallback); !os.IsNotExist(err) {
+			t.Error("default host-command path reached; private sentinel prevented execution")
+		}
+		raw, err := os.ReadFile(capture)
+		if err != nil || !strings.Contains(string(raw), "podman ") || !strings.Contains(string(raw), "-v /sys:/sys") {
+			t.Errorf("actual command seam did not observe podman/sys args: %v %s", err, raw)
+		}
+	})
+}
+
+// Existing entrypoint tests already use owned bootc/podman executables, but
+// their auxiliary mount helpers formerly fell through to real host commands.
+func controlledAncillaryMountCommands(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	primary := filepath.Join(dir, "owned-ancillary")
+	fallback := filepath.Join(dir, "unexpected-default-ancillary")
+	for _, name := range []string{"mount", "umount", "losetup"} {
+		guard := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"" + fallback + "\"\nexit 94\n"
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(guard), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	script := filepath.Join(dir, "owned-command")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \""+primary+"\"\nexit 93\n"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+":"+os.Getenv("PATH"))
+	old := install.CommandFn
+	install.CommandFn = func(name string, args ...string) *exec.Cmd {
+		if name == "mount" || name == "umount" || name == "losetup" {
+			return exec.Command(script, append([]string{name}, args...)...)
+		}
+		return old(name, args...)
+	}
+	t.Cleanup(func() {
+		install.CommandFn = old
+		if _, err := os.Stat(fallback); !os.IsNotExist(err) {
+			t.Error("default ancillary command reached; private sentinel prevented host mutation")
+		}
+	})
 }

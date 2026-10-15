@@ -1,0 +1,1 @@
+{"hostname": "my-pc", "user": {"username": "alice"}, "tpm-and-disk-are-ignored": true, "disk": "/nonexistent", "encryption": {"type": "tpm2-luks"}}

@@ -1,0 +1,211 @@
+{
+  "protocol_version": 1,
+  "disks": [
+    {
+      "path": "/dev/loop0",
+      "size_bytes": 4294967296,
+      "size_label": "4 GiB",
+      "model": "",
+      "vendor": "",
+      "transport": "",
+      "transport_label": "",
+      "removable": false,
+      "read_only": true,
+      "eligible": false,
+      "excluded_reason": "loop"
+    },
+    {
+      "path": "/dev/sda",
+      "size_bytes": 500107862016,
+      "size_label": "465.8 GiB",
+      "model": "Samsung SSD 870 EVO 500GB",
+      "vendor": "ATA",
+      "transport": "sata",
+      "transport_label": "SATA",
+      "removable": false,
+      "read_only": false,
+      "eligible": true
+    },
+    {
+      "path": "/dev/sdb",
+      "size_bytes": 15931539456,
+      "size_label": "14.8 GiB",
+      "model": "Ultra Fit",
+      "vendor": "SanDisk",
+      "transport": "usb",
+      "transport_label": "USB",
+      "removable": true,
+      "read_only": false,
+      "eligible": false,
+      "excluded_reason": "boot_disk"
+    },
+    {
+      "path": "/dev/sdc",
+      "size_bytes": 1000204886016,
+      "size_label": "931.5 GiB",
+      "model": "Extreme SSD",
+      "vendor": "SanDisk",
+      "transport": "usb",
+      "transport_label": "USB",
+      "removable": true,
+      "read_only": false,
+      "eligible": true
+    },
+    {
+      "path": "/dev/sdd",
+      "size_bytes": 64023257088,
+      "size_label": "59.6 GiB",
+      "model": "Cruzer Blade",
+      "vendor": "SanDisk",
+      "transport": "usb",
+      "transport_label": "USB",
+      "removable": true,
+      "read_only": false,
+      "eligible": true
+    },
+    {
+      "path": "/dev/sr0",
+      "size_bytes": 2147483648,
+      "size_label": "2 GiB",
+      "model": "DVD-RW DRW-24F1ST",
+      "vendor": "ASUS",
+      "transport": "sata",
+      "transport_label": "SATA",
+      "removable": true,
+      "read_only": false,
+      "eligible": false,
+      "excluded_reason": "optical"
+    },
+    {
+      "path": "/dev/zram0",
+      "size_bytes": 8589934592,
+      "size_label": "8 GiB",
+      "model": "",
+      "vendor": "",
+      "transport": "",
+      "transport_label": "",
+      "removable": false,
+      "read_only": false,
+      "eligible": false,
+      "excluded_reason": "zram"
+    },
+    {
+      "path": "/dev/ram0",
+      "size_bytes": 67108864,
+      "size_label": "64 MiB",
+      "model": "",
+      "vendor": "",
+      "transport": "",
+      "transport_label": "",
+      "removable": false,
+      "read_only": false,
+      "eligible": false,
+      "excluded_reason": "ram"
+    },
+    {
+      "path": "/dev/mapper/vg-data",
+      "size_bytes": 107374182400,
+      "size_label": "100 GiB",
+      "model": "",
+      "vendor": "",
+      "transport": "",
+      "transport_label": "",
+      "removable": false,
+      "read_only": false,
+      "eligible": false,
+      "excluded_reason": "device_mapper"
+    },
+    {
+      "path": "/dev/nvme0n1",
+      "size_bytes": 1024209543168,
+      "size_label": "953.9 GiB",
+      "model": "WD_BLACK SN850X 1000GB",
+      "vendor": "",
+      "transport": "nvme",
+      "transport_label": "NVMe",
+      "removable": false,
+      "read_only": false,
+      "eligible": true
+    },
+    {
+      "path": "/dev/nvme1n1",
+      "size_bytes": 2000398934016,
+      "size_label": "1.8 TiB",
+      "model": "",
+      "vendor": "",
+      "transport": "nvme",
+      "transport_label": "NVMe",
+      "removable": false,
+      "read_only": false,
+      "eligible": false,
+      "excluded_reason": "boot_disk"
+    },
+    {
+      "path": "/dev/mmcblk0",
+      "size_bytes": 31914983424,
+      "size_label": "29.7 GiB",
+      "model": "",
+      "vendor": "",
+      "transport": "mmc",
+      "transport_label": "MMC",
+      "removable": false,
+      "read_only": false,
+      "eligible": false,
+      "excluded_reason": "too_small"
+    },
+    {
+      "path": "/dev/sde",
+      "size_bytes": 0,
+      "size_label": "0 B",
+      "model": "Card Reader",
+      "vendor": "Generic",
+      "transport": "usb",
+      "transport_label": "USB",
+      "removable": true,
+      "read_only": false,
+      "eligible": false,
+      "excluded_reason": "too_small"
+    },
+    {
+      "path": "/dev/sdf",
+      "size_bytes": 128035676160,
+      "size_label": "119.2 GiB",
+      "model": "WP Disk",
+      "vendor": "ATA",
+      "transport": "sata",
+      "transport_label": "SATA",
+      "removable": false,
+      "read_only": true,
+      "eligible": false,
+      "excluded_reason": "read_only"
+    }
+  ],
+  "tpm": {
+    "present": true,
+    "version": "2.0",
+    "usable": true
+  },
+  "system": {
+    "ram_bytes": 16694403072,
+    "cpu_threads": 8,
+    "cpu_cores": 4,
+    "uefi": true,
+    "meets_requirements": true,
+    "unmet": []
+  },
+  "live": {
+    "is_live": true,
+    "live_image": "ghcr.io/example/os:stable",
+    "detected_by": "cmdline:root=live:"
+  },
+  "offline": {
+    "stores": [
+      "/usr/share/tuna-installer/oci-store"
+    ],
+    "images": [
+      "ghcr.io/example/os:stable",
+      "ghcr.io/example/os:beta",
+      "localhost/os:beta"
+    ]
+  }
+}

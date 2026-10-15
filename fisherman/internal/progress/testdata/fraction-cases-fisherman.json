@@ -1,0 +1,215 @@
+{
+  "_comment": "fisherman-only cases for what overall_pct does beyond bootc-installer's shared/progress/progress_parser.py: it interpolates 'Copying Flatpak data: N%' across the Flatpak step and holds the bar below 100 until complete. Written by hand; fraction-cases.json next to it is the reference parser's own output and stays byte-identical with bootc-installer. `bar` is the fraction (0-1) after each event.",
+  "cases": [
+    {
+      "name": "flatpak_copy_interpolates_across_its_step",
+      "events": [
+        {
+          "type": "step",
+          "step": 5,
+          "total_steps": 8,
+          "step_name": "Installing OS",
+          "cumulative_pct": 1,
+          "weight_pct": 87
+        },
+        {
+          "type": "substep",
+          "message": "bootc installation complete"
+        },
+        {
+          "type": "step",
+          "step": 6,
+          "total_steps": 8,
+          "step_name": "Copying system Flatpaks",
+          "cumulative_pct": 88,
+          "weight_pct": 11
+        },
+        {
+          "type": "substep",
+          "message": "Found 3/3 wanted apps in system install"
+        },
+        {
+          "type": "substep",
+          "message": "Copying 3 Flatpak apps (1.2 GB)"
+        },
+        {
+          "type": "substep",
+          "message": "Copying Flatpak data: 5%"
+        },
+        {
+          "type": "substep",
+          "message": "Copying Flatpak data: 50%"
+        },
+        {
+          "type": "substep",
+          "message": "Copying Flatpak data: 100%"
+        },
+        {
+          "type": "substep",
+          "message": "Copied 3 Flatpak apps"
+        },
+        {
+          "type": "step",
+          "step": 7,
+          "total_steps": 8,
+          "step_name": "Configuring installed system",
+          "cumulative_pct": 99,
+          "weight_pct": 0
+        },
+        {
+          "type": "step",
+          "step": 8,
+          "total_steps": 8,
+          "step_name": "Finalizing installation",
+          "cumulative_pct": 99,
+          "weight_pct": 1
+        },
+        {
+          "type": "complete",
+          "message": "done"
+        }
+      ],
+      "bar": [
+        0.01,
+        0.88,
+        0.88,
+        0.88,
+        0.88,
+        0.8855,
+        0.935,
+        0.99,
+        0.99,
+        0.99,
+        0.99,
+        1.0
+      ]
+    },
+    {
+      "name": "cached_install_flatpak_copy_never_moves_back",
+      "events": [
+        {
+          "type": "step",
+          "step": 5,
+          "total_steps": 8,
+          "step_name": "Installing OS",
+          "cumulative_pct": 1,
+          "weight_pct": 68
+        },
+        {
+          "type": "substep",
+          "message": "Deploying image"
+        },
+        {
+          "type": "step",
+          "step": 6,
+          "total_steps": 8,
+          "step_name": "Copying system Flatpaks",
+          "cumulative_pct": 69,
+          "weight_pct": 29
+        },
+        {
+          "type": "substep",
+          "message": "Copying Flatpak data: 10%"
+        },
+        {
+          "type": "substep",
+          "message": "Copying Flatpak data: 4%"
+        },
+        {
+          "type": "substep",
+          "message": "Copying Flatpak data: 60%"
+        },
+        {
+          "type": "substep",
+          "message": "Copying Flatpak data: 100%"
+        },
+        {
+          "type": "step",
+          "step": 7,
+          "total_steps": 8,
+          "step_name": "Configuring installed system",
+          "cumulative_pct": 98,
+          "weight_pct": 0
+        }
+      ],
+      "bar": [
+        0.01,
+        0.248,
+        0.69,
+        0.719,
+        0.719,
+        0.864,
+        0.98,
+        0.98
+      ]
+    },
+    {
+      "name": "flatpak_copy_over_100_percent_clamps_to_the_step",
+      "events": [
+        {
+          "type": "step",
+          "step": 6,
+          "total_steps": 8,
+          "step_name": "Copying system Flatpaks",
+          "cumulative_pct": 88,
+          "weight_pct": 11
+        },
+        {
+          "type": "substep",
+          "message": "Copying Flatpak data: 250%"
+        }
+      ],
+      "bar": [
+        0.88,
+        0.99
+      ]
+    },
+    {
+      "name": "flatpak_copy_in_a_zero_weight_step_holds_the_bar",
+      "events": [
+        {
+          "type": "step",
+          "step": 4,
+          "total_steps": 8,
+          "step_name": "Mounting filesystem",
+          "cumulative_pct": 1,
+          "weight_pct": 0
+        },
+        {
+          "type": "substep",
+          "message": "Copying Flatpak data: 50%"
+        }
+      ],
+      "bar": [
+        0.01,
+        0.01
+      ]
+    },
+    {
+      "name": "the_bar_stays_below_100_until_complete",
+      "events": [
+        {
+          "type": "step",
+          "step": 8,
+          "total_steps": 8,
+          "step_name": "Finalizing installation",
+          "cumulative_pct": 99,
+          "weight_pct": 1
+        },
+        {
+          "type": "substep",
+          "message": "bootc installation complete"
+        },
+        {
+          "type": "complete",
+          "message": "done"
+        }
+      ],
+      "bar": [
+        0.99,
+        0.99,
+        1.0
+      ]
+    }
+  ]
+}

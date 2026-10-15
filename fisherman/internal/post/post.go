@@ -2,12 +2,14 @@ package post
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -26,15 +28,32 @@ var RemoveAllFn = os.RemoveAll
 
 // Cleanup tracks mounted filesystems and an open LUKS device so they can be
 // torn down in the correct order on both success and error paths.
+//
+// It is safe for concurrent use: a cancel signal runs Run on the signal
+// goroutine while the install pipeline may still be registering resources or
+// reaching its own Run on the main goroutine. Run holds the lock for the
+// whole teardown, so a second caller waits for the first to finish and then
+// gets the same result instead of tearing down a half-torn-down disk.
 type Cleanup struct {
+	mu           sync.Mutex
 	mounts       []string
 	postRemovals []string
 	luksMapper   string
 	done         bool
+	err          error
 }
 
-func (c *Cleanup) AddMount(path string) { c.mounts = append(c.mounts, path) }
-func (c *Cleanup) SetLUKS(name string)  { c.luksMapper = name }
+func (c *Cleanup) AddMount(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.mounts = append(c.mounts, path)
+}
+
+func (c *Cleanup) SetLUKS(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.luksMapper = name
+}
 
 // AddPostRemoval registers a path to be removed after all unmounts and the
 // LUKS device close have completed. Use this for scratch directories whose
@@ -42,17 +61,27 @@ func (c *Cleanup) SetLUKS(name string)  { c.luksMapper = name }
 // post-install step has run — including the fatal-error path, where
 // os.Exit(1) would otherwise skip a deferred RemoveAll.
 func (c *Cleanup) AddPostRemoval(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.postRemovals = append(c.postRemovals, path)
 }
 
 // Run unmounts all registered mount points in reverse order, then closes any
 // open LUKS device, then deletes any registered post-removal paths. It is
-// idempotent.
-func (c *Cleanup) Run() {
+// idempotent: only the first call does any work, and every call returns the
+// first call's result.
+//
+// Every step is attempted even when an earlier one fails. Failures are
+// printed to stderr as they happen and returned joined, so the caller can
+// say in its final message what was left behind.
+func (c *Cleanup) Run() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.done {
-		return
+		return c.err
 	}
 	c.done = true
+	var errs []error
 	for i := len(c.mounts) - 1; i >= 0; i-- {
 		mp := c.mounts[i]
 		// Use lazy recursive unmount so that busy mounts (e.g. held by
@@ -61,6 +90,7 @@ func (c *Cleanup) Run() {
 		// fallback in internal/disk/partition.go:unmountAll().
 		if err := runner.Run("umount", "-Rl", mp); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: unmounting %s: %v\n", mp, err)
+			errs = append(errs, fmt.Errorf("unmounting %s: %w", mp, err))
 		}
 	}
 	if c.luksMapper != "" {
@@ -81,6 +111,7 @@ func (c *Cleanup) Run() {
 		// Now close the LUKS device.
 		if err := luks.Close(c.luksMapper); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: closing LUKS device %s: %v\n", c.luksMapper, err)
+			errs = append(errs, fmt.Errorf("closing LUKS device %s: %w", c.luksMapper, err))
 		}
 	}
 	// Post-removals run last so any path that was bind-mounted into the target
@@ -88,8 +119,11 @@ func (c *Cleanup) Run() {
 	for _, p := range c.postRemovals {
 		if err := RemoveAllFn(p); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: removing %s: %v\n", p, err)
+			errs = append(errs, fmt.Errorf("removing %s: %w", p, err))
 		}
 	}
+	c.err = errors.Join(errs...)
+	return c.err
 }
 
 // DefaultComposeFsDeployEtcDir finds the writable /etc directory for the

@@ -1,0 +1,11 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "hostname",
+      "code": "hostname_label_hyphen",
+      "message": "hostname label \"-router\" starts or ends with a hyphen"
+    }
+  ]
+}

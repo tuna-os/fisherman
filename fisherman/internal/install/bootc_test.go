@@ -308,6 +308,7 @@ func TestSkopeoExportOCI_FnIsReplaceable(t *testing.T) {
 }
 
 func TestBootcInstall_DirectComposeFsExportsOCI(t *testing.T) {
+	controlledAncillaryMountCommands(t)
 	tmpDir := t.TempDir()
 	bootcPath := tmpDir + "/bootc"
 	if err := os.WriteFile(bootcPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
@@ -346,6 +347,7 @@ func TestBootcInstall_DirectComposeFsExportsOCI(t *testing.T) {
 }
 
 func TestBootcInstall_DirectComposeFsUsesCustomScratchDir(t *testing.T) {
+	controlledAncillaryMountCommands(t)
 	tmpDir := t.TempDir()
 	bootcPath := tmpDir + "/bootc"
 	if err := os.WriteFile(bootcPath, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
@@ -541,6 +543,7 @@ func TestInjectStorageTmpDir(t *testing.T) {
 // test for the bug where exportComposefsOCIIfNeeded returned nil for
 // non-composefs, causing "oci-cache/index.json: no such file or directory".
 func TestBootcInstall_NonComposefsContainerExportsOCI(t *testing.T) {
+	controlledAncillaryMountCommands(t)
 	// Non-composefs only exports to an OCI layout when it redirects podman
 	// storage to the target disk, which happens when the default store is
 	// space-constrained. Force that path so the test is deterministic
@@ -615,6 +618,7 @@ func TestBootcInstall_NonComposefsContainerExportsOCI(t *testing.T) {
 // the OCI export is NOT called.  Bootc reads from containers-storage on the
 // host; no OCI layout is needed.
 func TestBootcInstall_NonComposefsDirectSkipsOCIExport(t *testing.T) {
+	controlledAncillaryMountCommands(t)
 	tmpDir := t.TempDir()
 
 	// Fake bootc for direct mode.
@@ -654,6 +658,7 @@ func TestBootcInstall_NonComposefsDirectSkipsOCIExport(t *testing.T) {
 // run the host's bootc against the live store -- no OCI export and no podman,
 // which on an 8 GiB Utah live ISO was OOM-killed.
 func TestBootcInstall_LocalSourceInstallsDirectly(t *testing.T) {
+	controlledAncillaryMountCommands(t)
 	defer install.SetHostHasBootcForTest(true)()
 	defer install.SetStorageSpaceConstrainedForTest(true)()
 	defer install.SetSelectStorageDriverForTest("overlay", "forced for test")()

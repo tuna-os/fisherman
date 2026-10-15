@@ -16,6 +16,15 @@ import (
 	"github.com/tuna-os/fisherman/internal/runner"
 )
 
+// CommandFn constructs owned host subprocesses from an argv that has already
+// been through runner.HostArgs. The default is runner.WrappedCommand, which
+// applies the halt gate so a subprocess started here cannot outlive
+// runner.Halt — these are the podman, bootc and skopeo invocations a cancel
+// most needs to stop. Argv-only controls replace it and retain a private
+// PATH guard as a second safety boundary, so removing the test seam cannot
+// invoke host installers.
+var CommandFn = runner.WrappedCommand
+
 // selinuxBypassCSrc is a minimal LD_PRELOAD shim that silently succeeds
 // for security.selinux xattr writes. It is compiled at runtime and injected
 // into the bootc container when installing a cross-distro image (e.g.
@@ -294,6 +303,11 @@ func writeAdditionalStoresConf(scratchDir string, stores []string) (hostPath, co
 // Returns the new args slice and a cleanup function that removes any
 // temporary file created. The cleanup function is always non-nil and safe to
 // defer immediately.
+// LiveMediaImageStore is the SuperISO offline image store. When it is
+// mounted on the host, every install exposes it to bootc, and `fisherman
+// probe` lists it among the offline stores.
+const LiveMediaImageStore = "/var/lib/superiso-store"
+
 func appendImageStoreArgs(podmanArgs []string, scratch string, opts Options) ([]string, func()) {
 	noop := func() {}
 	stores := append([]string{}, opts.AdditionalImageStores...)
@@ -301,16 +315,16 @@ func appendImageStoreArgs(podmanArgs []string, scratch string, opts Options) ([]
 	// on the host, expose it even when the recipe didn't explicitly pass
 	// AdditionalImageStores. This keeps caller-supplied storage.conf files that
 	// reference /var/lib/superiso-store working.
-	if _, err := os.Stat("/var/lib/superiso-store"); err == nil {
+	if _, err := os.Stat(LiveMediaImageStore); err == nil {
 		found := false
 		for _, s := range stores {
-			if s == "/var/lib/superiso-store" {
+			if s == LiveMediaImageStore {
 				found = true
 				break
 			}
 		}
 		if !found {
-			stores = append(stores, "/var/lib/superiso-store")
+			stores = append(stores, LiveMediaImageStore)
 		}
 	}
 	// Bind-mount each additional store read-only at its host path so any
@@ -362,7 +376,7 @@ func BootcInstall(opts Options) error {
 // image). A package var so tests do not depend on the machine running them.
 var hostHasBootcFn = func() bool {
 	name, args := runner.HostArgs("bootc", []string{"--version"})
-	return exec.Command(name, args...).Run() == nil
+	return CommandFn(name, args...).Run() == nil
 }
 
 // useDirectForLocalSource decides whether a non-composefs install from an
@@ -409,6 +423,10 @@ func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
 // bootcViaContainer runs bootc from inside the source container image.
 // This is the required approach when not already running inside the image.
 func bootcViaContainer(opts Options) error {
+	localSource := strings.HasPrefix(opts.SourceImgref, "containers-storage:")
+	if localSource && opts.NeedsPull {
+		return fmt.Errorf("required local source is absent; refusing registry fallback")
+	}
 	targetImgref := opts.TargetImgref
 	if targetImgref == "" {
 		targetImgref = opts.SourceImgref
@@ -472,7 +490,7 @@ func bootcViaContainer(opts Options) error {
 	// pressure).
 	if useOciLayout {
 		exportRef := opts.SourceImgref
-		if nonComposefsRoot != "" && opts.NeedsPull {
+		if nonComposefsRoot != "" && opts.NeedsPull && !localSource {
 			// The image was pulled into the redirected root; qualify the
 			// containers-storage reference so skopeo reads that store instead
 			// of the default /var/lib/containers (where the image is absent —
@@ -501,7 +519,7 @@ func bootcViaContainer(opts Options) error {
 
 	// Build the podman run invocation.
 	var podmanArgs []string
-	podmanImageRef := opts.SourceImgref
+	podmanImageRef := bareImageRef(opts.SourceImgref)
 
 	if useOciLayout {
 		ociCacheHost := filepath.Join(scratch, "oci-cache")
@@ -607,7 +625,7 @@ func bootcViaContainer(opts Options) error {
 	name, args := runner.HostArgs("podman", podmanArgs)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 
-	cmd := exec.Command(name, args...)
+	cmd := CommandFn(name, args...)
 	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("bootc install to-filesystem (via container): %w", err)
 	}
@@ -647,7 +665,7 @@ func bootcDirect(opts Options) error {
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 	fmt.Fprintf(os.Stdout, "# %s\n", tmpEnv)
 
-	cmd := exec.Command(name, args...)
+	cmd := CommandFn(name, args...)
 	cmd.Env = append(os.Environ(), tmpEnv)
 	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("bootc install to-filesystem: %w", err)
@@ -674,14 +692,14 @@ func overrideVarTmp(tmpdir string) func() {
 		return func() {}
 	}
 	mntName, mntArgs := runner.HostArgs("mount", []string{"--bind", varTmpOverride, "/var/tmp"})
-	if exec.Command(mntName, mntArgs...).Run() != nil {
+	if CommandFn(mntName, mntArgs...).Run() != nil {
 		fmt.Fprintf(os.Stdout, "# warning: /var/tmp bind-mount failed — ENOSPC likely on overlay tmpfs\n")
 		return func() {}
 	}
 	fmt.Fprintf(os.Stdout, "# /var/tmp bind-mounted → %s for blob staging\n", varTmpOverride)
 	return func() {
 		umName, umArgs := runner.HostArgs("umount", []string{"/var/tmp"})
-		_ = exec.Command(umName, umArgs...).Run()
+		_ = CommandFn(umName, umArgs...).Run()
 	}
 }
 
@@ -830,7 +848,7 @@ func bootcToDiskViaContainer(opts Options, diskDevice, filesystem string) (effec
 
 	name, args := runner.HostArgs("podman", podmanArgs)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
-	cmd := exec.Command(name, args...)
+	cmd := CommandFn(name, args...)
 	if err := runWithSubsteps(cmd); err != nil {
 		return "", fmt.Errorf("bootc install to-disk (via container): %w", err)
 	}
@@ -972,7 +990,7 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 	name, args := runner.HostArgs("skopeo", skopeoArgs)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 	fmt.Fprintf(os.Stdout, "# TMPDIR=%s\n", tmpdir)
-	cmd := exec.Command(name, args...)
+	cmd := CommandFn(name, args...)
 	if err := runWithSubsteps(cmd); err != nil {
 		return fmt.Errorf("skopeo copy: %w", err)
 	}
@@ -1041,7 +1059,7 @@ func bootcToDiskDirect(opts Options, diskDevice, filesystem string) (string, err
 
 	name, args := runner.HostArgs("bootc", bootcArgs)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
-	cmd := exec.Command(name, args...)
+	cmd := CommandFn(name, args...)
 	if err := runWithSubsteps(cmd); err != nil {
 		return "", fmt.Errorf("bootc install to-disk: %w", err)
 	}
@@ -1093,11 +1111,15 @@ func pullImageOnce(image string, layerCount int, root, runRoot, storageDriver st
 	podmanArgs = append(podmanArgs, "pull", image)
 	name, args := runner.HostArgs("podman", podmanArgs)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
-	cmd := exec.Command(name, args...)
+	cmd := CommandFn(name, args...)
 	pr, pw := io.Pipe()
 	cmd.Stdout = pw
 	cmd.Stderr = pw
 
+	if runner.Halted() {
+		pw.Close()
+		return runner.ErrHalted
+	}
 	if err := cmd.Start(); err != nil {
 		pw.Close()
 		return err
@@ -1159,6 +1181,18 @@ func DefaultSkopeoInspect(args ...string) ([]byte, error) {
 // Replace in tests to avoid network calls.
 var SkopeoInspectFn = DefaultSkopeoInspect
 
+func validSHA256Digest(digest string) bool {
+	if len(digest) != 71 || !strings.HasPrefix(digest, "sha256:") {
+		return false
+	}
+	for _, ch := range digest[7:] {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 // CheckImage compares the remote and local (containers-storage) image digests
 // to determine whether a pull is required. It also returns the remote layer count.
 //
@@ -1170,6 +1204,16 @@ func CheckImage(image string) ImageCheck {
 	type manifest struct {
 		Digest string   `json:"Digest"`
 		Layers []string `json:"Layers"`
+	}
+
+	// An explicit local source must never query or fall back to a registry.
+	if strings.HasPrefix(image, "containers-storage:") {
+		localOut, err := SkopeoInspectFn(image)
+		var local manifest
+		if err != nil || json.Unmarshal(localOut, &local) != nil || !validSHA256Digest(local.Digest) {
+			return ImageCheck{NeedsPull: true}
+		}
+		return ImageCheck{NeedsPull: false, LayerCount: len(local.Layers), Offline: true}
 	}
 
 	// 1. Fetch remote normalized manifest (resolves fat/multi-arch manifests).
@@ -1219,6 +1263,10 @@ func runWithSubsteps(cmd *exec.Cmd) error {
 	cmd.Stdout = pw
 	cmd.Stderr = pw
 
+	if runner.Halted() {
+		pw.Close()
+		return runner.ErrHalted
+	}
 	if err := cmd.Start(); err != nil {
 		pw.Close()
 		return err

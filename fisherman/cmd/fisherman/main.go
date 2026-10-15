@@ -45,7 +45,16 @@ type stepProfile struct {
 // buildProfile returns per-step weight profiles based on timing data from a
 // yellowfin gnome-hwe loop-device install (264s uncached, ~111s cached).
 // Weights sum to 100. cumulativePct is the bar position at step start.
-func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) []stepProfile {
+//
+// main() reads the profile by index, one slot per progress.Step call, so the
+// slots must follow exactly the steps main() emits for this recipe. A manual
+// layout (customMounts) emits a single "Preparing disk" step in place of
+// partition/EFI/LUKS/root/mount, which takes their combined weight, and never
+// emits LUKS setup or TPM2 enrolment (both need the auto-partitioned root).
+func buildProfile(needsPull, isManual, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) []stepProfile {
+	if isManual {
+		hasLUKS, hasTPM2enrolment = false, false
+	}
 	osWeight := 87
 	flatpakWeight := 11
 	if !needsPull {
@@ -59,11 +68,16 @@ func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) [
 		osWeight--
 	}
 
-	weights := []int{0, 1} // partition, format EFI
-	if hasLUKS {
-		weights = append(weights, 1) // LUKS setup
+	var weights []int
+	if isManual {
+		weights = []int{1} // prepare disk = partition + EFI + root + mount
+	} else {
+		weights = []int{0, 1} // partition, format EFI
+		if hasLUKS {
+			weights = append(weights, 1) // LUKS setup
+		}
+		weights = append(weights, 0, 0) // format root, mount
 	}
-	weights = append(weights, 0, 0) // format root, mount
 	if hasVarDiskFormat {
 		weights = append(weights, 0) // format /var disk (fast)
 	}
@@ -87,12 +101,13 @@ func buildProfile(needsPull, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) [
 	return profile
 }
 
+// fatal ends the install: it stops child processes, tears down every mount
+// and LUKS mapping registered on cleanup, emits one {"type":"error"} event
+// (noting any teardown failure) and exits with exitFailure. If a cancel
+// signal is already being handled it defers to that path instead. See
+// terminator in terminate.go.
 func fatal(format string, args ...any) {
-	msg := fmt.Sprintf(format, args...)
-	progress.Error(msg)
-	cleanup.Run()
-	fmt.Fprintf(os.Stderr, "fisherman: fatal: %s\n", msg)
-	os.Exit(1)
+	term.fail(fmt.Sprintf(format, args...))
 }
 
 // lookPath is exec.LookPath by default; replaced in tests.
@@ -203,9 +218,13 @@ func printHelp() {
 
 Usage:
   fisherman <recipe.json>          run an installation from a recipe file
-  fisherman validate <recipe.json> validate a recipe without installing
+  fisherman -                      run an installation, reading the recipe JSON from stdin
+  fisherman validate <recipe.json> validate a recipe without installing ("-" reads stdin)
+  fisherman validate --json [--partial] <recipe.json|->
+                                   every problem as JSON (docs/VALIDATE.md)
   fisherman images [<query>]       list or search the image catalog
   fisherman scan <disk>            scan disk for Windows data available to migrate
+  fisherman probe --json           print disks, TPM, RAM/CPU/UEFI, live and offline facts
   fisherman version                print version information
   fisherman help                   show this help
 
@@ -215,12 +234,15 @@ Options for 'images':
 
 Examples:
   fisherman /tmp/recipe.json
+  fisherman - < /tmp/recipe.json
   fisherman validate /tmp/recipe.json
+  echo '{"hostname":"my-pc"}' | fisherman validate --json --partial -
   fisherman images
   fisherman images Bluefin
   fisherman images "GNOME 50"
   fisherman images --plain yellowfin
   fisherman scan /dev/nvme0n1
+  fisherman probe --json
 `)
 }
 
@@ -231,6 +253,9 @@ Examples:
 // command this backend does not have (`fisherman install --recipe …`, #178).
 // Naming it beats "loading recipe: open install: no such file or directory".
 func looksLikeSubcommand(arg string) bool {
+	if arg == recipe.StdinArg {
+		return false // `fisherman -`: the recipe is on stdin
+	}
 	if strings.HasPrefix(arg, "-") {
 		return true
 	}
@@ -244,7 +269,7 @@ func looksLikeSubcommand(arg string) bool {
 func main() {
 	if len(os.Args) < 2 {
 		printHelp()
-		os.Exit(1)
+		os.Exit(exitFailure)
 	}
 
 	switch os.Args[1] {
@@ -260,15 +285,17 @@ func main() {
 	case "validate":
 		runValidate(os.Args[2:])
 		return
+	case "probe":
+		os.Exit(runProbe(os.Args[2:], os.Stdout, os.Stderr))
 	case "scan":
 		if len(os.Args) < 3 {
 			fmt.Fprintf(os.Stderr, "Usage: fisherman scan <disk>\n")
-			os.Exit(1)
+			os.Exit(exitFailure)
 		}
 		output, err := slurp.ScanJSON(os.Args[2])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "scan: %v\n", err)
-			os.Exit(1)
+			os.Exit(exitFailure)
 		}
 		fmt.Println(output)
 		return
@@ -277,14 +304,28 @@ func main() {
 	if looksLikeSubcommand(os.Args[1]) {
 		fmt.Fprintf(os.Stderr, "fisherman: unknown command %q, and no such recipe file\n\n", os.Args[1])
 		printHelp()
-		os.Exit(2)
+		os.Exit(exitUsage)
 	}
 
-	r, err := recipe.Load(os.Args[1])
+	// From here on this is an install. SIGTERM, SIGINT and SIGHUP cancel it
+	// through the same teardown as fatal() and exit with exitCancelled. So
+	// does the death of fisherman's parent (the frontend's wrapper), which is
+	// how an unprivileged frontend cancels a root fisherman; see
+	// parentdeath_linux.go.
+	term.watchSignals()
+	term.armParentDeathCancel()
+
+	r, err := loadRecipe(os.Args[1])
 	if err != nil {
 		fatal("loading recipe: %v", err)
 	}
-	if err := r.Validate(); err != nil {
+	// Every rule `fisherman validate` enforces, including the hostname,
+	// username and TPM checks, runs here: before any disk is touched.
+	if ps := installProblems(r); len(ps) > 0 {
+		fatal("invalid recipe: %v", ps[0])
+	}
+	live, err := checkImageSource(r)
+	if err != nil {
 		fatal("invalid recipe: %v", err)
 	}
 
@@ -323,11 +364,29 @@ func main() {
 	isManual := len(r.CustomMounts) > 0
 	isSystemdBoot := r.Bootloader == "systemd" || r.Filesystem == "zfs"
 
+	if r.Image == "" {
+		// Only reachable on live media (checkImageSource).
+		msg := fmt.Sprintf("Live media (%s): installing the running image", live.DetectedBy)
+		if live.LiveImage != "" {
+			msg += " " + live.LiveImage
+		}
+		progress.Info(msg)
+	}
+
+	// Offline image stores: the recipe's list, or the host's when it has none.
+	imageStores, discoveredStores := resolveImageStores(r)
+	if discoveredStores && len(imageStores) > 0 {
+		progress.Info("Offline image stores found on the host: " + strings.Join(imageStores, ", "))
+	}
+
 	// ── Pre-flight: check image cache ─────────────────────────────────────────
 	var imageCheck install.ImageCheck
 	if r.Image != "" {
 		progress.Info("Checking image cache...")
 		imageCheck = install.CheckImage(r.Image)
+		if strings.HasPrefix(r.Image, "containers-storage:") && imageCheck.NeedsPull {
+			fatal("required local source is absent or unreadable; refusing installation")
+		}
 		if imageCheck.NeedsPull {
 			progress.Info(fmt.Sprintf("Image pull required (%d layers)", imageCheck.LayerCount))
 		} else if imageCheck.Offline {
@@ -337,25 +396,13 @@ func main() {
 		}
 	}
 
-	profile := buildProfile(imageCheck.NeedsPull, hasEncryption, hasTPM2, r.VarDisk != nil && !r.VarDisk.KeepExisting)
+	hasVarDisk := r.VarDisk != nil
+	profile := buildProfile(imageCheck.NeedsPull, isManual, hasEncryption, hasTPM2, hasVarDisk && !r.VarDisk.KeepExisting)
 	pi := 0 // profile index, incremented at each progress.Step call
 
-	// Compute total step count up front so the GUI can show accurate progress.
-	// Manual layouts collapse the 4 auto disk-setup steps into a single step.
-	totalSteps := 8
-	if isManual {
-		totalSteps -= 3 // partition + format EFI + format root collapse into one step
-	}
-	if hasEncryption && !isManual {
-		totalSteps++ // extra step for LUKS setup (auto mode only)
-	}
-	if hasTPM2 {
-		totalSteps++ // extra step for TPM2 enrolment (both tpm2-luks and tpm2-luks-passphrase)
-	}
-	hasVarDisk := r.VarDisk != nil
-	if hasVarDisk && !r.VarDisk.KeepExisting {
-		totalSteps++ // extra step to format the /var disk
-	}
+	// The profile has one slot per emitted step, so it is also the step count
+	// the GUI shows up front.
+	totalSteps := len(profile)
 	step := 1
 
 	// ── Immediate: Apply friendly audio names to live session ─────────────
@@ -691,7 +738,7 @@ func main() {
 		ScratchDir:            scratchDir,
 		NeedsPull:             imageCheck.NeedsPull,
 		LayerCount:            imageCheck.LayerCount,
-		AdditionalImageStores: r.AdditionalImageStores,
+		AdditionalImageStores: imageStores,
 	}); err != nil {
 		fatal("bootc install: %v", err)
 	}
@@ -710,6 +757,17 @@ func main() {
 	if !isManual && isSystemdBoot && r.ComposeFsBackend {
 		if err := install.InstallSystemdBoot(activeTargetMount); err != nil {
 			progress.Info(fmt.Sprintf("Warning: could not ensure systemd-boot EFI binary: %v", err))
+		}
+	}
+
+	// GRUB installs: bootupctl writes EFI/<vendor>/ and an NVRAM entry but
+	// can leave no fallback loader at EFI/BOOT/BOOTX64.EFI, so a reset NVRAM
+	// or a disk moved to another machine falls through to PXE (#233). Fill
+	// that gap from the vendor directory. Never on a manual layout: that ESP
+	// may be shared, and its EFI/BOOT belongs to whoever set it up.
+	if !isManual && !isSystemdBoot {
+		if err := install.InstallGrubFallback(activeTargetMount, r.DistroID); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not ensure the UEFI fallback loader: %v", err))
 		}
 	}
 
@@ -951,8 +1009,13 @@ func main() {
 		}
 	}
 
-	// Tear down mounts and LUKS before declaring success.
-	cleanup.Run()
+	// Tear down mounts and LUKS before declaring success. Claiming the exit
+	// first means a cancel signal from here on is ignored (the install has
+	// finished), and a cancel that already started keeps the exit to itself.
+	term.claimSuccess()
+	if err := cleanup.Run(); err != nil {
+		progress.Info(fmt.Sprintf("Warning: teardown after install was incomplete: %v", err))
+	}
 
 	// Find the EFI boot entry so the frontend can set BootNext before rebooting.
 	// Non-fatal: on VMs or systems without efibootmgr this may return empty.

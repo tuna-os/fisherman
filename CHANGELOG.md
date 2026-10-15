@@ -7,6 +7,145 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Features
+
+- **Recipe on stdin**: `fisherman -` and `fisherman validate -` read the recipe
+  JSON from stdin until EOF. A frontend pipes it through
+  `pkexec`/`sudo`/`flatpak-spawn --host` instead of writing a temporary file
+  that holds the LUKS passphrase and user password. Empty stdin fails with
+  `loading recipe: recipe is empty`; recipes are capped at 1 MiB. A file
+  path works as before, and a lone `-` is no longer reported as an unknown
+  command (exit 2).
+- **fisherman finds offline image stores on the host**: when a recipe omits
+  `additionalImageStores`, fisherman exposes the stores `fisherman probe`
+  reports (`$TUNA_OFFLINE_STORES`, `/etc/tuna-installer/offline-stores`,
+  `/usr/share/tuna-installer/oci-store`, `/var/lib/superiso-store`) and logs
+  them as an `info` event. Four frontends looked for these inside their
+  Flatpak sandbox, where the host's paths are not visible. A recipe that sets
+  the field (`[]` included) is used exactly as given.
+- **Empty `image` is rejected off live media**: it means "install the running
+  live image", so on a host that did not boot from live media (probe's live
+  detection: `/run/ostree-live`, `rd.live.image`/`root=live:`, or
+  `/etc/bootc-installer/live-iso-mode`) the install and `fisherman validate`
+  now fail with `invalid recipe: image is required: …` before touching a disk,
+  instead of reaching `bootc install` with nothing to install after
+  partitioning. On live media the behaviour is unchanged.
+- **`fisherman validate --json`**: every recipe problem as one JSON object,
+  `{"protocol_version":1,"valid":…,"errors":[{"field","code","message"}]}`,
+  with stable codes frontends key their copy on. Exit 0 valid, 1 invalid, 2
+  bad arguments; `-` reads the recipe from stdin. `--partial` checks only the
+  fields present and reads nothing from the machine, so a frontend can
+  validate a page as it is filled in. The plain `fisherman validate` output is
+  unchanged. Schema and codes in `docs/VALIDATE.md`.
+- **One rule set for validate and install** (`internal/recipe/rules.go`):
+  `Recipe.Problems()` reports every problem where `Validate()` still returns
+  the first, with its existing messages. New rules: the hostname (RFC 1123
+  labels, at most 64 characters), the username (at most 32 characters,
+  lowercase letter or `_` first, then `[a-z0-9_-]`, not a reserved system
+  user or group such as `root`, `wheel` or `systemd-*`), and a `tpm2-*`
+  encryption type on a machine without a usable TPM 2.0 (probe's
+  `tpm.usable`).
+  An empty `image` off live media (above) is reported as `image_required`.
+- **`data/encryption-choices.json`**: the encryption types, in display order,
+  with `needs_passphrase`, `needs_tpm2` and the branding `copy_key`, generated
+  from the Go table the rules use (a test fails if they differ).
+  bootc-installer copies it to `shared/recipe/encryption-choices.json`.
+
+- **Progress events carry the finished bar position and a stable step id**:
+  additive fields on the JSON progress protocol, so frontends render the bar
+  instead of re-deriving it. Every existing field and event is unchanged.
+  - `overall_pct` (number, 0–100, two decimals) on `step`, `substep` and
+    `complete`. It is the bar position after that event, ported from
+    bootc-installer's reference parser (`shared/progress/progress_parser.py`)
+    and checked against its golden `fraction-cases.json`: a step starts at its
+    `cumulative_pct`; `Pulling image: layer N/M` fills the first 60% of the
+    step; the post-pull bootc phases sit at fixed points in the rest; other
+    substeps hold the bar. It never decreases, stays at or below 99 until
+    `complete`, and `complete` is exactly 100.
+  - New over the reference parser: `Copying Flatpak data: N%` now moves the bar
+    across the Flatpak step's weight (11% of the bar, 29% when the image was
+    cached), where every frontend's bar used to stand still.
+  - `step_id` on `step` events: a stable snake_case id per step (`partition`,
+    `format_efi`, `luks`, `format_root`, `mount`, `prepare_disk`, `format_var`,
+    `install_os`, `tpm2_enroll`, `flatpaks`, `configure`, `finalize`), from one
+    table in `internal/progress/bar.go`. Ids never change; `step_name` stays
+    the English name.
+- **Clean cancel on SIGTERM, SIGINT and SIGHUP**: fisherman used to die at once
+  when a frontend cancelled an install, leaving the target mounted, the LUKS
+  mapping open and the `/var/fisherman-tmp` bind mount in place, with no JSON
+  event. It now stops its child processes (SIGTERM, then SIGKILL after 10 s,
+  grandchildren included), runs the same teardown as a fatal error, emits one
+  `{"type":"error","message":"installation cancelled (SIGTERM)"}` event and
+  exits with the new code **130**. Failures still exit 1 and bad usage 2. A
+  second signal during teardown is logged and ignored rather than aborting
+  it; teardown is bounded at 3 minutes instead. A teardown failure is now
+  appended to the error message (`…; cleanup failed, …`), and on the failure
+  path the `error` event is emitted after teardown rather than before it.
+- **Cancel by killing the wrapper**: frontends run fisherman as root through
+  `pkexec`, so their SIGTERM gets EPERM and never reaches it. fisherman now
+  sets `PR_SET_PDEATHSIG` to SIGTERM, so when its parent (the frontend's
+  `bash` wrapper, `sudo`, or the shell) dies, it cancels through the same path
+  and exits 130. Frontend contract: kill the wrapper you spawned, in its own
+  process group, and fisherman cancels cleanly.
+- **`fisherman probe --json`**: a read-only, no-root command that prints the
+  disks (with eligibility and the reason a disk is excluded), TPM, RAM/CPU/UEFI,
+  live-media and offline-store facts every installer frontend computed for
+  itself, as one JSON object. Schema and example in `docs/PROBE.md`.
+
+### 🐛 Bug Fixes
+
+- **A bad username no longer fails after the OS is on disk**: `useradd` in
+  the configure step was the first thing to check it, so `Alice`, `root` or
+  `my user` failed the install after partitioning and the OS install. The
+  install now rejects it with the other recipe rules, before any disk step,
+  and so does the hostname (only one frontend checked it) and a TPM type with
+  no TPM 2.0 (which failed at enrolment).
+
+- **Missing supplementary groups no longer abort the install** (#231): `useradd`
+  exits 6 when a `--groups` entry does not exist on the target (e.g. `libvirt` on
+  images without virt-manager). Requested groups are now filtered against the
+  target `/etc/group`, and missing ones are skipped with a warning.
+- **Offline non-composefs installs from a live ISO export from the right store**
+  (#236): a `containers-storage:` source is never pulled into the redirected
+  podman root, so the OCI export now uses the original ref unless the image was
+  actually pulled there.
+- **Local non-composefs images install with the host's bootc** (#237): a GUI
+  install of a live ISO's embedded GRUB/ostree image now runs `bootc` directly
+  against the live store with that source as `--source-imgref`, avoiding the OCI
+  export and the podman OOM seen in 8 GiB VMs. Composefs keeps the container path.
+- **Explicit local image identity survives storage redirects** (#244): an
+  explicit `containers-storage:` source is checked locally, and a missing or
+  malformed one is refused before any disk work instead of triggering a registry
+  lookup.
+
+### 📝 Documentation
+
+- ROADMAP release/branch status refreshed after v0.3.0/v0.4.0 (#240).
+
+---
+
+## [0.4.0] - 2026-09-19
+
+Release-process-only release; no installer behaviour changed since 0.3.0.
+
+### 🚀 Release Automation
+
+- **Cut publishes the tag it just made** (#227): `release-cut.yml` now calls
+  `release-publish.yml` via `workflow_call` instead of relying on a tag-push
+  trigger that never fires for `GITHUB_TOKEN`-pushed tags, and a
+  `workflow_dispatch` recovery path republishes a tag that has no assets.
+- **Automatic promotion**: `promote.yml` promotes `dev` to `prod` and releases
+  once `dev` is green; `promote-reconcile.yml` reconciles `prod` back into `dev`
+  (not the reverse). `scripts/next-version.sh` computes the next version, with
+  tests.
+- **Two-step release documented** (#228): `CONTRIBUTING.md` gains a Releasing
+  section, and the promotion PR body warns that it must be merge-committed, never
+  squashed, into `prod`.
+
+---
+
+## [0.3.0] - 2026-09-19
+
 ### 🔒 Security
 
 - **Transient TPM2 enrolment key is pinned to 0600** (#221): `StageFirstBootEnrollment`
@@ -76,6 +215,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **2 GiB ESP for all fleet images**: grub2 EFI System Partition increased from
   512 MiB → 2 GiB for fleet consistency with systemd-boot (dakota) images.
 
+### 🔒 Security (other)
+
+- Temporary LUKS passphrase file in `EnrollTPM2` is created 0600 (#213); the TUI
+  writes its installer recipe through a secure temporary file (#216).
+- The SELinux bypass shim is built in a private temp dir (#161); test images
+  require SSH key auth (#172); the debian-bootc base image is pinned by digest
+  (#76); `GITHUB_TOKEN` is passed via env in `bootcrew-vm.yml` (#78); Renovate
+  automerge is restricted to patch/pin/digest updates (#109).
+
+### ✨ Features
+
+- **Structured error event on fatal install failure** (#195) in the progress
+  stream.
+- **TPM2 enrolment moved to first boot** of the installed system instead of
+  during install (#48).
+- `customMount` fstypes are validated and encryption is rejected on manual
+  layouts (#58); ext4 verity is enabled on the manual layout path (#70).
+
+### 🧹 Maintenance
+
+- TUI Go module renamed `projectbluefin` → `tuna-os` (#113); the orphaned Python
+  GTK installer copy (`tuna_installer/`) was removed (#114); the TUI stays on the
+  charmbracelet v1 APIs (#130, #135).
+- Release config repaired so a tag can publish (#225).
+- Unit/E2E coverage expanded across `disk`, `install`, `post`, `images` and
+  `customMounts` (#94, #100, #107, #115, #118, #119, #125, #142, #148, #149,
+  #151).
+- Added ROADMAP (#163), CONTRIBUTING (#169), agent guide/CODEOWNERS/EditorConfig
+  (#201); switched from Dependabot to Renovate.
+
 ---
 
 ## [0.2.0] - 2026-05-08
@@ -130,7 +299,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
-## [0.1.0] - 2026-03-XX
+## [0.1.0] - 2026-03-27
 
 ### Initial Release
 - First stable release of fisherman bootc installer backend

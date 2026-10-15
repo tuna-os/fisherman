@@ -34,9 +34,24 @@ type Executor interface {
 type defaultExecutor struct{}
 
 func (e defaultExecutor) Command(name string, args ...string) Command {
+	if err := checkHalted(name, args); err != nil {
+		return &haltedCommand{err: err}
+	}
 	name, args = HostArgs(name, args)
 	return &realCommand{exec.Command(name, args...)}
 }
 
 // DefaultExecutor is the standard implementation of Executor.
 var DefaultExecutor Executor = defaultExecutor{}
+
+// haltedCommand is returned by the default executor after runner.Halt: every
+// attempt to run it fails with ErrHalted instead of starting a process.
+type haltedCommand struct{ err error }
+
+func (c *haltedCommand) Run() error              { return c.err }
+func (c *haltedCommand) Output() ([]byte, error) { return nil, c.err }
+func (c *haltedCommand) Start() error            { return c.err }
+func (c *haltedCommand) Wait() error             { return c.err }
+func (c *haltedCommand) SetStdin(io.Reader)      {}
+func (c *haltedCommand) SetStdout(io.Writer)     {}
+func (c *haltedCommand) SetStderr(io.Writer)     {}

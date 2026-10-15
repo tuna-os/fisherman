@@ -1,0 +1,36 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "disk",
+      "code": "disk_not_found",
+      "message": "disk /nonexistent/fisherman-golden-disk: stat /nonexistent/fisherman-golden-disk: no such file or directory"
+    },
+    {
+      "field": "filesystem",
+      "code": "filesystem_unsupported",
+      "message": "filesystem must be \"xfs\", \"ext4\", \"btrfs\", or \"zfs\", got \"ntfs\""
+    },
+    {
+      "field": "encryption.passphrase",
+      "code": "encryption_passphrase_required",
+      "message": "encryption.passphrase required for tpm2-luks-passphrase"
+    },
+    {
+      "field": "hostname",
+      "code": "hostname_invalid_char",
+      "message": "hostname \"my_pc\" contains '_'; use only letters, digits, hyphens and dots"
+    },
+    {
+      "field": "user.username",
+      "code": "username_invalid_start",
+      "message": "username \"Alice\" must start with a lowercase letter or an underscore"
+    },
+    {
+      "field": "encryption.type",
+      "code": "encryption_tpm_unavailable",
+      "message": "encryption \"tpm2-luks-passphrase\" needs a TPM 2.0, and this machine has none usable"
+    }
+  ]
+}

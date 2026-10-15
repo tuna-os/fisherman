@@ -8,7 +8,7 @@
 > [tuna-os/fisherman#59](https://github.com/tuna-os/fisherman/pull/59)); pick
 > whichever home matches your distro's tooling.
 
-A universal bootc installer backend, designed to be driven by a frontend such as [tuna-installer](https://github.com/tuna-os/tuna-installer).
+A universal bootc installer backend, designed to be driven by a frontend. The GNOME, KDE, COSMIC, Niri and XFCE frontends live in [tuna-os/bootc-installer](https://github.com/tuna-os/bootc-installer), which pins this repository as a submodule.
 
 fisherman handles disk partitioning, formatting, LUKS encryption, and `bootc install to-filesystem` image installation. It works with any bootc-compatible image regardless of distro.
 
@@ -45,7 +45,34 @@ When running inside a Flatpak sandbox, fisherman automatically wraps host subpro
 
 ```bash
 sudo fisherman <recipe.json>
+# or, with the recipe on stdin (no temporary file):
+generate-recipe | sudo fisherman -
 ```
+
+`-` reads the recipe JSON from stdin until EOF, for the install and for
+`validate`. pkexec, sudo and `flatpak-spawn --host` all pass stdin through,
+so a frontend can pipe the recipe instead of writing it, LUKS passphrase and
+all, to a file both its sandbox and root on the host can see:
+
+```sh
+printf '%s' "$RECIPE_JSON" | flatpak-spawn --host bash -c 'pkexec /usr/local/bin/fisherman -; exit $?'
+```
+
+Empty stdin is an error (`loading recipe: recipe is empty`), as is input
+that is not one JSON object. Recipes are capped at 1 MiB.
+
+### Commands
+
+| Command | Root? | What it does |
+|---|---|---|
+| `fisherman <recipe.json>` | yes | run an installation from a recipe |
+| `fisherman -` | yes | run an installation from a recipe read on stdin |
+| `fisherman validate <recipe.json \| ->` | no | validate a recipe without installing, including the empty-image check below; `-` reads stdin |
+| `fisherman validate --json [--partial] <recipe.json\|->` | no | every problem as one JSON object with stable codes (hostname, username, filesystem, encryption, disk, TPM), the same rules the install enforces before touching a disk; `--partial` checks one page's fields. Schema, codes and the encryption choices file: [`docs/VALIDATE.md`](docs/VALIDATE.md) |
+| `fisherman images [<query>]` | no | list or search the image catalog |
+| `fisherman scan <disk>` | yes | scan a disk for Windows data available to migrate |
+| `fisherman probe --json` | no | print disks, TPM, RAM/CPU/UEFI, live-media and offline-store facts as one JSON object; read-only. Schema and an example: [`docs/PROBE.md`](docs/PROBE.md) |
+| `fisherman version` | no | print the version |
 
 ## Recipe format
 
@@ -68,6 +95,21 @@ sudo fisherman <recipe.json>
 **Encryption types:** `none`, `luks-passphrase`, `tpm2-luks`, `tpm2-luks-passphrase`
 
 For `luks-passphrase` and `tpm2-luks-passphrase`, add `"passphrase": "hunter2"` inside the `encryption` object.
+
+**Empty `image`** means "install the image this live system is running"
+(bootc installs the booted container). It is accepted only on live media, by
+the same detection `fisherman probe` reports as `live.is_live`
+([`docs/PROBE.md`](docs/PROBE.md#live-detection)). On any other host the
+recipe fails validation (`invalid recipe: image is required: …`, exit 1)
+before a disk is touched.
+
+**Offline image stores** (`additionalImageStores`): leave the field out and
+fisherman finds the offline containers-storage roots on the host itself,
+with the discovery `fisherman probe` reports as `offline.stores`
+([`docs/PROBE.md`](docs/PROBE.md#offline-stores)), and exposes them to bootc
+read-only. A list, including `[]`, is used exactly as given; `[]` turns
+discovery off. `/var/lib/superiso-store` is exposed whenever it exists, as
+before.
 
 ## Image catalog
 

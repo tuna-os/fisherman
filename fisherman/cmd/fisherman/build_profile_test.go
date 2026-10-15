@@ -26,7 +26,7 @@ func TestBuildProfile_WeightsSumTo100(t *testing.T) {
 		for _, luks := range []bool{false, true} {
 			for _, tpm2 := range []bool{false, true} {
 				for _, varDisk := range []bool{false, true} {
-					p := buildProfile(pull, luks, tpm2, varDisk)
+					p := buildProfile(pull, false, luks, tpm2, varDisk)
 					if got := sumWeights(p); got != 100 {
 						t.Errorf("buildProfile(pull=%v,luks=%v,tpm2=%v,var=%v) weights sum = %d, want 100",
 							pull, luks, tpm2, varDisk, got)
@@ -55,7 +55,7 @@ func TestBuildProfile_StepCounts(t *testing.T) {
 		{"everything", false, true, true, true, 11},
 	}
 	for _, tc := range cases {
-		p := buildProfile(tc.pull, tc.luks, tc.tpm2, tc.vdisk)
+		p := buildProfile(tc.pull, false, tc.luks, tc.tpm2, tc.vdisk)
 		if len(p) != tc.want {
 			t.Errorf("%s: steps = %d, want %d (profile %+v)", tc.name, len(p), tc.want, p)
 		}
@@ -68,7 +68,7 @@ func TestBuildProfile_StepCounts(t *testing.T) {
 func TestBuildProfile_CumulativePositions(t *testing.T) {
 	for _, pull := range []bool{false, true} {
 		for _, luks := range []bool{false, true} {
-			p := buildProfile(pull, luks, false, false)
+			p := buildProfile(pull, false, luks, false, false)
 			if p[0].cumulativePct != 0 {
 				t.Errorf("first step cumulative = %d, want 0", p[0].cumulativePct)
 			}
@@ -91,7 +91,7 @@ func TestBuildProfile_CumulativePositions(t *testing.T) {
 // partition, the TPM2 step after the OS install, and the /var format right
 // after mounting.
 func TestBuildProfile_Order(t *testing.T) {
-	p := buildProfile(true, true, true, true)
+	p := buildProfile(true, false, true, true, true)
 	// Expect: 0(part) 1(efi) 1(luks) 0(root) 0(mount) 0(var) 85(os) 1(tpm2) 11(flatpak) 0(conf) 1(finalize)
 	var weights []int
 	for _, s := range p {
@@ -111,8 +111,8 @@ func TestBuildProfile_Order(t *testing.T) {
 // TestBuildProfile_NoPullAdjustsWeights verifies that a cached image (no
 // pull) shifts weight from the OS install to the flatpak step.
 func TestBuildProfile_NoPullAdjustsWeights(t *testing.T) {
-	pull := buildProfile(true, false, false, false)
-	noPull := buildProfile(false, false, false, false)
+	pull := buildProfile(true, false, false, false, false)
+	noPull := buildProfile(false, false, false, false, false)
 
 	find := func(p []stepProfile, w int) int {
 		for _, s := range p {
@@ -133,10 +133,10 @@ func TestBuildProfile_NoPullAdjustsWeights(t *testing.T) {
 // TestBuildProfile_LuksAndTpm2ShaveOsWeight verifies each encryption feature
 // deducts one weight point from the OS install step.
 func TestBuildProfile_LuksAndTpm2ShaveOsWeight(t *testing.T) {
-	base := buildProfile(true, false, false, false)
-	luks := buildProfile(true, true, false, false)
-	tpm2 := buildProfile(true, false, true, false)
-	both := buildProfile(true, true, true, false)
+	base := buildProfile(true, false, false, false, false)
+	luks := buildProfile(true, false, true, false, false)
+	tpm2 := buildProfile(true, false, false, true, false)
+	both := buildProfile(true, false, true, true, false)
 
 	maxWeight := func(p []stepProfile) int {
 		m := 0
