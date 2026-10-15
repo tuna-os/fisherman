@@ -1,0 +1,1 @@
+{"filesystem": "zfs", "encryption": {"type": "luks-passphrase", "passphrase": "x"}, "hostname": "ok-host", "user": {"username": "bob"}}

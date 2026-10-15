@@ -78,17 +78,30 @@ func eachGoFile(t *testing.T, fn func(path string, fset *token.FileSet, file *as
 	}
 }
 
-// TestExecCommandNamesAreNotLiterals asserts that no production code calls
-// exec.Command with a literal program name.
+// TestExecCommandLivesInRunnerOnly asserts that no production code outside
+// this package constructs its own exec.Command.
 //
-// A literal name is a command that was never offered to HostArgs: the wrapped
-// form necessarily passes the variable HostArgs returned, because in a sandbox
-// the program actually executed is "flatpak-spawn" and the original name has
-// moved into the argument list. Callers that need raw Output or CombinedOutput
-// rather than runner.Run's streaming still go through HostArgs first —
-// internal/disk/format.go is the reference for that shape.
-func TestExecCommandNamesAreNotLiterals(t *testing.T) {
+// This supersedes the weaker check it replaces, which only rejected a literal
+// program name. A literal name caught the Flatpak half of the problem: the
+// wrapped form necessarily passes the variable HostArgs returned, because in
+// a sandbox the program actually executed is "flatpak-spawn". It could not
+// catch the other half. A hand-built command also answers to no halt gate, so
+// after runner.Halt it still forks — and for the mount diagnostics in
+// internal/disk/format.go that meant Halt itself provoked the mount it exists
+// to prevent, because ErrHalted is the error that triggers the re-run.
+//
+// Callers that need exec.Cmd itself (raw Output or CombinedOutput, a detached
+// Start, a custom cmd.Env) use runner.HostCommand, or runner.WrappedCommand
+// when they need the effective argv first. Both apply the halt gate, and
+// HostCommand applies the Flatpak wrapping as well.
+func TestExecCommandLivesInRunnerOnly(t *testing.T) {
+	root := moduleRoot(t)
+	runnerDir := filepath.Join(root, "internal", "runner")
+
 	eachGoFile(t, func(path string, fset *token.FileSet, file *ast.File) {
+		if filepath.Dir(path) == runnerDir {
+			return
+		}
 		ast.Inspect(file, func(n ast.Node) bool {
 			call, ok := n.(*ast.CallExpr)
 			if !ok {
@@ -102,17 +115,12 @@ func TestExecCommandNamesAreNotLiterals(t *testing.T) {
 			if !ok || pkg.Name != "exec" {
 				return true
 			}
-			if len(call.Args) == 0 {
-				return true
-			}
-			lit, ok := call.Args[0].(*ast.BasicLit)
-			if !ok || lit.Kind != token.STRING {
-				return true
-			}
-			t.Errorf("%s: exec.Command(%s, …) names its program literally; "+
-				"pass it through runner.HostArgs first so it is forwarded to "+
-				"the host inside a Flatpak sandbox",
-				fset.Position(lit.Pos()), lit.Value)
+			t.Errorf("%s: exec.Command is built outside internal/runner; "+
+				"use runner.HostCommand (or runner.WrappedCommand for an argv "+
+				"already passed through HostArgs) so the call is forwarded to "+
+				"the host inside a Flatpak sandbox and refuses to start after "+
+				"runner.Halt",
+				fset.Position(call.Pos()))
 			return true
 		})
 	})

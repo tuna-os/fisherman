@@ -1,0 +1,11 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "",
+      "code": "recipe_malformed",
+      "message": "parsing recipe: unexpected end of JSON input"
+    }
+  ]
+}

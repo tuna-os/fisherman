@@ -63,6 +63,26 @@ func HostArgs(name string, args []string) (string, []string) {
 	return name, args
 }
 
+// unwrapHostArgs recovers the original program name and arguments from an
+// argv that HostArgs or HostArgsWithEnv has already rewritten. For an
+// unwrapped argv it returns its input unchanged.
+//
+// The wrapped form is "flatpak-spawn --host [--env=K=V ...] <name> <args...>",
+// so the original name is the first element after the --host flag that is not
+// an --env= assignment.
+func unwrapHostArgs(name string, args []string) (string, []string) {
+	if name != "flatpak-spawn" {
+		return name, args
+	}
+	for i, a := range args {
+		if a == "--host" || strings.HasPrefix(a, "--env=") {
+			continue
+		}
+		return a, args[i+1:]
+	}
+	return name, args
+}
+
 // HostArgsWithEnv is like HostArgs but also forwards the provided env vars
 // to the host process via --env=KEY=VALUE when running inside a Flatpak.
 //

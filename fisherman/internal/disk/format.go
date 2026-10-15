@@ -3,7 +3,6 @@ package disk
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 
 	"github.com/tuna-os/fisherman/internal/progress"
@@ -49,7 +48,10 @@ func MountType(dev, target, fstype, opts string) error {
 	args = append(args, dev, target)
 	if err := runner.Run("mount", args...); err != nil {
 		name, cargs := runner.HostArgs("mount", args)
-		out, _ := exec.Command(name, cargs...).CombinedOutput()
+		// The diagnostic re-run is a real mount, so it must go through the
+		// halt gate too: after Halt the error above is ErrHalted, and a raw
+		// exec.Command here would perform the mount Halt exists to prevent.
+		out, _ := runner.WrappedCommand(name, cargs...).CombinedOutput()
 		probe, _ := runner.Output("blkid", dev)
 		dmesg, _ := runner.Output("sh", "-c", "dmesg | tail -8")
 		return fmt.Errorf("%w: %s (blkid: %s) (dmesg: %s)", err,
@@ -75,7 +77,8 @@ func Mount(dev, target, opts string) error {
 	args = append(args, dev, target)
 	if err := runner.Run("mount", args...); err != nil {
 		name, cargs := runner.HostArgs("mount", args)
-		out, _ := exec.Command(name, cargs...).CombinedOutput()
+		// As in MountType: halt-gated, because this re-run really mounts.
+		out, _ := runner.WrappedCommand(name, cargs...).CombinedOutput()
 		probe, _ := runner.Output("blkid", dev)
 		// The kernel's ring buffer is the only place that says WHY a mount
 		// was rejected (unsupported feature bits, SB validation, missing

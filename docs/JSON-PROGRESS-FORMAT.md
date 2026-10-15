@@ -200,7 +200,10 @@ example `loading recipe: ...`, `invalid recipe: ...`,
 `missing required host tool: ...`, `LUKS format: ...` or `bootc install: ...`.
 
 `error` can be the only event in the stream. Recipe loading, recipe
-validation and the host tool check all run before the first step.
+validation and the host tool check all run before the first step. With the
+recipe on stdin (`fisherman -`), empty stdin is `loading recipe: recipe is
+empty`. An empty `image` on a host that did not boot from live media is
+`invalid recipe: image is required: …`.
 
 `error` is **not** emitted when fisherman exits 2 (unknown command) or
 panics, or when it is killed with SIGKILL. See [Exit codes](#exit-codes).
@@ -344,10 +347,15 @@ looks like for each.
 | 1 | No arguments. Help is printed to stdout. | None. |
 | 1 | `scan` without a disk, or `scan` failed. Message on stderr. | None. |
 | 130 | Cancelled: SIGTERM, SIGINT or SIGHUP, or the parent process (the frontend's wrapper) died. Children are stopped and the target is torn down first; see [Cancelling an install](#cancelling-an-install). | Ends with `error`: `installation cancelled (SIGTERM)` (the signal name varies). |
-| 2 | The argument looks like a command, not a recipe path (a flag, or a bare word with no file behind it). Message and help on stderr and stdout. | None. |
+| 2 | The argument looks like a command, not a recipe path (a flag, or a bare word with no file behind it). A lone `-` is not one: it reads the recipe from stdin. Message and help on stderr and stdout. | None. |
 
 The `images` and `validate` subcommands (in `images.go` and `validate.go`)
 also exit 1 on failure. They do not emit progress events.
+
+`validate --json` (see [VALIDATE.md](VALIDATE.md)) exits 0 for a valid
+recipe, 1 for an invalid one (its problems are the JSON on stdout), and 2 for
+bad arguments. The install runs the same rules first, so an invalid recipe
+ends with an `error` event (`invalid recipe: …`) before any disk step.
 
 `probe --json` (see [PROBE.md](PROBE.md)) exits 0 with its JSON on stdout, 1
 if the probe or the encoding failed, and 2 for a missing `--json` or an
@@ -379,6 +387,8 @@ cancel, kill the process you spawned. Every frontend uses the same wrapper:
 
 ```sh
 bash -c 'pkexec /usr/local/bin/fisherman "$1"; exit $?' -- /path/to/recipe.json
+# or, piping the recipe on stdin:
+bash -c 'pkexec /usr/local/bin/fisherman -; exit $?'
 ```
 
 Spawn it in its own process group (under Flatpak, prefix it with

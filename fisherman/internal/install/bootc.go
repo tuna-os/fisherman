@@ -16,10 +16,14 @@ import (
 	"github.com/tuna-os/fisherman/internal/runner"
 )
 
-// CommandFn constructs owned host subprocesses. The default is exec.Command;
-// argv-only controls replace it and retain a private PATH guard as a second
-// safety boundary, so removing the test seam cannot invoke host installers.
-var CommandFn = exec.Command
+// CommandFn constructs owned host subprocesses from an argv that has already
+// been through runner.HostArgs. The default is runner.WrappedCommand, which
+// applies the halt gate so a subprocess started here cannot outlive
+// runner.Halt — these are the podman, bootc and skopeo invocations a cancel
+// most needs to stop. Argv-only controls replace it and retain a private
+// PATH guard as a second safety boundary, so removing the test seam cannot
+// invoke host installers.
+var CommandFn = runner.WrappedCommand
 
 // selinuxBypassCSrc is a minimal LD_PRELOAD shim that silently succeeds
 // for security.selinux xattr writes. It is compiled at runtime and injected
