@@ -145,7 +145,7 @@ func (v *ImageSourceValidator) Validate() error {
 
 // RecipeProblemsValidator checks all recipe validation rules including TPM checks.
 type RecipeProblemsValidator struct {
-	recipe *recipe.Recipe
+	recipe     *recipe.Recipe
 	tpm2Usable bool
 }
 
@@ -220,7 +220,7 @@ func (v *RecipeDependentToolValidator) requiredToolsForRecipe(r *recipe.Recipe) 
 		{"skopeo", true},
 		{"podman", true},
 	}
-	
+
 	var tools []string
 	for _, req := range reqs {
 		if req.when {
