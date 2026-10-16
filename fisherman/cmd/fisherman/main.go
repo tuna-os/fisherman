@@ -12,9 +12,11 @@ import (
 	"github.com/tuna-os/fisherman/internal/install"
 	"github.com/tuna-os/fisherman/internal/luks"
 	"github.com/tuna-os/fisherman/internal/post"
+	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
 	"github.com/tuna-os/fisherman/internal/slurp"
+	"github.com/tuna-os/fisherman/internal/validation"
 )
 
 const (
@@ -319,15 +321,19 @@ func main() {
 	if err != nil {
 		fatal("loading recipe: %v", err)
 	}
-	// Every rule `fisherman validate` enforces, including the hostname,
-	// username and TPM checks, runs here: before any disk is touched.
-	if ps := installProblems(r); len(ps) > 0 {
-		fatal("invalid recipe: %v", ps[0])
-	}
-	live, err := checkImageSource(r)
-	if err != nil {
+
+	// Run pre-flight validation chain. Every rule `fisherman validate` enforces,
+	// including the hostname, username, and TPM checks, runs here: before any
+	// disk is touched. The ValidatorChain stops at the first error.
+	var live probe.Live
+	chain := validation.NewChain().
+		Add(validation.NewRecipeProblemsValidator(r, tpm2Usable())).
+		Add(validation.NewImageSourceValidator(r, hostLive()))
+	if err := chain.Run(); err != nil {
 		fatal("invalid recipe: %v", err)
 	}
+	// Retrieve live media info for later use in progress messages
+	live = hostLive()
 
 	// Recipe-level overrides for the otherwise-shared global mount paths.
 	// Keeps two parallel installs on the same host from colliding.
@@ -349,7 +355,9 @@ func main() {
 
 	// Pre-flight: verify that every host tool required for this recipe is
 	// present before we touch any disks.
-	if err := checkRequiredTools(r); err != nil {
+	toolChain := validation.NewChain().
+		Add(validation.NewRecipeDependentToolValidator(r))
+	if err := toolChain.Run(); err != nil {
 		fatal("missing required host tool: %v", err)
 	}
 
