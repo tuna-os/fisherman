@@ -161,6 +161,9 @@ func (v *RecipeProblemsValidator) Name() string {
 
 // Validate implements Validator.
 func (v *RecipeProblemsValidator) Validate() error {
+	if v.recipe == nil {
+		return fmt.Errorf("recipe is nil")
+	}
 	problems := v.recipe.Problems()
 	if recipe.NeedsTPM2(v.recipe.Encryption.Type) {
 		problems = append(problems, v.recipe.CheckTPM(v.tpm2Usable)...)
@@ -188,6 +191,9 @@ func (v *RecipeDependentToolValidator) Name() string {
 
 // Validate implements Validator.
 func (v *RecipeDependentToolValidator) Validate() error {
+	if v.recipe == nil {
+		return fmt.Errorf("recipe is nil")
+	}
 	tools := v.requiredToolsForRecipe(v.recipe)
 	var missing []string
 	for _, tool := range tools {
