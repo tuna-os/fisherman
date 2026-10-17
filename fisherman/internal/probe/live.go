@@ -28,7 +28,8 @@ type Live struct {
 	// omit `image`: bootc installs the running container.
 	LiveImage string `json:"live_image"`
 	// DetectedBy names the signal that said "live": "/run/ostree-live",
-	// "cmdline:rd.live.image", "cmdline:root=live:" or
+	// "cmdline:rd.live.image", "cmdline:root=live:", "cmdline:root=tbox:",
+	// "cmdline:tacklebox.live.squashimg" or
 	// "/etc/bootc-installer/live-iso-mode". Empty when not live.
 	DetectedBy string `json:"detected_by,omitempty"`
 }
@@ -38,23 +39,34 @@ type Live struct {
 // inside a Flatpak, where the sandbox has its own /run.
 func (p *Prober) Live() Live {
 	var l Live
+	cmdSig := p.cmdlineSignal()
 	switch {
 	case p.hostTest("-e", ostreeLiveMarker):
 		l.DetectedBy = ostreeLiveMarker
-	case p.cmdlineSignal() != "":
-		l.DetectedBy = p.cmdlineSignal()
+	case cmdSig != "":
+		l.DetectedBy = cmdSig
 	case p.hostTest("-e", liveModeFlag):
 		l.DetectedBy = liveModeFlag
 	}
 	l.IsLive = l.DetectedBy != ""
 	if l.IsLive {
 		l.LiveImage = p.bootedImage()
+		// A flattened tacklebox live root runs no booted container, so
+		// `bootc status` has nothing to say. The media input names the
+		// same embedded immutable image; prefer the booted ref whenever
+		// bootc knows one.
+		if l.LiveImage == "" && isTboxSignal(cmdSig) {
+			if mi, err := p.MediaInput(); err == nil && mi != nil {
+				l.LiveImage = mi.Image
+			}
+		}
 	}
 	return l
 }
 
-// cmdlineSignal returns "cmdline:<token>" for a dracut live-boot argument:
-// rd.live.image (dmsquash-live) or a root=live: source.
+// cmdlineSignal returns "cmdline:<token>" for a live-boot argument:
+// rd.live.image (dmsquash-live), a root=live: source, a root=tbox: source
+// or a tacklebox.live.squashimg= image on tacklebox live media.
 func (p *Prober) cmdlineSignal() string {
 	cmdline, err := p.readKernelFile("/proc/cmdline")
 	if err != nil {
@@ -66,9 +78,19 @@ func (p *Prober) cmdlineSignal() string {
 			return "cmdline:rd.live.image"
 		case strings.HasPrefix(tok, "root=live:"):
 			return "cmdline:root=live:"
+		case strings.HasPrefix(tok, "root=tbox:"):
+			return "cmdline:root=tbox:"
+		case tok == "tacklebox.live.squashimg" || strings.HasPrefix(tok, "tacklebox.live.squashimg="):
+			return "cmdline:tacklebox.live.squashimg"
 		}
 	}
 	return ""
+}
+
+// isTboxSignal reports whether a cmdline signal comes from tacklebox live
+// media (a flattened live root with an embedded immutable image).
+func isTboxSignal(sig string) bool {
+	return sig == "cmdline:root=tbox:" || sig == "cmdline:tacklebox.live.squashimg"
 }
 
 // bootedImage is .status.booted.image.image.image from `bootc status
@@ -93,6 +115,38 @@ func (p *Prober) bootedImage() string {
 		return ""
 	}
 	return status.Status.Booted.Image.Image.Image
+}
+
+// Offline OCI media input, the v1 contract between the tacklebox ISO builder
+// and fisherman. The alias keeps one canonical type in install (which probe
+// already imports, so the reverse would be a cycle); ParseMediaInput and
+// Validate are re-exported here for callers that only know probe.
+const (
+	// MediaInputPath is the host path the ISO builder writes
+	// media-input.json to. A host /etc path, so Flatpak-aware like
+	// offlineStoresFile.
+	MediaInputPath = "/etc/bootc-installer/media-input.json"
+)
+
+// MediaInput describes the immutable embedded image on offline live media.
+// See install.MediaInput for the field contract.
+type MediaInput = install.MediaInput
+
+// ParseMediaInput decodes media-input.json; see install.ParseMediaInput.
+func ParseMediaInput(data []byte) (*MediaInput, error) {
+	return install.ParseMediaInput(data)
+}
+
+// MediaInput reads the host's media-input.json. Inside a Flatpak the host's
+// /etc is read under /run/host, like every other host file. A missing file
+// is ordinary (not live media, or media without an embedded image) and
+// returns (nil, nil).
+func (p *Prober) MediaInput() (*MediaInput, error) {
+	data, err := p.hostReadFile(MediaInputPath)
+	if err != nil {
+		return nil, nil
+	}
+	return ParseMediaInput(data)
 }
 
 // Offline-store discovery, the union of what the frontends looked at.

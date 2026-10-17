@@ -388,6 +388,9 @@ func main() {
 	if r.Image != "" {
 		progress.Info("Checking image cache...")
 		imageCheck = install.CheckImage(r.Image)
+		if install.IsOCISource(r.Image) && imageCheck.NeedsPull {
+			fatal("required local source is absent or unreadable; refusing installation")
+		}
 		if strings.HasPrefix(r.Image, "containers-storage:") && imageCheck.NeedsPull {
 			fatal("required local source is absent or unreadable; refusing installation")
 		}
@@ -398,6 +401,25 @@ func main() {
 		} else {
 			progress.Info("Image already up to date in local cache")
 		}
+	}
+
+	// ── Pre-flight: offline OCI media source ────────────────────────────────
+	// When the host carries an embedded immutable image (media-input.json
+	// bound by resolveMediaInput), verify its OCI layout BEFORE any
+	// partitioning or formatting. A bound media input is the install source:
+	// it is never pulled, and any missing, corrupt or mismatched input
+	// refuses the installation with the same wording as a missing local
+	// containers-storage source.
+	mediaInput := resolveMediaInput(r)
+	sourceImgref := r.Image
+	if mediaInput != nil {
+		if err := install.PreflightOCILayout(mediaInput.OCILayoutPath, mediaInput.ExpectedDigest()); err != nil {
+			fatal("required local source is absent or unreadable; refusing installation: %v", err)
+		}
+		sourceImgref = "oci:" + mediaInput.OCILayoutPath
+		imageCheck.NeedsPull = false
+		imageCheck.Offline = true
+		progress.Info("Offline: using embedded media image " + mediaInput.OCILayoutPath)
 	}
 
 	hasVarDisk := r.VarDisk != nil
@@ -722,6 +744,23 @@ func main() {
 	if targetImgref == r.Image {
 		targetImgref = ""
 	}
+	if mediaInput != nil {
+		// A bound media input is the install source; the installed system
+		// tracks the media's day-2 ref (or the canonical image ref when the
+		// media names none), never the on-disk layout path.
+		if targetImgref == "" {
+			targetImgref = mediaInput.TargetImgref
+		}
+		if targetImgref == "" {
+			targetImgref = r.Image
+			if targetImgref == "" {
+				targetImgref = mediaInput.Image
+			}
+		}
+		if targetImgref == sourceImgref {
+			targetImgref = ""
+		}
+	}
 
 	// ZFS installs must use composefs-backend because bootc's ostree path checks
 	// the filesystem type and rejects ZFS; composefs-native bypasses that check.
@@ -731,7 +770,7 @@ func main() {
 	}
 
 	if err := install.BootcInstall(install.Options{
-		SourceImgref:          r.Image,
+		SourceImgref:          sourceImgref,
 		TargetImgref:          targetImgref,
 		SelinuxDisabled:       r.SelinuxDisabled,
 		UnifiedStorage:        r.UnifiedStorage,

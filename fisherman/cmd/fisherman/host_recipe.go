@@ -4,6 +4,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/tuna-os/fisherman/internal/install"
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/recipe"
 )
@@ -13,8 +14,9 @@ import (
 // frontend shows can never disagree about whether this is live media or where
 // the offline stores are. Tests replace newProber (probe.go).
 var (
-	hostLive    = func() probe.Live { return newProber().Live() }
-	hostOffline = func() probe.Offline { return newProber().Offline() }
+	hostLive       = func() probe.Live { return newProber().Live() }
+	hostOffline    = func() probe.Offline { return newProber().Offline() }
+	hostMediaInput = func() (*install.MediaInput, error) { return newProber().MediaInput() }
 )
 
 // recipeStdin is where `fisherman -` reads its recipe; tests replace it.
@@ -52,4 +54,24 @@ func resolveImageStores(r *recipe.Recipe) (stores []string, discovered bool) {
 		return r.AdditionalImageStores, false
 	}
 	return hostOffline().Stores, true
+}
+
+// resolveMediaInput binds the host's offline OCI media input
+// (media-input.json) to a recipe. A live install (empty image) always uses
+// the embedded image when the host carries one, and a recipe that names the
+// embedded image uses its verified layout too; anything else returns nil and
+// the install proceeds exactly as before.
+//
+// The binding is only the OCI layout path plus the expected digest and the
+// day-2 target ref. additionalImageStores stays strictly for
+// containers-storage graphroots: an OCI layout path must never appear there.
+func resolveMediaInput(r *recipe.Recipe) *install.MediaInput {
+	mi, err := hostMediaInput()
+	if err != nil || mi == nil || mi.OCILayoutPath == "" {
+		return nil
+	}
+	if r.Image == "" || r.Image == mi.Image {
+		return mi
+	}
+	return nil
 }

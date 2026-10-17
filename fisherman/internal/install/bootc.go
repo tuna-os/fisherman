@@ -213,7 +213,11 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	if ociPath == "" {
 		ociPath = opts.scratchDir() + "/oci-cache"
 	}
-	if opts.ComposeFsBackend || opts.ComposeFsOCIPath != "" {
+	if IsOCISource(opts.SourceImgref) {
+		// A verified read-only OCI layout (offline media) passes straight
+		// through to bootc, for both ostree and composefs installs.
+		args = append(args, "--source-imgref", opts.SourceImgref)
+	} else if opts.ComposeFsBackend || opts.ComposeFsOCIPath != "" {
 		args = append(args, "--source-imgref", "oci:"+ociPath)
 	} else if opts.directLocalSource {
 		// Direct mode from an explicit local source, which may differ from
@@ -400,6 +404,11 @@ func useDirectForLocalSource(opts Options) bool {
 }
 
 func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
+	// A verified OCI layout source is already on disk; exporting it again
+	// would only cost time and scratch space.
+	if IsOCISource(sourceImgref) {
+		return nil
+	}
 	// Composefs always requires OCI layout for raw blobs.
 	// Non-composefs only needs it in container mode with overlay redirect.
 	// In direct mode (bootcDirect) for non-composefs, bootc reads from
@@ -423,7 +432,8 @@ func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
 // bootcViaContainer runs bootc from inside the source container image.
 // This is the required approach when not already running inside the image.
 func bootcViaContainer(opts Options) error {
-	localSource := strings.HasPrefix(opts.SourceImgref, "containers-storage:")
+	ociSource := IsOCISource(opts.SourceImgref)
+	localSource := ociSource || strings.HasPrefix(opts.SourceImgref, "containers-storage:")
 	if localSource && opts.NeedsPull {
 		return fmt.Errorf("required local source is absent; refusing registry fallback")
 	}
@@ -445,7 +455,7 @@ func bootcViaContainer(opts Options) error {
 	// avoids the copy entirely — working layers are created via mount namespaces —
 	// eliminating the memory pressure that kills podman during bootc install.
 	var nonComposefsRoot, nonComposefsRunRoot, nonComposefsDriver string
-	if !opts.ComposeFsBackend && storageSpaceConstrainedFn() {
+	if !opts.ComposeFsBackend && !ociSource && storageSpaceConstrainedFn() {
 		driver, reason := selectStorageDriverFn(scratch)
 		if driver == "overlay" {
 			progress.Substep(fmt.Sprintf("Redirecting podman storage to target disk with %s driver (%s)", driver, reason))
@@ -488,7 +498,7 @@ func bootcViaContainer(opts Options) error {
 	// blobs; non-composefs OCI-redirect uses it so we can skip the
 	// containers-storage bind mount (the major source of podman memory
 	// pressure).
-	if useOciLayout {
+	if useOciLayout && !ociSource {
 		exportRef := opts.SourceImgref
 		if nonComposefsRoot != "" && opts.NeedsPull && !localSource {
 			// The image was pulled into the redirected root; qualify the
@@ -512,7 +522,7 @@ func bootcViaContainer(opts Options) error {
 	}
 
 	containerOpts := opts
-	if useOciLayout {
+	if useOciLayout && !ociSource {
 		containerOpts.ComposeFsOCIPath = containerOCICachePath
 	}
 	bootcArgs := BuildBootcArgs(containerOpts, targetImgref, "/target")
@@ -520,8 +530,13 @@ func bootcViaContainer(opts Options) error {
 	// Build the podman run invocation.
 	var podmanArgs []string
 	podmanImageRef := bareImageRef(opts.SourceImgref)
+	if ociSource {
+		// Run bootc from the verified on-disk layout itself: podman reads an
+		// OCI layout directly, so no export or registry pull is needed.
+		podmanImageRef = opts.SourceImgref
+	}
 
-	if useOciLayout {
+	if useOciLayout && !ociSource {
 		ociCacheHost := filepath.Join(scratch, "oci-cache")
 		podmanImageRef = "oci:" + ociCacheHost
 
@@ -570,7 +585,19 @@ func bootcViaContainer(opts Options) error {
 		podmanArgs = append(podmanArgs, "-v", "/sys/firmware/efi/efivars:/sys/firmware/efi/efivars")
 	}
 
-	if useOciLayout {
+	if ociSource {
+		// Straight-through OCI layout: bootc inside the container reads the
+		// same host path, so bind-mount the layout read-only at its own
+		// location. /var/tmp stays disk-backed scratch, never /run.
+		ociLayoutHost := strings.TrimPrefix(opts.SourceImgref, "oci:")
+		if !opts.ComposeFsBackend {
+			podmanArgs = append(podmanArgs, "-v", scratch+":/var/tmp:z")
+		} else {
+			podmanArgs = append(podmanArgs, "--tmpfs", "/var/tmp")
+		}
+		podmanArgs = append(podmanArgs,
+			"-v", ociLayoutHost+":"+ociLayoutHost+":ro")
+	} else if useOciLayout {
 		ociCacheHost := filepath.Join(scratch, "oci-cache")
 		// Non-composefs (ostree) installs: bootc needs disk-backed /var/tmp
 		// for deployment scratch.  tmpfs would consume VM RAM and OOM-kill.
@@ -590,7 +617,7 @@ func bootcViaContainer(opts Options) error {
 		"--mount", fmt.Sprintf("type=bind,src=%s,dst=/target,bind-propagation=rslave", opts.Target),
 	)
 
-	if NeedsContainerStorageMount(opts) && !useOciLayout {
+	if NeedsContainerStorageMount(opts) && !useOciLayout && !ociSource {
 		podmanArgs = append(podmanArgs, "-v", "/var/lib/containers:/var/lib/containers")
 		var cleanupConf func()
 		podmanArgs, cleanupConf = appendImageStoreArgs(podmanArgs, scratch, opts)
@@ -1207,6 +1234,17 @@ func CheckImage(image string) ImageCheck {
 	}
 
 	// An explicit local source must never query or fall back to a registry.
+	// A read-only OCI layout source is inspected locally only (the same
+	// checks as the install preflight) and must never query or fall back to
+	// a registry. A missing or corrupt layout reports NeedsPull so callers
+	// refuse the install before touching any disk.
+	if IsOCISource(image) {
+		layers, err := inspectOCILayout(strings.TrimPrefix(image, "oci:"), "")
+		if err != nil {
+			return ImageCheck{NeedsPull: true}
+		}
+		return ImageCheck{NeedsPull: false, LayerCount: layers, Offline: true}
+	}
 	if strings.HasPrefix(image, "containers-storage:") {
 		localOut, err := SkopeoInspectFn(image)
 		var local manifest
