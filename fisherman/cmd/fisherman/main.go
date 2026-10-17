@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -326,14 +327,15 @@ func main() {
 	// including the hostname, username, and TPM checks, runs here: before any
 	// disk is touched. The ValidatorChain stops at the first error.
 	var live probe.Live
+	if r.Image == "" {
+		live = hostLive()
+	}
 	chain := validation.NewChain().
 		Add(validation.NewRecipeProblemsValidator(r, tpm2Usable())).
-		Add(validation.NewImageSourceValidator(r, hostLive()))
+		Add(validation.NewImageSourceValidator(r, live))
 	if err := chain.Run(); err != nil {
-		fatal("invalid recipe: %v", err)
+		fatal("invalid recipe: %v", errors.Unwrap(err))
 	}
-	// Retrieve live media info for later use in progress messages
-	live = hostLive()
 
 	// Recipe-level overrides for the otherwise-shared global mount paths.
 	// Keeps two parallel installs on the same host from colliding.
@@ -358,7 +360,7 @@ func main() {
 	toolChain := validation.NewChain().
 		Add(validation.NewRecipeDependentToolValidator(r))
 	if err := toolChain.Run(); err != nil {
-		fatal("missing required host tool: %v", err)
+		fatal("missing required host tool: %v", errors.Unwrap(err))
 	}
 
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
