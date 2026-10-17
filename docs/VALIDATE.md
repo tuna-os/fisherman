@@ -186,6 +186,108 @@ differ. Regenerate it with:
 cd fisherman && go test ./internal/recipe -run TestEncryptionChoicesFile -update
 ```
 
+## Error Code Reference
+
+This section maps error codes to their causes and corrective actions. Each code is stable and will not be reused or renamed.
+
+### Recipe Structure
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `recipe_unreadable` | (whole recipe) | Recipe file could not be read | Verify the file path and permissions |
+| `recipe_malformed` | (whole recipe) | Recipe JSON is not valid JSON | Validate the JSON syntax |
+
+### Disk and Partition
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `disk_required` | `disk` | No disk specified in auto-layout recipe | Add `"disk": "/dev/sdX"` or similar |
+| `disk_not_found` | `disk` | The disk path does not exist | Check the disk path; run `lsblk` to list available disks |
+| `var_disk_required` | `varDisk.disk` | No `/var` disk specified when `varDisk` is used | Add `"varDisk": {"disk": "/dev/sdY"}` |
+| `var_disk_not_found` | `varDisk.disk` | The `/var` disk path does not exist | Check the disk path |
+| `var_disk_same_as_disk` | `varDisk.disk` | The `/var` disk is the same as the root disk | Use a different disk for `/var` |
+| `custom_mount_partition_required` | `customMounts[i].partition` | Partition path is missing in custom mount | Specify a partition path |
+| `custom_mount_partition_not_found` | `customMounts[i].partition` | The partition path does not exist | Check the partition path |
+| `custom_mounts_no_root` | `customMounts` | No custom mount targets `/` (root filesystem) | Add an entry with `"target": "/"` |
+
+### Filesystem
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `filesystem_unsupported` | `filesystem` | Filesystem is not one of `xfs`, `ext4`, `btrfs`, or `zfs` | Choose a supported filesystem |
+| `btrfs_subvolumes_require_btrfs` | `btrfsSubvolumes` | `btrfsSubvolumes` requires `filesystem: btrfs` | Either remove `btrfsSubvolumes` or change filesystem to `btrfs` |
+| `composefs_requires_fsverity` | `composeFsBackend` | composefs backend requires fs-verity support, which XFS does not provide | Change filesystem to `ext4`, `btrfs`, or `zfs`; or disable `composeFsBackend` |
+| `custom_mount_fstype_unsupported` | `customMounts[i].fstype` | Custom mount filesystem type is not supported | Use one of: `fat32`, `ext3`, `ext4`, `xfs`, `btrfs`, `swap`, `unformatted`, or empty |
+
+### Encryption
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `encryption_unsupported` | `encryption.type` | Encryption type is not one of the supported choices | Use `none`, `luks-passphrase`, `tpm2-luks`, or `tpm2-luks-passphrase` |
+| `encryption_unsupported_on_zfs` | `encryption.type` | LUKS encryption cannot be used with ZFS | Either disable encryption or use a different filesystem |
+| `encryption_unsupported_on_manual_layout` | `encryption.type` | Encryption is not supported with custom mount layout | Use auto layout, or disable encryption |
+| `encryption_tpm_unavailable` | `encryption.type` | TPM 2.0 is required but not available or not usable on this system | Choose `luks-passphrase` instead, or enable TPM in BIOS |
+| `encryption_passphrase_required` | `encryption.passphrase` | A passphrase is required for this encryption type but is empty | Provide a non-empty passphrase |
+
+### Hostname
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `hostname_required` | `hostname` | Hostname is required but missing | Provide a hostname |
+| `hostname_too_long` | `hostname` | Hostname exceeds 64 characters | Shorten the hostname to 64 characters or less |
+| `hostname_invalid_char` | `hostname` | Hostname contains invalid characters | Use only ASCII letters, digits, `-`, and `.` |
+| `hostname_label_empty` | `hostname` | A label (part between dots) is empty or missing | Remove consecutive dots and ensure labels exist between dots |
+| `hostname_label_too_long` | `hostname` | A label exceeds 63 characters | Shorten each label to 63 characters or less |
+| `hostname_label_hyphen` | `hostname` | A label starts or ends with `-` | Hyphens cannot start or end a label |
+
+### Username
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `username_too_long` | `user.username` | Username exceeds 32 characters | Shorten the username to 32 characters or less |
+| `username_invalid_start` | `user.username` | Username does not start with a lowercase letter or `_` | Start with a lowercase letter (a–z) or underscore |
+| `username_invalid_char` | `user.username` | Username contains invalid characters | Use only lowercase letters, digits, `-`, and `_` |
+| `username_reserved` | `user.username` | Username is reserved by the system | Use a different username; reserved names include common service accounts, systemd system users, and standard UNIX users |
+
+### Image and Distribution
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `image_required` | `image` | Image is required on non-live systems but is empty | Provide a container image URL |
+| `image_type_unsupported` | `imageType` | Image type is not empty or `bootc` | Leave empty or use `bootc` |
+| `distro_id_invalid` | `distroID` | distroID contains invalid characters or format | Use 1–63 lowercase letters, digits, and `-`, starting with a lowercase letter |
+
+### Bootloader and Slurp
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `bootloader_unsupported` | `bootloader` | Bootloader is not empty, `grub2`, or `systemd` | Use one of: empty (auto), `grub2`, or `systemd` |
+| `slurp_unsupported` | `slurp` | User-data migration (slurp) without durable rescue storage is not supported | Specify a `slurpRescueStore` disk, or remove the `slurp` field |
+| `brew_tap_invalid` | `brewTap` | Homebrew tap format is invalid | Use `owner/name` format, with each part containing only letters, digits, `.`, `_`, and `-` |
+
+### Interpreting Errors in JSON
+
+When calling `fisherman validate --json`, errors are returned as:
+
+```json
+{
+  "problems": [
+    {
+      "field": "hostname",
+      "code": "hostname_invalid_char",
+      "message": "hostname \"my_pc\" contains '_'; use only letters, digits, hyphens and dots"
+    }
+  ]
+}
+```
+
+**Key points for integrators:**
+- Use the `code` field to match against this reference (codes are stable and will not change)
+- Use the `message` field for user-facing display (messages may be improved over time)
+- The `field` field identifies which recipe field caused the problem
+- Multiple problems may be returned; process all of them before showing the user
+- If you encounter an unknown code, treat it as an error and show the message
+
 ## Compatibility
 
 `protocol_version` changes when a field is removed or renamed or its meaning
