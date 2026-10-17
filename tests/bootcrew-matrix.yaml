@@ -57,6 +57,24 @@ images:
     vm_boot: true   # exercises Flatpak-copy + installer-app-exclusion (PR #1)
     build_ssh_image: true
 
+  # Issue #176: constrain the installer itself, not only the post-install
+  # QEMU guest. yellowfin is a large desktop image and exercises the
+  # non-composefs podman path where VFS copies previously caused OOM kills.
+  # The just recipe forces podman into the same cgroup so child containers
+  # cannot escape the 4 GiB limit.
+  - name: yellowfin-gnome50-low-memory
+    image: ghcr.io/tuna-os/yellowfin:gnome50
+    ssh_image_name: yellowfin-gnome50
+    filesystem: xfs
+    composefs_backend: false
+    unified_storage: false
+    selinux_disabled: true
+    flatpaks:
+      - org.mozilla.firefox
+    install_memory_max: 4G
+    nightly: false
+    vm_boot: true
+
   # composefs_backend must stay false while filesystem is xfs: the recipe
   # validator rejects the pair outright ("composefs-backend requires
   # fs-verity, which XFS does not support"), so the install never starts.

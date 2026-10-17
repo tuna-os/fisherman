@@ -267,6 +267,7 @@ bootcrew-ci-test IMAGE_JSON:
   LUKS_PASSPHRASE=$(echo "$IMAGE_JSON" | jq -r '.luks_passphrase // ""')
   SSH_NAME=$(echo "$IMAGE_JSON" | jq -r '.ssh_image_name // .name')
   VM_TIMEOUT=$(echo "$IMAGE_JSON" | jq -r '.vm_timeout // 600')
+  INSTALL_MEMORY_MAX=$(echo "$IMAGE_JSON" | jq -r '.install_memory_max // ""')
   
   echo "=========================================="
   echo "Bootcrew CI Test: $IMAGE_NAME"
@@ -274,6 +275,9 @@ bootcrew-ci-test IMAGE_JSON:
   echo "Filesystem: $FILESYSTEM"
   echo "ComposFS Backend: $COMPOSEFS"
   echo "LUKS: $LUKS"
+  if [ -n "$INSTALL_MEMORY_MAX" ]; then
+    echo "Installer memory limit: $INSTALL_MEMORY_MAX (swap disabled)"
+  fi
   echo "=========================================="
   echo ""
   
@@ -331,7 +335,27 @@ bootcrew-ci-test IMAGE_JSON:
   fi
   
   echo "Installing system..."
-  sudo /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
+  if [ -n "$INSTALL_MEMORY_MAX" ]; then
+    # Keep podman's containers inside the transient scope. With podman's
+    # default systemd cgroup manager they get separate scopes and escape the
+    # limit, so this test-only wrapper selects cgroupfs for the whole process
+    # tree. The wrapper is created after tool setup and removed on return.
+    REAL_PODMAN=$(command -v podman)
+    PODMAN_WRAPPER=$(mktemp -d)
+    trap 'rm -rf "$PODMAN_WRAPPER"' EXIT
+    cat > "$PODMAN_WRAPPER/podman" << EOF
+  #!/bin/sh
+  exec "$REAL_PODMAN" --cgroup-manager=cgroupfs "\$@"
+  EOF
+    chmod 0755 "$PODMAN_WRAPPER/podman"
+    sudo env "PATH=$PODMAN_WRAPPER:$PATH" \
+      systemd-run --scope --quiet --collect \
+      --property="MemoryMax=$INSTALL_MEMORY_MAX" \
+      --property="MemorySwapMax=0" \
+      /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
+  else
+    sudo /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
+  fi
 
   # The registry image has password authentication disabled. Inject this
   # run's public key into the installed target for the localhost-only VM test
