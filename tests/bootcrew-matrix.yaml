@@ -15,7 +15,7 @@
 #          matter.
 images:
   - name: dakota
-    image: ghcr.io/projectbluefin/dakota:latest
+    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
     filesystem: ext4
     composefs_backend: true
     bootloader: systemd
@@ -27,7 +27,7 @@ images:
     build_ssh_image: true
 
   - name: bluefin-lts
-    image: ghcr.io/ublue-os/bluefin:lts
+    image: ghcr.io/ublue-os/bluefin@sha256:c4fe04748470e801f9ec44c2c9931d5447957211567144d7bef37eae47514585 # lts
     filesystem: xfs
     composefs_backend: false
     unified_storage: false
@@ -36,7 +36,7 @@ images:
     vm_boot: false
 
   - name: centos-bootc
-    image: quay.io/centos-bootc/centos-bootc:c10s
+    image: quay.io/centos-bootc/centos-bootc@sha256:9aedf2d189b85c498697f9b83112c893b084d359268da7dd6d5d848478d260de # c10s
     filesystem: xfs
     composefs_backend: false
     unified_storage: false
@@ -47,7 +47,7 @@ images:
     build_ssh_image: true
 
   - name: yellowfin-gnome50
-    image: ghcr.io/tuna-os/yellowfin:gnome50
+    image: ghcr.io/tuna-os/yellowfin@sha256:c4d3a42f6defa62c4c28b86b09eeb08748b78922d6df26fc5f3107dbcbd9d1c0 # gnome50
     filesystem: xfs
     composefs_backend: false
     unified_storage: false
@@ -63,7 +63,7 @@ images:
   # The just recipe forces podman into the same cgroup so child containers
   # cannot escape the 4 GiB limit.
   - name: yellowfin-gnome50-low-memory
-    image: ghcr.io/tuna-os/yellowfin:gnome50
+    image: ghcr.io/tuna-os/yellowfin@sha256:c4d3a42f6defa62c4c28b86b09eeb08748b78922d6df26fc5f3107dbcbd9d1c0 # gnome50
     ssh_image_name: yellowfin-gnome50
     filesystem: xfs
     composefs_backend: false
@@ -82,7 +82,7 @@ images:
   # but did not reach here, because vm_boot: false keeps these two out of the
   # PR gate — nightly still processes every entry regardless of vm_boot (#106).
   - name: ubuntu-bootc
-    image: ghcr.io/bootcrew/ubuntu-bootc:latest
+    image: ghcr.io/bootcrew/ubuntu-bootc@sha256:296b8d2367db7026d90db281b868837e275a2cff116e3f6ab401cd3f40e6562d # latest
     filesystem: xfs
     composefs_backend: false
     unified_storage: false
@@ -102,7 +102,7 @@ images:
 
   # composefs_backend false for the same reason as ubuntu-bootc above.
   - name: opensuse-bootc
-    image: ghcr.io/bootcrew/opensuse-bootc:latest
+    image: ghcr.io/bootcrew/opensuse-bootc@sha256:c9f8126d87d805bb150046278ed68f3e20ff881602fb4579e4876f13c59183b3 # latest
     filesystem: xfs
     composefs_backend: false
     unified_storage: false
@@ -115,7 +115,7 @@ images:
   # composefs requires fs-verity, which XFS does not support, so use ext4
   # (the same backend/layout as the passing dakota canary).
   - name: arch-bootc
-    image: ghcr.io/bootcrew/arch-bootc:latest
+    image: ghcr.io/bootcrew/arch-bootc@sha256:14b31e6578955ea4facbb51024e77f1e19080256f4abf0132820a0241c953d71 # latest
     filesystem: ext4
     composefs_backend: true
     bootloader: systemd
@@ -127,7 +127,7 @@ images:
 
   # LUKS variants — vm_boot only (nightly excluded: nightly patches root=/dev/vdaX which is wrong for LUKS)
   - name: dakota-luks
-    image: ghcr.io/projectbluefin/dakota:latest
+    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
     ssh_image_name: dakota
     filesystem: ext4
     composefs_backend: true
@@ -145,7 +145,7 @@ images:
   # cannot be used with composefs-backend (no fs-verity), so filesystem is
   # ext4 — the same LUKS+composefs+ext4 layout as the passing dakota-luks.
   - name: arch-bootc-luks
-    image: ghcr.io/bootcrew/arch-bootc:latest
+    image: ghcr.io/bootcrew/arch-bootc@sha256:14b31e6578955ea4facbb51024e77f1e19080256f4abf0132820a0241c953d71 # latest
     ssh_image_name: arch-bootc
     filesystem: ext4
     composefs_backend: true
@@ -165,7 +165,7 @@ images:
   # btrfs, so does not reproduce the exact scratch-on-btrfs failure mode — but validates the
   # LUKS+composefs install path against a btrfs target filesystem end-to-end).
   - name: dakota-luks-btrfs
-    image: ghcr.io/projectbluefin/dakota:latest
+    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
     ssh_image_name: dakota
     filesystem: btrfs
     composefs_backend: true
@@ -195,7 +195,7 @@ images:
   # composefs requires fs-verity, which XFS does not support, so use ext4
   # (the same backend/layout as the passing dakota canary).
   - name: debian-bootc
-    image: ghcr.io/bootcrew/debian-bootc:latest
+    image: ghcr.io/bootcrew/debian-bootc@sha256:006eaaad4072b4925ef6f2bb693332a81baee1ff01fec4b1a68bdcc7b0eb622b # latest
     filesystem: ext4
     composefs_backend: true
     bootloader: systemd
@@ -206,7 +206,7 @@ images:
     build_ssh_image: true
 
   - name: frostyard-snow
-    image: ghcr.io/frostyard/snow:latest
+    image: ghcr.io/frostyard/snow@sha256:7c1a655c3754f758bb39ad32ed0de3fa1ff70db346dc9e9e78bc4cc9beef6eee # latest
     filesystem: btrfs
     composefs_backend: true
     unified_storage: false
