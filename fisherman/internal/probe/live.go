@@ -144,7 +144,7 @@ func ParseMediaInput(data []byte) (*MediaInput, error) {
 func (p *Prober) MediaInput() (*MediaInput, error) {
 	data, err := p.hostReadFile(MediaInputPath)
 	if err != nil {
-		return nil, nil
+		return nil, nil //nolint:nilerr // best-effort: absent/unreadable media input → no binding, install proceeds as before
 	}
 	return ParseMediaInput(data)
 }
