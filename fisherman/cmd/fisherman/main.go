@@ -270,6 +270,9 @@ func looksLikeSubcommand(arg string) bool {
 	return err != nil
 }
 
+// Test seam; production preserves the native-context guard from #346.
+var checkTargetFlatpakIntentContext = post.CheckTargetFlatpakIntentContext
+
 func main() {
 	if len(os.Args) < 2 {
 		printHelp()
@@ -324,8 +327,14 @@ func main() {
 		fatal("loading recipe: %v", err)
 	}
 
-	if err := post.CheckTargetFlatpakIntentContext(r.FlatpakIntent); err != nil {
+	if err := checkTargetFlatpakIntentContext(r.FlatpakIntent); err != nil {
 		fatal("Flatpak selection execution context: %v", err)
+	}
+
+	// Exact browser OCI bindings are verified before tool probes or disk work.
+	explicitMediaInput, err := resolveExplicitOCIMediaInput(r)
+	if err != nil {
+		fatal("required local source is absent or unreadable; refusing installation: %v", err)
 	}
 
 	// Run pre-flight validation chain. Every rule `fisherman validate` enforces,
@@ -398,7 +407,7 @@ func main() {
 
 	// ── Pre-flight: check image cache ─────────────────────────────────────────
 	var imageCheck install.ImageCheck
-	if r.Image != "" {
+	if r.Image != "" && explicitMediaInput == nil {
 		progress.Info("Checking image cache...")
 		imageCheck = install.CheckImage(r.Image)
 		if install.IsOCISource(r.Image) && imageCheck.NeedsPull {
@@ -423,11 +432,16 @@ func main() {
 	// it is never pulled, and any missing, corrupt or mismatched input
 	// refuses the installation with the same wording as a missing local
 	// containers-storage source.
-	mediaInput := resolveMediaInput(r)
+	mediaInput := explicitMediaInput
+	if mediaInput == nil && !install.IsOCISource(r.Image) {
+		mediaInput = resolveMediaInput(r)
+	}
 	sourceImgref := r.Image
 	if mediaInput != nil {
-		if err := install.PreflightOCILayout(mediaInput.OCILayoutPath, mediaInput.ExpectedDigest()); err != nil {
-			fatal("required local source is absent or unreadable; refusing installation: %v", err)
+		if explicitMediaInput == nil {
+			if err := install.PreflightOCILayout(mediaInput.OCILayoutPath, mediaInput.ExpectedDigest()); err != nil {
+				fatal("required local source is absent or unreadable; refusing installation: %v", err)
+			}
 		}
 		sourceImgref = "oci:" + mediaInput.OCILayoutPath
 		imageCheck.NeedsPull = false
