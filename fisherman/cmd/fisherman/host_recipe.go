@@ -1,8 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/tuna-os/fisherman/internal/install"
 	"github.com/tuna-os/fisherman/internal/probe"
@@ -74,4 +77,45 @@ func resolveMediaInput(r *recipe.Recipe) *install.MediaInput {
 		return mi
 	}
 	return nil
+}
+
+// preflightExplicitOCIMedia is replaced only by ordering tests. The production
+// implementation reads and hashes the bound read-only layout before disk work.
+var preflightExplicitOCIMedia = install.PreflightBoundOCIMediaInput
+
+// resolveExplicitOCIMediaInput never treats an unrelated path as media-bound.
+// Missing metadata preserves standalone explicit-OCI compatibility; a browser
+// qualification profile must separately require the descriptor to be present.
+func resolveExplicitOCIMediaInput(r *recipe.Recipe) (*install.MediaInput, error) {
+	if !install.IsOCISource(r.Image) {
+		return nil, nil
+	}
+	mi, err := hostMediaInput()
+	if err != nil {
+		return nil, fmt.Errorf("reading explicit OCI media binding: %w", err)
+	}
+	if mi == nil || mi.OCILayoutPath == "" {
+		return nil, nil
+	}
+	sourcePath := strings.TrimPrefix(r.Image, "oci:")
+	if sourcePath != mi.OCILayoutPath {
+		// A textual alias of this descriptor is a failed binding, not an
+		// excuse to fall through to standalone OCI semantics.
+		if filepath.Clean(sourcePath) == filepath.Clean(mi.OCILayoutPath) {
+			return nil, fmt.Errorf("explicit OCI binding uses a noncanonical path alias")
+		}
+		// Truly unrelated standalone paths retain their existing parsing,
+		// including relative or noncanonical spellings accepted previously.
+		return nil, nil
+	}
+	if !filepath.IsAbs(sourcePath) || filepath.Clean(sourcePath) != sourcePath {
+		return nil, fmt.Errorf("explicit OCI source path is not canonical absolute")
+	}
+	if r.TargetImgref != "" && r.TargetImgref != mi.TargetImgref {
+		return nil, fmt.Errorf("explicit OCI targetImgref differs from bound media")
+	}
+	if err := preflightExplicitOCIMedia(mi); err != nil {
+		return nil, err
+	}
+	return mi, nil
 }
