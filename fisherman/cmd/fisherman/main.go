@@ -16,6 +16,7 @@ import (
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
+	"github.com/tuna-os/fisherman/internal/runner"
 	"github.com/tuna-os/fisherman/internal/slurp"
 	"github.com/tuna-os/fisherman/internal/validation"
 )
@@ -323,6 +324,10 @@ func main() {
 		fatal("loading recipe: %v", err)
 	}
 
+	if err := post.CheckTargetFlatpakIntentContext(r.FlatpakIntent); err != nil {
+		fatal("Flatpak selection execution context: %v", err)
+	}
+
 	// Run pre-flight validation chain. Every rule `fisherman validate` enforces,
 	// including the hostname, username, and TPM checks, runs here: before any
 	// disk is touched. The ValidatorChain stops at the first error.
@@ -361,6 +366,14 @@ func main() {
 		Add(validation.NewRecipeDependentToolValidator(r))
 	if err := toolChain.Run(); err != nil {
 		fatal("missing required host tool: %v", errors.Unwrap(err))
+	}
+
+	// Explicit app requests must have their host execution tool before any
+	// partition is touched. Use runner so Flatpak frontends probe the host.
+	if r.FlatpakIntent != nil && r.FlatpakIntent.Target.Mode == "replace" && len(r.FlatpakIntent.Target.Apps) > 0 {
+		if err := runner.Run("env", "flatpak", "--version"); err != nil {
+			fatal("explicit Flatpak selection requires host flatpak: %v", err)
+		}
 	}
 
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
@@ -897,7 +910,11 @@ func main() {
 	pi++
 	step++
 
-	if err := post.CopyFlatpaks(activeTargetMount, r.Flatpaks, r.FlatpakVarPath); err != nil {
+	if r.FlatpakIntent != nil && r.FlatpakIntent.Target.Mode == "replace" {
+		if err := post.ApplyTargetFlatpakIntent(activeTargetMount, r.FlatpakVarPath, r.FlatpakIntent); err != nil {
+			fatal("applying explicit target Flatpak selection: %v", err)
+		}
+	} else if err := post.CopyFlatpaks(activeTargetMount, r.Flatpaks, r.FlatpakVarPath); err != nil {
 		// Non-fatal — the system will work without pre-installed flatpaks.
 		progress.Info(fmt.Sprintf("Warning: could not copy flatpaks: %v", err))
 	}
