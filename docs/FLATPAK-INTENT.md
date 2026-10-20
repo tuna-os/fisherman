@@ -1,6 +1,6 @@
 # Explicit Flatpak target intent (staged implementation)
 
-This is an opt-in native-host backend contract, not an end-to-end ISO Builder feature. The currently published installer runs inside Flatpak and cannot use this stage yet. Explicit replacement in a sandbox fails before partition work; old recipes and inherit retain their existing behavior.
+This is an opt-in native-host backend contract, not an end-to-end ISO Builder feature. A Flatpak-packaged frontend may already launch the backend on the host: the released GNOME frontend does so. The published backend pin and frontend intent transport still need updating. Explicit replacement when the backend itself runs in a sandbox fails before partition work; old recipes and inherit retain their existing behavior.
 Existing `flatpaks` recipes, including their empty-list fallback behavior, remain
 unchanged when `flatpakIntent` is absent. Current frontends and browser media do
 not yet emit this contract.
@@ -70,10 +70,19 @@ nonempty repository on retry; reconciliation/resume support is a later stage.
 2. **TunaOS live overlay:** supply a nonblocking post-desktop live consumer and a
    status record. Requests cannot remove already-baked live apps in this stage.
    Required live installer bytes must already be present and verified.
-3. **Native host helper and bootc-installer/frontends:** first provide a root-owned helper in the live host filesystem, built from the same pinned fisherman revision, and invoke it through the existing host-command boundary. The helper must own both target filesystem operations and Flatpak commands in the same mount namespace. Send bounded source-aware intent on stdin, not through a temporary sandbox path. Confirm helper version/capability, effective UID, host namespace and target identity before any partition work; include a sandbox-to-host regression and VM proof before removing this stage's early rejection. Then pass the target envelope through without reducing
-   it to ID strings. Alternatively add one shared host-side resolver, but only
-   after verifying media/image binding; do not blindly import ambient media intent
-   when installing a different image. Update the fisherman release/submodule pin.
+3. **bootc-installer/frontends:** update the fisherman release/submodule pin and
+   pass the target envelope without reducing it to ID strings. The GNOME release
+   [`9f582fe0`](https://github.com/tuna-os/bootc-installer/blob/9f582fe0ecc19561be1115dfef64a59e91ea5072/bootc_installer/utils/fisherman_runner.py)
+   already stages and hashes the bundled backend and launches it through
+   `flatpak-spawn --host`; its session passes the recipe on stdin. Preserve that
+   boundary and hash verification instead of assuming a new helper is required.
+   Verify capability, effective UID, mount namespace and target identity before
+   partitioning, with bounded fake-host transport tests and subsequent VM proof.
+   A fake runner cannot establish actual namespace behavior. Retain the early
+   rejection for genuinely sandboxed backend execution. Other desktop frontend
+   release paths remain unverified; their repository reads returned 404 during
+   this audit. Alternatively add a shared host-side resolver only after verifying
+   media/image binding; never import ambient intent for a different image.
 4. **ISO Builder:** label image declarations, actual included inventory and requested
    additions separately. IDs from suggestedFlatpaks do not establish source URL,
    role, architecture or deployment. Explicit source resolution is required.
