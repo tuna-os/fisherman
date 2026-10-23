@@ -66,23 +66,39 @@ jobs:
 
       - name: Compute next version
         id: version
+        # The inputs arrive through env, never as expressions inside the
+        # script: an expression is pasted into the shell source before bash
+        # parses it, so a version like `1.0.0$(...)` would run as a command
+        # in a job that can push tags (#337).
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          REQUESTED_BUMP: ${{ inputs.bump }}
         run: |
-          LAST=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.' | head -1)
+          set -euo pipefail
+          LAST=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.' | head -1 || true)
           LAST=${LAST:-v0.0.0}
           echo "Last tag: $LAST"
 
-          if [ -n "${{ inputs.version }}" ]; then
-            NEXT="v${{ inputs.version }}"
-          elif [ "${{ inputs.bump }}" = "auto" ]; then
+          if [ -n "$REQUESTED_VERSION" ]; then
+            if [[ ! "$REQUESTED_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::version must be MAJOR.MINOR.PATCH, digits only, without a leading v (got an invalid value)"
+              exit 1
+            fi
+            NEXT="v$REQUESTED_VERSION"
+          elif [ "$REQUESTED_BUMP" = "auto" ]; then
             # Same derivation promote.yml uses, so a hand-cut release and an
             # automatic one cannot disagree about what the next version is.
             NEXT=$(./scripts/next-version.sh)
           else
             IFS='.' read -r MAJOR MINOR PATCH <<< "${LAST#v}"
-            case "${{ inputs.bump }}" in
+            case "$REQUESTED_BUMP" in
               major) NEXT="v$((MAJOR+1)).0.0" ;;
               minor) NEXT="v${MAJOR}.$((MINOR+1)).0" ;;
               patch) NEXT="v${MAJOR}.${MINOR}.$((PATCH+1))" ;;
+              *)
+                echo "::error::bump must be auto, patch, minor or major"
+                exit 1
+                ;;
             esac
           fi
 
@@ -92,10 +108,10 @@ jobs:
 
       - name: Generate changelog
         id: changelog
+        env:
+          LAST: ${{ steps.version.outputs.last }}
+          NEXT: ${{ steps.version.outputs.version }}
         run: |
-          LAST="${{ steps.version.outputs.last }}"
-          NEXT="${{ steps.version.outputs.version }}"
-
           if [ "$LAST" = "v0.0.0" ]; then
             RANGE="HEAD"
           else
@@ -136,8 +152,9 @@ jobs:
           cat /tmp/changelog.md
 
       - name: Create and push tag
+        env:
+          NEXT: ${{ steps.version.outputs.version }}
         run: |
-          NEXT="${{ steps.version.outputs.version }}"
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$NEXT" -m "Release $NEXT"
@@ -147,8 +164,8 @@ jobs:
       - name: Open release PR dev → prod
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
+          NEXT: ${{ steps.version.outputs.version }}
         run: |
-          NEXT="${{ steps.version.outputs.version }}"
           BODY=$(cat /tmp/changelog.md)
 
           gh pr create \

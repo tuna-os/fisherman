@@ -55,6 +55,12 @@ jobs:
       - name: Reconcile direction
         run: bash tests/test-reconcile-direction.sh
 
+      # workflow_dispatch inputs must reach scripts through env, never as
+      # pasted expressions, and release-cut.yml must refuse a malformed
+      # version (#337). Parses the workflows; no network.
+      - name: Workflow input handling
+        run: bash tests/test-release-cut-inputs.sh
+
   setup:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
