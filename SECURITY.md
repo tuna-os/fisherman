@@ -2,125 +2,152 @@
 
 ## Reporting Vulnerabilities
 
-If you discover a security vulnerability in fisherman, please report it responsibly by following GitHub's coordinated vulnerability disclosure process:
+If you discover a security vulnerability in fisherman, please report it
+privately:
 
-1. **Do not file a public issue.** Instead, use GitHub's [Security Advisory](https://github.com/tuna-os/fisherman/security/advisories) feature or email security@tuna-os.org.
-2. **Provide details:** affected versions, reproduction steps, and the impact.
-3. **Allow reasonable time for a fix:** we aim to release security patches within 7 days of confirmation.
+1. **Do not file a public issue.** Use GitHub's private vulnerability
+   reporting on this repository
+   ([Security → Report a vulnerability](https://github.com/tuna-os/fisherman/security/advisories/new)).
+2. **Provide details:** the affected version or commit, reproduction steps,
+   and the impact.
+3. **Allow time for a fix** before any public disclosure. Fixes land on `dev`
+   and reach users through the normal release flow, and then through each
+   frontend's submodule bump.
 
-All security vulnerabilities will be acknowledged and addressed before public disclosure. Contributors who discover and responsibly report vulnerabilities will be credited.
+Reporters who disclose responsibly will be credited in the advisory unless
+they ask not to be.
 
 ## Threat Model
 
-### What fisherman is designed to protect against
+fisherman runs as root, partitions and formats whole block devices, and
+creates LUKS volumes. It assumes a **trusted host**, **trusted container
+images** and a **trusted caller**.
 
-fisherman assumes a **trusted host** and **trusted frontends**. It makes these guarantees:
+### What fisherman aims to guarantee
 
-- **Disk integrity:** A completed fisherman install creates a bitwise correct filesystem layout on the target disk, matching the partition layout, formatting, and bootloader expectations.
-- **Encryption strength:** When LUKS encryption is requested, the encrypted root filesystem is generated and sealed correctly; the passphrase/TPM unlock flow is not weakened by fisherman.
-- **Data isolation:** Multiple simultaneous installs on the same host do not corrupt each other's target disks or scratch directories.
-- **Cleanup:** All temporary files and mount points are cleaned up after installation, even on error paths. A failed install leaves the target disk in a recoverable state.
+- **Validation before disk changes.** Every rule `fisherman validate` enforces
+  runs inside the install itself, before any disk is touched; the install
+  refuses an invalid recipe (see [`docs/VALIDATE.md`](docs/VALIDATE.md)). The
+  host tools the recipe needs are also checked before partitioning.
+- **Encryption as requested.** When LUKS is requested, fisherman formats the
+  root volume with the recipe's passphrase, or, for `tpm2-luks`, a random
+  recovery passphrase that it emits for the user to save. TPM2 is enrolled on
+  the installed system's first boot, not during the install, because PCR 7
+  measured in the installer differs from the installed system's. Until then
+  the transient key sits in `/etc/fisherman/tpm2-enroll.key` (mode `0600`,
+  directory `0700`) inside the encrypted root, and the first-boot unit shreds
+  it after enrolment (`fisherman/internal/luks/luks.go`).
+- **Scratch and mount cleanup.** Mounts, LUKS mappings and scratch
+  directories fisherman creates are released in dependency order, including
+  on the fatal-error path.
 
 ### What fisherman does not protect against
 
-- **Malicious frontends.** fisherman executes recipes provided by its caller without further validation of the caller's privileges or intent.
-- **Compromised host.** If the host is already compromised before fisherman runs, fisherman cannot guarantee the security of the installed system. SELinux policy and other security controls are applied *during* installation but assume the bootc image itself is trusted.
-- **Network-based attacks.** fisherman does not defend against MITM attacks on container image pulls; it relies on the underlying podman/skopeo security model.
-- **Passive data recovery.** Deleted files may be recoverable from an unencrypted disk or a LUKS-encrypted disk if the key material is available.
+- **An unauthorised caller.** fisherman checks that a recipe is well formed,
+  but not who wrote it or whether the caller was entitled to run it. Anyone
+  who can run fisherman as root can erase any disk on the host. Authorisation
+  is the job of the escalation layer (pkexec policy, sudoers) and of the
+  frontend.
+- **A compromised host.** If the host, its container runtime or its system
+  tools are already compromised, so is the installed system.
+- **A malicious image.** The image is installed and then booted; fisherman
+  does not inspect its contents. Image authenticity relies on the host's
+  containers configuration (registry TLS and any signature policy).
+- **Data on a disk that has been installed over.** A failed install may
+  already have repartitioned or formatted the target disk; cleanup releases
+  mounts and mappings, it does not restore the previous contents.
+- **Parallel installs with default paths.** The target mount and LUKS mapper
+  name are shared defaults. Two installs on the same host must set
+  `targetMount` and `luksMapperName` in their recipes to avoid colliding.
 
 ## Security-Relevant Invariants
 
-The following behaviors have security implications and must not be simplified or moved:
+These behaviours have security implications and must not be simplified or
+moved.
 
-### Scratch Directory Isolation
+### Scratch directory
 
-- **Two-level cleanup:** Regular files, mounts, and LUKS mappings are cleaned up in dependency order (leaf to root). Post-removal paths (like the scratch dir itself) are removed only *after* all unmounts and LUKS closes complete. This prevents accidental overwrites or data leaks.
-- **Private tempdir:** The scratch directory is created with `0700` permissions to prevent unprivileged users from reading partial installation state.
-- **Location:** On live media, scratch lives under `/<target>/.fisherman-scratch` to respect constrained overlayfs/tmpfs; on normal hosts it is `/var/fisherman-tmp`. This separation ensures CI and recovery scenarios work correctly.
+- On a normal host the scratch directory is `/var/fisherman-tmp`
+  (`fisherman/cmd/fisherman/main.go`), created mode `0700`. Do not move it
+  under `/run/*`: that is tmpfs and too small for image blobs.
+- On live media whose `/var` is tmpfs or overlayfs, scratch lives on the
+  target disk at `<target mount>/.fisherman-scratch` instead. It is
+  self-bind-mounted, and its removal is registered as a post-removal so it
+  runs after the unmount and LUKS close, and still runs on the error path.
 
-### SELinux Bypass Shim
+### SELinux bypass shim
 
-- **Privilege isolation:** The SELinux bypass shim (generated in `BuildSelinuxBypassShim`) runs as root and is bind-mounted into the privileged bootc container. Its build path must be:
-  - Private to root (no world-writable directories like `/tmp`)
-  - Protected with `O_EXCL` and `O_NOFOLLOW` during creation
-  - Located in the scratch dir (subject to proper cleanup)
-  
-  **See:** #161 (CVE details TBD) — a prior implementation wrote to `/tmp` with insufficient protection, allowing local privilege escalation.
+`BuildSelinuxBypassShim` (`fisherman/internal/install/bootc.go`) compiles a
+small shared library as root, and that library is then `LD_PRELOAD`ed into the
+privileged bootc container. It must be built in a fresh directory created by
+`os.MkdirTemp` (mode `0700`, unpredictable name), never at a fixed path in a
+world-writable directory such as `/tmp`. A fixed path would let an
+unprivileged local user pre-plant the library for root to preload, or symlink
+the source path at an arbitrary file for root to truncate (fixed in #161).
 
-### Partition Layout
+### Partition layout
 
-- **GRUB compatibility:** GRUB cannot read modern XFS features; therefore:
-  - GRUB images always use 3 partitions (EFI, ext4 `/boot`, root) even unencrypted
-  - `/boot` is always ext4 on its own partition
-  - This is not a performance optimization; it is a hard requirement for GRUB to boot the system
-  
-  **See:** README.md partition-layout table.
+- **GRUB images always use 3 partitions** (EFI, ext4 `/boot`, root), even
+  unencrypted. GRUB cannot read modern XFS features, so `/boot` is ext4 on its
+  own partition. This is a boot requirement, not an optimisation.
+- **systemd-boot images (dakota) use 2 partitions** (EFI, root), with the
+  kernel and initrd on the ESP.
+- **The ESP is 2 GiB across the whole fleet.**
 
-- **Systemd-boot simplification:** systemd-boot can read kernel+initrd directly from FAT32, so dakota images use 2 partitions (EFI, root). The ESP must still be at least 2 GiB for kernel staging.
+See the partition-layout table in the [README](README.md).
 
-### Recipe Validation Before Disk Operations
+### Recipe handling
 
-- **Fail-fast:** `fisherman validate` is called before any disk operations. All recipe fields that could damage a disk (hostname, username, filesystem choice, partition boundaries) are validated synchronously with stable error codes.
-- **Error codes:** See `docs/VALIDATE.md` for the full reference. Integrators should map these to user-facing messages before allowing installation.
-- **JSON output:** `fisherman validate --json` returns structured error objects. Frontends must not skip validation errors; they are the primary protection against misconfigured installs.
-
-### Image Source Verification
-
-- **Empty image rule:** On non-live media, an empty `image` field is rejected (exit 1). This prevents accidentally deploying the host system instead of the intended image.
-- **Live detection:** `fisherman probe --json` reports whether the host is running from live media via the `live.is_live` field. Frontends should use this to decide whether to accept an empty image.
+- **Validation.** `fisherman validate [--json]` runs the same rules as the
+  install, and frontends should call it to show errors early. The stable error
+  codes are listed in [`docs/VALIDATE.md`](docs/VALIDATE.md).
+- **Empty image.** An empty `image` is rejected unless the host booted from
+  live media (`fisherman probe --json` reports this as `live.is_live`), where
+  it means "install the running image". This keeps a mistake from silently
+  installing the host's own image.
+- **Recipes on stdin.** `fisherman -` reads the recipe from stdin (bounded to
+  1 MiB), so a frontend never has to write a recipe containing a LUKS
+  passphrase or user password to a temporary file.
 
 ## Post-Install Verification
 
-After fisherman completes successfully (exit 0), integrators and users should verify:
+After fisherman exits 0, integrators can check:
 
-1. **Partitions exist and are readable:**
+1. **The partition layout** matches the image's boot stack (3 partitions for
+   GRUB, 2 for systemd-boot):
    ```bash
-   lsblk /dev/X  # Check layout matches recipe (3 for GRUB, 2 for systemd-boot)
+   lsblk /dev/X
    ```
-
-2. **Bootloader is installed (use `bootctl` or `grub-editenv`):**
+2. **For encrypted installs**, that the unlock flow works on first boot.
+3. **The deployed image**, once booted:
    ```bash
-   bootctl status     # For systemd-boot
-   grub-editenv list  # For GRUB
-   ```
-
-3. **For encrypted installs, test the unlock flow:**
-   ```bash
-   # Reboot the system and verify Plymouth prompt + LUKS unlock works
-   ```
-
-4. **Verify the deployed image:**
-   ```bash
-   bootc status   # After first boot
+   bootc status
    ```
 
 ## Privilege Boundaries
 
-fisherman is invoked through privilege-escalation frontends:
+fisherman is started as root by its frontend:
 
-| Frontend | Escalation | stdin/recipe | Notes |
+| Path | Escalation | Recipe | Notes |
 |---|---|---|---|
-| sudo | sudo (Linux escalation) | recipe on stdin or file | fisherman validates `sudo` presence in environment |
-| pkexec | PolicyKit | recipe on stdin or file | requires PolicyKit policy allowing installer |
-| flatpak-spawn --host | Flatpak sandbox escape | recipe on stdin | used by GNOME/KDE installers running sandboxed |
+| `sudo fisherman …` | sudo | file or stdin (`-`) | CLI and test use |
+| `pkexec fisherman …` | polkit | file or stdin (`-`) | needs a polkit policy that allows it |
+| `flatpak-spawn --host pkexec fisherman …` | polkit, from a Flatpak frontend | stdin (`-`) or a host-visible path | the sandbox cannot see the host, so recipes and fisherman are staged where root on the host can read them |
 
-**Key boundary:** fisherman does not authenticate the frontend or its recipe. The frontend is responsible for:
-- Collecting user input securely
-- Prompting for confirmation before calling fisherman
-- Verifying the recipe matches user intent (especially the disk and image)
+fisherman does not authenticate the frontend or its recipe. The frontend is
+responsible for collecting input, confirming the target disk and image with
+the user, and only then starting fisherman.
 
 ## Dependencies and Supply Chain
 
-fisherman depends on:
+- **Go modules** are pinned in `fisherman/go.mod` and `go.sum` (no vendor
+  directory); CI runs `go vet` and golangci-lint.
+- **bootc** runs from the target image via `podman run --privileged` when an
+  image is given; on live media it is called directly from the running image.
+- **podman** and **skopeo** handle image pulls and offline image copies, and
+  inherit the host's containers configuration.
+- **System utilities** (`sfdisk`, `mkfs.*`, `cryptsetup`, `mount`, …) are
+  taken from the host.
 
-- **Go runtime** (v1.22+): vendored deps in `go.mod`, audited via `go mod tidy` and CI lint
-- **bootc** (bootable container CLI): called via `podman run --privileged`; assumes bootc image is from a trusted registry
-- **podman**: container runtime; inherits podman's security posture
-- **skopeo**: image copy tool; used for offline image store discovery
-- **System utilities:** cryptsetup, mkfs, mount, etc.
-
-All of these are assumed to be from a trusted source. If any are compromised, so is the resulting install.
-
-## Change Log
-
-- **2026-10-17** (initial draft): Documented threat model, invariants, and post-install verification.
+All of these are assumed to come from a trusted source. If any is
+compromised, so is the resulting install.
