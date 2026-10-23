@@ -94,6 +94,17 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	if has("brewTap") {
 		ps = append(ps, recipe.CheckBrewTap(r.BrewTap)...)
 	}
+	if has("customMounts") {
+		for i, cm := range r.CustomMounts {
+			ps = append(ps, recipe.CheckCustomMountTarget(i, cm.Target)...)
+		}
+	}
+	if has("targetMount") {
+		ps = append(ps, recipe.CheckTargetMount(r.TargetMount)...)
+	}
+	if has("flatpakVarPath") {
+		ps = append(ps, recipe.CheckFlatpakVarPath(r.FlatpakVarPath)...)
+	}
 	return ps, nil
 }
 

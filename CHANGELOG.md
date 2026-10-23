@@ -102,6 +102,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `^[a-z][a-z0-9-]{0,62}$` (`distro_id_invalid`) and `brewTap` an
   `owner/name` pair of letters, digits, `.`, `_` and `-` (`brew_tap_invalid`);
   empty values keep their defaults.
+- **Recipe host paths cannot escape the target** (#333): root appended
+  `customMounts[].target` to the target mount, mounted the root filesystem at
+  `targetMount`, and joined `flatpakVarPath` under the installed root, all
+  unchecked, so `/../../etc` or `targetMount: "/"` would mount a partition
+  over the host. The install and `fisherman validate` now refuse a relative
+  or `..`-bearing custom target (`custom_mount_target_invalid`), a
+  `targetMount` that is `/`, relative or `..`-bearing
+  (`target_mount_invalid`), and a `..`-bearing `flatpakVarPath`
+  (`flatpak_var_path_invalid`), before any disk work. Every value that worked
+  before (`/boot/efi`, `/mnt/altroot`, `state/os/default/var`, …) still does.
 
 ### 🐛 Bug Fixes
 

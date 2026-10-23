@@ -404,3 +404,78 @@ func TestValidateAllowsNoEncryptionWithCustomMounts(t *testing.T) {
 		}
 	}
 }
+
+// hasCode reports whether ps carries code on field.
+func hasCode(ps []recipe.Problem, field, code string) bool {
+	for _, p := range ps {
+		if p.Field == field && p.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+// The path rules (#333): root joins these to host directories, so a ".."
+// component or a relative custom target would escape the install target.
+func TestProblemsRejectEscapingCustomMountTargets(t *testing.T) {
+	for _, target := range []string{"/../../etc", "/boot/../../etc", "/..", "../etc", "etc", "boot/efi"} {
+		r := manualRecipe(t, "xfs", "none")
+		r.CustomMounts = append(r.CustomMounts, recipe.CustomMount{Partition: r.CustomMounts[0].Partition, Target: target, Fstype: "ext4"})
+		if !hasCode(r.Problems(), "customMounts[1].target", recipe.CodeCustomMountTargetInvalid) {
+			t.Errorf("target %q must be rejected with %s", target, recipe.CodeCustomMountTargetInvalid)
+		}
+	}
+}
+
+func TestProblemsAcceptValidCustomMountTargets(t *testing.T) {
+	for _, target := range []string{"/boot", "/boot/efi", "/var", "/home", "/var/home/", "/srv/..data", "swap", ""} {
+		r := manualRecipe(t, "xfs", "none")
+		r.CustomMounts = append(r.CustomMounts, recipe.CustomMount{Partition: r.CustomMounts[0].Partition, Target: target, Fstype: "ext4"})
+		for _, p := range r.Problems() {
+			t.Errorf("target %q: unexpected problem %s: %s", target, p.Code, p.Message)
+		}
+	}
+}
+
+func TestProblemsTargetMount(t *testing.T) {
+	cases := map[string]bool{ // value -> valid
+		"":                      true,
+		"/mnt/fisherman-target": true,
+		"/mnt/altroot":          true,
+		"/mnt/altroot/":         true,
+		"/":                     false,
+		"//":                    false,
+		"/.":                    false,
+		"/mnt/..":               false,
+		"/mnt/../etc":           false,
+		"mnt/altroot":           false,
+		"../mnt":                false,
+	}
+	for value, valid := range cases {
+		r := manualRecipe(t, "xfs", "none")
+		r.TargetMount = value
+		got := hasCode(r.Problems(), "targetMount", recipe.CodeTargetMountInvalid)
+		if got == valid {
+			t.Errorf("targetMount %q: rejected=%v, want rejected=%v", value, got, !valid)
+		}
+	}
+}
+
+func TestProblemsFlatpakVarPath(t *testing.T) {
+	cases := map[string]bool{ // value -> valid
+		"":                     true,
+		"state/os/default/var": true, // data/images.json (GnomeOS/Dakota)
+		"ostree/deploy/x/var":  true,
+		"../../etc":            false,
+		"state/../../etc":      false,
+		"/..":                  false,
+	}
+	for value, valid := range cases {
+		r := manualRecipe(t, "xfs", "none")
+		r.FlatpakVarPath = value
+		got := hasCode(r.Problems(), "flatpakVarPath", recipe.CodeFlatpakVarPathInvalid)
+		if got == valid {
+			t.Errorf("flatpakVarPath %q: rejected=%v, want rejected=%v", value, got, !valid)
+		}
+	}
+}

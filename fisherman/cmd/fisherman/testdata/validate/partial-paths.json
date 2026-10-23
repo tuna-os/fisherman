@@ -1,0 +1,8 @@
+{
+  "customMounts": [
+    {"partition": "/dev/does-not-exist1", "target": "/", "fstype": "xfs"},
+    {"partition": "/dev/does-not-exist2", "target": "/../../etc", "fstype": "ext4"}
+  ],
+  "targetMount": "/",
+  "flatpakVarPath": "../../etc"
+}

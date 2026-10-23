@@ -1,0 +1,21 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "customMounts[1].target",
+      "code": "custom_mount_target_invalid",
+      "message": "customMounts[1]: target must be \"swap\" or an absolute path without \"..\" components, got \"/../../etc\""
+    },
+    {
+      "field": "targetMount",
+      "code": "target_mount_invalid",
+      "message": "targetMount must be an absolute path other than / without \"..\" components, got \"/\""
+    },
+    {
+      "field": "flatpakVarPath",
+      "code": "flatpak_var_path_invalid",
+      "message": "flatpakVarPath must stay inside the installed root (no \"..\" components), got \"../../etc\""
+    }
+  ]
+}

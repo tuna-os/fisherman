@@ -109,9 +109,13 @@ A rule runs when its key is present:
 | `encryption` | encryption type, passphrase |
 | `bootloader` | bootloader |
 | `imageType` | imageType |
+| `customMounts` | each entry's target (not its partition) |
+| `targetMount` | targetMount |
+| `flatpakVarPath` | flatpakVarPath |
 
-Everything else (`disk`, `customMounts`, `varDisk`, the TPM) is ignored in
-partial mode: those read the machine, and the full mode checks them.
+Everything else (`disk`, the `customMounts` partitions, `varDisk`, the TPM)
+is ignored in partial mode: those read the machine, and the full mode checks
+them.
 
 Why a partial recipe rather than `--field name=value` flags: the passphrase
 rule needs the passphrase, and argv is world-readable in `/proc`. A partial
@@ -139,7 +143,10 @@ holds both fields.
 | `disk` | required on the auto layout, and must exist. Full mode only. | `disk_required`, `disk_not_found` |
 | `customMounts[i].partition` | required, and must exist unless the target is swap or empty | `custom_mount_partition_required`, `custom_mount_partition_not_found` |
 | `customMounts[i].fstype` | one of `fat32`, `ext3`, `ext4`, `xfs`, `btrfs`, `swap`, `unformatted`, `""` | `custom_mount_fstype_unsupported` |
+| `customMounts[i].target` | `""`, `swap`, or an absolute path with no `..` component. It is appended to `targetMount`, so `/../../etc` would mount the partition over the host's `/etc` and a relative `etc` would land beside the target. | `custom_mount_target_invalid` |
 | `customMounts` | one entry targets `/` | `custom_mounts_no_root` |
+| `targetMount` | empty is valid (`/mnt/fisherman-target`). Otherwise an absolute path with no `..` component that is not `/`: the root filesystem is mounted there and every post-install write goes under it. | `target_mount_invalid` |
+| `flatpakVarPath` | empty is valid (auto-detect). Otherwise no `..` component: it is joined under the installed root for the flatpak copy. | `flatpak_var_path_invalid` |
 | `varDisk.disk` | required, exists, differs from `disk` | `var_disk_required`, `var_disk_not_found`, `var_disk_same_as_disk` |
 | `image` | non-empty unless this host booted from live media (probe's `live.is_live`), where empty means "install the running live image". Full mode only. | `image_required` |
 | `imageType` | `""` or `bootc` | `image_type_unsupported` |
@@ -209,6 +216,9 @@ This section maps error codes to their causes and corrective actions. Each code 
 | `custom_mount_partition_required` | `customMounts[i].partition` | Partition path is missing in custom mount | Specify a partition path |
 | `custom_mount_partition_not_found` | `customMounts[i].partition` | The partition path does not exist | Check the partition path |
 | `custom_mounts_no_root` | `customMounts` | No custom mount targets `/` (root filesystem) | Add an entry with `"target": "/"` |
+| `custom_mount_target_invalid` | `customMounts[i].target` | The target is relative or has a `..` component, so it would resolve outside the install target | Use `swap` or an absolute mountpoint such as `/boot/efi` or `/home` |
+| `target_mount_invalid` | `targetMount` | The target mount is `/`, relative, or has a `..` component | Leave it empty, or use an absolute path such as `/mnt/altroot` |
+| `flatpak_var_path_invalid` | `flatpakVarPath` | The path has a `..` component, so it would leave the installed root | Leave it empty, or use a path inside the root such as `state/os/default/var` |
 
 ### Filesystem
 

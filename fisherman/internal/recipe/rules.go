@@ -2,6 +2,7 @@ package recipe
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -67,6 +68,9 @@ const (
 	CodeSlurpUnsupported              = "slurp_unsupported"
 	CodeDistroIDInvalid               = "distro_id_invalid"
 	CodeBrewTapInvalid                = "brew_tap_invalid"
+	CodeCustomMountTargetInvalid      = "custom_mount_target_invalid"
+	CodeTargetMountInvalid            = "target_mount_invalid"
+	CodeFlatpakVarPathInvalid         = "flatpak_var_path_invalid"
 )
 
 // Filesystems is the set of root filesystems the auto-partition path can
@@ -356,6 +360,69 @@ func (r *Recipe) CheckTPM(tpm2Usable bool) []Problem {
 	}
 	return []Problem{{"encryption.type", CodeEncryptionTPMUnavailable,
 		fmt.Sprintf("encryption %q needs a TPM 2.0, and this machine has none usable", r.Encryption.Type)}}
+}
+
+// The three path rules below exist because each path is used by root, before
+// or during disk work, by joining it to a host directory (#333):
+//
+//   - customMounts[].target is appended to targetMount, so "/../../etc"
+//     would make fisherman mkdir and mount a partition over the host's /etc,
+//     and a relative "etc" would land beside the target ("/mnt/fisherman-targetetc").
+//   - targetMount is where the root filesystem is mounted and every
+//     post-install write goes, so "/" would mount it over the running host.
+//   - flatpakVarPath is joined under the installed root for the flatpak
+//     copy, so "../../etc" would send that copy outside the target.
+//
+// They reject ".." components rather than every non-canonical spelling, so a
+// recipe that was valid before (a trailing slash, say) still is.
+
+// hasDotDot reports whether any "/"-separated component of p is "..".
+func hasDotDot(p string) bool {
+	for _, c := range strings.Split(p, "/") {
+		if c == ".." {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckCustomMountTarget applies the customMounts[i].target rule: "" and
+// "swap" are the documented special values; anything else is an absolute
+// path inside the target with no ".." component.
+func CheckCustomMountTarget(i int, target string) []Problem {
+	if target == "" || target == "swap" {
+		return nil
+	}
+	if strings.HasPrefix(target, "/") && !hasDotDot(target) {
+		return nil
+	}
+	return []Problem{{fmt.Sprintf("customMounts[%d].target", i), CodeCustomMountTargetInvalid,
+		fmt.Sprintf("customMounts[%d]: target must be \"swap\" or an absolute path without \"..\" components, got %q", i, target)}}
+}
+
+// CheckTargetMount applies the targetMount rule. Empty is valid (the default,
+// /mnt/fisherman-target); otherwise an absolute path with no ".." component
+// that is not the host root.
+func CheckTargetMount(p string) []Problem {
+	if p == "" {
+		return nil
+	}
+	if strings.HasPrefix(p, "/") && !hasDotDot(p) && filepath.Clean(p) != "/" {
+		return nil
+	}
+	return []Problem{{"targetMount", CodeTargetMountInvalid,
+		fmt.Sprintf("targetMount must be an absolute path other than / without \"..\" components, got %q", p)}}
+}
+
+// CheckFlatpakVarPath applies the flatpakVarPath rule. Empty is valid
+// (auto-detect); otherwise a path under the installed root with no ".."
+// component.
+func CheckFlatpakVarPath(p string) []Problem {
+	if p == "" || !hasDotDot(p) {
+		return nil
+	}
+	return []Problem{{"flatpakVarPath", CodeFlatpakVarPathInvalid,
+		fmt.Sprintf("flatpakVarPath must stay inside the installed root (no \"..\" components), got %q", p)}}
 }
 
 func isLower(r rune) bool { return r >= 'a' && r <= 'z' }
