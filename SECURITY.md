@@ -140,8 +140,10 @@ the user, and only then starting fisherman.
 
 ## Dependencies and Supply Chain
 
-- **Go modules** are pinned in `fisherman/go.mod` and `go.sum` (no vendor
-  directory); CI runs `go vet` and golangci-lint.
+- **Go:** the `fisherman` module uses only the Go standard library
+  (`fisherman/go.mod` has no requirements); CI runs `go vet`, the unit tests
+  and golangci-lint. The separate `tui/` module pins its dependencies in
+  `tui/go.sum`.
 - **bootc** runs from the target image via `podman run --privileged` when an
   image is given; on live media it is called directly from the running image.
 - **podman** and **skopeo** handle image pulls and offline image copies, and
