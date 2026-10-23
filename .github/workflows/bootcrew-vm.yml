@@ -13,9 +13,14 @@ concurrency:
   group: bootcrew-vm-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# No packages: read and no registry login. Every image these jobs pull
+# (tests/bootcrew-matrix.yaml and ghcr.io/tuna-os/fisherman/<name>:ssh-enabled)
+# is public, and this workflow runs pull-request code: `podman login` left the
+# token in the runner's auth.json, where every later step of the PR could read
+# it (#332). If a private image is ever needed, pull it in a push/schedule-only
+# job, not here.
 permissions:
   contents: read
-  packages: read
 
 jobs:
   lint:
@@ -172,10 +177,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y just socat
           just ci-install-tools
-      - name: Login to GHCR
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "${{ env.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
@@ -260,10 +261,6 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y just socat
           just ci-install-tools
-      - name: Login to GHCR
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: echo "${{ env.GITHUB_TOKEN }}" | podman login -u "${{ github.actor }}" --password-stdin ghcr.io
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
