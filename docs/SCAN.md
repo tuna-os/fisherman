@@ -95,8 +95,8 @@ reported.
   current JSON encoding).
 - A partition that cannot be mounted, has no `Users` directory, or has no
   non-empty user profile is omitted. Other partitions continue to be scanned.
-- A failure from `lsblk`, creation of the temporary mount point, or invalid
-  command usage exits non-zero and writes the error to stderr instead of
+- A failure from `lsblk`, creation of the temporary mount point, or a missing
+  disk argument exits non-zero and writes the error to stderr instead of
   returning a scan result.
 
 The scan only measures available data. A frontend must perform any later
