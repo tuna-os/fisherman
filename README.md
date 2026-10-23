@@ -83,7 +83,7 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 | `fisherman validate <recipe.json \| ->` | no | validate a recipe without installing, including the empty-image check below; `-` reads stdin |
 | `fisherman validate --json [--partial] <recipe.json\|->` | no | every problem as one JSON object with stable codes (hostname, username, filesystem, encryption, disk, TPM), the same rules the install enforces before touching a disk; `--partial` checks one page's fields. Schema, codes and the encryption choices file: [`docs/VALIDATE.md`](docs/VALIDATE.md) |
 | `fisherman images [<query>]` | no | list or search the image catalog |
-| `fisherman scan <disk>` | yes | scan a disk for Windows data available to migrate |
+| `fisherman scan <disk>` | yes | scan a disk for Windows data available to migrate; output contract and safety notes: [`docs/SCAN.md`](docs/SCAN.md) |
 | `fisherman probe --json` | no | print disks, TPM, RAM/CPU/UEFI, live-media and offline-store facts as one JSON object; read-only. Schema and an example: [`docs/PROBE.md`](docs/PROBE.md) |
 | `fisherman version` | no | print the version |
 
