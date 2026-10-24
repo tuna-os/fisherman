@@ -823,7 +823,23 @@ func main() {
 	// It stays here for the unencrypted layout as a belt-and-braces pass: a
 	// disk reused from an earlier install can reach this point with a stale
 	// type when bootc rewrites the table itself.
+	//
+	// The type is read first, while everything is still mounted (reading the
+	// table is harmless), and the whole unmount/rewrite/remount sequence is
+	// skipped when it already matches — the normal case, since
+	// PartitionSystemdBoot wrote it. An sfdisk write makes the kernel and udev
+	// drop and re-add the partition nodes, and remounting straight after it
+	// raced that re-add ("mount /dev/loop0p2 ...: exit status 32", dakota CI).
+	// A failed read falls through to the write, as before.
+	retagRoot := false
 	if !isManual && isSystemdBoot && !hasEncryption && r.ComposeFsBackend {
+		var curType string
+		retagRoot, curType = disk.PartitionTypeNeedsRewrite(r.Disk, 2, disk.LinuxRootPartType())
+		if !retagRoot {
+			progress.Info(fmt.Sprintf("Root partition already tagged for systemd GPT auto-discovery (%s)", curType))
+		}
+	}
+	if retagRoot {
 		progress.Info("Retagging root partition for systemd GPT auto-discovery")
 
 		// Unmount the EFI partition explicitly so the FAT32 state is flushed to
@@ -848,8 +864,15 @@ func main() {
 		if err := os.MkdirAll(activeTargetMount, 0o755); err != nil {
 			fatal("recreating target mountpoint before remount: %v", err)
 		}
+		// The sfdisk write makes the kernel re-read the table, so the node
+		// can be missing or mid-re-add here: settle, wait (bounded) for it to
+		// be a block device again, and retry the mount briefly. Either still
+		// failing is fatal.
 		rootPart := disk.PartName(r.Disk, 2)
-		if err := disk.Mount(rootPart, activeTargetMount, ""); err != nil {
+		if err := disk.WaitForPartitionNode(rootPart, disk.DefaultPartitionNodeTimeout); err != nil {
+			fatal("remounting root partition after retagging: %v", err)
+		}
+		if err := disk.MountWithRetry(rootPart, activeTargetMount, "", disk.DefaultMountAttempts, disk.DefaultMountBackoff); err != nil {
 			fatal("remounting root partition after retagging: %v", err)
 		}
 		// Remount EFI so that Plymouth/LUKS arg writes land on the real ESP
