@@ -33,14 +33,8 @@ images:
     required: true # composefs + systemd-boot canary
     build_ssh_image: true
 
-  - name: bluefin-lts
-    image: ghcr.io/ublue-os/bluefin@sha256:c4fe04748470e801f9ec44c2c9931d5447957211567144d7bef37eae47514585 # lts
-    filesystem: xfs
-    composefs_backend: false
-    unified_storage: false
-    selinux_disabled: false
-    flatpaks: []
-    vm_boot: false
+  # bluefin-lts removed: Bluefin LTS is discontinued and its pinned digest is
+  # gone upstream ("manifest unknown" in nightly run 40098003911).
 
   - name: centos-bootc
     image: quay.io/centos-bootc/centos-bootc@sha256:9aedf2d189b85c498697f9b83112c893b084d359268da7dd6d5d848478d260de # c10s

@@ -47,7 +47,7 @@ The separate ext4 `/boot` partition is required for GRUB because GRUB cannot rea
 
 | Bootloader | Layout | EFI | /boot | Notes |
 |---|---|---|---|---|
-| `grub2` (bluefin, lts) | 3-partition GPT | **2 GiB** FAT32 | **2 GiB** ext4 | GRUB reads kernel from ext4 /boot |
+| `grub2` (bluefin) | 3-partition GPT | **2 GiB** FAT32 | **2 GiB** ext4 | GRUB reads kernel from ext4 /boot |
 | `systemd` (dakota) | 2-partition GPT | **2 GiB** FAT32 | — | systemd-boot reads kernel directly from FAT32 ESP |
 
 All fleet images use a **2 GiB ESP** for consistency. Each kernel+initrd pair is 200–400 MiB; 2 GiB accommodates the booted entry, rollback, and a staged upgrade without running out of space.
@@ -155,7 +155,6 @@ The nightly CI (`bootcrew-nightly.yml`) runs a full install + QEMU boot test for
 | Image | Filesystem | composefs | Bootloader | Nightly |
 |-------|-----------|-----------|------------|---------|
 | dakota | ext4 | yes | systemd | gating |
-| bluefin:lts | xfs | no | grub2 | gating |
 | centos-bootc | xfs | no | grub2 | gating |
 | yellowfin:gnome50 | xfs | no | grub2 | gating |
 | ubuntu-bootc | ext4 | yes | systemd | gating |

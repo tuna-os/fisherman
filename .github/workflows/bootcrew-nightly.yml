@@ -229,16 +229,16 @@ jobs:
             for conf in "$MNT"/loader/entries/*.conf; do
               [ -f "$conf" ] || continue
               if ! sudo grep -q "^options" "$conf"; then
-                # A Type #1 entry that boots a UKI ("efi" key) has no options
+                # A Type #1 entry that boots a UKI ("uki" or "efi" key) has no options
                 # line: the command line is the UKI's .cmdline section. With
                 # Secure Boot off (this OVMF build has none) systemd-stub uses
                 # loader-supplied options *instead of* .cmdline, so copy the
                 # embedded line verbatim and let the edits below extend it.
                 local uki cmdline_file cmdline
-                uki=$(sudo awk '$1 == "efi" { print $2; exit }' "$conf")
+                uki=$(sudo awk '$1 == "uki" || $1 == "efi" { print $2; exit }' "$conf")
                 uki="/${uki#/}"  # BLS paths are relative to the ESP root
                 if [ "$uki" = "/" ] || ! sudo test -f "$MNT$uki"; then
-                  echo "FAIL: $(basename "$conf") on $label has neither an options line nor a readable efi UKI"
+                  echo "FAIL: $(basename "$conf") on $label has neither an options line nor a readable uki/efi UKI"
                   sudo cat "$conf"
                   sudo umount "$MNT"; rmdir "$MNT"
                   exit 1
