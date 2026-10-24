@@ -150,17 +150,21 @@ just build                  # builds binary to /tmp/fisherman
 
 ## CI / Bootcrew integration tests
 
-The nightly CI runs a full install + QEMU boot test for each image in `tests/bootcrew-matrix.yaml`:
+The nightly CI (`bootcrew-nightly.yml`) runs a full install + QEMU boot test for each image in `tests/bootcrew-matrix.yaml` that is not marked `nightly: false`. It installs with the entry's `bootloader` and asserts that bootloader's partition layout:
 
-| Image | Filesystem | composefs |
-|-------|-----------|-----------|
-| bluefin:lts | xfs | no |
-| yellowfin:gnome50 | xfs | no |
-| ubuntu-bootc | xfs | yes |
-| opensuse-bootc | xfs | yes |
-| arch-bootc | xfs | yes |
-| debian-bootc | xfs | yes |
-| frostyard/snow | btrfs | yes |
+| Image | Filesystem | composefs | Bootloader | Nightly |
+|-------|-----------|-----------|------------|---------|
+| dakota | ext4 | yes | systemd | gating |
+| bluefin:lts | xfs | no | grub2 | gating |
+| centos-bootc | xfs | no | grub2 | gating |
+| yellowfin:gnome50 | xfs | no | grub2 | gating |
+| ubuntu-bootc | ext4 | yes | systemd | gating |
+| opensuse-bootc | xfs | no | grub2 | advisory (upstream image ships no podman) |
+| arch-bootc | ext4 | yes | systemd | gating |
+| debian-bootc | ext4 | yes | systemd | gating |
+| frostyard/snow | btrfs | yes | systemd | gating |
+
+`nightly_advisory: true` runs an image without letting its failure fail the workflow; it is reserved for images whose upstream is shown to be broken, with the evidence in the matrix comment.
 
 Fast CI (PR gate) runs a subset. Add new images to `tests/bootcrew-matrix.yaml` to include them in both workflows automatically.
 

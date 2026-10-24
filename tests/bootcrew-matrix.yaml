@@ -13,6 +13,13 @@
 #          job summary but do not fail the workflow. Frees us from chasing
 #          per-image flakes while still keeping signal on the backends that
 #          matter.
+# bootloader: systemd | grub2 (default) — passed to fisherman by every harness,
+#          and it selects the partition layout the nightly asserts
+#          (systemd: EFI + DPS-typed root; grub2: EFI + ext4 /boot + root).
+# nightly_advisory: true — bootcrew-nightly.yml still runs the full install
+#          and boot for this image, but a failure does not fail the workflow.
+#          Only for images whose upstream is shown to be broken; the entry's
+#          comment must carry that evidence and say what clears it.
 images:
   - name: dakota
     image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
@@ -75,20 +82,22 @@ images:
     nightly: false
     vm_boot: true
 
-  # composefs_backend must stay false while filesystem is xfs: the recipe
-  # validator rejects the pair outright ("composefs-backend requires
-  # fs-verity, which XFS does not support"), so the install never starts.
-  # #97 dropped the same combo from arch-bootc/arch-bootc-luks-xfs/debian-bootc
-  # but did not reach here, because vm_boot: false keeps these two out of the
-  # PR gate — nightly still processes every entry regardless of vm_boot (#106).
+  # ghcr.io/bootcrew/ubuntu-bootc is composefs-native, exactly like
+  # debian-bootc below: the pinned digest ships bootc 1.16.10 and no `ostree`
+  # (or podman) binary, so the ostree path it was configured for died in
+  # every nightly with "Creating ostree deployment: No such file or directory
+  # (os error 2)" — the same error debian-bootc hit before it moved to the
+  # composefs backend. Same fix here: composefs backend + systemd-boot, on
+  # ext4 because composefs needs fs-verity and XFS has none.
   - name: ubuntu-bootc
     image: ghcr.io/bootcrew/ubuntu-bootc@sha256:296b8d2367db7026d90db281b868837e275a2cff116e3f6ab401cd3f40e6562d # latest
-    filesystem: xfs
-    composefs_backend: false
+    filesystem: ext4
+    composefs_backend: true
+    bootloader: systemd
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
-    vm_boot: false  # TODO: bootcrew image broken, find or create working ubuntu-bootc image
+    vm_boot: false  # no ssh-enabled image is built for it; nightly covers install + boot
 
   # gnomeos-bootc disabled: consistently fails with missing blob in containers-storage
   # (sha256:6d2d10...) — likely a broken layer in the ghcr.io/bootcrew/gnomeos-bootc image.
@@ -100,7 +109,20 @@ images:
   #   unified_storage: false
   #   selinux_disabled: false
 
-  # composefs_backend false for the same reason as ubuntu-bootc above.
+  # ADVISORY in nightly: the upstream image cannot install itself.
+  # bootc 1.17.1 in this image creates the bound-image store with podman
+  # during `bootc install to-filesystem`, and the image does not ship podman:
+  #   error: Installing to filesystem: Creating imgstorage: podman executable
+  #   not found in PATH; it is required for container image storage operations
+  # The last four nightlies (2026-09-21 .. 2026-10-12, runs 35573901848,
+  # 36396130996, 37283228750, 38224754894) failed that way on four different
+  # upstream digests; it reproduces with the image's own bootc on the pinned
+  # digest outside fisherman; and ghcr.io/bootcrew/opensuse-bootc
+  # :latest as of 2026-10-24 (sha256:3ee6bfa1...) still has /usr/bin/bootc
+  # and /usr/bin/ostree but no /usr/bin/podman. Nothing fisherman passes can
+  # supply a binary missing from the image bootc runs in. Drop
+  # nightly_advisory once a digest ships podman (or a bootc that no longer
+  # needs it) and passes.
   - name: opensuse-bootc
     image: ghcr.io/bootcrew/opensuse-bootc@sha256:c9f8126d87d805bb150046278ed68f3e20ff881602fb4579e4876f13c59183b3 # latest
     filesystem: xfs
@@ -109,6 +131,7 @@ images:
     selinux_disabled: false
     flatpaks: []
     vm_boot: false
+    nightly_advisory: true
 
   # ghcr.io/bootcrew/arch-bootc is a composefs-native image and ships no
   # `ostree` binary, so it can only be installed via --composefs-backend.
@@ -205,10 +228,18 @@ images:
     vm_boot: false  # SSH-enabled image boots but never answers SSH in the VM (login prompt only); keep nightly-only until ssh.service is fixed
     build_ssh_image: true
 
+  # frostyard/snow is a sealed composefs image: it ships a UKI
+  # (boot/EFI/Linux/7.2.9+deb14-amd64.efi) whose embedded command line is
+  # only `rw composefs=?<digest>` — no root=. Such an image finds its root by
+  # GPT auto-discovery, which only fisherman's systemd-boot layout provides
+  # (root partition carries the DPS root type, see PartitionSystemdBoot and
+  # #219). Without `bootloader: systemd` it was installed on the grub2
+  # 3-partition layout with a generic root type.
   - name: frostyard-snow
     image: ghcr.io/frostyard/snow@sha256:7c1a655c3754f758bb39ad32ed0de3fa1ff70db346dc9e9e78bc4cc9beef6eee # latest
     filesystem: btrfs
     composefs_backend: true
+    bootloader: systemd
     unified_storage: false
     selinux_disabled: false
     flatpaks: []
