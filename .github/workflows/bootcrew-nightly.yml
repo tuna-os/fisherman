@@ -43,10 +43,14 @@ jobs:
         working-directory: fisherman
 
   full-install:
-    name: install / ${{ matrix.image.name }}
+    name: install / ${{ matrix.image.name }}${{ matrix.image.nightly_advisory && ' (advisory)' || '' }}
     needs: [setup, unit-tests]
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    # nightly_advisory images (tests/bootcrew-matrix.yaml) run the full
+    # install and boot, but their failure does not fail the workflow. The
+    # matrix entry carries the evidence that the upstream image is broken.
+    continue-on-error: ${{ matrix.image.nightly_advisory == true }}
     strategy:
       fail-fast: false
       matrix:
@@ -63,7 +67,7 @@ jobs:
       - name: Install tools
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq
+          sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq binutils
           sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install -y flathub org.mozilla.firefox
 
@@ -80,6 +84,28 @@ jobs:
           echo "loopdev=$LOOPDEV" >> "$GITHUB_OUTPUT"
           echo "tmpfile=$TMPFILE" >> "$GITHUB_OUTPUT"
 
+      # Mirrors fisherman's layout contract (cmd/fisherman/main.go,
+      # internal/disk/partition.go):
+      #   systemd: p1 EFI-SYSTEM + p2 root (DPS root type)           2 partitions
+      #   grub2:   p1 EFI-SYSTEM + p2 ext4 /boot + p3 root           3 partitions
+      - name: Resolve bootloader and partition layout
+        id: layout
+        run: |
+          BOOTLOADER='${{ matrix.image.bootloader }}'
+          BOOTLOADER="${BOOTLOADER:-grub2}"
+          case "$BOOTLOADER" in
+            systemd) PARTS=2; ROOT_NUM=2; BOOT_NUM=1 ;;
+            grub2)   PARTS=3; ROOT_NUM=3; BOOT_NUM=2 ;;
+            *) echo "FAIL: unknown bootloader '$BOOTLOADER' in tests/bootcrew-matrix.yaml"; exit 1 ;;
+          esac
+          {
+            echo "bootloader=$BOOTLOADER"
+            echo "parts=$PARTS"
+            echo "root_num=$ROOT_NUM"
+            echo "boot_num=$BOOT_NUM"
+          } >> "$GITHUB_OUTPUT"
+          echo "bootloader=$BOOTLOADER: expect $PARTS partitions, root on p$ROOT_NUM"
+
       - name: Generate recipe
         run: |
           FLATPAKS='${{ toJSON(matrix.image.flatpaks) }}'
@@ -94,6 +120,7 @@ jobs:
             "encryption": {"type": "none"},
             "image": "${{ matrix.image.image }}",
             "hostname": "ci-test",
+            "bootloader": "${{ steps.layout.outputs.bootloader }}",
             "flatpaks": $FLATPAKS
           }
           EOF
@@ -108,19 +135,34 @@ jobs:
         run: |
           LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
           COMPOSEFS="${{ matrix.image.composefs_backend }}"
+          BOOTLOADER="${{ steps.layout.outputs.bootloader }}"
+          PARTS="${{ steps.layout.outputs.parts }}"
 
           LABEL_COUNT=$(sudo lsblk -o LABEL "$LOOPDEV" | grep -cE 'EFI-SYSTEM|boot|root' || true)
-          if [ "$LABEL_COUNT" -ne 3 ]; then
-            echo "FAIL: expected 3 labelled partitions, got $LABEL_COUNT"
-            sudo lsblk -o NAME,SIZE,FSTYPE,LABEL "$LOOPDEV"
+          if [ "$LABEL_COUNT" -ne "$PARTS" ]; then
+            echo "FAIL: expected $PARTS labelled partitions for bootloader=$BOOTLOADER, got $LABEL_COUNT"
+            sudo lsblk -o NAME,SIZE,FSTYPE,LABEL,PARTTYPE "$LOOPDEV"
             exit 1
           fi
 
-          BOOT_PART="${LOOPDEV}p2"
+          if [ "$BOOTLOADER" = "systemd" ]; then
+            # A sealed UKI has no root= on its command line; the root is found
+            # by GPT auto-discovery, so the DPS root type is load-bearing.
+            ROOT_TYPE=$(sudo lsblk -no PARTTYPE "${LOOPDEV}p2" | tr '[:upper:]' '[:lower:]')
+            if [ "$ROOT_TYPE" != "4f68bce3-e8cd-4db1-96e7-fbcaf984b709" ]; then
+              echo "FAIL: root partition ${LOOPDEV}p2 type is '$ROOT_TYPE', expected the x86-64 DPS root type"
+              sudo lsblk -o NAME,SIZE,FSTYPE,LABEL,PARTTYPE "$LOOPDEV"
+              exit 1
+            fi
+            echo "OK: root partition carries the DPS root type"
+          fi
+
+          # grub2: the ext4 /boot (p2); systemd: the ESP (p1), which holds the kernels.
+          BOOT_PART="${LOOPDEV}p${{ steps.layout.outputs.boot_num }}"
           VERIFY_DIR=$(mktemp -d)
           sudo mount "$BOOT_PART" "$VERIFY_DIR"
 
-          ROOT_PART="${LOOPDEV}p3"
+          ROOT_PART="${LOOPDEV}p${{ steps.layout.outputs.root_num }}"
           ROOT_DIR=$(mktemp -d)
           sudo mount "$ROOT_PART" "$ROOT_DIR"
 
@@ -177,6 +219,7 @@ jobs:
       - name: Patch serial console into bootloader entries
         run: |
           LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
+          ROOT_DEV="/dev/vda${{ steps.layout.outputs.root_num }}"
           patch_entries() {
             local part="$1" label="$2"
             local MNT
@@ -185,12 +228,40 @@ jobs:
             local patched=0
             for conf in "$MNT"/loader/entries/*.conf; do
               [ -f "$conf" ] || continue
+              if ! sudo grep -q "^options" "$conf"; then
+                # A Type #1 entry that boots a UKI ("efi" key) has no options
+                # line: the command line is the UKI's .cmdline section. With
+                # Secure Boot off (this OVMF build has none) systemd-stub uses
+                # loader-supplied options *instead of* .cmdline, so copy the
+                # embedded line verbatim and let the edits below extend it.
+                local uki cmdline_file cmdline
+                uki=$(sudo awk '$1 == "efi" { print $2; exit }' "$conf")
+                uki="/${uki#/}"  # BLS paths are relative to the ESP root
+                if [ "$uki" = "/" ] || ! sudo test -f "$MNT$uki"; then
+                  echo "FAIL: $(basename "$conf") on $label has neither an options line nor a readable efi UKI"
+                  sudo cat "$conf"
+                  sudo umount "$MNT"; rmdir "$MNT"
+                  exit 1
+                fi
+                cmdline_file=$(mktemp)
+                sudo objcopy -O binary --only-section=.cmdline "$MNT$uki" "$cmdline_file"
+                cmdline=$(tr '\0\n' '  ' < "$cmdline_file" | sed 's/^ *//; s/ *$//')
+                rm -f "$cmdline_file"
+                if [ -z "$cmdline" ]; then
+                  echo "FAIL: UKI $uki referenced by $(basename "$conf") has no .cmdline section"
+                  sudo umount "$MNT"; rmdir "$MNT"
+                  exit 1
+                fi
+                echo "UKI entry ($label): $(basename "$conf") -> $uki, embedded cmdline: $cmdline"
+                echo "options $cmdline" | sudo tee -a "$conf" > /dev/null
+                patched=1
+              fi
               if ! sudo grep -q "console=ttyS0" "$conf"; then
                 sudo sed -i 's/^options /options console=ttyS0,115200 /' "$conf"
                 patched=1
               fi
               if ! sudo grep -q "root=" "$conf"; then
-                sudo sed -i 's/^options /options root=\/dev\/vda3 /' "$conf"
+                sudo sed -i "s|^options |options root=$ROOT_DEV |" "$conf"
                 patched=1
               fi
               if [ "$patched" -eq 1 ]; then
@@ -203,7 +274,9 @@ jobs:
             rmdir "$MNT"
           }
           patch_entries "${LOOPDEV}p1" "EFI"
-          patch_entries "${LOOPDEV}p2" "boot"
+          if [ "${{ steps.layout.outputs.bootloader }}" = "grub2" ]; then
+            patch_entries "${LOOPDEV}p2" "boot"
+          fi
 
       - name: Boot verification
         run: |
@@ -275,4 +348,4 @@ jobs:
       - name: Report result to job summary
         if: always()
         run: |
-          echo "| ${{ matrix.image.name }} | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ${{ matrix.image.name }}${{ matrix.image.nightly_advisory && ' (advisory)' || '' }} | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
