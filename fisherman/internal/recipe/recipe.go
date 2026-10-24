@@ -45,10 +45,11 @@ type Recipe struct {
 	// auto-detects based on whether the system is ostree or composefs-native.
 	// Override in images.json for non-standard layouts, e.g. GnomeOS/Dakota:
 	//   "flatpak_var_path": "state/os/default/var"
-	FlatpakVarPath string   `json:"flatpakVarPath,omitempty"`
-	Hostname       string   `json:"hostname"`
-	Flatpaks       []string `json:"flatpaks"` // flatpak app IDs to install; empty = fallback
-	User           UserSpec `json:"user"`     // optional user account to create
+	FlatpakIntent  *FlatpakIntent `json:"flatpakIntent,omitempty"`
+	FlatpakVarPath string         `json:"flatpakVarPath,omitempty"`
+	Hostname       string         `json:"hostname"`
+	Flatpaks       []string       `json:"flatpaks"` // flatpak app IDs to install; empty = fallback
+	User           UserSpec       `json:"user"`     // optional user account to create
 	// CustomMounts is set for manual partitioning. When non-empty, Disk/Filesystem/
 	// BtrfsSubvolumes and the auto-partition steps are skipped; fisherman formats and
 	// mounts the listed partitions directly.
@@ -184,6 +185,9 @@ func (r *Recipe) Validate() error {
 // needs the machine; see CheckTPM.
 func (r *Recipe) Problems() []Problem {
 	var ps []Problem
+	if err := r.FlatpakIntent.Validate(); err != nil {
+		ps = append(ps, Problem{"flatpakIntent", "flatpak_intent_invalid", err.Error()})
+	}
 	if len(r.CustomMounts) > 0 {
 		// Manual layout: validate each mount spec instead of the auto-partition fields.
 		hasRoot := false
