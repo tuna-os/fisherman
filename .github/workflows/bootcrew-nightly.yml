@@ -243,10 +243,12 @@ jobs:
                   sudo umount "$MNT"; rmdir "$MNT"
                   exit 1
                 fi
-                cmdline_file=$(mktemp)
+                # Root owns the temp file: with fs.protected_regular, root
+                # cannot write a runner-owned file in sticky /tmp.
+                cmdline_file=$(sudo mktemp)
                 sudo objcopy -O binary --only-section=.cmdline "$MNT$uki" "$cmdline_file"
-                cmdline=$(tr '\0\n' '  ' < "$cmdline_file" | sed 's/^ *//; s/ *$//')
-                rm -f "$cmdline_file"
+                cmdline=$(sudo cat "$cmdline_file" | tr '\0\n' '  ' | sed 's/^ *//; s/ *$//')
+                sudo rm -f "$cmdline_file"
                 if [ -z "$cmdline" ]; then
                   echo "FAIL: UKI $uki referenced by $(basename "$conf") has no .cmdline section"
                   sudo umount "$MNT"; rmdir "$MNT"
