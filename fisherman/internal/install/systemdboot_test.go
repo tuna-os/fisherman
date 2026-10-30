@@ -34,7 +34,7 @@ func TestInstallSystemdBoot_FullInstall(t *testing.T) {
 	target := t.TempDir()
 	srcBin := makeDeployTree(t, target)
 
-	if err := InstallSystemdBoot(target); err != nil {
+	if err := installSystemdBoot(target, "amd64"); err != nil {
 		t.Fatalf("InstallSystemdBoot: %v", err)
 	}
 
@@ -81,7 +81,7 @@ func TestInstallSystemdBoot_NoopWhenFallbackExists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := InstallSystemdBoot(target); err != nil {
+	if err := installSystemdBoot(target, "amd64"); err != nil {
 		t.Fatalf("InstallSystemdBoot: %v", err)
 	}
 
@@ -110,7 +110,7 @@ func TestInstallSystemdBoot_PreservesExistingLoaderConf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := InstallSystemdBoot(target); err != nil {
+	if err := installSystemdBoot(target, "amd64"); err != nil {
 		t.Fatalf("InstallSystemdBoot: %v", err)
 	}
 
@@ -125,7 +125,7 @@ func TestInstallSystemdBoot_PreservesExistingLoaderConf(t *testing.T) {
 func TestInstallSystemdBoot_BinaryNotFound(t *testing.T) {
 	target := t.TempDir() // empty target, no ostree tree
 
-	err := InstallSystemdBoot(target)
+	err := installSystemdBoot(target, "amd64")
 	if err == nil {
 		t.Fatal("expected error when systemd-boot binary is absent, got nil")
 	}
@@ -151,7 +151,7 @@ func TestFindSystemdBootBinary_PrefersSigned(t *testing.T) {
 		}
 	}
 
-	got, err := findSystemdBootBinary(target)
+	got, err := findSystemdBootBinary(target, "systemd-bootx64.efi")
 	if err != nil {
 		t.Fatalf("findSystemdBootBinary: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestFindSystemdBootBinary_SysrootRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := findSystemdBootBinary(target)
+	got, err := findSystemdBootBinary(target, "systemd-bootx64.efi")
 	if err != nil {
 		t.Fatalf("findSystemdBootBinary: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestFindSystemdBootBinary_SysrootRoot(t *testing.T) {
 
 // TestFindSystemdBootBinary_NotFound verifies the error for an empty tree.
 func TestFindSystemdBootBinary_NotFound(t *testing.T) {
-	if _, err := findSystemdBootBinary(t.TempDir()); err == nil {
+	if _, err := findSystemdBootBinary(t.TempDir(), "systemd-bootx64.efi"); err == nil {
 		t.Fatal("expected error for empty target, got nil")
 	}
 }
@@ -220,5 +220,68 @@ func TestCopyFile_MissingSource(t *testing.T) {
 	dir := t.TempDir()
 	if err := copyFile(filepath.Join(dir, "nope"), filepath.Join(dir, "dst")); err == nil {
 		t.Fatal("expected error for missing source, got nil")
+	}
+}
+
+// TestInstallSystemdBoot_ArchFileNames verifies that the fallback install
+// finds and writes the architecture-specific systemd-boot file names, and
+// writes nothing under the other architecture's names.
+func TestInstallSystemdBoot_ArchFileNames(t *testing.T) {
+	for _, tc := range []struct {
+		goarch, vendor, fallback, otherVendor, otherFallback string
+	}{
+		{"amd64", "systemd-bootx64.efi", "BOOTX64.EFI", "systemd-bootaa64.efi", "BOOTAA64.EFI"},
+		{"arm64", "systemd-bootaa64.efi", "BOOTAA64.EFI", "systemd-bootx64.efi", "BOOTX64.EFI"},
+	} {
+		t.Run(tc.goarch, func(t *testing.T) {
+			target := t.TempDir()
+			dir := filepath.Join(target, "ostree", "deploy", "default", "deploy", "abc.0",
+				"usr", "lib", "systemd", "boot", "efi")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			want := []byte("payload-" + tc.goarch)
+			if err := os.WriteFile(filepath.Join(dir, tc.vendor), want, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, tc.otherVendor), []byte("wrong arch"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := installSystemdBoot(target, tc.goarch); err != nil {
+				t.Fatal(err)
+			}
+			esp := filepath.Join(target, "boot", "efi", "EFI")
+			for _, p := range []string{filepath.Join(esp, "systemd", tc.vendor), filepath.Join(esp, "BOOT", tc.fallback)} {
+				got, err := os.ReadFile(p)
+				if err != nil {
+					t.Fatalf("reading %s: %v", p, err)
+				}
+				if string(got) != string(want) {
+					t.Errorf("%s = %q, want %q", p, got, want)
+				}
+			}
+			for _, p := range []string{filepath.Join(esp, "systemd", tc.otherVendor), filepath.Join(esp, "BOOT", tc.otherFallback)} {
+				if _, err := os.Stat(p); err == nil {
+					t.Errorf("unexpected other-arch file %s", p)
+				}
+			}
+		})
+	}
+}
+
+// TestInstallSystemdBoot_Arm64NoopWhenFallbackExists verifies an existing
+// BOOTAA64.EFI makes the arm64 install a no-op.
+func TestInstallSystemdBoot_Arm64NoopWhenFallbackExists(t *testing.T) {
+	target := t.TempDir()
+	fallback := filepath.Join(target, "boot", "efi", "EFI", "BOOT", "BOOTAA64.EFI")
+	if err := os.MkdirAll(filepath.Dir(fallback), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(fallback, []byte("existing"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// No deployment tree: a non-noop would fail with "not found".
+	if err := installSystemdBoot(target, "arm64"); err != nil {
+		t.Fatalf("expected no-op, got %v", err)
 	}
 }

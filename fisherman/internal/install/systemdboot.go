@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/tuna-os/fisherman/internal/progress"
 )
@@ -13,29 +14,45 @@ import (
 // ESP. This is a fallback for newer bootctl (e.g. arch-bootc) which runs in
 // --graceful mode inside the container and silently skips writing to the ESP.
 //
-// The binary is copied to both the vendor path (EFI/systemd/systemd-bootx64.efi)
-// and the UEFI fallback path (EFI/BOOT/BOOTX64.EFI) so UEFI firmware can
+// The binary is copied to both the vendor path (EFI/systemd/systemd-boot<arch>.efi)
+// and the UEFI fallback path (EFI/BOOT/BOOT<ARCH>.EFI) so UEFI firmware can
 // auto-detect the bootloader without an NVRAM entry.
 //
-// If BOOTX64.EFI already exists on the ESP (e.g. bootctl ran correctly for
+// If the fallback loader already exists on the ESP (e.g. bootctl ran correctly for
 // debian-bootc), this function is a no-op.
+//
+// File names follow the target architecture (x64 or aa64).
 func InstallSystemdBoot(targetMount string) error {
+	return installSystemdBoot(targetMount, runtime.GOARCH)
+}
+
+// systemdBootNames returns the systemd-boot vendor binary name and the UEFI
+// fallback loader name for goarch.
+func systemdBootNames(goarch string) (vendorName, fallbackName string) {
+	if goarch == "arm64" {
+		return "systemd-bootaa64.efi", "BOOTAA64.EFI"
+	}
+	return "systemd-bootx64.efi", "BOOTX64.EFI"
+}
+
+func installSystemdBoot(targetMount, goarch string) error {
+	vendorName, fallbackName := systemdBootNames(goarch)
 	efiDir := filepath.Join(targetMount, "boot", "efi")
-	fallback := filepath.Join(efiDir, "EFI", "BOOT", "BOOTX64.EFI")
+	fallback := filepath.Join(efiDir, "EFI", "BOOT", fallbackName)
 
 	if _, err := os.Stat(fallback); err == nil {
 		progress.Info("systemd-boot EFI binary already present, skipping manual install")
 		return nil
 	}
 
-	srcBin, err := findSystemdBootBinary(targetMount)
+	srcBin, err := findSystemdBootBinary(targetMount, vendorName)
 	if err != nil {
 		return err
 	}
 	progress.Info(fmt.Sprintf("Installing systemd-boot from %s", srcBin))
 
 	dsts := []string{
-		filepath.Join(efiDir, "EFI", "systemd", "systemd-bootx64.efi"),
+		filepath.Join(efiDir, "EFI", "systemd", vendorName),
 		fallback,
 	}
 	for _, dst := range dsts {
@@ -66,7 +83,7 @@ func InstallSystemdBoot(targetMount string) error {
 // systemd-boot EFI binary, preferring the .signed variant when available.
 // Searches across any stateroot and deployment slot (not just "default" and
 // "*.0") to handle non-standard bootc setups.
-func findSystemdBootBinary(targetMount string) (string, error) {
+func findSystemdBootBinary(targetMount, vendorName string) (string, error) {
 	// Search both the standard ostree prefix and the sysroot prefix used by
 	// some composefs configurations.
 	ostreeRoots := []string{
@@ -75,7 +92,7 @@ func findSystemdBootBinary(targetMount string) (string, error) {
 	}
 
 	for _, root := range ostreeRoots {
-		for _, variant := range []string{"systemd-bootx64.efi.signed", "systemd-bootx64.efi"} {
+		for _, variant := range []string{vendorName + ".signed", vendorName} {
 			// Use a broad glob: any stateroot, any deployment slot.
 			pattern := filepath.Join(root, "deploy", "*", "deploy", "*",
 				"usr", "lib", "systemd", "boot", "efi", variant)
@@ -88,7 +105,7 @@ func findSystemdBootBinary(targetMount string) (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("systemd-bootx64.efi not found under %s/{ostree,sysroot/ostree}", targetMount)
+	return "", fmt.Errorf("%s not found under %s/{ostree,sysroot/ostree}", vendorName, targetMount)
 }
 
 // copyFile copies src to dst, preserving permissions.

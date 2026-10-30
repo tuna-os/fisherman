@@ -58,7 +58,7 @@ func TestSystemdFallbackPreservesSignedPEAndInstalledUKI(t *testing.T) {
 	uki := filepath.Join(target, "boot/efi/EFI/Linux/bootc/test.efi")
 	efifixture.Write(t, uki, signed)
 	for i := 0; i < 2; i++ {
-		if err := InstallSystemdBoot(target); err != nil {
+		if err := installSystemdBoot(target, "amd64"); err != nil {
 			t.Fatal(err)
 		}
 		for _, p := range []string{src + ".signed", uki, filepath.Join(target, "boot/efi/EFI/BOOT/BOOTX64.EFI"), filepath.Join(target, "boot/efi/EFI/systemd/systemd-bootx64.efi")} {
@@ -73,10 +73,6 @@ func TestFallbackHelpersLeaveExistingSignedChainUntouched(t *testing.T) {
 	signed := efifixture.Bytes()
 	fallback, grub, mm := fallbackBootNames()
 	paths := []string{"EFI/BOOT/" + fallback, "EFI/BOOT/" + grub, "EFI/BOOT/" + mm, "EFI/Linux/bootc/test.efi"}
-	// InstallSystemdBoot currently supports x64 only, regardless of Go host arch.
-	if fallback != "BOOTX64.EFI" {
-		paths = append(paths, "EFI/BOOT/BOOTX64.EFI")
-	}
 	for _, rel := range paths {
 		efifixture.Write(t, filepath.Join(target, "boot/efi", rel), signed)
 	}
