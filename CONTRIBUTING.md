@@ -165,6 +165,47 @@ For full VM end-to-end testing with QEMU:
 just bootcrew-vm
 ```
 
+### CI host-tool download cache
+
+Run [40284374415](https://github.com/tuna-os/fisherman/actions/runs/40284374415),
+job `install / yellowfin-gnome50` (121444707547), spent 1246 seconds in
+`Install tools`. Its APT log says `Fetched 48.7 MB in 20min 2s (40.5 kB/s)`:
+the measured delay was Ubuntu archive download throughput, not Go compilation.
+The other matrix legs' same step took 42–65 seconds. This is one run's
+measurement, not an aggregate savings estimate.
+
+The three VM/disk workflows share `.github/actions/setup-host-tools`, which
+always refreshes APT's signed repository metadata (any repository update error,
+including transient download failures, stops setup) and resolves the normal
+package/dependency selection. Only the resulting `.deb` downloads are cached.
+The exact key includes OS, runner architecture, runner image identity, and a
+SHA256 digest of the complete download manifest (each archive's URI, filename
+including version/architecture, byte size and repository SHA256). Any changed
+archive identity or content, runner image or architecture invalidates the key;
+there are no broad restore prefixes. Bump the `fisherman-host-debs-v1` schema
+prefix if the cache format changes.
+
+A hit rechecks every restored archive against the fresh manifest's SHA256 and
+size, discards mismatches, and still runs the ordinary authenticated APT install
+and package configuration. A miss or missing/corrupt archive downloads normally.
+Thus a complete hit removes the repeated archive-transfer work measured above,
+not the entire 1246-second step, metadata refresh, install or boot qualification.
+The VM workflow also avoids its former duplicate APT update/bootstrap install
+before `just ci-install-tools`; the host package set is unchanged.
+
+Go still uses `actions/setup-go` and `fisherman/go.mod`; these workflows do not
+build external bootcrew/corral binaries. Firefox/Flathub installation remains
+fresh and uncached. No guest disk, container image, installed Flatpak, SSH key,
+generated secret, firmware variable store or other VM runtime state is cached.
+All scheduled/PR matrices, encryption cases, boot waits, timeouts and required
+check names are unchanged.
+
+The no-network cache boundary tests run in the existing VM workflow's `lint`
+job, or locally with `python3 tests/test-host-tool-cache.py` (requires PyYAML).
+They cover exact manifests, empty plans, rejected weak hashes/unsafe filenames,
+same-size corrupt archives, missing downloads, symlinks and directory-shaped
+cache entries containing symlinks to files/directories outside the cache.
+
 ### Code Quality & Linting
 
 Run standard Go linting before submitting a pull request:

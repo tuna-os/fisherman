@@ -1,0 +1,107 @@
+name: Setup host tools
+description: Reuse only APT archives identified by fresh authenticated repository metadata
+inputs:
+  packages:
+    description: Space-separated host packages, with the same APT defaults as a normal install
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Resolve host package downloads
+      id: plan
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        sudo apt-get update -qq -o APT::Update::Error-Mode=any
+        mkdir -p "$RUNNER_TEMP/fisherman-host-tools/archives/partial"
+        read -ra packages <<< "$PACKAGES"
+        # Force SHA256: --print-uris otherwise defaults to MD5 for compatibility.
+        sudo apt-get --print-uris -y -o Acquire::ForceHash=sha256 \
+          -o "Dir::Cache::archives=$RUNNER_TEMP/fisherman-host-tools/archives" \
+          install "${packages[@]}" | tee "$RUNNER_TEMP/fisherman-host-tools/plan"
+        python3 <<'PY'
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+        import re
+        import shlex
+
+        root = Path(os.environ["RUNNER_TEMP"]) / "fisherman-host-tools"
+        archives = {}
+        for line in (root / "plan").read_text().splitlines():
+            if not line.startswith("'"):
+                continue
+            uri, name, size, checksum = shlex.split(line)
+            if Path(name).name != name or not name.endswith(".deb"):
+                raise SystemExit(f"Unexpected APT archive name: {name}")
+            if not re.fullmatch(r"SHA256:[0-9a-fA-F]{64}", checksum):
+                raise SystemExit(f"APT did not provide SHA256 for {name}")
+            archives[name] = [uri, int(size), checksum.split(":", 1)[1].lower()]
+        manifest = json.dumps(archives, sort_keys=True)
+        (root / "manifest.json").write_text(manifest)
+        with open(os.environ["GITHUB_OUTPUT"], "a") as output:
+            output.write(f"digest={hashlib.sha256(manifest.encode()).hexdigest()}\n")
+            output.write(f"has-archives={'true' if archives else 'false'}\n")
+        PY
+
+    - name: Restore host package archives
+      id: cache
+      if: steps.plan.outputs.has-archives == 'true'
+      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/fisherman-host-tools/archives/*.deb
+        # No prefix fallback: dependency versions, hashes, architecture and runner
+        # image must all match. No installed files or VM state enter this cache.
+        key: fisherman-host-debs-v1-${{ runner.os }}-${{ runner.arch }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ steps.plan.outputs.digest }}
+
+    - name: Verify restored archives and install host tools
+      shell: bash
+      env:
+        PACKAGES: ${{ inputs.packages }}
+      run: |
+        python3 <<'PY'
+        import hashlib
+        import json
+        import os
+        from pathlib import Path
+        import shutil
+
+        root = Path(os.environ["RUNNER_TEMP"]) / "fisherman-host-tools"
+        expected = json.loads((root / "manifest.json").read_text())
+        archive_dir_fd = os.open(
+            root / "archives", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        )
+        try:
+            for archive in (root / "archives").glob("*.deb"):
+                record = expected.get(archive.name)
+                valid = False
+                if record and archive.is_file() and not archive.is_symlink():
+                    with archive.open("rb") as stream:
+                        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                    valid = archive.stat().st_size == record[1] and digest == record[2]
+                if not valid:
+                    print(f"Discarding unverified cached archive: {archive.name}")
+                    if archive.is_dir() and not archive.is_symlink():
+                        # Ubuntu's fd-based rmtree does not follow nested symlinks.
+                        # Relative removal stays inside this owned archive directory.
+                        shutil.rmtree(archive.name, dir_fd=archive_dir_fd)
+                    else:
+                        os.unlink(archive.name, dir_fd=archive_dir_fd)
+        finally:
+            os.close(archive_dir_fd)
+        PY
+        read -ra packages <<< "$PACKAGES"
+        # Always install: a hit replaces downloads, never package configuration
+        # or authentication. Missing/corrupt archives use the normal APT path.
+        sudo apt-get install -y \
+          -o "Dir::Cache::archives=$RUNNER_TEMP/fisherman-host-tools/archives" \
+          -o APT::Keep-Downloaded-Packages=true "${packages[@]}"
+
+    - name: Save host package archives
+      if: steps.plan.outputs.has-archives == 'true' && steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.temp }}/fisherman-host-tools/archives/*.deb
+        key: ${{ steps.cache.outputs.cache-primary-key }}

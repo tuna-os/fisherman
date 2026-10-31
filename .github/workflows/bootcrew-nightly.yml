@@ -65,9 +65,14 @@ jobs:
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
 
       - name: Install tools
+        uses: ./.github/actions/setup-host-tools
+        with:
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq binutils
+
+      # Firefox is guest installation input, not a pinned host tool. Keep its
+      # fresh Flathub install and verification outside the host archive cache.
+      - name: Install Firefox from Flathub
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq binutils
           sudo flatpak remote-add --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           sudo flatpak install -y flathub org.mozilla.firefox
 

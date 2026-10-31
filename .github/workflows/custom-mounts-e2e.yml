@@ -28,9 +28,9 @@ jobs:
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
 
       - name: Install disk tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y xfsprogs dosfstools e2fsprogs jq
+        uses: ./.github/actions/setup-host-tools
+        with:
+          packages: xfsprogs dosfstools e2fsprogs jq
 
       - name: Run customMounts recipe validation suite
         run: ./tests/check-custom-mounts.sh
