@@ -323,12 +323,26 @@ func main() {
 		fatal("loading recipe: %v", err)
 	}
 
+	// Resolve and verify host-owned media before live probing (bootc status),
+	// store discovery or CheckImage can inspect a stale cache or the registry.
+	mediaInput, err := resolveMediaInput(r)
+	if err != nil {
+		fatal("required local source is absent or unreadable; refusing installation: %v", err)
+	}
+	sourceImgref := r.Image
+	if mediaInput != nil {
+		sourceImgref = "oci:" + mediaInput.OCILayoutPath
+	}
+
 	// Run pre-flight validation chain. Every rule `fisherman validate` enforces,
 	// including the hostname, username, and TPM checks, runs here: before any
 	// disk is touched. The ValidatorChain stops at the first error.
 	var live probe.Live
-	if r.Image == "" {
+	if r.Image == "" && mediaInput == nil {
 		live = hostLive()
+	}
+	if mediaInput != nil {
+		live = probe.Live{IsLive: true, LiveImage: mediaInput.Image, DetectedBy: "verified media input"}
 	}
 	chain := validation.NewChain().
 		Add(validation.NewRecipeProblemsValidator(r, tpm2Usable())).
@@ -377,15 +391,23 @@ func main() {
 		progress.Info(msg)
 	}
 
-	// Offline image stores: the recipe's list, or the host's when it has none.
-	imageStores, discoveredStores := resolveImageStores(r)
+	// An OCI media source needs no store discovery or podman image listing.
+	// Preserve explicitly supplied stores without probing unrelated caches.
+	imageStores := r.AdditionalImageStores
+	var discoveredStores bool
+	if mediaInput == nil {
+		imageStores, discoveredStores = resolveImageStores(r)
+	}
 	if discoveredStores && len(imageStores) > 0 {
 		progress.Info("Offline image stores found on the host: " + strings.Join(imageStores, ", "))
 	}
 
 	// ── Pre-flight: check image cache ─────────────────────────────────────────
 	var imageCheck install.ImageCheck
-	if r.Image != "" {
+	if mediaInput != nil {
+		imageCheck.Offline = true
+		progress.Info("Offline: using embedded media image " + mediaInput.OCILayoutPath)
+	} else if r.Image != "" {
 		progress.Info("Checking image cache...")
 		imageCheck = install.CheckImage(r.Image)
 		if install.IsOCISource(r.Image) && imageCheck.NeedsPull {
@@ -401,25 +423,6 @@ func main() {
 		} else {
 			progress.Info("Image already up to date in local cache")
 		}
-	}
-
-	// ── Pre-flight: offline OCI media source ────────────────────────────────
-	// When the host carries an embedded immutable image (media-input.json
-	// bound by resolveMediaInput), verify its OCI layout BEFORE any
-	// partitioning or formatting. A bound media input is the install source:
-	// it is never pulled, and any missing, corrupt or mismatched input
-	// refuses the installation with the same wording as a missing local
-	// containers-storage source.
-	mediaInput := resolveMediaInput(r)
-	sourceImgref := r.Image
-	if mediaInput != nil {
-		if err := install.PreflightOCILayout(mediaInput.OCILayoutPath, mediaInput.ExpectedDigest()); err != nil {
-			fatal("required local source is absent or unreadable; refusing installation: %v", err)
-		}
-		sourceImgref = "oci:" + mediaInput.OCILayoutPath
-		imageCheck.NeedsPull = false
-		imageCheck.Offline = true
-		progress.Info("Offline: using embedded media image " + mediaInput.OCILayoutPath)
 	}
 
 	hasVarDisk := r.VarDisk != nil

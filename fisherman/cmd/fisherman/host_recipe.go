@@ -1,12 +1,16 @@
 package main
 
 import (
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/tuna-os/fisherman/internal/install"
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/recipe"
+	"github.com/tuna-os/fisherman/internal/runner"
 )
 
 // Host facts a recipe is checked and completed against. They come from the
@@ -14,10 +18,25 @@ import (
 // frontend shows can never disagree about whether this is live media or where
 // the offline stores are. Tests replace newProber (probe.go).
 var (
-	hostLive       = func() probe.Live { return newProber().Live() }
-	hostOffline    = func() probe.Offline { return newProber().Offline() }
-	hostMediaInput = func() (*install.MediaInput, error) { return newProber().MediaInput() }
+	hostLive           = func() probe.Live { return newProber().Live() }
+	hostOffline        = func() probe.Offline { return newProber().Offline() }
+	hostMediaInput     = func() (*install.MediaInput, error) { return newProber().MediaInput() }
+	hostMediaSandboxed = runner.InFlatpak
+	hostMediaRequired  = func() (bool, error) {
+		path := "/etc/bootc-installer/live-iso-mode"
+		if runner.InFlatpak() {
+			path = "/run/host" + path
+		}
+		_, err := os.Stat(path)
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return err == nil, err
+	}
 )
+
+// Test seam for consumer ordering; production uses the shared strict validator.
+var preflightBoundMediaInput = install.PreflightBoundOCIMediaInput
 
 // recipeStdin is where `fisherman -` reads its recipe; tests replace it.
 var recipeStdin io.Reader = os.Stdin
@@ -56,22 +75,53 @@ func resolveImageStores(r *recipe.Recipe) (stores []string, discovered bool) {
 	return hostOffline().Stores, true
 }
 
-// resolveMediaInput binds the host's offline OCI media input
-// (media-input.json) to a recipe. A live install (empty image) always uses
-// the embedded image when the host carries one, and a recipe that names the
-// embedded image uses its verified layout too; anything else returns nil and
-// the install proceeds exactly as before.
-//
-// The binding is only the OCI layout path plus the expected digest and the
-// day-2 target ref. additionalImageStores stays strictly for
-// containers-storage graphroots: an OCI layout path must never appear there.
-func resolveMediaInput(r *recipe.Recipe) *install.MediaInput {
+// resolveMediaInput selects the host-owned source before any image-cache
+// inspection. The live marker makes the embedded input mandatory, independent
+// of the frontend's recipe spelling; an incompatible explicit request refuses.
+// additionalImageStores remains exclusively containers-storage graphroots.
+func resolveMediaInput(r *recipe.Recipe) (*install.MediaInput, error) {
+	required, err := hostMediaRequired()
+	if err != nil {
+		return nil, fmt.Errorf("reading live media marker: %w", err)
+	}
+	if required && hostMediaSandboxed() {
+		return nil, fmt.Errorf("required live media installation must run natively on the host, not inside a Flatpak sandbox")
+	}
 	mi, err := hostMediaInput()
-	if err != nil || mi == nil || mi.OCILayoutPath == "" {
-		return nil
+	if err != nil {
+		if !required {
+			return nil, nil
+		}
+		return nil, err
 	}
-	if r.Image == "" || r.Image == mi.Image {
-		return mi
+	if mi == nil {
+		if required {
+			return nil, fmt.Errorf("live media requires %s", probe.MediaInputPath)
+		}
+		return nil, nil
 	}
-	return nil
+	if mi.OCILayoutPath == "" {
+		if !required {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("required media input has no OCI layout")
+	}
+	explicitOCI := install.IsOCISource(r.Image)
+	exactOCI := explicitOCI && r.Image == "oci:"+mi.OCILayoutPath
+	if explicitOCI && !exactOCI && filepath.Clean(strings.TrimPrefix(r.Image, "oci:")) == filepath.Clean(mi.OCILayoutPath) {
+		return nil, fmt.Errorf("explicit OCI binding uses a noncanonical path alias")
+	}
+	if r.Image != "" && r.Image != mi.Image && !exactOCI {
+		if required {
+			return nil, fmt.Errorf("requested image %q does not match embedded source %q", r.Image, mi.Image)
+		}
+		return nil, nil
+	}
+	if r.TargetImgref != "" && r.TargetImgref != mi.TargetImgref {
+		return nil, fmt.Errorf("requested target %q does not match media target %q", r.TargetImgref, mi.TargetImgref)
+	}
+	if err := preflightBoundMediaInput(mi); err != nil {
+		return nil, err
+	}
+	return mi, nil
 }
