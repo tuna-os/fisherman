@@ -4,21 +4,26 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/tuna-os/fisherman/internal/install"
 	"github.com/tuna-os/fisherman/internal/recipe"
+	"github.com/tuna-os/fisherman/internal/runner"
 )
 
 // Actual CLI preflight with an owned regular file and controlled tool processes.
 // No OS installation or disk mutation is proved by this fixture.
 func TestActualLocalSourcePreflightRefusesBeforeDiskWork(t *testing.T) {
 	if os.Getenv("FISHERMAN_PREFLIGHT_CHILD") == "1" {
+		hostMediaRequired = func() (bool, error) { return false, nil }
+		hostMediaInput = func() (*install.MediaInput, error) { return nil, nil }
 		os.Args = []string{os.Args[0], os.Getenv("FISHERMAN_PREFLIGHT_RECIPE")}
 		main()
 		os.Exit(99)
@@ -95,69 +100,146 @@ func TestActualLocalSourcePreflightRefusesBeforeDiskWork(t *testing.T) {
 // errTestMediaFailure stands in for a host media-input.json read failure.
 var errTestMediaFailure = errors.New("controlled media input failure")
 
-// image, and a recipe naming the embedded image uses its verified layout;
-// anything else installs exactly as before (nil binding).
+// A host receipt is authoritative only for its exact source and day-2 target.
 func TestResolveMediaInputBinding(t *testing.T) {
-	old := hostMediaInput
-	defer func() { hostMediaInput = old }()
-	embedded := &install.MediaInput{
-		Image:         "ghcr.io/example/os:stable",
-		OCILayoutPath: "/run/media/layout",
-		TargetImgref:  "ghcr.io/example/os:stable",
-	}
+	oldMedia, oldRequired := hostMediaInput, hostMediaRequired
+	oldSandboxed, oldPreflight := hostMediaSandboxed, preflightBoundMediaInput
+	defer func() {
+		hostMediaInput, hostMediaRequired = oldMedia, oldRequired
+		hostMediaSandboxed, preflightBoundMediaInput = oldSandboxed, oldPreflight
+	}()
+	hostMediaSandboxed = func() bool { return false }
+	embedded := testBoundMediaInput()
 	for _, tt := range []struct {
-		name  string
-		media *install.MediaInput
-		err   error
-		image string
-		want  bool
+		name     string
+		media    *install.MediaInput
+		err      error
+		image    string
+		target   string
+		required bool
+		want     bool
+		wantErr  bool
 	}{
-		{"live session binds embedded image", embedded, nil, "", true},
-		{"recipe naming embedded image binds", embedded, nil, "ghcr.io/example/os:stable", true},
-		{"custom image does not bind", embedded, nil, "ghcr.io/example/other:latest", false},
-		{"no media input does not bind", nil, nil, "", false},
-		{"media read error does not bind", embedded, errTestMediaFailure, "", false},
-		{"media without layout does not bind", &install.MediaInput{Image: "ghcr.io/example/os:stable"}, nil, "", false},
+		{"empty live recipe", embedded, nil, "", "", true, true, false},
+		{"exact source and target", embedded, nil, embedded.Image, embedded.TargetImgref, true, true, false},
+		{"exact OCI source", embedded, nil, "oci:" + embedded.OCILayoutPath, embedded.TargetImgref, true, true, false},
+		{"noncanonical OCI alias", embedded, nil, "oci:" + embedded.OCILayoutPath + "/.", "", true, false, true},
+		{"optional exact OCI source", embedded, nil, "oci:" + embedded.OCILayoutPath, "", false, true, false},
+		{"optional unrelated OCI source", embedded, nil, "oci:/srv/operator/layout", "", false, false, false},
+		{"optional missing OCI receipt", nil, nil, "oci:/srv/operator/layout", "", false, false, false},
+		{"optional malformed receipt leaves standalone OCI unbound", nil, errTestMediaFailure, "oci:/srv/operator/layout", "", false, false, false},
+		{"mandatory malformed receipt refuses explicit OCI", nil, errTestMediaFailure, "oci:/srv/operator/layout", "", true, false, true},
+		{"target is not source", embedded, nil, embedded.TargetImgref, "", true, false, true},
+		{"different explicit source", embedded, nil, "ghcr.io/example/other:latest", "", true, false, true},
+		{"different explicit target", embedded, nil, embedded.Image, "ghcr.io/example/other:latest", true, false, true},
+		{"missing mandatory input", nil, nil, embedded.Image, "", true, false, true},
+		{"unreadable mandatory input", nil, errTestMediaFailure, embedded.Image, "", true, false, true},
+		{"empty mandatory input", &install.MediaInput{}, nil, "", "", true, false, true},
+		{"nonlive explicit network", nil, nil, "ghcr.io/example/network:latest", "", false, false, false},
+		{"nonlive different source", embedded, nil, "ghcr.io/example/network:latest", "", false, false, false},
+		{"nonlive unrelated invalid receipt", nil, errTestMediaFailure, "ghcr.io/example/network:latest", "", false, false, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			hostMediaInput = func() (*install.MediaInput, error) { return tt.media, tt.err }
-			got := resolveMediaInput(&recipe.Recipe{Image: tt.image})
-			if (got != nil) != tt.want {
-				t.Fatalf("resolveMediaInput(%q) bound=%v, want bound=%v", tt.image, got != nil, tt.want)
+			hostMediaRequired = func() (bool, error) { return tt.required, nil }
+			calls := 0
+			preflightBoundMediaInput = func(got *install.MediaInput) error {
+				calls++
+				if got != tt.media {
+					t.Fatal("verified a different media input")
+				}
+				return nil
 			}
-			if tt.want && got.OCILayoutPath != embedded.OCILayoutPath {
-				t.Fatalf("bound wrong layout: %+v", got)
+			got, err := resolveMediaInput(&recipe.Recipe{Image: tt.image, TargetImgref: tt.target})
+			if (err != nil) != tt.wantErr || (got != nil) != tt.want {
+				t.Fatalf("binding=%+v err=%v, want binding=%v error=%v", got, err, tt.want, tt.wantErr)
+			}
+			if (calls == 1) != tt.want {
+				t.Fatalf("strict verifier calls=%d, want bound=%v", calls, tt.want)
 			}
 		})
 	}
 }
 
-// The gate main() applies to a bound media input refuses a digest-mismatched
-// layout with the same wording as a missing local source, and never falls
-// back to the registry.
-func TestBoundMediaDigestMismatchRefuses(t *testing.T) {
-	dir := t.TempDir()
-	layout := filepath.Join(dir, "layout")
-	if err := os.MkdirAll(filepath.Join(layout, "blobs", "sha256"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(layout, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	present := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	manifest := `{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"` + present + `","size":11}]}`
-	if err := os.WriteFile(filepath.Join(layout, "index.json"), []byte(manifest), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	mi := &install.MediaInput{
-		Image:                  "ghcr.io/example/os:stable",
-		PlatformManifestDigest: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-		OCILayoutPath:          layout,
+func testBoundMediaInput() *install.MediaInput {
+	return &install.MediaInput{
+		SchemaVersion:          1,
+		Image:                  "ghcr.io/example/source:qualified",
 		TargetImgref:           "ghcr.io/example/os:stable",
+		OCILayoutPath:          "/run/initramfs/live/OCI",
+		Platform:               runtime.GOOS + "/" + runtime.GOARCH,
+		PlatformManifestDigest: "sha256:" + strings.Repeat("a", 64),
+		ConfigDigest:           "sha256:" + strings.Repeat("b", 64),
 	}
-	// The exact gate from main(): PreflightOCILayout(layout, ExpectedDigest).
-	if err := install.PreflightOCILayout(mi.OCILayoutPath, mi.ExpectedDigest()); err == nil {
-		t.Fatal("digest-mismatched layout accepted")
+}
+
+// Exercise main's actual refusal boundary. The strict verifier's filesystem
+// behavior has its own shared tests; this test proves consumer ordering and
+// refusal propagation without mounting filesystems or touching any device.
+func TestActualMandatoryMediaRefusesBeforeHostCommands(t *testing.T) {
+	if os.Getenv("FISHERMAN_MEDIA_CHILD") == "1" {
+		mode := os.Getenv("FISHERMAN_MEDIA_CASE")
+		mi := testBoundMediaInput()
+		hostMediaRequired = func() (bool, error) { return true, nil }
+		hostMediaSandboxed = func() bool { return mode == "sandbox" }
+		hostMediaInput = func() (*install.MediaInput, error) {
+			switch mode {
+			case "sandbox":
+				fmt.Fprintln(os.Stderr, "FORBIDDEN MEDIA READ")
+				os.Exit(97)
+			case "missing", "empty-missing", "composefs-missing":
+				return nil, nil
+			case "malformed":
+				return nil, errTestMediaFailure
+			case "source":
+				mi.Image = "ghcr.io/example/wrong:stable"
+			case "target":
+				mi.TargetImgref = "ghcr.io/example/wrong:stable"
+			}
+			return mi, nil
+		}
+		preflightBoundMediaInput = func(got *install.MediaInput) error {
+			if got != mi {
+				panic("verified a different media input")
+			}
+			fmt.Fprintln(os.Stderr, "STRICT VERIFIER REACHED")
+			return errors.New("controlled shared strict verifier refusal")
+		}
+		runner.OutputFn = func(name string, args ...string) ([]byte, error) {
+			fmt.Fprintf(os.Stderr, "FORBIDDEN HOST COMMAND: %s %v\n", name, args)
+			os.Exit(97)
+			return nil, nil
+		}
+		os.Args = []string{os.Args[0], "-"}
+		image := mi.Image
+		switch mode {
+		case "empty-missing", "empty-verifier":
+			image = ""
+		case "oci-verifier":
+			image = "oci:" + mi.OCILayoutPath
+		case "noncanonical":
+			image = "oci:" + mi.OCILayoutPath + "/."
+		}
+		composefs := mode == "composefs-missing" || mode == "composefs-verifier"
+		recipeStdin = strings.NewReader(fmt.Sprintf(`{"disk":"/never-a-device","filesystem":"ext4","hostname":"fixture","image":%q,"targetImgref":"ghcr.io/example/os:stable","composeFsBackend":%t,"encryption":{"type":"none"}}`, image, composefs))
+		main()
+		os.Exit(99)
+	}
+	for _, mode := range []string{"missing", "empty-missing", "composefs-missing", "malformed", "source", "target", "sandbox", "noncanonical", "verifier", "empty-verifier", "composefs-verifier", "oci-verifier"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestActualMandatoryMediaRefusesBeforeHostCommands$")
+			command.Env = append(os.Environ(), "FISHERMAN_MEDIA_CHILD=1", "FISHERMAN_MEDIA_CASE="+mode)
+			output, err := command.CombinedOutput()
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 || !strings.Contains(string(output), "required local source is absent or unreadable; refusing installation") || strings.Contains(string(output), "FORBIDDEN") {
+				t.Fatalf("wrong preflight boundary: %v %s", err, output)
+			}
+			if got := strings.Count(string(output), "STRICT VERIFIER REACHED"); got != 0 && !strings.HasSuffix(mode, "verifier") || strings.HasSuffix(mode, "verifier") && got != 1 {
+				t.Fatalf("wrong strict verifier invocation count: %v %s", err, output)
+			}
+		})
 	}
 }
 
@@ -167,6 +249,8 @@ func TestBoundMediaDigestMismatchRefuses(t *testing.T) {
 // skopeo would record any inspection, and the disk fixture must not change.
 func TestActualOCILayoutPreflightRefusesBeforeDiskWork(t *testing.T) {
 	if os.Getenv("FISHERMAN_PREFLIGHT_CHILD") == "1" {
+		hostMediaRequired = func() (bool, error) { return false, nil }
+		hostMediaInput = func() (*install.MediaInput, error) { return nil, errTestMediaFailure }
 		os.Args = []string{os.Args[0], os.Getenv("FISHERMAN_PREFLIGHT_RECIPE")}
 		main()
 		os.Exit(99)
@@ -248,6 +332,9 @@ func TestActualOCILayoutPreflightRefusesBeforeDiskWork(t *testing.T) {
 				exit, ok := runErr.(*exec.ExitError)
 				if !ok || exit.ExitCode() != 1 || !strings.Contains(string(output), "required local source is absent or unreadable; refusing installation") {
 					t.Fatalf("wrong refusal %s: %v %s", name, runErr, output)
+				}
+				if !strings.Contains(string(output), "Checking image cache...") || strings.Contains(string(output), errTestMediaFailure.Error()) {
+					t.Fatalf("optional malformed receipt displaced standalone OCI validation %s: %s", name, output)
 				}
 				if observed, err := os.ReadFile(capture); err == nil {
 					for _, line := range strings.Split(string(observed), "\n") {

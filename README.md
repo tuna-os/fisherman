@@ -116,6 +116,37 @@ the same detection `fisherman probe` reports as `live.is_live`
 recipe fails validation (`invalid recipe: image is required: …`, exit 1)
 before a disk is touched.
 
+**Embedded live media**: the host-owned
+`/etc/bootc-installer/live-iso-mode` marker makes
+`/etc/bootc-installer/media-input.json` mandatory for every frontend.
+Fisherman needs to run natively on the host, outside a Flatpak sandbox,
+before it reads required media.
+It resolves the receipt before bootc status, offline-store discovery or
+image-cache/registry inspection.
+
+Fisherman checks that the layout and every referenced blob are read-only,
+rejects symlinks, and verifies manifest, config and layer digests and sizes.
+It refuses installation before disk work for missing or invalid receipts,
+invalid layouts or incompatible requests, without registry fallback.
+An empty recipe `image` selects the embedded source.
+A nonempty `image` must equal the receipt's `image` or canonical exact
+`oci:<ociLayoutPath>` source, not merely its day-2 `targetImgref`.
+Any explicit `targetImgref` must match the receipt's target.
+
+Fisherman passes the verified OCI layout to bootc as the source and keeps the
+receipt's target as the day-2 update reference, including composefs installs.
+OCI layouts are not `additionalImageStores`.
+Without the marker, Fisherman uses legacy `CheckImage` for unrelated explicit
+requests, whether they name a network image or a standalone OCI layout.
+This also applies when an optional receipt contains malformed data.
+
+This change reuses the exact `PreflightBoundOCIMediaInput` API from
+[`76c4c477` (PR #347)](https://github.com/tuna-os/fisherman/pull/347)
+for strict OCI validation.
+PRs #346 and #347 remain drafts.
+This reuse does not finish the stacked integration in #347 or the feature
+for Flatpak intent in #346.
+
 **Offline image stores** (`additionalImageStores`): leave the field out and
 fisherman finds the offline containers-storage roots on the host itself,
 with the discovery `fisherman probe` reports as `offline.stores`
