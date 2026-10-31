@@ -66,6 +66,11 @@ jobs:
       - name: Workflow input handling
         run: bash tests/test-release-cut-inputs.sh
 
+      # Cache hits must not turn repository authentication into a size-only
+      # check; these cases exercise the composite action's actual Python.
+      - name: Host tool cache trust boundaries
+        run: python3 tests/test-host-tool-cache.py
+
   setup:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
@@ -179,10 +184,11 @@ jobs:
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
 
       - name: Setup CI environment
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y just socat
-          just ci-install-tools
+        uses: ./.github/actions/setup-host-tools
+        with:
+          # Same host package set as just ci-install-tools, including its
+          # bootstrap dependencies; resolve/install once rather than twice.
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
@@ -263,10 +269,9 @@ jobs:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
       - name: Setup CI environment
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y just socat
-          just ci-install-tools
+        uses: ./.github/actions/setup-host-tools
+        with:
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
