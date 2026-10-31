@@ -26,7 +26,7 @@ frontend until its submodule pointer is bumped in a separate commit.
 | `fisherman/` | the CLI — its **own Go module** (`cmd/fisherman`, `internal/`) |
 | `tui/` | a **second, separate Go module** |
 | `tests/` | shell harnesses + `fake-bins/`; `check-validation.sh` runs entirely in `/tmp`, no disk or VM |
-| `data/` | image catalog and assets copied from `tuna-os/branding` |
+| `data/` | image catalog and assets; TunaOS marks are the Noto emoji marks from `tuna-os/tunaOS` `system_files/usr/share/tunaos/logos/` |
 | `justfile` | `build`, `install`, `test-checks`, `ci-install-tools`, `cleanup-loop` |
 
 Two modules means `go build ./...` at the repo root does **not** cover
