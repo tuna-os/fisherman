@@ -150,6 +150,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   malformed one is refused before any disk work instead of triggering a registry
   lookup.
 
+### 🧪 Tests
+
+- **Slurp unit tests no longer depend on the host's `/run`** (#388): the
+  data-migration full-flow test stubs the `/run` capacity observation, so it
+  passes on hosts with under 2 GiB free in `/run`. Zero budget and a failed
+  capacity observation are now covered: nothing is copied, nothing is reported
+  as migrated, and the Windows partition is still unmounted. The production
+  budget (real `/run`, 2 GiB reserve) is unchanged.
+
 ### 📝 Documentation
 
 - ROADMAP release/branch status refreshed after v0.3.0/v0.4.0 (#240).

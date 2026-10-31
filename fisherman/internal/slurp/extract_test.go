@@ -2,8 +2,9 @@ package slurp
 
 // Tests for the data/wallpaper extraction + injection half (data.go,
 // wallpaper.go). Everything filesystem-shaped runs against temp dirs; the
-// only external seam is the runner package's RunFn/OutputFn, which is
-// stubbed here. No root, no NTFS partition, no /run access needed.
+// external seams are the runner package's RunFn/OutputFn and the /run
+// capacity observation (statfsFn), which are stubbed here. No root, no NTFS
+// partition, no /run access needed.
 
 import (
 	"errors"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/runner"
@@ -55,6 +57,29 @@ func withScratchDirs(t *testing.T) (scratch, mountPoint string) {
 	scratchBase, ntfsMountPoint = scratch, mountPoint
 	t.Cleanup(func() { scratchBase, ntfsMountPoint = origS, origM })
 	return scratch, mountPoint
+}
+
+// scratchReserve mirrors the safety margin AvailableScratchBytes keeps free
+// in /run.
+const scratchReserve int64 = 2 * 1024 * 1024 * 1024
+
+// fakeScratchCapacity replaces the /run capacity observation so a test's
+// data-migration budget does not depend on the host's /run. A non-nil err
+// makes the observation fail. Returns a thunk for the observed paths.
+func fakeScratchCapacity(t *testing.T, available int64, err error) func() []string {
+	t.Helper()
+	orig := statfsFn
+	var paths []string
+	statfsFn = func(path string, st *syscall.Statfs_t) error {
+		paths = append(paths, path)
+		if err != nil {
+			return err
+		}
+		*st = syscall.Statfs_t{Bsize: 1, Bavail: uint64(available)}
+		return nil
+	}
+	t.Cleanup(func() { statfsFn = orig })
+	return func() []string { return paths }
 }
 
 func writeFixture(t *testing.T, path string, size int) {
@@ -444,6 +469,9 @@ func TestExtractData_FullFlow(t *testing.T) {
 	writeFixture(t, filepath.Join(mountPoint, "Users", "Bob", "Documents", "b.txt"), 50)
 
 	fakeRun(t)
+	// 1 MiB above the reserve: a deterministic budget, independent of the
+	// host's /run, that comfortably fits the 300-byte fixture.
+	fakeScratchCapacity(t, scratchReserve+1<<20, nil)
 	config := &SlurpConfig{
 		SourcePartition: "/dev/sda2",
 		Users: []SlurpUserConfig{
@@ -469,6 +497,94 @@ func TestExtractData_FullFlow(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(scratch, "data", "Alice", "Documents", "a.txt")); err != nil {
 		t.Errorf("data not copied to scratch: %v", err)
+	}
+}
+
+// checkExtractDataWithoutBudget runs ExtractData when the /run capacity
+// observation yields no usable budget and checks that nothing was copied,
+// nothing is claimed as migrated, and the Windows partition is still
+// unmounted.
+func checkExtractDataWithoutBudget(t *testing.T, available int64, statErr error) {
+	t.Helper()
+	scratch, mountPoint := withScratchDirs(t)
+	writeFixture(t, filepath.Join(mountPoint, "Users", "Alice", "Documents", "a.txt"), 100)
+	writeFixture(t, filepath.Join(mountPoint, "Users", "Alice", "Pictures", "p.png"), 200)
+
+	calls := fakeRun(t)
+	observed := fakeScratchCapacity(t, available, statErr)
+	result, err := ExtractData(&SlurpConfig{
+		SourcePartition: "/dev/sda2",
+		Users:           []SlurpUserConfig{{Name: "Alice", Categories: []string{"Documents", "Pictures"}}},
+	})
+	if err != nil {
+		t.Fatalf("ExtractData: %v", err)
+	}
+	if got := observed(); len(got) != 1 || got[0] != "/run" {
+		t.Errorf("scratch capacity observations = %v, want exactly one of /run", got)
+	}
+	if result.Found {
+		t.Error("Found = true without a scratch budget; nothing may be reported as migrated")
+	}
+	if result.TotalBytes != 0 || result.FileCount != 0 {
+		t.Errorf("TotalBytes=%d FileCount=%d, want 0/0", result.TotalBytes, result.FileCount)
+	}
+	for _, u := range result.Users {
+		for _, c := range u.Categories {
+			if c.Bytes != 0 || c.Count != 0 {
+				t.Errorf("%s/%s reports %d bytes in %d files, want none", u.Name, c.Name, c.Bytes, c.Count)
+			}
+		}
+	}
+	var copied []string
+	_ = filepath.Walk(filepath.Join(scratch, "data"), func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			copied = append(copied, path)
+		}
+		return nil
+	})
+	if len(copied) != 0 {
+		t.Errorf("files copied to scratch without a budget: %v", copied)
+	}
+	want := strings.Join([]string{
+		"mount -t ntfs3 -o ro,noatime /dev/sda2 " + mountPoint,
+		"umount " + mountPoint,
+	}, "\n")
+	if got := strings.Join(calls(), "\n"); got != want {
+		t.Errorf("runner calls:\n%s\nwant mount then umount:\n%s", got, want)
+	}
+}
+
+func TestExtractData_ZeroScratchBudget(t *testing.T) {
+	// /run has exactly the reserve free: the budget is zero.
+	checkExtractDataWithoutBudget(t, scratchReserve, nil)
+}
+
+func TestExtractData_ScratchCapacityObservationFails(t *testing.T) {
+	checkExtractDataWithoutBudget(t, scratchReserve+1<<30, syscall.EIO)
+}
+
+func TestAvailableScratchBytes_KeepsReserve(t *testing.T) {
+	cases := []struct {
+		name      string
+		available int64
+		err       error
+		want      int64
+	}{
+		{"observation fails", scratchReserve + 1<<30, syscall.EIO, 0},
+		{"below reserve", scratchReserve - 1, nil, 0},
+		{"exactly reserve", scratchReserve, nil, 0},
+		{"above reserve", scratchReserve + 1<<20, nil, 1 << 20},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			observed := fakeScratchCapacity(t, c.available, c.err)
+			if got := AvailableScratchBytes(); got != c.want {
+				t.Errorf("AvailableScratchBytes() = %d, want %d", got, c.want)
+			}
+			if got := observed(); len(got) != 1 || got[0] != "/run" {
+				t.Errorf("observed %v, want /run", got)
+			}
+		})
 	}
 }
 

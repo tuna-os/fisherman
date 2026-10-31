@@ -48,11 +48,16 @@ type SlurpCategoryResult struct {
 	Count int
 }
 
+// statfsFn observes the capacity of the scratch filesystem. Package-level
+// (like wallpaper.go's scratchBase / ntfsMountPoint) so tests can supply a
+// deterministic /run capacity instead of depending on the host's.
+var statfsFn = syscall.Statfs
+
 // AvailableScratchBytes returns how much RAM-backed scratch space is available
 // in /run, leaving a 2GB safety margin for the system.
 func AvailableScratchBytes() int64 {
 	var st syscall.Statfs_t
-	if err := syscall.Statfs("/run", &st); err != nil {
+	if err := statfsFn("/run", &st); err != nil {
 		return 0
 	}
 	available := int64(st.Bavail) * int64(st.Bsize)
