@@ -161,7 +161,6 @@ func TestBuildBootcArgs_KernelArguments(t *testing.T) {
 	assertContains(t, args, "--karg=console=ttyS0")
 }
 
-
 func TestBuildBootcArgs_ComposeFsBackend(t *testing.T) {
 	args := install.BuildBootcArgs(install.Options{ComposeFsBackend: true}, "", "/target")
 	assertContains(t, args, "--composefs-backend")

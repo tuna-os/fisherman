@@ -104,6 +104,7 @@ type Recipe struct {
 	// packages (e.g. "ublue-os/tap"). When empty, no tap is added.
 	BrewTap string `json:"brewTap,omitempty"`
 }
+
 // RootMountOptions returns the filesystem mount options that should be applied
 // when mounting root during installation and recorded as persistent rootflags
 // for post-reboot boots.
@@ -128,7 +129,6 @@ func (r *Recipe) RootMountOptions() string {
 	}
 	return "compress=zstd:1"
 }
-
 
 // UserSpec describes a user account to create during installation.
 // If Username is empty the user creation step is skipped.

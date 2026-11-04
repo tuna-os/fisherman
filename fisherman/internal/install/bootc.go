@@ -168,7 +168,6 @@ type Options struct {
 	// Used to persist rootflags (e.g. Btrfs compression).
 	KernelArguments []string
 
-
 	// directLocalSource is set by BootcInstall when a local
 	// containers-storage: SourceImgref is installed with the host's bootc
 	// instead of inside a podman container (see useDirectForLocalSource).

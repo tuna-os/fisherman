@@ -151,7 +151,6 @@ func TestApplyCustomLayout_BtrfsUsesCompression(t *testing.T) {
 	}
 }
 
-
 func TestApplyCustomLayout_EmptyFstypeSameAsUnformatted(t *testing.T) {
 	dir := t.TempDir()
 	targetBase := filepath.Join(dir, "target")

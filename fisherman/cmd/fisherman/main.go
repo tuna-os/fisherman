@@ -39,9 +39,9 @@ var cleanup = &post.Cleanup{}
 
 // bindMount is disk.BindMount by default; tests replace it to avoid real mounts.
 var bindMount = disk.BindMount
+
 // bootcInstall is install.BootcInstall by default; tests replace it.
 var bootcInstall = install.BootcInstall
-
 
 type stepProfile struct {
 	cumulativePct int
