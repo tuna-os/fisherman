@@ -90,8 +90,14 @@ func ApplyCustomLayout(specs []MountSpec, targetBase string) (targetMount, efiPa
 		}
 
 		progress.Info(fmt.Sprintf("Mounting %s → %s", s.Partition, hostTarget))
-		if err2 := runner.Run("mount", s.Partition, hostTarget); err2 != nil {
-			return "", "", mounted, fmt.Errorf("mount %s at %s: %w", s.Partition, hostTarget, err2)
+		var mountErr error
+		if s.Fstype == "btrfs" {
+			mountErr = MountType(s.Partition, hostTarget, "btrfs", "compress=zstd:1")
+		} else {
+			mountErr = runner.Run("mount", s.Partition, hostTarget)
+		}
+		if mountErr != nil {
+			return "", "", mounted, fmt.Errorf("mount %s at %s: %w", s.Partition, hostTarget, mountErr)
 		}
 		mounted = append(mounted, hostTarget)
 

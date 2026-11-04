@@ -233,3 +233,58 @@ func TestCheckRequiredTools_SystemdCryptenrollNotCheckedForPlainLUKS(t *testing.
 		t.Errorf("systemd-cryptenroll should not be checked for luks-passphrase, got: %v", err)
 	}
 }
+
+func TestBuildBootcInstallOptions_KernelArguments(t *testing.T) {
+	tests := []struct {
+		name     string
+		recipe   *recipe.Recipe
+		wantKarg []string
+	}{
+		{
+			name: "btrfs with subvolumes",
+			recipe: &recipe.Recipe{
+				Filesystem:      "btrfs",
+				BtrfsSubvolumes: true,
+			},
+			wantKarg: []string{"rootflags=subvol=@,compress=zstd:1"},
+		},
+		{
+			name: "plain btrfs",
+			recipe: &recipe.Recipe{
+				Filesystem:      "btrfs",
+				BtrfsSubvolumes: false,
+			},
+			wantKarg: []string{"rootflags=compress=zstd:1"},
+		},
+		{
+			name: "xfs has no rootflags",
+			recipe: &recipe.Recipe{
+				Filesystem: "xfs",
+			},
+			wantKarg: nil,
+		},
+		{
+			name: "manual btrfs root",
+			recipe: &recipe.Recipe{
+				CustomMounts: []recipe.CustomMount{
+					{Partition: "/dev/sda1", Target: "/", Fstype: "btrfs"},
+				},
+			},
+			wantKarg: []string{"rootflags=compress=zstd:1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			opts := buildBootcInstallOptions(tt.recipe, "src", "target", "/mnt/target", "/tmp/scratch", nil, false, 0)
+			if len(opts.KernelArguments) != len(tt.wantKarg) {
+				t.Fatalf("KernelArguments = %v, want %v", opts.KernelArguments, tt.wantKarg)
+			}
+			for i := range opts.KernelArguments {
+				if opts.KernelArguments[i] != tt.wantKarg[i] {
+					t.Errorf("KernelArguments[%d] = %q, want %q", i, opts.KernelArguments[i], tt.wantKarg[i])
+				}
+			}
+		})
+	}
+}
