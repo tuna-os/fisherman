@@ -121,6 +121,36 @@ func TestApplyCustomLayout_PreservesUnformattedPartitions(t *testing.T) {
 		t.Fatalf("expected 2 mount calls, got %d", len(mountCalls))
 	}
 }
+func TestApplyCustomLayout_BtrfsUsesCompression(t *testing.T) {
+	dir := t.TempDir()
+	targetBase := filepath.Join(dir, "target")
+
+	rec := setupRecorder(t)
+
+	specs := []disk.MountSpec{
+		{Partition: "/dev/sda1", Target: "/", Fstype: "btrfs"},
+		{Partition: "/dev/sda2", Target: "/boot/efi", Fstype: "fat32"},
+	}
+
+	if _, _, _, err := disk.ApplyCustomLayout(specs, targetBase); err != nil {
+		t.Fatalf("ApplyCustomLayout: %v", err)
+	}
+
+	var btrfsMount *execCall
+	for i, c := range rec.calls {
+		if c.name == "mount" && contains(c.args, "btrfs") && contains(c.args, "/dev/sda1") {
+			btrfsMount = &rec.calls[i]
+			break
+		}
+	}
+	if btrfsMount == nil {
+		t.Fatalf("no btrfs mount call recorded; calls: %+v", rec.calls)
+	}
+	if !contains(btrfsMount.args, "compress=zstd:1") {
+		t.Fatalf("btrfs mount args %v missing compress=zstd:1", btrfsMount.args)
+	}
+}
+
 
 func TestApplyCustomLayout_EmptyFstypeSameAsUnformatted(t *testing.T) {
 	dir := t.TempDir()

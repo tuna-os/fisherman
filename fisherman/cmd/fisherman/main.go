@@ -39,6 +39,9 @@ var cleanup = &post.Cleanup{}
 
 // bindMount is disk.BindMount by default; tests replace it to avoid real mounts.
 var bindMount = disk.BindMount
+// bootcInstall is install.BootcInstall by default; tests replace it.
+var bootcInstall = install.BootcInstall
+
 
 type stepProfile struct {
 	cumulativePct int
@@ -654,7 +657,11 @@ func main() {
 				fatal("setting up btrfs subvolumes: %v", err)
 			}
 		} else {
-			if err := disk.MountType(rootDev, targetMount, r.Filesystem, ""); err != nil {
+			mountOpts := ""
+			if r.Filesystem == "btrfs" {
+				mountOpts = "compress=zstd:1"
+			}
+			if err := disk.MountType(rootDev, targetMount, r.Filesystem, mountOpts); err != nil {
 				fatal("mounting root: %v", err)
 			}
 		}
@@ -764,27 +771,8 @@ func main() {
 		}
 	}
 
-	// ZFS installs must use composefs-backend because bootc's ostree path checks
-	// the filesystem type and rejects ZFS; composefs-native bypasses that check.
-	composeFsBackend := r.ComposeFsBackend
-	if r.Filesystem == "zfs" {
-		composeFsBackend = true
-	}
-
-	if err := install.BootcInstall(install.Options{
-		SourceImgref:          sourceImgref,
-		TargetImgref:          targetImgref,
-		SelinuxDisabled:       r.SelinuxDisabled,
-		UnifiedStorage:        r.UnifiedStorage,
-		ComposeFsBackend:      composeFsBackend,
-		GenericImage:          r.GenericImage,
-		Bootloader:            r.Bootloader,
-		Target:                activeTargetMount,
-		ScratchDir:            scratchDir,
-		NeedsPull:             imageCheck.NeedsPull,
-		LayerCount:            imageCheck.LayerCount,
-		AdditionalImageStores: imageStores,
-	}); err != nil {
+	opts := buildBootcInstallOptions(r, sourceImgref, targetImgref, activeTargetMount, scratchDir, imageStores, imageCheck.NeedsPull, imageCheck.LayerCount)
+	if err := bootcInstall(opts); err != nil {
 		fatal("bootc install: %v", err)
 	}
 
@@ -1096,4 +1084,38 @@ func main() {
 	}
 
 	progress.Complete("Installation complete!", bootID)
+}
+
+func buildBootcInstallOptions(
+	r *recipe.Recipe,
+	sourceImgref, targetImgref, activeTargetMount, scratchDir string,
+	imageStores []string,
+	needsPull bool,
+	layerCount int,
+) install.Options {
+	composeFsBackend := r.ComposeFsBackend
+	if r.Filesystem == "zfs" {
+		composeFsBackend = true
+	}
+
+	var kernelArgs []string
+	if rootOpts := r.RootMountOptions(); rootOpts != "" {
+		kernelArgs = append(kernelArgs, "rootflags="+rootOpts)
+	}
+
+	return install.Options{
+		SourceImgref:          sourceImgref,
+		TargetImgref:          targetImgref,
+		SelinuxDisabled:       r.SelinuxDisabled,
+		UnifiedStorage:        r.UnifiedStorage,
+		ComposeFsBackend:      composeFsBackend,
+		GenericImage:          r.GenericImage,
+		Bootloader:            r.Bootloader,
+		Target:                activeTargetMount,
+		ScratchDir:            scratchDir,
+		NeedsPull:             needsPull,
+		LayerCount:            layerCount,
+		AdditionalImageStores: imageStores,
+		KernelArguments:       kernelArgs,
+	}
 }

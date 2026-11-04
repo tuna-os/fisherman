@@ -164,6 +164,10 @@ type Options struct {
 	// When empty, BuildBootcArgs falls back to the host-side OCI cache
 	// (scratchDir/oci-cache), which is correct for bootcDirect (no container).
 	ComposeFsOCIPath string
+	// KernelArguments adds explicit --karg flags to bootc install to-filesystem.
+	// Used to persist rootflags (e.g. Btrfs compression).
+	KernelArguments []string
+
 
 	// directLocalSource is set by BootcInstall when a local
 	// containers-storage: SourceImgref is installed with the host's bootc
@@ -232,6 +236,11 @@ func BuildBootcArgs(opts Options, resolvedTargetImgref, installTarget string) []
 	}
 	if opts.Bootloader != "" && opts.Bootloader != "grub2" {
 		args = append(args, "--bootloader", opts.Bootloader)
+	}
+	for _, karg := range opts.KernelArguments {
+		if karg != "" {
+			args = append(args, "--karg="+karg)
+		}
 	}
 	args = append(args, "--skip-finalize")
 	args = append(args, installTarget)

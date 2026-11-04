@@ -152,6 +152,15 @@ func TestBuildBootcArgs_BaseArgs(t *testing.T) {
 	assertContains(t, args, "--skip-finalize")
 	assertContains(t, args, "/target")
 }
+func TestBuildBootcArgs_KernelArguments(t *testing.T) {
+	args := install.BuildBootcArgs(install.Options{
+		Target:          "/mnt/target",
+		KernelArguments: []string{"rootflags=subvol=@,compress=zstd:1", "console=ttyS0"},
+	}, "", "/target")
+	assertContains(t, args, "--karg=rootflags=subvol=@,compress=zstd:1")
+	assertContains(t, args, "--karg=console=ttyS0")
+}
+
 
 func TestBuildBootcArgs_ComposeFsBackend(t *testing.T) {
 	args := install.BuildBootcArgs(install.Options{ComposeFsBackend: true}, "", "/target")
