@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/runner"
+	"github.com/tuna-os/fisherman/internal/sha512crypt"
 )
 
 // On ostree targets, useradd --create-home resolves the deployment's
@@ -265,4 +266,167 @@ func TestCreateUserKeepsGroupsWhenGroupFileMissing(t *testing.T) {
 		}
 	}
 	t.Errorf("no chroot useradd call recorded: %v", calls)
+}
+
+type chpasswdCall struct {
+	args  []string
+	stdin string
+}
+
+// fakeComposeFsUser points CreateUser at a composefs deploy root under a temp
+// sysroot and records every chpasswd invocation with its stdin.
+func fakeComposeFsUser(t *testing.T) (sysroot, root string, chpasswd *[]chpasswdCall) {
+	t.Helper()
+	sysroot = t.TempDir()
+	etcDir := filepath.Join(sysroot, "state", "deploy", "abc123", "etc")
+	if err := os.MkdirAll(etcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origEtcFn := ComposeFsDeployEtcDirFn
+	t.Cleanup(func() { ComposeFsDeployEtcDirFn = origEtcFn })
+	ComposeFsDeployEtcDirFn = func(string) (string, error) { return etcDir, nil }
+
+	var calls []chpasswdCall
+	origRunFn := runner.RunFn
+	t.Cleanup(func() { runner.RunFn = origRunFn })
+	runner.RunFn = func(stdin io.Reader, name string, args ...string) error {
+		switch name {
+		case "ls":
+			_, err := os.Stat(args[len(args)-1])
+			return err
+		case "chroot":
+			t.Errorf("composefs must not chroot: %v", args)
+		case "chpasswd":
+			in, err := io.ReadAll(stdin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			calls = append(calls, chpasswdCall{args: args, stdin: string(in)})
+		}
+		return nil
+	}
+	return sysroot, filepath.Dir(etcDir), &calls
+}
+
+// chpasswd without -e hashes through PAM, and a composefs deploy root has no
+// PAM modules: "pam_chauthtok() failed, error: Module is unknown"
+// (projectbluefin/utah#1129). A plaintext password must be hashed in-process
+// and handed to chpasswd -e as a $6$ crypt string.
+func TestCreateUserComposeFsHashesPlaintextPassword(t *testing.T) {
+	sysroot, root, calls := fakeComposeFsUser(t)
+	const plain = "hunter2-plaintext"
+
+	if err := CreateUser(sysroot, UserConfig{Username: "dave", Password: plain}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("want one chpasswd call, got %v", *calls)
+	}
+	c := (*calls)[0]
+	if want := []string{"--root", root, "-e"}; strings.Join(c.args, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("chpasswd args = %q; want %q", c.args, want)
+	}
+	for _, a := range c.args {
+		if strings.Contains(a, plain) {
+			t.Errorf("plaintext password leaked into chpasswd args: %q", c.args)
+		}
+	}
+	hash, ok := strings.CutPrefix(strings.TrimSuffix(c.stdin, "\n"), "dave:")
+	if !ok || !strings.HasPrefix(hash, "$6$") || strings.Contains(c.stdin, plain) {
+		t.Fatalf("chpasswd stdin = %q; want dave:$6$<salt>$<hash>", c.stdin)
+	}
+	if again, err := sha512crypt.Crypt(plain, hash); err != nil || again != hash {
+		t.Errorf("stdin hash %q does not verify the password (got %q, %v)", hash, again, err)
+	}
+}
+
+// A pre-hashed crypt string reaches chpasswd -e verbatim, never re-hashed.
+func TestCreateUserComposeFsPassesPreHashedPassword(t *testing.T) {
+	sysroot, root, calls := fakeComposeFsUser(t)
+	const hashed = "$6$saltstring$svn8UoSVapNtMuq1ukKS4tPQd8iKwSMHWjl/O817G3uBnIFNjnQJuesI68u4OTLiBFdcbYEdFCoEOfaS35inz1"
+
+	if err := CreateUser(sysroot, UserConfig{Username: "carol", Password: hashed}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("want one chpasswd call, got %v", *calls)
+	}
+	c := (*calls)[0]
+	if want := []string{"--root", root, "-e"}; strings.Join(c.args, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("chpasswd args = %q; want %q", c.args, want)
+	}
+	if want := "carol:" + hashed + "\n"; c.stdin != want {
+		t.Errorf("chpasswd stdin = %q; want %q", c.stdin, want)
+	}
+}
+
+// A plaintext password that merely starts with "$" is not a crypt setting:
+// it must take the hash-in-process path, not reach chpasswd -e verbatim
+// (which would store the literal text and lock the account).
+func TestCreateUserComposeFsHashesDollarLeadingPlaintextPassword(t *testing.T) {
+	_, _, calls := fakeComposeFsUser(t)
+	const plain = "$notacryptsetting"
+
+	if err := CreateUser("sysroot-ignored", UserConfig{Username: "erin", Password: plain}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("want one chpasswd call, got %v", *calls)
+	}
+	c := (*calls)[0]
+	if len(c.args) != 3 || c.args[0] != "--root" || c.args[2] != "-e" {
+		t.Errorf("chpasswd args = %q; want [--root <root> -e]", c.args)
+	}
+	hash, ok := strings.CutPrefix(strings.TrimSuffix(c.stdin, "\n"), "erin:")
+	if !ok || !strings.HasPrefix(hash, "$6$") || strings.Contains(c.stdin, plain) {
+		t.Fatalf("chpasswd stdin = %q; want erin:$6$<salt>$<hash>", c.stdin)
+	}
+	if again, err := sha512crypt.Crypt(plain, hash); err != nil || again != hash {
+		t.Errorf("stdin hash %q does not verify the password (got %q, %v)", hash, again, err)
+	}
+}
+
+// The ostree branch keeps chroot chpasswd with the target's own PAM stack:
+// a plaintext password goes in as-is, without -e.
+func TestCreateUserOstreePlaintextPasswordUnchanged(t *testing.T) {
+	sysroot := t.TempDir()
+	deployDir := filepath.Join(sysroot, "ostree", "deploy", "default", "deploy", "abc123.0")
+	if err := os.MkdirAll(deployDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	origDeployFn := DeploymentDirFn
+	defer func() { DeploymentDirFn = origDeployFn }()
+	DeploymentDirFn = func(string) (string, error) { return deployDir, nil }
+
+	var chpasswd []chpasswdCall
+	origRunFn := runner.RunFn
+	defer func() { runner.RunFn = origRunFn }()
+	runner.RunFn = func(stdin io.Reader, name string, args ...string) error {
+		if name == "ls" {
+			_, err := os.Stat(args[len(args)-1])
+			return err
+		}
+		if name == "chroot" && len(args) > 1 && args[1] == "chpasswd" {
+			in, err := io.ReadAll(stdin)
+			if err != nil {
+				t.Fatal(err)
+			}
+			chpasswd = append(chpasswd, chpasswdCall{args: args, stdin: string(in)})
+		}
+		return nil
+	}
+
+	if err := CreateUser(sysroot, UserConfig{Username: "frank", Password: "plain"}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if len(chpasswd) != 1 {
+		t.Fatalf("want one chroot chpasswd call, got %v", chpasswd)
+	}
+	c := chpasswd[0]
+	if want := []string{deployDir, "chpasswd"}; strings.Join(c.args, "\x00") != strings.Join(want, "\x00") {
+		t.Errorf("chroot args = %q; want %q", c.args, want)
+	}
+	if c.stdin != "frank:plain\n" {
+		t.Errorf("chpasswd stdin = %q; want %q", c.stdin, "frank:plain\n")
+	}
 }
