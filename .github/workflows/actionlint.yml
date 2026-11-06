@@ -3,9 +3,12 @@ name: Workflow lint
 on:
   pull_request:
     paths: [".github/workflows/**"]
+  # No path filter on push: promote.yml requires an `actionlint` check on the
+  # exact dev commit it promotes. Filtered to workflow changes, the check never
+  # existed on ordinary code commits and the gate refused them forever (#395
+  # sat unreleased behind v0.5.2). The run takes seconds.
   push:
     branches: [main, dev, prod]
-    paths: [".github/workflows/**"]
   merge_group:
   workflow_dispatch:
 
