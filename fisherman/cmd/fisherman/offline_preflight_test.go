@@ -161,6 +161,64 @@ func TestResolveMediaInputBinding(t *testing.T) {
 	}
 }
 
+// A host store receipt binds only its exact image (or its
+// containers-storage spelling) and day-2 target, verified by the strict
+// store preflight — never the OCI verifier.
+func TestResolveMediaInputStoreBinding(t *testing.T) {
+	oldMedia, oldRequired := hostMediaInput, hostMediaRequired
+	oldSandboxed, oldOCI, oldStore := hostMediaSandboxed, preflightBoundMediaInput, preflightBoundStoreMediaInput
+	defer func() {
+		hostMediaInput, hostMediaRequired = oldMedia, oldRequired
+		hostMediaSandboxed, preflightBoundMediaInput, preflightBoundStoreMediaInput = oldSandboxed, oldOCI, oldStore
+	}()
+	hostMediaSandboxed = func() bool { return false }
+	media := &install.MediaInput{
+		SchemaVersion:          1,
+		Image:                  "ghcr.io/example/os:stable",
+		TargetImgref:           "ghcr.io/example/base:stable",
+		ContainersStoragePath:  "/var/lib/containers/storage",
+		Platform:               runtime.GOOS + "/" + runtime.GOARCH,
+		PlatformManifestDigest: "sha256:" + strings.Repeat("c", 64),
+	}
+	for _, tt := range []struct {
+		name    string
+		image   string
+		target  string
+		want    bool
+		wantErr bool
+	}{
+		{"empty live recipe", "", "", true, false},
+		{"exact image", media.Image, "", true, false},
+		{"exact store source", "containers-storage:" + media.Image, "", true, false},
+		{"different explicit source", "ghcr.io/example/other:latest", "", false, true},
+		{"different explicit target", media.Image, "ghcr.io/example/other:latest", false, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			hostMediaInput = func() (*install.MediaInput, error) { return media, nil }
+			hostMediaRequired = func() (bool, error) { return true, nil }
+			ociCalls, storeCalls := 0, 0
+			preflightBoundMediaInput = func(got *install.MediaInput) error { ociCalls++; return nil }
+			preflightBoundStoreMediaInput = func(got *install.MediaInput) error {
+				storeCalls++
+				if got != media {
+					t.Fatal("verified a different media input")
+				}
+				return nil
+			}
+			got, err := resolveMediaInput(&recipe.Recipe{Image: tt.image, TargetImgref: tt.target})
+			if (err != nil) != tt.wantErr || (got != nil) != tt.want {
+				t.Fatalf("binding=%+v err=%v, want binding=%v error=%v", got, err, tt.want, tt.wantErr)
+			}
+			if ociCalls != 0 {
+				t.Fatal("store receipt reached the OCI verifier")
+			}
+			if (storeCalls == 1) != tt.want {
+				t.Fatalf("strict store verifier calls=%d, want bound=%v", storeCalls, tt.want)
+			}
+		})
+	}
+}
+
 func testBoundMediaInput() *install.MediaInput {
 	return &install.MediaInput{
 		SchemaVersion:          1,

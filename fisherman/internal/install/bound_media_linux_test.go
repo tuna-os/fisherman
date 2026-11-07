@@ -450,6 +450,59 @@ func TestBoundMediaUniqueByteBudgetBoundary(t *testing.T) {
 	}
 }
 
+func TestPreflightBoundStoreMediaInput(t *testing.T) {
+	writableBoundFixture(t)
+	digest := "sha256:" + strings.Repeat("e", 64)
+	store := t.TempDir()
+	oldRoot := boundOfflineStoreRoot
+	boundOfflineStoreRoot = store
+	defer func() { boundOfflineStoreRoot = oldRoot }()
+	oldInspect := SkopeoInspectFn
+	defer func() { SkopeoInspectFn = oldInspect }()
+	SkopeoInspectFn = func(args ...string) ([]byte, error) {
+		if len(args) != 1 || args[0] != "containers-storage:ghcr.io/example/os:stable" {
+			return nil, fmt.Errorf("store digest queried outside the bound store: %v", args)
+		}
+		return []byte(`{"Digest": "` + digest + `"}`), nil
+	}
+	good := &MediaInput{
+		SchemaVersion: 1, Image: "ghcr.io/example/os:stable",
+		TargetImgref:           "ghcr.io/example/os:stable",
+		PlatformManifestDigest: digest,
+		Platform:               runtime.GOOS + "/" + runtime.GOARCH,
+		ContainersStoragePath:  store,
+	}
+	if err := PreflightBoundStoreMediaInput(good); err != nil {
+		t.Fatalf("bound store source refused: %v", err)
+	}
+	if err := PreflightBoundStoreMediaInput(nil); err == nil {
+		t.Fatal("nil store input accepted")
+	}
+	missing := *good
+	missing.ContainersStoragePath = filepath.Join(store, "no-such-dir")
+	boundOfflineStoreRoot = missing.ContainersStoragePath
+	if err := PreflightBoundStoreMediaInput(&missing); err == nil {
+		t.Fatal("missing store directory accepted")
+	}
+	boundOfflineStoreRoot = store
+	SkopeoInspectFn = func(args ...string) ([]byte, error) {
+		return []byte(`{"Digest": "sha256:` + strings.Repeat("f", 64) + `"}`), nil
+	}
+	if err := PreflightBoundStoreMediaInput(good); err == nil {
+		t.Fatal("digest-mismatched store accepted")
+	}
+	other := *good
+	other.ContainersStoragePath = "/srv/custom/store"
+	if err := PreflightBoundStoreMediaInput(&other); err == nil {
+		t.Fatal("non-default store path accepted")
+	}
+	both := *good
+	both.OCILayoutPath = "/run/media/layout"
+	if err := PreflightBoundStoreMediaInput(&both); err == nil {
+		t.Fatal("layout+store receipt accepted")
+	}
+}
+
 func TestBoundMediaAllowsRawLayerBelowBlobCeiling(t *testing.T) {
 	r := boundBlobReader{sizes: make(map[string]int64)}
 	metadata := ociDescriptor{Digest: "sha256:" + strings.Repeat("a", 64), Size: 8 << 10}
