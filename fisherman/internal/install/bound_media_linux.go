@@ -20,7 +20,7 @@ const boundBlobLimit int64 = 16 << 30
 
 // Proposed first-candidate policy, not a claim that every image fits.
 const boundLayerLimit = 1024
-const boundUniqueBlobLimit int64 = 10 << 30
+const boundUniqueBlobLimit int64 = boundBlobLimit
 
 // This seam is replaced only by filesystem fixture tests. Production requires
 // an actually read-only mounted filesystem, not a caller-supplied assertion.

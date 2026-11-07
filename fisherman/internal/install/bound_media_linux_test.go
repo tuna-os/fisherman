@@ -350,8 +350,8 @@ func TestBoundMediaLayerAndAggregateBudgets(t *testing.T) {
 		{"empty layers", "layer count exceeds policy", func(m *ociManifest) { m.Layers = nil }},
 		{"aggregate", "unique blob bytes exceed policy", func(m *ociManifest) {
 			m.Layers = []ociDescriptor{
-				{Digest: "sha256:" + strings.Repeat("a", 64), Size: 6 << 30},
-				{Digest: "sha256:" + strings.Repeat("b", 64), Size: 5 << 30},
+				{Digest: "sha256:" + strings.Repeat("a", 64), Size: 9 << 30},
+				{Digest: "sha256:" + strings.Repeat("b", 64), Size: 8 << 30},
 			}
 		}},
 		{"conflicting layer duplicate", "inconsistent repeated bound blob size", func(m *ociManifest) {
@@ -447,5 +447,20 @@ func TestBoundMediaUniqueByteBudgetBoundary(t *testing.T) {
 	first.Size--
 	if err := r.reserve(first, false); err == nil {
 		t.Fatal("inconsistent duplicate size accepted")
+	}
+}
+
+func TestBoundMediaAllowsRawLayerBelowBlobCeiling(t *testing.T) {
+	r := boundBlobReader{sizes: make(map[string]int64)}
+	metadata := ociDescriptor{Digest: "sha256:" + strings.Repeat("a", 64), Size: 8 << 10}
+	layer := ociDescriptor{Digest: "sha256:" + strings.Repeat("b", 64), Size: 12 << 30}
+	if err := r.reserve(metadata, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.reserve(layer, false); err != nil {
+		t.Fatal("valid raw image rejected:", err)
+	}
+	if r.total != metadata.Size+layer.Size || len(r.sizes) != 2 {
+		t.Fatal("raw image and metadata were not accounted together")
 	}
 }
