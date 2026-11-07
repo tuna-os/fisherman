@@ -115,6 +115,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Bug Fixes
 
+- **Bound offline media accepts full uncompressed images**: the aggregate unique
+  blob budget now matches the existing 16 GiB per-blob ceiling instead of rejecting
+  valid raw layers above 10 GiB. Layer bytes are still streamed and hashed once per
+  digest; metadata, layer-count, read-only, platform and symlink checks are unchanged.
 - **Offline OCI imports use target-disk scratch** (#345): Podman's image store,
   runtime state, and host-side blob staging no longer fill the RAM-backed live
   filesystem before the bootc container starts. This also covers the VFS
