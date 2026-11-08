@@ -142,6 +142,53 @@ func PreflightBoundOCIMediaInput(m *MediaInput) error {
 	return nil
 }
 
+// PreflightBoundStoreMediaInput is the strict gate for an explicitly bound
+// containers-storage offline source. It mirrors PreflightBoundOCIMediaInput:
+// schema v1, named image and day-2 target, platform match, canonical store
+// path limited to the v1 bound root, opened with O_NOFOLLOW on a read-only
+// filesystem, then the embedded image digest verified against the receipt.
+// Layer bytes are never buffered; skopeo reads the store, fisherman only the
+// digest.
+func PreflightBoundStoreMediaInput(m *MediaInput) error {
+	if m == nil {
+		return fmt.Errorf("missing bound media input")
+	}
+	if err := m.Validate(); err != nil {
+		return err
+	}
+	if m.SchemaVersion != 1 || m.Image == "" || m.TargetImgref == "" ||
+		!validSHA256Digest(m.PlatformManifestDigest) {
+		return fmt.Errorf("bound media needs schema v1, image, target and platform manifest digest")
+	}
+	if m.Platform != runtime.GOOS+"/"+runtime.GOARCH {
+		return fmt.Errorf("bound media platform %q does not match host", m.Platform)
+	}
+	if m.ContainersStoragePath == "" {
+		return fmt.Errorf("bound media has no containers-storage path")
+	}
+	p := m.ContainersStoragePath
+	if p == "/" || !filepath.IsAbs(p) || filepath.Clean(p) != p {
+		return fmt.Errorf("bound containers-storage path is not canonical absolute")
+	}
+	if p != boundOfflineStoreRoot {
+		return fmt.Errorf("bound containers-storage path %q is not the bound offline store", p)
+	}
+	fd, err := syscall.Open("/", syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	root, err := openBoundRelative(fd, strings.TrimPrefix(p, "/"), true)
+	_ = syscall.Close(fd)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if err := boundReadOnlyCheck(int(root.Fd())); err != nil {
+		return fmt.Errorf("bound containers-storage is not on a read-only filesystem")
+	}
+	return inspectStoreDigest(m.Image, m.PlatformManifestDigest)
+}
+
 // openBoundRelative rejects symlinks, noncanonical components, and nonregular
 // files. O_NONBLOCK prevents a hostile FIFO from blocking before fstat.
 func openBoundRelative(base int, relative string, directory bool) (*os.File, error) {

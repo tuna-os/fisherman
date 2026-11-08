@@ -36,7 +36,16 @@ type MediaInput struct {
 	// OCILayoutPath is the host-absolute path of the verified read-only OCI
 	// layout directory. Passed straight through to bootc as
 	// --source-imgref oci:<OCILayoutPath>; never an additionalImageStore.
+	// Exactly one of OCILayoutPath and ContainersStoragePath is set.
 	OCILayoutPath string `json:"ociLayoutPath"`
+	// ContainersStoragePath is the host-absolute path of a verified
+	// read-only containers-storage graphroot holding the embedded image.
+	// The install reads it as --source-imgref containers-storage:<Image>
+	// (direct for ostree images, exported to an OCI cache for composefs).
+	// v1 binds only the default graphroot: unpacked store files then share
+	// squashfs blocks with the live root instead of duplicating it as an
+	// opaque layer blob.
+	ContainersStoragePath string `json:"containersStoragePath"`
 	// TargetImgref is the update-tracking ref written into the installed
 	// system for day-2 updates (--target-imgref).
 	TargetImgref string `json:"targetImgref"`
@@ -53,6 +62,16 @@ type MediaInput struct {
 func IsOCISource(ref string) bool {
 	return strings.HasPrefix(ref, "oci:")
 }
+
+// defaultContainersStoragePath is the only offline store location the v1
+// store-source contract binds: the default containers-storage graphroot.
+// A builder embedding the unpacked store anywhere else fails closed.
+const defaultContainersStoragePath = "/var/lib/containers/storage"
+
+// boundOfflineStoreRoot is the store root the bound-store gate accepts.
+// The production value is defaultContainersStoragePath; tests substitute a
+// fixture directory (the read-only check is separately stubbed).
+var boundOfflineStoreRoot = defaultContainersStoragePath
 
 // ExpectedDigest returns the manifest digest the on-disk layout must
 // contain: the platform-specific manifest when known, else the top-level
@@ -86,6 +105,17 @@ func (m *MediaInput) Validate() error {
 	}
 	if m.OCILayoutPath != "" && !filepath.IsAbs(m.OCILayoutPath) {
 		return fmt.Errorf("media input ociLayoutPath is not absolute: %q", m.OCILayoutPath)
+	}
+	if m.OCILayoutPath != "" && m.ContainersStoragePath != "" {
+		return fmt.Errorf("media input sets both an OCI layout and a containers-storage path")
+	}
+	if m.ContainersStoragePath != "" {
+		if !filepath.IsAbs(m.ContainersStoragePath) || filepath.Clean(m.ContainersStoragePath) != m.ContainersStoragePath {
+			return fmt.Errorf("media input containersStoragePath is not canonical absolute: %q", m.ContainersStoragePath)
+		}
+		if m.ContainersStoragePath != boundOfflineStoreRoot {
+			return fmt.Errorf("media input containersStoragePath %q is not the bound offline store", m.ContainersStoragePath)
+		}
 	}
 	if m.Image != "" && m.TargetImgref == "" {
 		return fmt.Errorf("media input names image %q but no targetImgref for day-2 updates", m.Image)
@@ -151,6 +181,7 @@ func ParseMediaInput(data []byte) (*MediaInput, error) {
 	m.IndexDigest = get("indexdigest")
 	m.ConfigDigest = get("configdigest")
 	m.OCILayoutPath = get("ocilayoutpath", "layoutpath", "ocilayout", "layout")
+	m.ContainersStoragePath = get("containersstoragepath", "storepath", "containersstore", "store")
 	m.TargetImgref = get("targetimgref", "target")
 	m.Platform = get("platform", "osarch")
 	m.CatalogVersion = get("catalogversion")
@@ -349,5 +380,47 @@ func PreflightMediaInput(m *MediaInput) error {
 				m.Platform, runtime.GOOS, runtime.GOARCH)
 		}
 	}
+	if m.ContainersStoragePath != "" {
+		return PreflightStoreMediaInput(m)
+	}
 	return PreflightOCILayout(m.OCILayoutPath, m.ExpectedDigest())
+}
+
+// PreflightStoreMediaInput validates m and verifies the embedded image
+// resolves in the bound default containers-storage with the receipt digest.
+// Fail-closed like the OCI gate: a missing store, an unresolvable image,
+// or a digest mismatch refuses the installation (never a registry pull).
+func PreflightStoreMediaInput(m *MediaInput) error {
+	if m == nil {
+		return fmt.Errorf("no media input bound")
+	}
+	if err := m.Validate(); err != nil {
+		return err
+	}
+	if m.ContainersStoragePath == "" {
+		return fmt.Errorf("no containers-storage path bound")
+	}
+	return inspectStoreDigest(m.Image, m.ExpectedDigest())
+}
+
+// inspectStoreDigest resolves image in the default containers-storage and
+// requires its manifest digest to equal expected when expected is given.
+func inspectStoreDigest(image, expected string) error {
+	if strings.TrimSpace(image) == "" {
+		return fmt.Errorf("no embedded image bound")
+	}
+	out, err := SkopeoInspectFn("containers-storage:" + image)
+	if err != nil {
+		return fmt.Errorf("inspecting embedded image %q: %w", image, err)
+	}
+	var v struct {
+		Digest string `json:"Digest"`
+	}
+	if err := json.Unmarshal(out, &v); err != nil || !validSHA256Digest(v.Digest) {
+		return fmt.Errorf("embedded image %q has no valid digest", image)
+	}
+	if expected != "" && v.Digest != expected {
+		return fmt.Errorf("embedded image digest %s does not match media input %s", v.Digest, expected)
+	}
+	return nil
 }

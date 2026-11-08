@@ -38,6 +38,9 @@ var (
 // Test seam for consumer ordering; production uses the shared strict validator.
 var preflightBoundMediaInput = install.PreflightBoundOCIMediaInput
 
+// Test seam for the store-source counterpart of the strict validator.
+var preflightBoundStoreMediaInput = install.PreflightBoundStoreMediaInput
+
 // recipeStdin is where `fisherman -` reads its recipe; tests replace it.
 var recipeStdin io.Reader = os.Stdin
 
@@ -100,18 +103,19 @@ func resolveMediaInput(r *recipe.Recipe) (*install.MediaInput, error) {
 		}
 		return nil, nil
 	}
-	if mi.OCILayoutPath == "" {
+	if mi.OCILayoutPath == "" && mi.ContainersStoragePath == "" {
 		if !required {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("required media input has no OCI layout")
+		return nil, fmt.Errorf("required media input has no OCI layout or containers-storage path")
 	}
 	explicitOCI := install.IsOCISource(r.Image)
-	exactOCI := explicitOCI && r.Image == "oci:"+mi.OCILayoutPath
+	exactOCI := explicitOCI && mi.OCILayoutPath != "" && r.Image == "oci:"+mi.OCILayoutPath
+	exactStore := mi.ContainersStoragePath != "" && r.Image == "containers-storage:"+mi.Image
 	if explicitOCI && !exactOCI && filepath.Clean(strings.TrimPrefix(r.Image, "oci:")) == filepath.Clean(mi.OCILayoutPath) {
 		return nil, fmt.Errorf("explicit OCI binding uses a noncanonical path alias")
 	}
-	if r.Image != "" && r.Image != mi.Image && !exactOCI {
+	if r.Image != "" && r.Image != mi.Image && !exactOCI && !exactStore {
 		if required {
 			return nil, fmt.Errorf("requested image %q does not match embedded source %q", r.Image, mi.Image)
 		}
@@ -120,7 +124,11 @@ func resolveMediaInput(r *recipe.Recipe) (*install.MediaInput, error) {
 	if r.TargetImgref != "" && r.TargetImgref != mi.TargetImgref {
 		return nil, fmt.Errorf("requested target %q does not match media target %q", r.TargetImgref, mi.TargetImgref)
 	}
-	if err := preflightBoundMediaInput(mi); err != nil {
+	if mi.ContainersStoragePath != "" {
+		if err := preflightBoundStoreMediaInput(mi); err != nil {
+			return nil, err
+		}
+	} else if err := preflightBoundMediaInput(mi); err != nil {
 		return nil, err
 	}
 	return mi, nil

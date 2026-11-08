@@ -361,6 +361,100 @@ func TestCheckImageOCISourceNeverTouchesRegistry(t *testing.T) {
 	}
 }
 
+func TestParseMediaInputStoreSource(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	camel := `{"schemaVersion":1,"image":"ghcr.io/example/os:stable",` +
+		`"platformManifestDigest":"` + digest + `",` +
+		`"containersStoragePath":"/var/lib/containers/storage",` +
+		`"targetImgref":"ghcr.io/example/os:stable","platform":"linux/amd64"}`
+	snake := `{"schema_version":1,"image":"ghcr.io/example/os:stable",` +
+		`"platform_manifest_digest":"` + digest + `",` +
+		`"containers_storage_path":"/var/lib/containers/storage",` +
+		`"target_imgref":"ghcr.io/example/os:stable","platform":"linux/amd64"}`
+	c, err := ParseMediaInput([]byte(camel))
+	if err != nil {
+		t.Fatalf("camelCase store source rejected: %v", err)
+	}
+	s, err := ParseMediaInput([]byte(snake))
+	if err != nil {
+		t.Fatalf("snake_case store source rejected: %v", err)
+	}
+	if *c != *s {
+		t.Fatalf("store spelling variants decode differently:\n%+v\n%+v", c, s)
+	}
+	if c.ContainersStoragePath != "/var/lib/containers/storage" {
+		t.Fatalf("store path lost in decode: %+v", c)
+	}
+}
+
+func TestMediaInputValidateStoreSource(t *testing.T) {
+	valid := &MediaInput{
+		Image:                 "ghcr.io/example/os:stable",
+		TargetImgref:          "ghcr.io/example/os:stable",
+		ContainersStoragePath: "/var/lib/containers/storage",
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid store input rejected: %v", err)
+	}
+	for _, tt := range []struct {
+		name string
+		mi   *MediaInput
+	}{
+		{"both layout and store set", &MediaInput{OCILayoutPath: "/run/media/layout", ContainersStoragePath: "/var/lib/containers/storage"}},
+		{"relative store path", &MediaInput{ContainersStoragePath: "relative/store"}},
+		{"non-default store path", &MediaInput{Image: "ghcr.io/example/os:stable", TargetImgref: "ghcr.io/example/os:stable", ContainersStoragePath: "/srv/custom/store"}},
+		{"store image without day-2 ref", &MediaInput{Image: "ghcr.io/example/os:stable", ContainersStoragePath: "/var/lib/containers/storage"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.mi.Validate(); err == nil {
+				t.Fatal("invalid store input accepted")
+			}
+		})
+	}
+}
+
+func TestPreflightMediaInputStoreSource(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("c", 64)
+	store := t.TempDir()
+	oldRoot := boundOfflineStoreRoot
+	boundOfflineStoreRoot = store
+	defer func() { boundOfflineStoreRoot = oldRoot }()
+	oldRO := boundReadOnlyCheck
+	boundReadOnlyCheck = func(fd int) error { return nil }
+	defer func() { boundReadOnlyCheck = oldRO }()
+	oldInspect := SkopeoInspectFn
+	defer func() { SkopeoInspectFn = oldInspect }()
+	SkopeoInspectFn = func(args ...string) ([]byte, error) {
+		if len(args) != 1 || args[0] != "containers-storage:ghcr.io/example/os:stable" {
+			return nil, fmt.Errorf("store digest queried outside the default store: %v", args)
+		}
+		return []byte(`{"Digest": "` + digest + `"}`), nil
+	}
+	mi := &MediaInput{
+		SchemaVersion:          1,
+		Image:                  "ghcr.io/example/os:stable",
+		PlatformManifestDigest: digest,
+		TargetImgref:           "ghcr.io/example/os:stable",
+		ContainersStoragePath:  store,
+		Platform:               runtime.GOOS + "/" + runtime.GOARCH,
+	}
+	if err := PreflightMediaInput(mi); err != nil {
+		t.Fatalf("bound store source refused: %v", err)
+	}
+	SkopeoInspectFn = func(args ...string) ([]byte, error) {
+		return []byte(`{"Digest": "sha256:` + strings.Repeat("d", 64) + `"}`), nil
+	}
+	if err := PreflightMediaInput(mi); err == nil {
+		t.Fatal("digest-mismatched store accepted")
+	}
+	SkopeoInspectFn = func(args ...string) ([]byte, error) {
+		return nil, errors.New("store unreadable")
+	}
+	if err := PreflightMediaInput(mi); err == nil {
+		t.Fatal("unreadable store accepted")
+	}
+}
+
 func TestOCISourceBuildsBootcArgsStraightThrough(t *testing.T) {
 	const layoutPath = "/run/media/layout"
 	for _, composefs := range []bool{false, true} {

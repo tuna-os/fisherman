@@ -334,7 +334,11 @@ func main() {
 	}
 	sourceImgref := r.Image
 	if mediaInput != nil {
-		sourceImgref = "oci:" + mediaInput.OCILayoutPath
+		if mediaInput.ContainersStoragePath != "" {
+			sourceImgref = "containers-storage:" + mediaInput.Image
+		} else {
+			sourceImgref = "oci:" + mediaInput.OCILayoutPath
+		}
 	}
 
 	// Run pre-flight validation chain. Every rule `fisherman validate` enforces,
