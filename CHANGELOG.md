@@ -119,6 +119,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blob budget now matches the existing 16 GiB per-blob ceiling instead of rejecting
   valid raw layers above 10 GiB. Layer bytes are still streamed and hashed once per
   digest; metadata, layer-count, read-only, platform and symlink checks are unchanged.
+- **composefs installs accept a plaintext user password**
+  (projectbluefin/utah#1129): `chpasswd --root` hashes a plaintext password
+  through PAM, and a composefs deploy root holds only `/etc` state, so user
+  creation failed with `pam_chauthtok() failed, error: Module is unknown`.
+  fisherman now hashes it in-process to a SHA-512 crypt (`$6$`) string and
+  passes it with `chpasswd -e`. Pre-hashed passwords and ostree installs are
+  unchanged.
+
 - **Offline OCI imports use target-disk scratch** (#345): Podman's image store,
   runtime state, and host-side blob staging no longer fill the RAM-backed live
   filesystem before the bootc container starts. This also covers the VFS

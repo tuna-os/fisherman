@@ -5,10 +5,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/tuna-os/fisherman/internal/runner"
+	"github.com/tuna-os/fisherman/internal/sha512crypt"
 )
+
+// cryptSetting matches a modular crypt(3) setting ("$id$...", e.g.
+// "$6$salt$hash"). A plaintext password merely starting with "$" must NOT
+// match: it has no closing "$" after an id, so it takes the hash-in-process
+// path instead of reaching chpasswd -e verbatim (which would store the
+// literal text as the crypt field and lock the account).
+var cryptSetting = regexp.MustCompile(`^\$[A-Za-z0-9.]+\$`)
 
 // UserConfig describes a user account to create in the installed system.
 type UserConfig struct {
@@ -154,14 +163,29 @@ func CreateUser(sysroot string, u UserConfig) error {
 	// Set the password via chpasswd stdin to avoid it appearing in ps output.
 	// Same ostree-chroot vs composefs---root split as useradd above.
 	if u.Password != "" {
-		input := fmt.Sprintf("%s:%s\n", u.Username, u.Password)
+		password := u.Password
 		// A pre-hashed crypt(3) string ("$id$salt$hash", e.g. wootc's vault
 		// $6$ SHA-512) must be written verbatim with -e. Without it chpasswd
 		// (a) treats the hash as a PLAINTEXT password — the account's real
 		// password becomes the literal hash text — and (b) invokes the
 		// hashing stack (PAM/crypt config), which exits 1 on EL10 targets.
+		preHashed := cryptSetting.MatchString(password)
+		if composefs && !preHashed {
+			// chpasswd without -e hashes through PAM (pam_chauthtok), and a
+			// composefs deploy root holds only /etc state — no PAM modules —
+			// so it fails with "pam_chauthtok() failed, error: Module is
+			// unknown" (projectbluefin/utah#1129). Hash here instead and
+			// hand chpasswd the result with -e, which skips PAM entirely.
+			hashed, err := sha512crypt.Hash(password)
+			if err != nil {
+				return fmt.Errorf("hashing password for %s: %w", u.Username, err)
+			}
+			password = hashed
+			preHashed = true
+		}
+		input := fmt.Sprintf("%s:%s\n", u.Username, password)
 		flag := []string{}
-		if strings.HasPrefix(u.Password, "$") {
+		if preHashed {
 			flag = []string{"-e"}
 		}
 		var cpErr error
