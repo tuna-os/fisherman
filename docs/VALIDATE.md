@@ -421,9 +421,11 @@ does: it needs no root.
 
 The host-tool list comes from the recipe. The auto layout needs `sfdisk`,
 `mkfs.fat`, `mkfs.ext4`, the `mkfs` of `filesystem` (or `zpool` and `zfs`),
-`cryptsetup` for an encrypted root and `systemd-cryptenroll` for a `tpm2-*`
-type. A manual layout needs no `sfdisk`: it needs the `mkfs` of each
-`customMounts[].fstype` it formats (`mkfs.fat`, `mkfs.ext3`, `mkfs.ext4`,
+and `cryptsetup` for an encrypted root. A `tpm2-*` type needs no
+`systemd-cryptenroll` on the host: the enrolment runs on the first boot of
+the installed system, with the image's own tool, and the install looks for
+it in the installed image. A manual layout needs no `sfdisk`: it needs the
+`mkfs` of each `customMounts[].fstype` it formats (`mkfs.fat`, `mkfs.ext3`, `mkfs.ext4`,
 `mkfs.xfs`, `mkfs.btrfs`), and `mkswap`, `swapon` and `swapoff` for a swap
 entry. A `varDisk` that is not kept needs `mkfs.xfs`. Every install needs
 `skopeo` and `podman`. fisherman looks for them where they run: on the host,

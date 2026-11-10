@@ -931,17 +931,7 @@ func main() {
 		if r.Encryption.Type == "tpm2-luks" {
 			unlockPassphrase = luksRecoveryKey
 		}
-		// Enroll TPM2 on the FIRST BOOT of the installed system, not here:
-		// --tpm2-pcrs=7 seals against PCR 7 as measured in the live
-		// installer, but the installed system boots a different chain and
-		// measures a different PCR 7 — so an install-time enrollment can
-		// never unseal on first boot. Staging a first-boot oneshot captures
-		// the correct PCR 7. The recovery/passphrase key unlocks until then.
-		if err := luks.StageFirstBootEnrollment(activeTargetMount, activeLuksUUID, unlockPassphrase); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not stage first-boot TPM2 enrollment (recovery key unlock still works): %v", err))
-		} else {
-			progress.Info("TPM2 auto-unlock will be enrolled on first boot")
-		}
+		progress.Info(stageTPM2Enrollment(activeTargetMount, activeRootPart, activeLuksUUID, unlockPassphrase))
 
 		// For tpm2-luks the user never chose a passphrase, so we emit the
 		// random one as a recovery key they must save before rebooting.

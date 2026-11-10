@@ -283,11 +283,10 @@ func RequiredTools(r *recipe.Recipe) []ToolRequirement {
 		if recipe.IsEncrypted(r.Encryption.Type) {
 			need("cryptsetup", "cryptsetup")
 		}
-		// systemd-cryptenroll runs after the OS is installed; a missing
-		// tool there would leave an installed disk with no TPM2 unlock.
-		if recipe.NeedsTPM2(r.Encryption.Type) {
-			need("systemd-cryptenroll", "systemd")
-		}
+		// No systemd-cryptenroll here: a tpm2-* type enrols on the first
+		// boot of the installed system, with the TARGET image's tool. The
+		// install looks for it there once the image is on the disk
+		// (luks.StageFirstBootEnrollment); the host needs cryptsetup only.
 	}
 	// A /var disk that is not kept is formatted XFS (disk.FormatVar).
 	if r.VarDisk != nil && !r.VarDisk.KeepExisting {

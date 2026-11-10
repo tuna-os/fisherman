@@ -64,9 +64,9 @@ fisherman is a Go CLI that reads a JSON recipe and runs an install pipeline. The
 | Mount | mount everything at `/mnt/fisherman-target` | always |
 | Format data disk | a second disk for `/var` | recipes that name one |
 | Install OS | `bootc install to-filesystem --skip-finalize` through `podman run --privileged` | always |
-| Enrol TPM2 | bind the LUKS volume to the TPM and emit the recovery key | TPM recipes |
+| Enrol TPM2 | add a single-use keyslot, stage the first-boot unit that binds the LUKS volume to the TPM, and emit the recovery key | TPM recipes |
 | Copy Flatpaks | copy system Flatpaks from the host to the target | always |
-| Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi and Bluetooth copied from the host, audio names, OEM extras, print services, caches | always |
+| Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi profiles and Bluetooth pairings copied from the host (live media, or on request), audio names, OEM extras, print services | always |
 | Finalize | fstrim → remount read-only → fsfreeze, then thaw | always (skipped on ZFS) |
 
 The separate ext4 `/boot` partition is required for GRUB because GRUB cannot read modern XFS features (`nrext64`, `exchange`, `rmapbt`). For composefs/systemd-boot images the EFI partition holds the kernel and initrd directly.
