@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "live_host": {
+    "context": "live-host",
+    "is_live": false,
+    "image": "ghcr.io/example/os:stable",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "platform": "x86_64",
+    "backend": "ostree",
+    "bootc_version": "1.17.1"
+  },
+  "source": {
+    "selected": true,
+    "ref": "docker://ghcr.io/example/os@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "transport": "registry",
+    "locality": "remote",
+    "store": "",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "digest_from": "reference",
+    "platform": ""
+  },
+  "execution_root": {
+    "context": "live-host",
+    "established": true,
+    "reason": "digest_match",
+    "backend": "ostree",
+    "bootc_version": "1.17.1"
+  },
+  "target": {
+    "update_ref": "ghcr.io/example/os@sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "update_ref_from": "source",
+    "state": "not_installed"
+  },
+  "features": {
+    "bootc_image_storage": {
+      "status": "unknown",
+      "reason": "not_qualified",
+      "context": "source-root"
+    },
+    "deployment_mount": {
+      "status": "unknown",
+      "reason": "not_qualified",
+      "context": "source-root"
+    },
+    "finalization": {
+      "status": "unknown",
+      "reason": "not_qualified",
+      "context": "source-root"
+    },
+    "install_configuration": {
+      "status": "supported",
+      "reason": "observed",
+      "context": "source-root"
+    },
+    "native_inspection": {
+      "status": "supported",
+      "reason": "observed",
+      "context": "source-root"
+    },
+    "unified_storage": {
+      "status": "unsupported",
+      "reason": "fisherman_refuses",
+      "context": "fisherman"
+    }
+  },
+  "install_defaults": {
+    "observed": true,
+    "root_filesystem": "xfs",
+    "block_setups": [],
+    "bootloader": ""
+  },
+  "image": {
+    "observed": true,
+    "kernel_version": "6.12.0-55.el10.x86_64",
+    "kernel_unified": false
+  }
+}

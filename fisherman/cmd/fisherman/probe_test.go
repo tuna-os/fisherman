@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tuna-os/fisherman/internal/probe"
+	"github.com/tuna-os/fisherman/internal/recipe"
 )
 
 func withProber(t *testing.T, p *probe.Prober) {
@@ -121,5 +123,111 @@ func TestHelpListsProbe(t *testing.T) {
 	stdout, _ := captureOutput(t, printHelp)
 	if !strings.Contains(stdout, "fisherman probe --json") {
 		t.Error("help does not list probe")
+	}
+}
+
+// selectionProber is fixtureProber that also records the commands it ran.
+func selectionProber(t *testing.T, calls *[]string) *probe.Prober {
+	t.Helper()
+	p := fixtureProber(t, nil)
+	inner := p.Run
+	p.Run = func(name string, args ...string) ([]byte, error) {
+		*calls = append(*calls, strings.Join(append([]string{name}, args...), " "))
+		return inner(name, args...)
+	}
+	return p
+}
+
+func TestRunProbeSelection(t *testing.T) {
+	tests := []struct {
+		name      string
+		args      []string
+		code      int
+		stderr    string
+		transport string
+		updateRef string
+	}{
+		{"source", []string{"--json", "--source", "containers-storage:ghcr.io/example/os:stable"}, 0, "", "containers-storage", "ghcr.io/example/os:stable"},
+		{"source=", []string{"--json", "--source=ghcr.io/example/os:stable", "--target-imgref=ghcr.io/example/os:lts"}, 0, "", "registry", "ghcr.io/example/os:lts"},
+		{"live root", []string{"--json", "--live-root"}, 0, "", "live-root", ""},
+		{"no source", []string{"--json"}, 0, "", "", ""},
+		{"missing value", []string{"--json", "--source"}, 2, "--source needs a value", "", ""},
+		{"bad source", []string{"--json", "--source", "$(SECRET-SENTINEL)"}, 2, "invalid image reference", "", ""},
+		{"bad target", []string{"--json", "--target-imgref", "a b SECRET-SENTINEL"}, 2, "invalid image reference", "", ""},
+		{"both", []string{"--json", "--live-root", "--source", "ghcr.io/x"}, 2, "exclude each other", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var calls []string
+			withProber(t, selectionProber(t, &calls))
+			var out, errOut bytes.Buffer
+			if code := runProbe(tt.args, &out, &errOut); code != tt.code {
+				t.Fatalf("exit %d, want %d (stderr %q)", code, tt.code, errOut.String())
+			}
+			if strings.Contains(errOut.String(), "SECRET-SENTINEL") {
+				t.Errorf("stderr echoes the reference: %q", errOut.String())
+			}
+			if tt.code != 0 {
+				if !strings.Contains(errOut.String(), tt.stderr) || out.Len() != 0 || len(calls) != 0 {
+					t.Errorf("stderr %q, stdout %q, calls %v", errOut.String(), out.String(), calls)
+				}
+				return
+			}
+			var res probe.Result
+			if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+				t.Fatal(err)
+			}
+			c := res.Capabilities
+			if c.Version != probe.CapabilitiesVersion || c.Source.Transport != tt.transport || c.Target.UpdateRef != tt.updateRef {
+				t.Errorf("capabilities = %+v", c)
+			}
+			// This fixture host has no bootc: nothing is established, and
+			// no source-root command runs.
+			if c.ExecutionRoot.Established {
+				t.Errorf("execution root established on a host without bootc: %+v", c.ExecutionRoot)
+			}
+			for _, call := range calls {
+				if call == "bootc install print-configuration" || call == "bootc container inspect --json" {
+					t.Errorf("ran %q", call)
+				}
+			}
+		})
+	}
+}
+
+// The probe's unified_storage answer and the recipe rule agree: the probe
+// says fisherman refuses it, and a recipe that asks for it is refused by the
+// same validation that runs before any disk step.
+func TestUnifiedStorageAnswerMatchesRecipeRule(t *testing.T) {
+	var calls []string
+	withProber(t, selectionProber(t, &calls))
+	var out, errOut bytes.Buffer
+	if code := runProbe([]string{"--json", "--source", "ghcr.io/example/os:stable"}, &out, &errOut); code != 0 {
+		t.Fatal(errOut.String())
+	}
+	var res probe.Result
+	if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	f := res.Capabilities.Features[probe.FeatUnifiedStorage]
+	if f.Status != probe.CapUnsupported || f.Reason != probe.ReasonFishermanRefuses {
+		t.Fatalf("unified_storage = %+v", f)
+	}
+	ps := recipe.CheckUnifiedStorage(true)
+	if len(ps) != 1 || ps[0].Code != recipe.CodeUnifiedStorageUnsupported {
+		t.Errorf("recipe rule does not refuse unifiedStorage: %+v", ps)
+	}
+	if len(recipe.CheckUnifiedStorage(false)) != 0 {
+		t.Error("recipe rule refuses unifiedStorage: false")
+	}
+}
+
+// The production runner bounds every probe command.
+func TestProbeRunIsBounded(t *testing.T) {
+	if probeCommandTimeout <= 0 || probeCommandTimeout > time.Minute || probeMaxOutput <= 0 || probeMaxOutput > 64<<20 {
+		t.Errorf("limits %v / %d", probeCommandTimeout, probeMaxOutput)
+	}
+	if _, err := probeRun("sh", "-c", "exit 0"); err != nil {
+		t.Errorf("probeRun: %v", err)
 	}
 }

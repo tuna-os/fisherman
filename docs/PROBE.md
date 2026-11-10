@@ -11,11 +11,20 @@ and machine model the installer runs on.
 - Exit `1`: the probe failed (lsblk failed, `/proc/meminfo` unreadable). The
   reason is on stderr; stdout is empty.
 - Exit `2`: bad arguments. `--json` is required; it is the only output format.
+  An invalid `--source` or `--target-imgref` is refused without echoing it.
 - **No root.** Run it as the desktop user.
 - **Read-only.** It writes nothing: no files, no mounts, no lock files.
 
 Each frontend used to compute these facts itself, and the copies drifted
 (see "Why" below). The logic now lives here; a frontend only renders it.
+
+```text
+fisherman probe --json [--source <ref> | --live-root] [--target-imgref <ref>]
+```
+
+`--source`, `--live-root` and `--target-imgref` scope the `capabilities`
+object to the source the user selected; see [Capabilities](#capabilities).
+Every other section is the same with or without them.
 
 ## Running it from a frontend
 
@@ -76,12 +85,13 @@ mounts, which the boot-disk rule needs.
   dmi                        the firmware's name for the machine model; see "Hardware facts"
     vendor          string   DMI sys_vendor, whitespace collapsed; "" when unknown
     product         string   DMI product_name; "" when unknown
+  capabilities               the selected source's bootc capabilities; see "Capabilities"
 }
 ```
 
-`bootc`, `gpus` and `dmi` were added after `protocol_version` 1 shipped. They
-are additions, so the version did not change; a fisherman that predates them
-simply omits the keys.
+`bootc`, `gpus`, `dmi` and `capabilities` were added after `protocol_version`
+1 shipped. They are additions, so the version did not change; a fisherman
+that predates them simply omits the keys.
 
 Arrays are always arrays, never `null`.
 
@@ -203,9 +213,9 @@ the selected image's own bootc, which can be older or newer, so:
 - ignore capability names and reason codes you do not know, and treat an
   unknown `status` as `unknown`.
 
-Other contexts (the selected source image, the installed target) will be
-added as further values of `context`, or as further objects; they are not
-probed yet (tuna-os/fisherman#383).
+The selected source image is answered by the separate `capabilities` object
+below, not by a further value of `context` here. Read this object for the
+live host only.
 
 | Capability | What it is | How `live-host` answers |
 |---|---|---|
@@ -238,6 +248,191 @@ A host without bootc is an ordinary answer, not a probe failure.
 Fixtures: `fisherman/internal/probe/testdata/golden/bootc-*.json` pin the
 object for a current bootc, an older one, a missing command, malformed
 version output, a bootc that fails, and a single failed check.
+
+### Capabilities
+
+`capabilities` is the source-scoped bootc report of tuna-os/fisherman#383,
+for tuna-os/bootc-installer#266. It answers one question: what can the
+**selected source's own bootc** do, and how does fisherman know? It has its
+own `version`, so a frontend can gate its capability UI on it.
+
+#### Selecting the source
+
+| Flag | Meaning |
+|---|---|
+| `--source <ref>` | the recipe's `image`: `containers-storage:<name>`, `oci:<path>[:<tag>]`, `docker://<name>` or a bare registry name |
+| `--live-root` | the recipe omits `image`: the install runs the live host's bootc, which installs the image the host booted. Excludes `--source` |
+| `--target-imgref <ref>` | the recipe's `targetImgref`, the update reference. Optional |
+
+The flags take image references, not a recipe. A recipe on stdin was the
+other choice; it was rejected because a recipe holds the LUKS passphrase and
+the user password, and the probe needs neither. A reference must match
+`[A-Za-z0-9][A-Za-z0-9._:/@+=-]{0,511}` and contain no `..`; anything else
+exits 2, and the message does not repeat the value. Without either source
+flag, `capabilities` is still present and every source feature is
+`unknown` with `no_source_selected`.
+
+Run the probe again when the selection changes, and drop an older reply: a
+reply belongs to the `source.ref` and `target.update_ref` it names.
+
+#### Schema (`capabilities.version` 1)
+
+```text
+capabilities
+  version           int      1; bumped only when a field is removed, renamed or changes meaning
+  live_host                  the machine that runs the installer
+    context         string   "live-host"
+    is_live         bool     the same answer as live.is_live
+    image           string   the ref the host booted ("" when it booted no bootc image)
+    digest          string   the manifest digest the host booted, "sha256:<64 hex>"; "" when unknown
+    identity_reason string   present only when digest is "": "not_bootc_booted" or "digest_missing"
+    platform        string   the architecture bootc status reports ("x86_64"); "" when unknown
+    backend         string   "ostree", "composefs", or "" when bootc does not say
+    bootc_version   string   the same as bootc.version
+  source                     the selected installation source
+    selected        bool     a source flag was given
+    ref             string   the reference as given (with --live-root: the host's booted ref)
+    transport       string   "containers-storage", "oci", "registry", "live-root"; "" when none
+    locality        string   "local", "remote" or "unknown"
+    store           string   the containers-storage root the digest was read from; "" otherwise
+    digest          string   the source's manifest digest; "" when not known offline
+    digest_from     string   present only with a digest: "store_index", "oci_index", "reference", "live_root"
+    digest_reason   string   present only without one; see the table below
+    platform        string   "os/arch[/variant]" from an OCI index; "" when unknown
+  execution_root             the root whose bootc the probe ran for the source
+    context         string   "live-host" when established, otherwise "none"
+    established     bool     the probe proved this root is the source's
+    reason          string   why; see the table below
+    backend         string   the root's backend when established, otherwise ""
+    bootc_version   string   that root's bootc version when established, otherwise ""
+  target                     the installed system; it does not exist during a probe
+    update_ref      string   the reference the installed system will follow; "" when unknown
+    update_ref_from string   "target_imgref", "source" (the source ref without its transport), "live_image" or ""
+    state           string   "not_installed"
+  features                   feature name -> answer; every name below is always present
+    <name>
+      status        string   "supported", "unsupported" or "unknown"
+      reason        string   a stable reason code; see the table below
+      context       string   "source-root", "fisherman" or "none": where the answer was established
+  install_defaults           what the source root's `bootc install print-configuration` reports
+    observed        bool     the command ran there and its output was read
+    root_filesystem string   root-fs-type (or filesystem.root.type); "" when not stated
+    block_setups[]  string   block, e.g. ["direct", "tpm2-luks"]; [] when not stated
+    bootloader      string   bootloader when stated; "" otherwise
+  image                      what the source root's `bootc container inspect --json` reports
+    observed        bool     the command ran there and its output was read
+    kernel_version  string   kernel.version; "" when not stated
+    kernel_unified  bool     kernel.unified (a UKI); false when not stated
+}
+```
+
+`install_defaults` are bootc's documented merged defaults, not a disk plan:
+fisherman's own partition layout and recipe rules still decide the install.
+Read them only when `observed` is true.
+
+#### The execution root
+
+fisherman never runs the source's bootc to answer a probe: that needs a
+pull, a mount or a container, and the probe does none of those. It runs a
+bootc only when it can prove that bootc **is** the source's: the live
+host's, when the host booted the selected image.
+
+| `execution_root.reason` | `established` | Meaning |
+|---|---|---|
+| `digest_match` | true | the source's manifest digest equals the digest the host booted (`bootc status --json`) |
+| `live_root` | true | `--live-root`, and the host booted a bootc image: bootc with no source installs the root it runs in |
+| `no_source_selected` | false | no source flag |
+| `host_not_bootc` | false | no bootc on the host, `bootc status` failed, or the host booted no bootc image |
+| `host_digest_unknown` | false | the host booted an image whose digest bootc did not report |
+| `source_digest_unknown` | false | the source's digest is not known offline; `source.digest_reason` says why |
+| `digest_mismatch` | false | both digests are known and differ: the host runs an unrelated image |
+
+A matching name, a matching version string or the same distribution is never
+enough: only the digest is. On a host whose image does not match, the host's
+own install configuration is never reported for the source.
+
+| `source.digest_reason` | Meaning |
+|---|---|
+| `remote_metadata_unavailable` | a registry source. The probe contacts no registry, so the digest stays unknown until the install pulls or inspects it |
+| `not_found_locally` | no readable store has the image. Root's `/var/lib/containers/storage` is usually unreadable for the desktop user, so this does not prove the image is absent |
+| `ambiguous_local_copies` | readable stores hold different images under that name |
+| `oci_layout_unreadable` | the layout's `index.json` is missing, unreadable or malformed, or does not single out one manifest (by `org.opencontainers.image.ref.name`, or the only one) |
+| `not_bootc_booted`, `digest_missing` | `--live-root` on a host that booted no bootc image, or one without a digest |
+
+Stores searched for a `containers-storage:` source are `offline.stores`,
+then `/var/lib/containers/storage`; a name without a tag also matches
+`<name>:latest`. A store entry matches the host through any digest it
+records (the manifest digest, or the list digest it was pulled by).
+
+#### Features
+
+| Feature | What it is | How it is answered in the source root |
+|---|---|---|
+| `native_inspection` | `bootc container inspect`, bootc's own image inspection | runs `bootc container inspect --json` |
+| `install_configuration` | `bootc install print-configuration`, the merged install defaults | runs `bootc install print-configuration` |
+| `finalization` | `bootc install finalize` | `bootc install finalize --help`: absence is proof; presence is not |
+| `deployment_mount` | bootc mounts the new deployment itself after the install | never answered read-only |
+| `bootc_image_storage` | bootc's own image store on the target (bound images) | never answered read-only |
+| `unified_storage` | bootc's `--experimental-unified-storage` | fisherman's policy, the same for every source |
+
+| `status` | `reason` | `context` | Meaning |
+|---|---|---|---|
+| `supported` | `observed` | `source-root` | the command ran in the established source root and the adapter read its output. The only way to `supported` |
+| `unsupported` | `command_absent` | `source-root` | the source root's bootc rejected the subcommand (exit status 2) |
+| `unsupported` | `fisherman_refuses` | `fisherman` | fisherman does not implement it, and `fisherman validate` refuses a recipe that asks for it (`unified_storage` ↔ `unified_storage_unsupported`, docs/VALIDATE.md) |
+| `unknown` | `not_qualified` | `source-root` | the source root has the command, but only an install of this source on a test machine shows it works with fisherman's install profile. Help text and versions are not that proof |
+| `unknown` | `malformed_output` | `source-root` | the command ran, but its output is not the JSON the adapter reads (not an object, or a known key with the wrong type or an unexpected value) |
+| `unknown` | `check_failed` | `source-root` | the command failed for another reason: an error, a timeout, too much output |
+| `unknown` | `source_root_unavailable` | `none` | no root the probe may run is the source's; `execution_root.reason` says why |
+| `unknown` | `no_source_selected` | `none` | no source flag |
+
+Rules for a frontend:
+
+- branch on `status` and `reason`, never on `bootc_version` or a version
+  number: no feature follows from a version;
+- `unknown` means "do not offer it", never "probably fine";
+- ignore feature names, reason codes and fields you do not know; treat an
+  unknown `status` as `unknown`;
+- a feature a recipe asks for that is `unsupported` is refused by
+  `fisherman validate`, and by the install before any disk is touched. Today that is
+  `unifiedStorage`; a later feature gets a validation code when a recipe
+  field starts asking for it.
+
+#### Adapters, limits and secrets
+
+bootc's JSON is read by adapters that copy out the fields in the schema and
+nothing else. Unknown keys are ignored, so a newer bootc does not change the
+contract, and only values that match a short token pattern (a filesystem,
+bootloader or block-setup name, a kernel release, a `sha256:` digest) are
+copied. Command output, error text, kernel arguments and store metadata never
+reach the JSON or stderr. Every command the probe runs is stopped after 20
+seconds and refused past 8 MiB of output (`runner.BoundedOutput`), and its
+stderr is discarded.
+
+The probe pulls nothing, mounts nothing, starts no container, takes no store
+lock and contacts no registry. Store indexes and OCI `index.json` files are
+read as files. It runs `bootc status --json` once, and the three source-root
+commands above only when the execution root is established.
+
+`bootc` here is the first `bootc` on the desktop user's `PATH` (forwarded to
+the host in a Flatpak). The install runs it as root through `pkexec`, which
+resets `PATH`; on an image-based host both resolve to `/usr/bin/bootc`.
+
+#### What only an install can prove
+
+`deployment_mount` and `bootc_image_storage` are `unknown` with
+`not_qualified` in every case, and `finalization` never becomes `supported`:
+nothing read-only can show they work with fisherman's install profile. A VM
+install of the source on the matrix in `tests/bootcrew-matrix.yaml` is the
+proof; until a qualified profile exists for a source, they stay `unknown`.
+
+Fixtures: `fisherman/internal/probe/testdata/golden/caps-*.json` pin the
+object for no source, a matching OSTree root with a current bootc, a
+matching composefs root, an older bootc, an unrelated live host with a
+conflicting configuration, a registry source, a digest-pinned reference, a
+host without bootc, malformed output, unknown fields, wrongly typed fields, a
+failed check, a local OCI layout, a source not found locally, ambiguous
+local copies, and `--live-root`.
 
 ### Hardware facts
 
@@ -529,6 +724,82 @@ The output for a laptop booted from a live USB, pinned by
   "dmi": {
     "vendor": "LENOVO",
     "product": "21HMCTO1WW"
+  },
+  "capabilities": {
+    "version": 1,
+    "live_host": {
+      "context": "live-host",
+      "is_live": true,
+      "image": "ghcr.io/example/os:stable",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "platform": "x86_64",
+      "backend": "ostree",
+      "bootc_version": "1.17.1"
+    },
+    "source": {
+      "selected": false,
+      "ref": "",
+      "transport": "",
+      "locality": "unknown",
+      "store": "",
+      "digest": "",
+      "platform": ""
+    },
+    "execution_root": {
+      "context": "none",
+      "established": false,
+      "reason": "no_source_selected",
+      "backend": "",
+      "bootc_version": ""
+    },
+    "target": {
+      "update_ref": "",
+      "update_ref_from": "",
+      "state": "not_installed"
+    },
+    "features": {
+      "bootc_image_storage": {
+        "status": "unknown",
+        "reason": "no_source_selected",
+        "context": "none"
+      },
+      "deployment_mount": {
+        "status": "unknown",
+        "reason": "no_source_selected",
+        "context": "none"
+      },
+      "finalization": {
+        "status": "unknown",
+        "reason": "no_source_selected",
+        "context": "none"
+      },
+      "install_configuration": {
+        "status": "unknown",
+        "reason": "no_source_selected",
+        "context": "none"
+      },
+      "native_inspection": {
+        "status": "unknown",
+        "reason": "no_source_selected",
+        "context": "none"
+      },
+      "unified_storage": {
+        "status": "unsupported",
+        "reason": "fisherman_refuses",
+        "context": "fisherman"
+      }
+    },
+    "install_defaults": {
+      "observed": false,
+      "root_filesystem": "",
+      "block_setups": [],
+      "bootloader": ""
+    },
+    "image": {
+      "observed": false,
+      "kernel_version": "",
+      "kernel_unified": false
+    }
   }
 }
 ```

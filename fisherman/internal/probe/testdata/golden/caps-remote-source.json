@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "live_host": {
+    "context": "live-host",
+    "is_live": false,
+    "image": "ghcr.io/example/os:stable",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "platform": "x86_64",
+    "backend": "ostree",
+    "bootc_version": "1.17.1"
+  },
+  "source": {
+    "selected": true,
+    "ref": "ghcr.io/example/os:stable",
+    "transport": "registry",
+    "locality": "remote",
+    "store": "",
+    "digest": "",
+    "digest_reason": "remote_metadata_unavailable",
+    "platform": ""
+  },
+  "execution_root": {
+    "context": "none",
+    "established": false,
+    "reason": "source_digest_unknown",
+    "backend": "",
+    "bootc_version": ""
+  },
+  "target": {
+    "update_ref": "ghcr.io/example/os:stable",
+    "update_ref_from": "source",
+    "state": "not_installed"
+  },
+  "features": {
+    "bootc_image_storage": {
+      "status": "unknown",
+      "reason": "source_root_unavailable",
+      "context": "none"
+    },
+    "deployment_mount": {
+      "status": "unknown",
+      "reason": "source_root_unavailable",
+      "context": "none"
+    },
+    "finalization": {
+      "status": "unknown",
+      "reason": "source_root_unavailable",
+      "context": "none"
+    },
+    "install_configuration": {
+      "status": "unknown",
+      "reason": "source_root_unavailable",
+      "context": "none"
+    },
+    "native_inspection": {
+      "status": "unknown",
+      "reason": "source_root_unavailable",
+      "context": "none"
+    },
+    "unified_storage": {
+      "status": "unsupported",
+      "reason": "fisherman_refuses",
+      "context": "fisherman"
+    }
+  },
+  "install_defaults": {
+    "observed": false,
+    "root_filesystem": "",
+    "block_setups": [],
+    "bootloader": ""
+  },
+  "image": {
+    "observed": false,
+    "kernel_version": "",
+    "kernel_unified": false
+  }
+}

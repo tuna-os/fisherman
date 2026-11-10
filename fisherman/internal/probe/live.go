@@ -96,9 +96,44 @@ func isTboxSignal(sig string) bool {
 // bootedImage is .status.booted.image.image.image from `bootc status
 // --json`, the ref every frontend read for the live image.
 func (p *Prober) bootedImage() string {
-	out, err := p.run("bootc", "status", "--json")
+	return p.hostStatus().image
+}
+
+// bootcHostStatus is what fisherman reads from the host's `bootc status
+// --json`. Only these fields are taken; the rest of bootc's JSON is not part
+// of any fisherman contract.
+type bootcHostStatus struct {
+	// ok: bootc ran and printed a JSON object.
+	ok bool
+	// missing: there is no bootc command on the host.
+	missing bool
+	// booted: the object names a booted deployment with an image.
+	booted bool
+	image  string
+	// digest is .status.booted.image.imageDigest when it is a sha256 digest.
+	digest string
+	// arch is .status.booted.image.architecture when it is a plain token.
+	arch string
+	// backend is "ostree" or "composefs" when the booted entry says which.
+	backend string
+}
+
+// hostStatus runs `bootc status --json` once per Prober and keeps the answer:
+// Live and Capabilities both need it, and it is the same host.
+func (p *Prober) hostStatus() bootcHostStatus {
+	if p.status != nil {
+		return *p.status
+	}
+	st := parseBootcStatus(p.run("bootc", "status", "--json"))
+	p.status = &st
+	return st
+}
+
+func parseBootcStatus(out []byte, err error) bootcHostStatus {
+	var st bootcHostStatus
 	if err != nil {
-		return ""
+		st.missing = commandMissing(err)
+		return st
 	}
 	var status struct {
 		Status struct {
@@ -107,14 +142,42 @@ func (p *Prober) bootedImage() string {
 					Image struct {
 						Image string `json:"image"`
 					} `json:"image"`
+					ImageDigest  string `json:"imageDigest"`
+					Architecture string `json:"architecture"`
 				} `json:"image"`
+				Ostree    json.RawMessage `json:"ostree"`
+				Composefs json.RawMessage `json:"composefs"`
 			} `json:"booted"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(out, &status) != nil || status.Status.Booted == nil || status.Status.Booted.Image == nil {
-		return ""
+	if json.Unmarshal(out, &status) != nil {
+		return st
 	}
-	return status.Status.Booted.Image.Image.Image
+	st.ok = true
+	b := status.Status.Booted
+	if b == nil || b.Image == nil {
+		return st
+	}
+	st.booted = true
+	st.image = b.Image.Image.Image
+	if validDigest(b.Image.ImageDigest) {
+		st.digest = b.Image.ImageDigest
+	}
+	if tokenRe.MatchString(b.Image.Architecture) {
+		st.arch = b.Image.Architecture
+	}
+	switch {
+	case present(b.Composefs):
+		st.backend = BackendComposefs
+	case present(b.Ostree):
+		st.backend = BackendOstree
+	}
+	return st
+}
+
+// present reports whether a JSON value exists and is not null.
+func present(raw json.RawMessage) bool {
+	return len(raw) != 0 && string(raw) != "null"
 }
 
 // Offline OCI media input, the v1 contract between the tacklebox ISO builder
