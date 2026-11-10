@@ -4,7 +4,8 @@
 installer frontend needs before it shows its first page: which disks may be
 installed to, whether a TPM 2.0 is usable, whether the machine meets the
 minimum requirements, whether it booted from live media, which offline
-image stores that media carries, and what the host's bootc can do.
+image stores that media carries, what the host's bootc can do, and which GPUs
+and machine model the installer runs on.
 
 - Exit `0`: stdout holds exactly one JSON object.
 - Exit `1`: the probe failed (lsblk failed, `/proc/meminfo` unreadable). The
@@ -68,12 +69,19 @@ mounts, which the boot-disk rule needs.
       <name>
         status      string   "supported", "unsupported" or "unknown"
         reason      string   a stable reason code; see "bootc"
+  gpus[]                     PCI display controllers of this machine, in PCI address order; [] when none
+    vendor_id       string   PCI vendor id, lower-case hex: "0x10de"
+    device_id       string   PCI device id: "0x2684"
+    class           string   24-bit PCI class code: "0x030000" VGA, "0x030200" 3D, "0x038000" other display
+  dmi                        the firmware's name for the machine model; see "Hardware facts"
+    vendor          string   DMI sys_vendor, whitespace collapsed; "" when unknown
+    product         string   DMI product_name; "" when unknown
 }
 ```
 
-`bootc` was added after `protocol_version` 1 shipped. It is an addition, so
-the version did not change; a fisherman that predates it simply omits the
-key.
+`bootc`, `gpus` and `dmi` were added after `protocol_version` 1 shipped. They
+are additions, so the version did not change; a fisherman that predates them
+simply omits the keys.
 
 Arrays are always arrays, never `null`.
 
@@ -230,6 +238,33 @@ A host without bootc is an ordinary answer, not a probe failure.
 Fixtures: `fisherman/internal/probe/testdata/golden/bootc-*.json` pin the
 object for a current bootc, an older one, a missing command, malformed
 version output, a bootc that fails, and a single failed check.
+
+### Hardware facts
+
+`gpus` and `dmi` are **facts only**. The probe does not decide which image
+fits them, and nothing in fisherman changes an image, a kernel argument or a
+driver because of them. Rules that map hardware to images are separate,
+versioned data (tuna-os/fisherman#373) and must match PCI ids, not brand
+names: for example, "NVIDIA" alone does not say whether the open kernel
+modules support the card.
+
+They describe **the machine that runs the installer**. The disk can be moved
+to another machine after the install, so present anything derived from them
+as advice that the user can override.
+
+`gpus` comes from `/sys/bus/pci/devices/*/{class,vendor,device}`: every
+device whose PCI base class is `0x03` (display controller). A device with a
+missing or malformed attribute is left out. A machine without a PCI bus has
+`[]`.
+
+`dmi` comes from `/sys/class/dmi/id/sys_vendor` and `product_name`. Both are
+the same for every unit of a model. Control characters are removed,
+whitespace is collapsed, and a value is cut at 128 characters. No DMI, an
+unreadable file or an empty value gives `""`. On some vendors' machines
+`product_name` is a model code, not a marketing name.
+
+The probe never reads the serial numbers, asset tags or the machine UUID that
+sit in the same directory, and a test checks that.
 
 ## Example
 
@@ -478,6 +513,22 @@ The output for a laptop booted from a live USB, pinned by
         "reason": "not_established"
       }
     }
+  },
+  "gpus": [
+    {
+      "vendor_id": "0x8086",
+      "device_id": "0xa7a0",
+      "class": "0x030000"
+    },
+    {
+      "vendor_id": "0x10de",
+      "device_id": "0x28a0",
+      "class": "0x030200"
+    }
+  ],
+  "dmi": {
+    "vendor": "LENOVO",
+    "product": "21HMCTO1WW"
   }
 }
 ```
