@@ -1009,16 +1009,15 @@ func main() {
 		}
 	}
 
-	// Copy Bluetooth pairings from live session so paired keyboards/mice
-	// reconnect on first boot without re-pairing. Non-fatal.
-	if err := post.CopyBluetoothPairings(activeTargetMount); err != nil {
-		progress.Info(fmt.Sprintf("Warning: could not copy Bluetooth pairings: %v", err))
-	}
-
-	// Copy WiFi connections from live session so network reconnects on first boot. Non-fatal.
-	if err := post.CopyWiFiConnections(activeTargetMount); err != nil {
-		progress.Info(fmt.Sprintf("Warning: could not copy WiFi connections: %v", err))
-	}
+	// Wi-Fi profiles and Bluetooth pairings hold secrets (passwords, link
+	// keys). They follow the user from live media to the disk; from any
+	// other host they are copied only when the recipe asks (#411).
+	copyHostSecrets(activeTargetMount, r, func() bool {
+		if live.IsLive {
+			return true
+		}
+		return hostLive().IsLive
+	})
 
 	// Generate friendly audio device names and hide useless outputs (S/PDIF,
 	// Pro Audio, monitor loopbacks). Writes WirePlumber rules to /etc/ so no

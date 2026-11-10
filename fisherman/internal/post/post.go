@@ -547,110 +547,110 @@ func flatpakList(installFlag, typeFilter string) []string {
 	return refs
 }
 
-// CopyBluetoothPairings copies Bluetooth pairing data from the live environment
-// to the installed system so paired devices (keyboards, mice) reconnect on first
-// boot without re-pairing. Non-fatal: if no pairings exist or the copy fails, the
-// system still boots normally.
-func CopyBluetoothPairings(target string) error {
-	const src = "/var/lib/bluetooth"
-	info, err := os.Stat(src)
-	if err != nil || !info.IsDir() {
-		return nil //nolint:nilerr // no bluetooth data → nothing to do
-	}
+// Host sources of CopyBluetoothPairings and CopyWiFiConnections. Variables
+// so tests can point them at a fixture.
+var (
+	hostBluetoothDir     = "/var/lib/bluetooth"
+	hostNMConnectionsDir = "/etc/NetworkManager/system-connections"
+)
 
-	// Check if the directory has any adapter subdirectories.
+// CopyBluetoothPairings copies the host's Bluetooth pairing data
+// (/var/lib/bluetooth, which holds the link keys) into the installed
+// system's /var, so paired keyboards and mice reconnect on first boot.
+//
+// It returns the number of adapters copied. Zero with a nil error means
+// there was nothing to copy; the caller reports that as skipped.
+//
+// The caller decides WHETHER to copy (live media, or the recipe's
+// copyBluetoothPairings): on an installed host these are the operator's
+// keys, and the target may be for another person (#411).
+func CopyBluetoothPairings(target string) (int, error) {
+	src := hostBluetoothDir
 	entries, err := os.ReadDir(src)
-	if err != nil || len(entries) == 0 {
-		return nil //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
+	if err != nil {
+		return 0, nil //nolint:nilerr // no bluetooth data on the host: nothing to do
+	}
+	adapters := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			adapters++
+		}
+	}
+	if adapters == 0 {
+		return 0, nil
 	}
 
-	// Resolve the target /var/lib/bluetooth path (composefs-native vs ostree).
-	var dst string
-	if isComposeFsNative(target) {
-		dst = filepath.Join(target, "state", "os", "default", "var", "lib", "bluetooth")
-	} else {
-		dst = filepath.Join(target, "var", "lib", "bluetooth")
+	// The booted /var: the stateroot's on ostree, state/os/default/var on
+	// composefs. <target>/var is the physical sysroot.
+	d, err := ResolveDeployment(target)
+	if err != nil {
+		return 0, err
 	}
-
+	dst := filepath.Join(d.Var, "lib", "bluetooth")
 	if err := runner.Run("mkdir", "-p", dst); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dst, err)
+		return 0, fmt.Errorf("mkdir %s: %w", dst, err)
 	}
+	// The directory holds link keys: bluetoothd keeps it 0700.
+	_ = os.Chmod(dst, 0o700)
 
 	// Copy preserving permissions and ownership.
 	if err := runner.Run("cp", "-a", src+"/.", dst); err != nil {
-		return fmt.Errorf("copying bluetooth pairings: %w", err)
+		return 0, fmt.Errorf("copying bluetooth pairings: %w", err)
 	}
 
 	// Fix SELinux context if restorecon is available.
 	_ = runner.Run("restorecon", "-R", dst)
 
 	fmt.Fprintf(os.Stdout, "  copied Bluetooth pairings to %s\n", dst)
-	return nil
+	return adapters, nil
 }
 
-// CopyWiFiConnections copies NetworkManager connection profiles from the live
-// session to the installed system so WiFi connects automatically on first boot.
-// Non-fatal: if no connections exist or the copy fails, the system still boots.
-func CopyWiFiConnections(target string) error {
-	const src = "/etc/NetworkManager/system-connections"
-	info, err := os.Stat(src)
-	if err != nil || !info.IsDir() {
-		return nil //nolint:nilerr // no NM connections → nothing to do
-	}
-
+// CopyWiFiConnections copies the host's NetworkManager connection profiles
+// (*.nmconnection: Wi-Fi passwords, 802.1X credentials, VPN secrets) into
+// the installed system's /etc so the network reconnects on first boot.
+//
+// It returns the number of profiles copied. Zero with a nil error means the
+// host has none; the caller reports that as skipped.
+//
+// The caller decides WHETHER to copy (live media, or the recipe's
+// copyNetworkProfiles): see CopyBluetoothPairings.
+func CopyWiFiConnections(target string) (int, error) {
+	src := hostNMConnectionsDir
 	entries, err := os.ReadDir(src)
-	if err != nil || len(entries) == 0 {
-		return nil //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
+	if err != nil {
+		return 0, nil //nolint:nilerr // no NM connections on the host: nothing to do
 	}
-
-	// Only copy .nmconnection files (skip other config).
-	var hasConnections bool
+	var profiles []string
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".nmconnection") {
-			hasConnections = true
-			break
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".nmconnection") {
+			profiles = append(profiles, e.Name())
 		}
 	}
-	if !hasConnections {
-		return nil
-	}
-
-	// Resolve the target NM connections path (composefs-native vs ostree).
-	var dst string
-	if isComposeFsNative(target) {
-		etcDir, err := ComposeFsDeployEtcDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding composefs deploy etc for WiFi connections: %w", err)
-		}
-		dst = filepath.Join(etcDir, "NetworkManager", "system-connections")
-	} else {
-		deployDir, err := DeploymentDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding deployment dir for NM connections: %w", err)
-		}
-		dst = filepath.Join(deployDir, "etc", "NetworkManager", "system-connections")
+	if len(profiles) == 0 {
+		return 0, nil
 	}
 
+	d, err := ResolveDeployment(target)
+	if err != nil {
+		return 0, err
+	}
+	dst := filepath.Join(d.Etc, "NetworkManager", "system-connections")
 	if err := runner.Run("mkdir", "-p", dst); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dst, err)
+		return 0, fmt.Errorf("mkdir %s: %w", dst, err)
 	}
 
-	// Copy only .nmconnection files preserving permissions (they contain passwords, mode 0600).
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".nmconnection") {
-			continue
-		}
-		srcFile := filepath.Join(src, e.Name())
-		if err := runner.Run("cp", "-a", srcFile, dst+"/"); err != nil {
-			return fmt.Errorf("copying %s: %w", e.Name(), err)
+	// cp -a keeps the mode: NetworkManager ignores a profile that is not 0600.
+	for _, name := range profiles {
+		if err := runner.Run("cp", "-a", filepath.Join(src, name), dst+"/"); err != nil {
+			return 0, fmt.Errorf("copying %s: %w", name, err)
 		}
 	}
 
 	// Fix SELinux context if restorecon is available.
 	_ = runner.Run("restorecon", "-R", dst)
 
-	fmt.Fprintf(os.Stdout, "  copied WiFi connections to %s\n", dst)
-	return nil
+	fmt.Fprintf(os.Stdout, "  copied %d network profile(s) to %s\n", len(profiles), dst)
+	return len(profiles), nil
 }
 
 // EnablePrintServices enables cups-browsed, avahi-daemon, and ipp-usb in the
@@ -703,4 +703,13 @@ func AppendFstabEntry(target, uuid, mountpoint, fstype, options string) error {
 		return fmt.Errorf("writing fstab entry: %w", err)
 	}
 	return nil
+}
+
+// SetHostSecretDirs points CopyBluetoothPairings and CopyWiFiConnections at
+// other host directories and returns a function that restores them. For
+// tests.
+func SetHostSecretDirs(bluetooth, nmConnections string) (restore func()) {
+	oldBT, oldNM := hostBluetoothDir, hostNMConnectionsDir
+	hostBluetoothDir, hostNMConnectionsDir = bluetooth, nmConnections
+	return func() { hostBluetoothDir, hostNMConnectionsDir = oldBT, oldNM }
 }

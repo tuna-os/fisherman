@@ -94,6 +94,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🔒 Security
 
+- **First-boot TPM2 enrolment never stages the user's passphrase** (#409,
+  #360). The install adds a random key in its own LUKS keyslot (31) and
+  stages only that, in the installed deployment's `/etc`. The unit retries
+  at most three times in one boot, then removes the keyslot and the file in
+  `ExecStopPost=`, which also runs when the enrolment fails. The unit and
+  key were staged in the physical sysroot before, where no booted system
+  reads them: the enrolment never ran and the key stayed on the disk.
+  `systemd-cryptenroll` is now looked for in the installed image, not on the
+  installer host.
+- **Host Wi-Fi profiles and Bluetooth keys are copied only on live media**
+  (#411), or when the recipe sets `copyNetworkProfiles` /
+  `copyBluetoothPairings` to `true`. `false` opts out on live media.
+
 - **`distroID` and `brewTap` are validated before use** (#299): both are
   written as root into generated paths, unit names and the OEM setup shell
   script (`/etc/<distroID>/oem/`, `<distroID>-oem-setup.service`,

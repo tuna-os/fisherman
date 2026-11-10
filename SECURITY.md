@@ -33,13 +33,35 @@ images** and a **trusted caller**.
   root volume with the recipe's passphrase, or, for `tpm2-luks`, a random
   recovery passphrase that it emits for the user to save. TPM2 is enrolled on
   the installed system's first boot, not during the install, because PCR 7
-  measured in the installer differs from the installed system's. Until then
-  the transient key sits in `/etc/fisherman/tpm2-enroll.key` (mode `0600`,
-  directory `0700`) inside the encrypted root, and the first-boot unit shreds
-  it after enrolment (`fisherman/internal/luks/luks.go`).
+  measured in the installer differs from the installed system's.
+- **No unlock key outlives its use.** The first-boot enrolment needs a key.
+  fisherman never stages the user's passphrase or the recovery key for it. It
+  adds a random key in its own LUKS keyslot (slot 31) and stages only that
+  key, in the installed deployment's `/etc/fisherman/tpm2-enroll.key` (mode
+  `0600`, directory `0700`), inside the encrypted root. The first-boot unit
+  (`fisherman-tpm2-enroll.service`, in the deployment's
+  `/etc/systemd/system`) tries the enrolment at most three times in that one
+  boot. When it stops, it removes the keyslot and then the file. This runs in
+  `ExecStopPost=`, so it also runs when the enrolment fails, times out or the
+  tool is missing. After that the file's old blocks unlock nothing, on any
+  filesystem. There is no retry on a later boot. fisherman looks for
+  `systemd-cryptenroll` in the installed image (an ostree deployment), and
+  adds no keyslot and stages nothing when the image has none
+  (`fisherman/internal/luks/firstboot.go`).
+- **Host secrets stay on the host unless the user is on live media.**
+  NetworkManager profiles (`/etc/NetworkManager/system-connections`: Wi-Fi
+  passwords, 802.1X credentials) and Bluetooth pairings (`/var/lib/bluetooth`:
+  link keys) are copied to the target only when the host booted from live
+  media (the `live.is_live` of `fisherman probe`), where they are what the
+  user set up in the installer session. On any other host fisherman copies
+  neither, because the target can be for another person. The recipe fields
+  `copyNetworkProfiles` and `copyBluetoothPairings` override the default in
+  both directions. The log says for each kind what was copied or why not.
 - **Scratch and mount cleanup.** Mounts, LUKS mappings and scratch
   directories fisherman creates are released in dependency order, including
-  on the fatal-error path.
+  on the fatal-error path. Scratch that lives on the target disk (live media)
+  is deleted while the target is still mounted read-write, before finalize
+  and before any unmount, so no image cache stays on the installed disk.
 
 ### What fisherman does not protect against
 
