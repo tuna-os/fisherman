@@ -156,7 +156,8 @@ Things a recipe author should know today:
 - `unifiedStorage: true` is refused (`unified_storage_unsupported`): fisherman does not pass that flag to bootc.
 - One install runs on a host at a time. A second one is refused (`install_already_running`).
 - `flatpaks` does not filter: the host's whole `/var/lib/flatpak` is copied (#408).
-- `varDisk` is not encrypted, even when the root is (#406).
+- `varDisk` works on unencrypted ostree targets only. With an encrypted `encryption.type` it is refused (`var_disk_encryption_unsupported`): fisherman does not encrypt the `/var` disk. With `composeFsBackend` or `filesystem: zfs` it is refused too (`var_disk_unsupported_composefs`, [#252](https://github.com/tuna-os/fisherman/issues/252)).
+- A `varDisk`, and each data or swap entry of `customMounts`, gets an fstab line on the installed system (type and UUID from `blkid`, `nofail`). A target that cannot be mounted again is refused (`custom_mount_not_persistable`). See [`docs/VALIDATE.md`](docs/VALIDATE.md#mounts-after-the-install).
 - There is no field for locale, keyboard layout or time zone (#405).
 - Wi-Fi profiles and Bluetooth pairings are copied from the host to the target on every install (#411).
 

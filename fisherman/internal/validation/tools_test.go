@@ -38,14 +38,14 @@ func TestRequiredTools(t *testing.T) {
 		{"auto zfs", &recipe.Recipe{Filesystem: "zfs"},
 			[]string{"sfdisk", "mkfs.fat", "mkfs.ext4", "zpool", "zfs", "skopeo", "podman"}},
 		{"auto ext4 with a formatted /var disk", &recipe.Recipe{Filesystem: "ext4", VarDisk: &recipe.VarDiskSpec{Disk: "/dev/sdb"}},
-			[]string{"sfdisk", "mkfs.fat", "mkfs.ext4", "mkfs.xfs", "skopeo", "podman"}},
+			[]string{"sfdisk", "mkfs.fat", "mkfs.ext4", "wipefs", "mkfs.xfs", "blkid", "skopeo", "podman"}},
 		{"auto ext4 with a kept /var disk", &recipe.Recipe{Filesystem: "ext4", VarDisk: &recipe.VarDiskSpec{Disk: "/dev/sdb", KeepExisting: true}},
-			[]string{"sfdisk", "mkfs.fat", "mkfs.ext4", "skopeo", "podman"}},
+			[]string{"sfdisk", "mkfs.fat", "mkfs.ext4", "blkid", "skopeo", "podman"}},
 
 		{"manual xfs root: mkfs.xfs, and no sfdisk", manual(
 			recipe.CustomMount{Partition: "/dev/sda2", Target: "/", Fstype: "xfs"},
 			recipe.CustomMount{Partition: "/dev/sda1", Target: "/boot/efi", Fstype: "unformatted"}),
-			[]string{"mkfs.xfs", "skopeo", "podman"}},
+			[]string{"mkfs.xfs", "blkid", "skopeo", "podman"}},
 		{"manual: every fstype, in recipe order, once", manual(
 			recipe.CustomMount{Partition: "/dev/sda1", Target: "/boot/efi", Fstype: "fat32"},
 			recipe.CustomMount{Partition: "/dev/sda2", Target: "/boot", Fstype: "ext3"},
@@ -54,7 +54,7 @@ func TestRequiredTools(t *testing.T) {
 			recipe.CustomMount{Partition: "/dev/sda5", Target: "/srv", Fstype: "xfs"},
 			recipe.CustomMount{Partition: "/dev/sda6", Target: "/data", Fstype: "xfs"},
 			recipe.CustomMount{Partition: "/dev/sda7", Target: "swap", Fstype: "swap"}),
-			[]string{"mkfs.fat", "mkfs.ext3", "mkfs.btrfs", "mkfs.ext4", "mkfs.xfs", "mkswap", "swapon", "swapoff", "skopeo", "podman"}},
+			[]string{"mkfs.fat", "mkfs.ext3", "mkfs.btrfs", "mkfs.ext4", "mkfs.xfs", "mkswap", "swapon", "swapoff", "blkid", "skopeo", "podman"}},
 		{"manual: nothing formatted", manual(
 			recipe.CustomMount{Partition: "/dev/sda2", Target: "/", Fstype: ""},
 			recipe.CustomMount{Partition: "/dev/sda1", Target: "/boot/efi", Fstype: "unformatted"},
@@ -62,7 +62,8 @@ func TestRequiredTools(t *testing.T) {
 			recipe.CustomMount{Partition: "/dev/sda3", Target: "swap", Fstype: "unformatted"},
 			// No target: neither formatted nor mounted.
 			recipe.CustomMount{Partition: "/dev/sda4", Target: "", Fstype: "xfs"}),
-			[]string{"skopeo", "podman"}},
+			// blkid checks the kept root and ESP before any disk work.
+			[]string{"blkid", "skopeo", "podman"}},
 		{"manual ignores `filesystem` and encryption tools", &recipe.Recipe{Filesystem: "btrfs",
 			CustomMounts: []recipe.CustomMount{{Partition: "/dev/sda2", Target: "/", Fstype: "ext4"}}},
 			[]string{"mkfs.ext4", "skopeo", "podman"}},

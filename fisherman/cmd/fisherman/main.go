@@ -416,6 +416,12 @@ func main() {
 		fatalProblem("missing required host tool", recipe.Problem{Code: recipe.CodeHostToolMissing, Message: err.Error()})
 	}
 
+	// A device the recipe keeps as it is must hold a mountable filesystem.
+	// blkid says so now; the mount would say so after the disk is wiped.
+	if ps := keptFilesystemProblems(r); len(ps) > 0 {
+		fatalProblem("cannot keep the existing filesystem", ps[0])
+	}
+
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
 	isManual := len(r.CustomMounts) > 0
@@ -735,7 +741,9 @@ func main() {
 			progress.Step(step, totalSteps, "Formatting data disk (/var)", profile[pi].cumulativePct, profile[pi].weightPct)
 			pi++
 			step++
-			if err := disk.FormatVar(r.VarDisk.Disk); err != nil {
+			// Release the disk (mounts, swap, LVM, old signatures), then
+			// format it: see disk.PrepareVarDisk (#406).
+			if err := disk.PrepareVarDisk(r.VarDisk.Disk); err != nil {
 				fatal("formatting /var disk: %v", err)
 			}
 		} else {
@@ -910,6 +918,13 @@ func main() {
 		}
 	}
 
+	// ── Persistent mounts (varDisk, customMounts data and swap) ──────────────
+	// The fstab lines for the installed system, and a second mount of each
+	// /var device where the steps below write. See mounts.go (#406, #372).
+	if err := persistMounts(r, activeTargetMount, cleanup.AddMount); err != nil {
+		fatal("persistent mounts: %v", err)
+	}
+
 	// ── TPM2 enrolment ────────────────────────────────────────────────────────
 	// Both tpm2-luks and tpm2-luks-passphrase add a TPM2 auto-unlock token so
 	// the system boots without a passphrase prompt. The difference:
@@ -961,20 +976,6 @@ func main() {
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
 	if err := post.WriteHostname(activeTargetMount, r.Hostname); err != nil {
 		fatal("writing hostname: %v", err)
-	}
-
-	// Write /var fstab entry if a separate /var disk was used.
-	if hasVarDisk {
-		varUUID := disk.UUID(r.VarDisk.Disk)
-		if varUUID == "" {
-			progress.Info(fmt.Sprintf("Warning: could not determine UUID for /var disk %s — skipping fstab entry", r.VarDisk.Disk))
-		} else {
-			if err := post.AppendFstabEntry(activeTargetMount, varUUID, "/var", "xfs", "defaults"); err != nil {
-				progress.Info(fmt.Sprintf("Warning: could not write /var fstab entry: %v", err))
-			} else {
-				progress.Info(fmt.Sprintf("Added /var fstab entry (UUID=%s)", varUUID))
-			}
-		}
 	}
 
 	// Create a user account if the recipe requests one (e.g. Bazzite has no OOBE).
