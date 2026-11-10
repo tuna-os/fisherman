@@ -180,60 +180,159 @@ func TestCopyFlatpaks_NoLocalData(t *testing.T) {
 	}
 }
 
-// TestCopyFlatpaks_PromotesUserApps verifies that wanted apps missing from the
-// system installation are promoted from the user installation.
-func TestCopyFlatpaks_PromotesUserApps(t *testing.T) {
+// TestCopyFlatpaks_NeverInstallsOnTheHost: CopyFlatpaks used to "promote" a
+// wanted app from the user installation with `flatpak install --system` ON
+// THE HOST. Under pkexec the user installation is root's, so it found
+// nothing; anywhere else it changed the installer host. The copy reads the
+// host, it does not install on it (tuna-os/fisherman#408).
+func TestCopyFlatpaks_NeverInstallsOnTheHost(t *testing.T) {
 	mock := setupMockExec(t)
 	target := t.TempDir()
 
-	// 1. Mock 'flatpak list --system --app' (empty)
+	wanted := "org.mozilla.firefox"
 	mock.responses["flatpak list --system --columns=ref --app"] = struct {
 		out []byte
 		err error
 	}{out: []byte("")}
-
-	// 2. Mock 'flatpak list --system' (empty)
-	mock.responses["flatpak list --system --columns=ref"] = struct {
-		out []byte
-		err error
-	}{out: []byte("")}
-
-	// 3. Mock 'flatpak list --user --columns=ref --app' (contains wanted app)
-	wanted := "org.mozilla.firefox"
 	mock.responses["flatpak list --user --columns=ref --app"] = struct {
 		out []byte
 		err error
 	}{out: []byte(wanted + "/x86_64/stable\n")}
-
-	// 4. Mock 'du -sb /var/lib/flatpak' (has data)
 	mock.responses["du -sb /var/lib/flatpak"] = struct {
 		out []byte
 		err error
 	}{out: []byte("1024\t/var/lib/flatpak\n")}
 
-	// 5. Mock 'flatpak install --system' (success)
-	mock.responses[fmt.Sprintf("flatpak install --system -y --noninteractive %s/x86_64/stable", wanted)] = struct {
-		out []byte
-		err error
-	}{out: []byte("OK")}
+	out := captureStdout(t, func() {
+		if err := post.CopyFlatpaks(target, []string{wanted}, ""); err != nil {
+			t.Fatalf("CopyFlatpaks: %v", err)
+		}
+	})
 
-	if err := post.CopyFlatpaks(target, []string{wanted}, ""); err != nil {
-		t.Fatalf("CopyFlatpaks: %v", err)
-	}
-
-	// Verify promotion call
-	promoted := false
 	for _, call := range mock.calls {
-		if call.name == "flatpak" && len(call.args) > 0 && call.args[0] == "install" {
-			for _, arg := range call.args {
-				if strings.Contains(arg, wanted) {
-					promoted = true
-				}
-			}
+		if call.name == "flatpak" && len(call.args) > 0 && call.args[0] != "list" {
+			t.Errorf("ran `flatpak %s` on the host", strings.Join(call.args, " "))
+		}
+		if call.name == "flatpak" && len(call.args) > 1 && call.args[1] == "--user" {
+			t.Errorf("read the user installation: flatpak %s", strings.Join(call.args, " "))
 		}
 	}
-	if !promoted {
-		t.Errorf("expected %s to be promoted to system, but no flatpak install call found", wanted)
+	// The app is not on the host, and the log says what that means.
+	if !strings.Contains(out, "Flatpak "+wanted+" is in the recipe but not on the host") {
+		t.Errorf("no warning for the listed app the host lacks:\n%s", out)
+	}
+}
+
+// The recipe's `flatpaks` decides whether, not what (#408): [] copies
+// nothing, absent copies the host's Flatpaks, and a list copies the host's
+// Flatpaks too, and the log says that it is not a filter.
+func TestCopyFlatpaks_Contract(t *testing.T) {
+	hostApps := "org.mozilla.firefox/x86_64/stable\norg.gnome.Console/x86_64/stable\n"
+	run := func(t *testing.T, wanted []string) (*mockExecutor, string) {
+		t.Helper()
+		mock := setupMockExec(t)
+		mock.responses["flatpak list --system --columns=ref --app"] = struct {
+			out []byte
+			err error
+		}{out: []byte(hostApps)}
+		mock.responses["du -sb /var/lib/flatpak"] = struct {
+			out []byte
+			err error
+		}{out: []byte("2048\t/var/lib/flatpak\n")}
+		target := t.TempDir()
+		out := captureStdout(t, func() {
+			if err := post.CopyFlatpaks(target, wanted, ""); err != nil {
+				t.Fatalf("CopyFlatpaks: %v", err)
+			}
+		})
+		if wanted != nil && len(wanted) == 0 {
+			if entries, _ := os.ReadDir(target); len(entries) != 0 {
+				t.Errorf("flatpaks: [] created %v in the target", entries)
+			}
+		}
+		return mock, out
+	}
+	tarCalls := func(m *mockExecutor) int {
+		n := 0
+		for _, c := range m.calls {
+			if c.name == "tar" {
+				n++
+			}
+		}
+		return n
+	}
+
+	t.Run("empty list copies nothing", func(t *testing.T) {
+		mock, out := run(t, []string{})
+		if len(mock.calls) != 0 {
+			t.Errorf("ran %v for flatpaks: []", mock.calls)
+		}
+		if !strings.Contains(out, "Flatpaks: skipped, the recipe's flatpaks list is empty") {
+			t.Errorf("no skip line:\n%s", out)
+		}
+	})
+	t.Run("absent copies the host's Flatpaks", func(t *testing.T) {
+		mock, out := run(t, nil)
+		if tarCalls(mock) != 2 {
+			t.Errorf("tar ran %d times, want create and extract", tarCalls(mock))
+		}
+		if !strings.Contains(out, "Flatpaks: copying the host's Flatpak installation (2 app(s)") {
+			t.Errorf("log does not say what is copied:\n%s", out)
+		}
+	})
+	t.Run("a list is not a filter, and the log says so", func(t *testing.T) {
+		mock, out := run(t, []string{"org.mozilla.firefox", "com.example.NotHere"})
+		if tarCalls(mock) != 2 {
+			t.Errorf("tar ran %d times, want create and extract", tarCalls(mock))
+		}
+		for _, want := range []string{
+			"the recipe lists 2 app(s); the list is not a filter, the host's whole Flatpak installation is copied (2 app(s)",
+			"Warning: Flatpak com.example.NotHere is in the recipe but not on the host",
+			"Copying app 2/2: org.gnome.Console", // not in the list, copied all the same
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log missing %q:\n%s", want, out)
+			}
+		}
+		for _, lie := range []string{"Installing 2 per-image", "fallback apps", "wanted apps", "will be downloaded"} {
+			if strings.Contains(out, lie) {
+				t.Errorf("log claims %q:\n%s", lie, out)
+			}
+		}
+		if strings.Contains(out, "Flatpak org.mozilla.firefox is in the recipe but not on the host") {
+			t.Error("warned about an app the host has")
+		}
+	})
+}
+
+// The copy lands in the /var the booted system mounts, on both layouts.
+func TestCopyFlatpaks_GoesToTheBootedVar(t *testing.T) {
+	for name, fx := range fixtures(t) {
+		t.Run(name, func(t *testing.T) {
+			realFileCommands(t)
+			mock := setupMockExec(t)
+			mock.responses["du -sb /var/lib/flatpak"] = struct {
+				out []byte
+				err error
+			}{out: []byte("2048\t/var/lib/flatpak\n")}
+			if err := post.CopyFlatpaks(fx.Path, nil, ""); err != nil {
+				t.Fatal(err)
+			}
+			want := filepath.Join(fx.Var, "lib", "flatpak")
+			if fi, err := os.Stat(want); err != nil || !fi.IsDir() {
+				t.Errorf("no flatpak dir in the booted /var: %v", err)
+			}
+			extracted := false
+			for _, c := range mock.calls {
+				if c.name == "tar" && len(c.args) == 4 && c.args[0] == "xf" && c.args[3] == want {
+					extracted = true
+				}
+			}
+			if !extracted {
+				t.Errorf("tar did not extract into %s: %v", want, mock.calls)
+			}
+			assertNoStrays(t, fx)
+		})
 	}
 }
 
@@ -974,4 +1073,25 @@ func TestCopyFlatpaks_RemovesInstallerApps_CustomFlatpakVarPath(t *testing.T) {
 	if _, err := os.Stat(appDir); err == nil {
 		t.Errorf("installer app dir still exists at custom flatpakVarPath: %s", appDir)
 	}
+}
+
+// captureStdout returns what fn writes to stdout (progress events included).
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	done := make(chan string, 1)
+	go func() {
+		b, _ := io.ReadAll(r)
+		done <- string(b)
+	}()
+	func() {
+		defer func() { os.Stdout = old; w.Close() }()
+		fn()
+	}()
+	return <-done
 }

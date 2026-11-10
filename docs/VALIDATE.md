@@ -196,7 +196,7 @@ A rule runs when its key is present:
 | `distroID` | distroID |
 | `brewTap` | brewTap |
 | `unifiedStorage` | unifiedStorage |
-| `filesystem` | filesystem, and its combinations with `btrfsSubvolumes`, `composeFsBackend` and `encryption.type` (absent ones count as false / none) |
+| `filesystem` | filesystem, its combinations with `btrfsSubvolumes`, `composeFsBackend` and `encryption.type` (absent ones count as false / none), and the `zfs` opt-in in `experimental` (absent counts as no opt-in) |
 | `encryption` | encryption type, passphrase |
 | `bootloader` | bootloader |
 | `imageType` | imageType |
@@ -208,6 +208,10 @@ A rule runs when its key is present:
 | `luksMapperName` | luksMapperName |
 | `additionalImageStores` | each entry's path syntax (not whether it exists) |
 | `override` | override |
+| `experimental` | experimental |
+| `locale` | locale |
+| `keyboard` | keyboard layout (required when the object is present), variant, model |
+| `timezone` | timezone |
 
 Everything else (`disk`, whether the `customMounts` partitions and the
 `varDisk` disk exist and are eligible, the TPM)
@@ -230,7 +234,15 @@ holds both fields.
 | `slurp` | absent. A requested user-data migration is refused until it has a durable rescue store: the copy lives only in RAM, an extraction error or partial copy still reached partitioning, and an interruption loses it after the source is wiped. `slurpWallpapers` is unaffected. | `slurp_unsupported` |
 | `distroID` | empty is valid (the install uses `bootc`). Otherwise 1–63 characters: a lowercase letter first, then lowercase letters, digits and `-`. It names `/etc/<distroID>/oem/`, the `<distroID>-oem-setup.service` unit and its preset. | `distro_id_invalid` |
 | `brewTap` | empty is valid (no tap is added). Otherwise `owner/name`, each part starting with a letter or digit and containing only letters, digits, `.`, `_` and `-`. It is run as `brew tap <brewTap>` in the OEM setup script. | `brew_tap_invalid` |
+| `locale` | empty or absent is valid (the image's locale is kept). Otherwise a locale name of at most 64 characters: `language[_TERRITORY][.codeset][@modifier]` (`de_DE.UTF-8`, `sr_RS@latin`), or `C` or `POSIX` with an optional codeset. It is written as `LANG=` to `/etc/locale.conf`. | `locale_invalid` |
+| `keyboard` | absent is valid (the image's keyboard is kept). A present object needs `layout`. | `keyboard_layout_required` |
+| `keyboard.layout` | an XKB layout name of at most 64 characters: letters, digits, `_` and `-`; several layouts separated by `,` (`us`, `de`, `us,ru`). | `keyboard_layout_invalid` |
+| `keyboard.variant` | empty is valid. Otherwise an XKB variant name: letters, digits, `_`, `.`, `+` and `-`; one per layout, separated by `,`, any of them empty (`nodeadkeys`, `,phonetic`). | `keyboard_variant_invalid` |
+| `keyboard.model` | empty is valid. Otherwise an XKB model name: letters, digits, `_`, `.`, `+` and `-` (`pc105`). | `keyboard_model_invalid` |
+| `timezone` | empty or absent is valid (the image's zone is kept). Otherwise an IANA zone name of at most 64 characters: parts of letters, digits, `_`, `+` and `-`, joined by `/`, with a letter first (`Europe/Berlin`, `Etc/GMT+1`, `UTC`). | `timezone_invalid` |
 | `filesystem` (auto layout) | one of `xfs`, `ext4`, `btrfs`, `zfs` (`recipe.Filesystems`) | `filesystem_unsupported` |
+| `filesystem` (auto layout) | `zfs` needs `"experimental": ["zfs"]`. No VM test installs ZFS and boots it, so the recipe must say that it accepts that. | `zfs_experimental` |
+| `experimental` | each entry is `zfs` | `experimental_unsupported` |
 | `btrfsSubvolumes` | needs `filesystem: btrfs` | `btrfs_subvolumes_require_btrfs` |
 | `composeFsBackend` | needs fs-verity, so not XFS | `composefs_requires_fsverity` |
 | `unifiedStorage` | `false` or absent. `true` asks for bootc's `--experimental-unified-storage`, which fisherman does not pass (it runs bootc in a container, where that storage does not resolve). The install used to finish without it and report success. It is not `composeFsBackend` and not `additionalImageStores`; both are supported. | `unified_storage_unsupported` |
@@ -401,11 +413,31 @@ This section maps error codes to their causes and corrective actions. Each code 
 | `target_mount_invalid` | `targetMount` | The target mount is `/`, relative, or has a `..` component | Leave it empty, or use an absolute path such as `/mnt/altroot` |
 | `flatpak_var_path_invalid` | `flatpakVarPath` | The path has a `..` component, so it would leave the installed root | Leave it empty, or use a path inside the root such as `state/os/default/var` |
 
+### Language, keyboard and time zone
+
+These values are written into `/etc` files of the installed system, and the
+keymap onto the kernel command line of an encrypted install. The rules admit
+every real name and nothing that can add a line, an argument or a path part.
+They do not check that the image has the locale, the layout or the zone: the
+image is not on the disk yet. After the install, a time zone that the image
+does not have is not linked, and the log says so.
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `locale_invalid` | `locale` | The value is not a locale name | Use a name from `locale -a`, such as `en_US.UTF-8` or `de_DE.UTF-8`, or leave the field out |
+| `keyboard_layout_required` | `keyboard.layout` | The `keyboard` object is present and has no `layout` | Set `layout`, or leave `keyboard` out |
+| `keyboard_layout_invalid` | `keyboard.layout` | The layout has a character outside letters, digits, `_`, `-` and `,` | Use a name from `localectl list-x11-keymap-layouts`, such as `us` or `de` |
+| `keyboard_variant_invalid` | `keyboard.variant` | The variant has a character outside letters, digits, `_`, `.`, `+`, `-` and `,` | Use a name from `localectl list-x11-keymap-variants <layout>`, or leave it empty |
+| `keyboard_model_invalid` | `keyboard.model` | The model has a character outside letters, digits, `_`, `.`, `+` and `-` | Use a name from `localectl list-x11-keymap-models`, such as `pc105`, or leave it empty |
+| `timezone_invalid` | `timezone` | The value is not an IANA time zone name | Use a name from `timedatectl list-timezones`, such as `Europe/Berlin` or `UTC` |
+
 ### Filesystem
 
 | Code | Field | Cause | Fix |
 |---|---|---|---|
 | `filesystem_unsupported` | `filesystem` | Filesystem is not one of `xfs`, `ext4`, `btrfs`, or `zfs` | Choose a supported filesystem |
+| `zfs_experimental` | `filesystem` | Filesystem is `zfs` and the recipe does not list `zfs` in `experimental`. ZFS is experimental: no VM test covers it | Add `"experimental": ["zfs"]` to the recipe (in `--partial` mode, to the same fragment as `filesystem`), or choose `xfs`, `ext4` or `btrfs`. A frontend should show ZFS as experimental and send the field only after the user chose it |
+| `experimental_unsupported` | `experimental[i]` | The entry is not a feature fisherman calls experimental | Use `zfs`, or remove the entry |
 | `btrfs_subvolumes_require_btrfs` | `btrfsSubvolumes` | `btrfsSubvolumes` requires `filesystem: btrfs` | Either remove `btrfsSubvolumes` or change filesystem to `btrfs` |
 | `composefs_requires_fsverity` | `composeFsBackend` | composefs backend requires fs-verity support, which XFS does not provide | Change filesystem to `ext4`, `btrfs`, or `zfs`; or disable `composeFsBackend` |
 | `custom_mount_fstype_unsupported` | `customMounts[i].fstype` | Custom mount filesystem type is not supported | Use one of: `fat32`, `ext3`, `ext4`, `xfs`, `btrfs`, `swap`, `unformatted`, or empty |

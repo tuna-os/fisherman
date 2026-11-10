@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+
+	"github.com/tuna-os/fisherman/internal/deploy"
 )
 
 //go:embed icons/*.svg
@@ -66,47 +68,56 @@ func detectArch() string {
 	return ""
 }
 
-// installVendorIcon installs the vendor's symbolic icon into the target's
-// hicolor icon theme so it can be referenced by name in dconf/extensions.
-func installVendorIcon(target string, vendor string) error {
+// installVendorIcon installs the vendor's symbolic icon into the installed
+// image's hicolor icon theme so it can be referenced by name in
+// dconf/extensions. It reports whether the icon is now there.
+//
+// On ostree the deployment is a checkout: a new file in it is a new file,
+// not a write through a hard link, and the booted system sees it until the
+// next image update replaces the deployment. On composefs /usr is in the
+// object store and cannot be added to: nothing is written (it used to go to
+// <target>/usr, which nothing reads).
+func installVendorIcon(target string, vendor string) (bool, error) {
 	iconFile, ok := vendorIconFiles[vendor]
 	if !ok {
-		return nil // no icon for this vendor
+		return false, nil // no icon for this vendor
 	}
 
 	iconName := vendorMenuIcons[vendor]
 	if iconName == "" {
-		return nil
+		return false, nil
 	}
 
 	data, err := oemIcons.ReadFile(iconFile)
 	if err != nil {
 		// Icon file not yet available — skip gracefully (placeholder for future icons)
-		return nil //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
+		return false, nil //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
 	}
 
-	// Resolve target paths.
-	var usrDir string
-	if isComposeFsNative(target) {
-		usrDir = filepath.Join(target, "usr")
-	} else {
-		deployDir, err := DeploymentDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding deployment dir: %w", err)
-		}
-		usrDir = filepath.Join(deployDir, "usr")
+	d, err := ResolveDeployment(target)
+	if err != nil {
+		return false, err
 	}
+	if d.Layout == deploy.ComposeFs {
+		return false, nil
+	}
+	usrDir := filepath.Join(d.Root, "usr")
 
 	// Install to hicolor scalable/apps — available system-wide.
 	iconDir := filepath.Join(usrDir, "share", "icons", "hicolor", "scalable", "apps")
 	if err := os.MkdirAll(iconDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir icon dir: %w", err)
+		return false, fmt.Errorf("mkdir icon dir: %w", err)
 	}
 
 	iconPath := filepath.Join(iconDir, iconName+".svg")
+	// Never write through an existing file: on ostree it is a hard link
+	// into the repository.
+	if _, err := os.Lstat(iconPath); err == nil {
+		return true, nil
+	}
 	if err := os.WriteFile(iconPath, data, 0o644); err != nil {
-		return fmt.Errorf("writing icon: %w", err)
+		return false, fmt.Errorf("writing icon: %w", err)
 	}
 
-	return nil
+	return true, nil
 }

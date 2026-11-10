@@ -101,17 +101,19 @@ func TestSetupBtrfsSubvolumes(t *testing.T) {
 		}
 	}
 
-	if len(subvolCalls) != 3 {
-		t.Fatalf("expected 3 btrfs subvolume create calls, got %d (all calls: %+v)", len(subvolCalls), rec.calls)
+	// Only @ is created. @home and @snapshots were created and never
+	// mounted by anything (tuna-os/fisherman#416): an empty promise.
+	if len(subvolCalls) != 1 {
+		t.Fatalf("expected 1 btrfs subvolume create call, got %d (all calls: %+v)", len(subvolCalls), rec.calls)
 	}
-
-	// Must be created in order: @, @home, @snapshots.
-	wantSubvols := []string{"@", "@home", "@snapshots"}
-	for i, sv := range wantSubvols {
-		c := subvolCalls[i]
-		wantArgs := []string{"subvolume", "create", target + "/" + sv}
-		if !equalSlice(c.args, wantArgs) {
-			t.Errorf("subvol call %d args = %v, want %v", i, c.args, wantArgs)
+	if wantArgs := []string{"subvolume", "create", target + "/@"}; !equalSlice(subvolCalls[0].args, wantArgs) {
+		t.Errorf("subvol call args = %v, want %v", subvolCalls[0].args, wantArgs)
+	}
+	for _, c := range rec.calls {
+		for _, a := range c.args {
+			if strings.Contains(a, "@home") || strings.Contains(a, "@snapshots") {
+				t.Errorf("created a subvolume nothing mounts: %s %v", c.name, c.args)
+			}
 		}
 	}
 

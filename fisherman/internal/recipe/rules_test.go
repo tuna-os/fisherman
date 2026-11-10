@@ -175,7 +175,7 @@ func TestValidateVarDiskBackend(t *testing.T) {
 		{"ostree xfs", recipe.Recipe{Filesystem: "xfs"}, ""},
 		{"ostree btrfs", recipe.Recipe{Filesystem: "btrfs"}, ""},
 		{"composefs ext4", recipe.Recipe{Filesystem: "ext4", ComposeFsBackend: true}, recipe.CodeVarDiskUnsupportedComposeFs},
-		{"zfs", recipe.Recipe{Filesystem: "zfs"}, recipe.CodeVarDiskUnsupportedComposeFs},
+		{"zfs", recipe.Recipe{Filesystem: "zfs", Experimental: []string{"zfs"}}, recipe.CodeVarDiskUnsupportedComposeFs},
 	}
 	for _, c := range cases {
 		r := c.r

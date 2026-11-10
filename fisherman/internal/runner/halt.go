@@ -24,7 +24,8 @@ var halted atomic.Bool
 // the disk unmount helpers use to release mounts, swap and LUKS mappings, so
 // refusing them would leave the disk in the state Halt exists to avoid.
 // cryptsetup is allowed only for closing a mapping, never for creating one,
-// and fsfreeze only for a thaw (-u), never for a freeze.
+// fsfreeze only for a thaw (-u), never for a freeze, and zpool only for an
+// export (releasing the pool the install imported), never for a create.
 var teardownCommands = map[string]bool{
 	"umount":   true,
 	"swapoff":  true,
@@ -58,6 +59,9 @@ func checkHalted(name string, args []string) error {
 		return nil
 	}
 	if name == "fsfreeze" && isThawOnly(args) {
+		return nil
+	}
+	if name == "zpool" && len(args) > 0 && args[0] == "export" {
 		return nil
 	}
 	return fmt.Errorf("%s: %w", name, ErrHalted)

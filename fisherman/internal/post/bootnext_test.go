@@ -118,3 +118,35 @@ func response(out string, err error) struct {
 		err error
 	}{out: []byte(out), err: err}
 }
+
+// SetBootNext runs efibootmgr --bootnext with the entry id, and refuses
+// anything that is not a boot entry number before it runs a command.
+func TestSetBootNext(t *testing.T) {
+	mock := setupMockExec(t)
+	if err := post.SetBootNext("001A"); err != nil {
+		t.Fatalf("SetBootNext: %v", err)
+	}
+	if len(mock.calls) != 1 || mock.calls[0].name != "efibootmgr" ||
+		len(mock.calls[0].args) != 2 || mock.calls[0].args[0] != "--bootnext" || mock.calls[0].args[1] != "001A" {
+		t.Errorf("calls = %+v, want efibootmgr --bootnext 001A", mock.calls)
+	}
+
+	for _, bad := range []string{"", "1", "00001", "000g", "-b 1", "0001 -B"} {
+		mock.calls = nil
+		if err := post.SetBootNext(bad); err == nil {
+			t.Errorf("SetBootNext(%q): no error", bad)
+		}
+		if len(mock.calls) != 0 {
+			t.Errorf("SetBootNext(%q) ran %+v", bad, mock.calls)
+		}
+	}
+}
+
+func TestSetBootNext_CommandFailure(t *testing.T) {
+	mock := setupMockExec(t)
+	mock.responses["efibootmgr --bootnext 0001"] = response("", errors.New("exit status 2"))
+	err := post.SetBootNext("0001")
+	if err == nil {
+		t.Fatal("no error although efibootmgr failed")
+	}
+}
