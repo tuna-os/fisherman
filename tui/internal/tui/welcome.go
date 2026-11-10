@@ -36,7 +36,7 @@ func (m *welcomeModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case "enter", " ":
-			return m, func() tea.Msg { return stepMsg{next: stepNetwork} }
+			return m, func() tea.Msg { return stepMsg{next: stepImage} }
 		}
 	}
 	return m, nil

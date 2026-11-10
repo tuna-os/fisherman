@@ -15,13 +15,38 @@ type filesystemModel struct {
 	form     *huh.Form
 	fsChoice string
 	hostname string
+	err      string
+}
+
+// fsLabels describe the filesystems the TUI can ask for.
+var fsLabels = map[string]string{
+	"ext4":  "ext4 — stable, widely supported",
+	"xfs":   "xfs  — high performance, recommended for servers",
+	"btrfs": "btrfs — copy-on-write, snapshots",
+}
+
+// filesystemOptions are the choices for the selected image: the catalog's
+// list, and never XFS for an image that needs composefs.
+func filesystemOptions(cfg *config.InstallConfig) []huh.Option[string] {
+	var opts []huh.Option[string]
+	for _, fs := range cfg.Image.Filesystems {
+		if !cfg.Image.SupportsFilesystem(fs) {
+			continue
+		}
+		label, ok := fsLabels[fs]
+		if !ok {
+			label = fs
+		}
+		opts = append(opts, huh.NewOption(label, fs))
+	}
+	return opts
 }
 
 func newFilesystemModel(cfg *config.InstallConfig) *filesystemModel {
 	m := &filesystemModel{cfg: cfg}
 	m.fsChoice = cfg.Filesystem
-	if m.fsChoice == "" {
-		m.fsChoice = "ext4"
+	if !cfg.Image.SupportsFilesystem(m.fsChoice) {
+		m.fsChoice = cfg.Image.Filesystem
 	}
 	m.hostname = cfg.Hostname
 	if m.hostname == "" {
@@ -35,11 +60,7 @@ func newFilesystemModel(cfg *config.InstallConfig) *filesystemModel {
 			huh.NewSelect[string]().
 				Title("Root filesystem").
 				Description("Choose the root filesystem type and set the hostname for the installed system.").
-				Options(
-					huh.NewOption("ext4 — stable, widely supported", "ext4"),
-					huh.NewOption("xfs  — high performance, recommended for servers", "xfs"),
-					huh.NewOption("btrfs — copy-on-write, snapshots", "btrfs"),
-				).
+				Options(filesystemOptions(cfg)...).
 				Value(&m.fsChoice),
 			huh.NewInput().
 				Title("Hostname").
@@ -77,7 +98,20 @@ func (m *filesystemModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if m.form.State == huh.StateCompleted {
 		m.cfg.Filesystem = m.fsChoice
 		m.cfg.Hostname = m.hostname
-		return m, func() tea.Msg { return stepMsg{next: stepEncryption} }
+		// The image's own rule first (it needs no backend), then
+		// fisherman's verdict on the fields this page sets.
+		msg := ""
+		if err := m.cfg.Check(); err != nil {
+			msg = err.Error()
+		} else {
+			msg = checkFields(m.cfg, "filesystem", "composeFsBackend", "bootloader", "hostname")
+		}
+		if msg != "" {
+			again := newFilesystemModel(m.cfg)
+			again.err = msg
+			return again, again.Init()
+		}
+		return m, func() tea.Msg { return stepMsg{next: nextStep(stepFilesystem, m.cfg)} }
 	}
 	return m, cmd
 }
@@ -85,8 +119,12 @@ func (m *filesystemModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *filesystemModel) View() string {
 	var sb strings.Builder
 	sb.WriteString("\n")
-	sb.WriteString(titleStyle.Render("  Step 4 of 9: Filesystem & Hostname"))
+	sb.WriteString(titleStyle.Render(stepTitle(m.cfg, stepFilesystem)))
 	sb.WriteString("\n\n")
+	if m.err != "" {
+		sb.WriteString(errorStyle.Render("  " + m.err))
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString(m.form.View())
 	sb.WriteString("\n")
 	sb.WriteString(helpStyle.Render("  ↑/↓ navigate • Enter select/next • Ctrl+C quit"))
