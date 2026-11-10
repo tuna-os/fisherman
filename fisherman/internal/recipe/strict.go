@@ -35,8 +35,8 @@ func unknownIn(data []byte, t reflect.Type, path string, ps *[]Problem) {
 		t = t.Elem()
 	}
 	data = bytes.TrimSpace(data)
-	switch t.Kind() {
-	case reflect.Struct:
+	kind := t.Kind()
+	if kind == reflect.Struct {
 		if len(data) == 0 || data[0] != '{' {
 			return
 		}
@@ -63,7 +63,7 @@ func unknownIn(data []byte, t reflect.Type, path string, ps *[]Problem) {
 			}
 			unknownIn(obj[k], ft, p, ps)
 		}
-	case reflect.Slice, reflect.Array:
+	} else if kind == reflect.Slice || kind == reflect.Array {
 		if len(data) == 0 || data[0] != '[' {
 			return
 		}
