@@ -182,10 +182,12 @@ func TestCheckRequiredTools_MissingCryptsetupForLUKS(t *testing.T) {
 	}
 }
 
-// TestCheckRequiredTools_MissingSystemdCryptenrollForTPM2 verifies that
-// systemd-cryptenroll is required for TPM2 encryption types, and that the
-// check fires before any disk is touched.
-func TestCheckRequiredTools_MissingSystemdCryptenrollForTPM2(t *testing.T) {
+// TestCheckRequiredTools_HostCryptenrollNotRequiredForTPM2: a tpm2-* type
+// enrols on the first boot of the installed system, with the target image's
+// systemd-cryptenroll. The installer host does not run it, so a host without
+// it must not fail the preflight (tuna-os/fisherman#409). The target is
+// checked after the image is installed (TestStageTPM2Enrollment_*).
+func TestCheckRequiredTools_HostCryptenrollNotRequiredForTPM2(t *testing.T) {
 	orig := lookPath
 	t.Cleanup(func() { lookPath = orig })
 	lookPath = func(file string) (string, error) {
@@ -200,16 +202,20 @@ func TestCheckRequiredTools_MissingSystemdCryptenrollForTPM2(t *testing.T) {
 			Filesystem: "xfs",
 			Encryption: recipe.Encryption{Type: encType, Passphrase: "hunter2"},
 		}
-		err := checkRequiredTools(r)
-		if err == nil {
-			t.Fatalf("encType=%s: expected error for missing systemd-cryptenroll, got nil", encType)
+		if err := checkRequiredTools(r); err != nil {
+			t.Errorf("encType=%s: host systemd-cryptenroll must not be required, got: %v", encType, err)
 		}
-		if !strings.Contains(err.Error(), "systemd-cryptenroll") {
-			t.Errorf("encType=%s: error should mention systemd-cryptenroll, got: %v", encType, err)
+	}
+	// cryptsetup is still a host tool for these types.
+	lookPath = func(file string) (string, error) {
+		if file == "cryptsetup" {
+			return "", errors.New("not found")
 		}
-		if !strings.Contains(err.Error(), "systemd") {
-			t.Errorf("encType=%s: error should mention systemd package, got: %v", encType, err)
-		}
+		return "/usr/bin/" + file, nil
+	}
+	r := &recipe.Recipe{Filesystem: "xfs", Encryption: recipe.Encryption{Type: "tpm2-luks"}}
+	if err := checkRequiredTools(r); err == nil || !strings.Contains(err.Error(), "cryptsetup") {
+		t.Errorf("missing host cryptsetup for tpm2-luks: err = %v", err)
 	}
 }
 

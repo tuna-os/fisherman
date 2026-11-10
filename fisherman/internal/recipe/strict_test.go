@@ -88,7 +88,8 @@ func TestFrontendRecipeKeysAreKnown(t *testing.T) {
 			"hostname":"h","user":{"username":"u","fullname":"U","password":"p","groups":["wheel"]}}`,
 		"schema-only and embedder keys": `{"brewTap":"o/n","genericImage":true,"luksMapperName":"m",
 			"slurp":{"sourcePartition":"/dev/sda3","users":[{"name":"n","categories":["Documents"]}]},
-			"slurpWallpapers":true,"targetMount":"/mnt/t","zfsPoolName":"rpool"}`,
+			"slurpWallpapers":true,"targetMount":"/mnt/t","zfsPoolName":"rpool",
+			"copyNetworkProfiles":true,"copyBluetoothPairings":false}`,
 	}
 	for name, raw := range recipes {
 		if ps := UnknownFields([]byte(raw)); len(ps) > 0 {

@@ -15,16 +15,10 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/tuna-os/fisherman/internal/deploy"
+	"github.com/tuna-os/fisherman/internal/deploy/deploytest"
 	"github.com/tuna-os/fisherman/internal/runner"
 )
-
-// fakeOutput returns out for every Output call.
-func fakeOutput(t *testing.T, out []byte) {
-	t.Helper()
-	orig := runner.OutputFn
-	runner.OutputFn = func(name string, args ...string) ([]byte, error) { return out, nil }
-	t.Cleanup(func() { runner.OutputFn = orig })
-}
 
 // fakeRun records calls and fails any call whose joined args contain a
 // whole fail token; returns a thunk for the recorded calls.
@@ -200,122 +194,6 @@ func TestExtractWallpapersFromPictures_Subdirs(t *testing.T) {
 	count := extractWallpapersFromPictures(pictures, target)
 	if count != 2 {
 		t.Fatalf("count = %d, want 2", count)
-	}
-}
-
-// --- md5hex / thumbnail generation ---
-
-func TestMd5Hex(t *testing.T) {
-	got := md5hex("file:///usr/share/backgrounds/a.jpg")
-	if len(got) != 32 {
-		t.Fatalf("md5hex length = %d, want 32 (got %q)", len(got), got)
-	}
-	// Deterministic and different for different inputs.
-	if got == md5hex("file:///usr/share/backgrounds/b.jpg") {
-		t.Error("md5hex must differ for different URIs")
-	}
-}
-
-func TestDetectThumbnailer_PreferenceOrder(t *testing.T) {
-	// gdk-pixbuf-thumbnailer first, then ffmpeg, then convert.
-	calls := 0
-	orig := runner.OutputFn
-	runner.OutputFn = func(name string, args ...string) ([]byte, error) {
-		calls++
-		if strings.Contains(strings.Join(args, " "), "gdk-pixbuf-thumbnailer") {
-			return nil, errors.New("not found")
-		}
-		return []byte("/usr/bin/ffmpeg"), nil
-	}
-	t.Cleanup(func() { runner.OutputFn = orig })
-
-	if got := detectThumbnailer(); got != "ffmpeg" {
-		t.Errorf("detectThumbnailer = %q, want ffmpeg", got)
-	}
-	if calls != 2 {
-		t.Errorf("expected 2 which probes, got %d", calls)
-	}
-}
-
-func TestDetectThumbnailer_NoneAvailable(t *testing.T) {
-	orig := runner.OutputFn
-	runner.OutputFn = func(name string, args ...string) ([]byte, error) {
-		return nil, errors.New("not found")
-	}
-	t.Cleanup(func() { runner.OutputFn = orig })
-
-	if got := detectThumbnailer(); got != "" {
-		t.Errorf("detectThumbnailer = %q, want empty when nothing is installed", got)
-	}
-}
-
-func TestGenerateSingleThumbnail_ArgsAndResult(t *testing.T) {
-	calls := fakeRun(t)
-	if !generateSingleThumbnail("ffmpeg", "/src/a.jpg", "/dst/a.png") {
-		t.Fatal("generateSingleThumbnail should succeed when the runner does")
-	}
-	joined := strings.Join(calls(), " ")
-	if !strings.Contains(joined, "ffmpeg -y -i /src/a.jpg") ||
-		!strings.Contains(joined, "scale=256:256") {
-		t.Errorf("ffmpeg invocation wrong: %s", joined)
-	}
-
-	// Failure propagates as false.
-	failCalls := fakeRun(t, "convert")
-	if generateSingleThumbnail("convert", "/src/b.jpg", "/dst/b.png") {
-		t.Error("expected false when the thumbnailer command fails")
-	}
-	_ = failCalls
-}
-
-func TestGenerateSystemThumbnails(t *testing.T) {
-	target := t.TempDir()
-	// System background + injected wallpaper; tiny file and non-image skipped.
-	writeFixture(t, filepath.Join(target, "usr", "share", "backgrounds", "a.jpg"), 200*1024)
-	writeFixture(t, filepath.Join(target, "usr", "share", "backgrounds", "tiny.png"), 2*1024)
-	writeFixture(t, filepath.Join(target, "usr", "share", "backgrounds", "notes.txt"), 200*1024)
-	writeFixture(t, filepath.Join(target, "var", "home", ".windows-wallpapers", "b.jpg"), 200*1024)
-
-	fakeOutput(t, []byte("/usr/bin/gdk-pixbuf-thumbnailer"))
-	// The thumbnailer command is mocked, so mirror its side effect: create
-	// the destination file (the last arg) so the cache dir really fills up.
-	orig := runner.RunFn
-	runner.RunFn = func(_ io.Reader, name string, args ...string) error {
-		if name == "gdk-pixbuf-thumbnailer" {
-			return os.WriteFile(args[len(args)-1], []byte("png"), 0o644)
-		}
-		return nil
-	}
-	t.Cleanup(func() { runner.RunFn = orig })
-
-	count := GenerateSystemThumbnails(target, false)
-	if count != 2 {
-		t.Fatalf("count = %d, want 2 thumbnails", count)
-	}
-	cacheDir := filepath.Join(target, "var", "home", ".cache", "thumbnails", "large")
-	entries, err := os.ReadDir(cacheDir)
-	if err != nil || len(entries) != 2 {
-		t.Fatalf("cache dir entries = %v, err=%v; want 2 .png thumbs", entries, err)
-	}
-	for _, e := range entries {
-		if filepath.Ext(e.Name()) != ".png" {
-			t.Errorf("thumbnail %q lacks .png suffix", e.Name())
-		}
-	}
-}
-
-func TestGenerateSystemThumbnails_NoThumbnailer(t *testing.T) {
-	target := t.TempDir()
-	writeFixture(t, filepath.Join(target, "usr", "share", "backgrounds", "a.jpg"), 200*1024)
-
-	orig := runner.OutputFn
-	runner.OutputFn = func(name string, args ...string) ([]byte, error) {
-		return nil, errors.New("not found")
-	}
-	t.Cleanup(func() { runner.OutputFn = orig })
-
-	if count := GenerateSystemThumbnails(target, false); count != 0 {
-		t.Errorf("count = %d, want 0 with no thumbnailer", count)
 	}
 }
 
@@ -615,7 +493,8 @@ func TestInjectData_Success(t *testing.T) {
 	target := t.TempDir()
 	scratch := t.TempDir()
 	writeFixture(t, filepath.Join(scratch, "Alice", "Documents", "a.txt"), 100)
-	if err := os.MkdirAll(filepath.Join(target, "var", "home", "bob"), 0o755); err != nil {
+	varDir := filepath.Join(target, "ostree", "deploy", "default", "var")
+	if err := os.MkdirAll(filepath.Join(varDir, "home", "bob"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -629,11 +508,11 @@ func TestInjectData_Success(t *testing.T) {
 			Categories: []SlurpCategoryResult{{Name: "Documents", Bytes: 100, Count: 1}},
 		}},
 	}
-	if err := InjectData(target, result, false); err != nil {
+	if err := InjectData(varDir, result); err != nil {
 		t.Fatalf("InjectData: %v", err)
 	}
 	// First non-hidden dir under var/home (bob) becomes the user home.
-	dst := filepath.Join(target, "var", "home", "bob", "Documents")
+	dst := filepath.Join(varDir, "home", "bob", "Documents")
 	if _, err := os.Stat(dst); err != nil {
 		t.Errorf("Documents dir not created under first user home: %v", err)
 	}
@@ -660,7 +539,7 @@ func TestInjectData_ComposefsNativePath(t *testing.T) {
 			Categories: []SlurpCategoryResult{{Name: "Documents"}},
 		}},
 	}
-	if err := InjectData(target, result, true); err != nil {
+	if err := InjectData(filepath.Join(target, "state", "os", "default", "var"), result); err != nil {
 		t.Fatalf("InjectData: %v", err)
 	}
 	home := filepath.Join(target, "state", "os", "default", "var", "home")
@@ -669,50 +548,54 @@ func TestInjectData_ComposefsNativePath(t *testing.T) {
 	}
 }
 
-func TestInjectWallpapers_Success(t *testing.T) {
-	target := t.TempDir()
-	scratch := t.TempDir()
-	writeFixture(t, filepath.Join(scratch, "x.jpg"), 100)
+// The wallpapers go to the /var the booted system sees, on both layouts,
+// and nothing is written into the physical sysroot (tuna-os/fisherman#407:
+// <target>/var/home on ostree is never mounted).
+func TestInjectWallpapers_GoesToTheBootedVar(t *testing.T) {
+	for name, fx := range map[string]deploytest.Sysroot{
+		"ostree":    deploytest.Ostree(t),
+		"composefs": deploytest.ComposeFs(t),
+	} {
+		t.Run(name, func(t *testing.T) {
+			d, err := deploy.Resolve(fx.Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			scratch := t.TempDir()
+			writeFixture(t, filepath.Join(scratch, "x.jpg"), 100)
 
-	calls := fakeRun(t)
-	result := &WallpaperResult{Found: true, ScratchDir: scratch, Count: 1, TotalBytes: 100}
-	if err := InjectWallpapers(target, result, false); err != nil {
-		t.Fatalf("InjectWallpapers: %v", err)
-	}
-	bgDir := filepath.Join(target, "var", "home", ".windows-wallpapers")
-	if _, err := os.Stat(bgDir); err != nil {
-		t.Errorf("wallpaper target dir not created: %v", err)
-	}
-	joined := strings.Join(calls(), " ")
-	if !strings.Contains(joined, "cp -a "+scratch+"/. "+bgDir+"/") {
-		t.Errorf("expected cp -a from scratch into bgDir, calls: %s", joined)
-	}
-	if !strings.Contains(joined, "chown -R 1000:1000 "+bgDir) {
-		t.Errorf("expected chown of the wallpaper dir, calls: %s", joined)
-	}
-}
-
-func TestInjectWallpapers_ComposefsNativePath(t *testing.T) {
-	target := t.TempDir()
-	scratch := t.TempDir()
-	writeFixture(t, filepath.Join(scratch, "x.jpg"), 100)
-
-	fakeRun(t)
-	result := &WallpaperResult{Found: true, ScratchDir: scratch, Count: 1}
-	if err := InjectWallpapers(target, result, true); err != nil {
-		t.Fatalf("InjectWallpapers: %v", err)
-	}
-	bgDir := filepath.Join(target, "state", "os", "default", "var", "home", ".windows-wallpapers")
-	if _, err := os.Stat(bgDir); err != nil {
-		t.Errorf("composefs-native wallpaper dir not created: %v", err)
+			calls := fakeRun(t)
+			result := &WallpaperResult{Found: true, ScratchDir: scratch, Count: 1, TotalBytes: 100}
+			if err := InjectWallpapers(d.Var, result); err != nil {
+				t.Fatalf("InjectWallpapers: %v", err)
+			}
+			bgDir := filepath.Join(fx.Var, "home", ".windows-wallpapers")
+			if _, err := os.Stat(bgDir); err != nil {
+				t.Errorf("wallpaper dir not created in the booted /var: %v", err)
+			}
+			if s := deploytest.Strays(fx); len(s) != 0 {
+				t.Errorf("wrote %v into the physical sysroot", s)
+			}
+			joined := strings.Join(calls(), " ")
+			if !strings.Contains(joined, "cp -a "+scratch+"/. "+bgDir+"/") {
+				t.Errorf("expected cp -a from scratch into bgDir, calls: %s", joined)
+			}
+			// A shared directory belongs to root; uid 1000 is nobody yet.
+			if strings.Contains(joined, "1000:1000") {
+				t.Errorf("wallpapers given to a hardcoded uid: %s", joined)
+			}
+			if !strings.Contains(joined, "chown -R 0:0 "+bgDir) {
+				t.Errorf("expected root ownership of the wallpaper dir, calls: %s", joined)
+			}
+		})
 	}
 }
 
 func TestInjectData_NilOrNotFound(t *testing.T) {
-	if err := InjectData("/tmp/t", nil, false); err != nil {
+	if err := InjectData("/tmp/t", nil); err != nil {
 		t.Errorf("nil result: %v", err)
 	}
-	if err := InjectData("/tmp/t", &DataSlurpResult{Found: false}, false); err != nil {
+	if err := InjectData("/tmp/t", &DataSlurpResult{Found: false}); err != nil {
 		t.Errorf("not-found result: %v", err)
 	}
 }

@@ -218,18 +218,14 @@ func streamCategory(srcDir, dstDir string, budget int64) (int64, int) {
 }
 
 // InjectData copies slurped user data from scratch into the installed system's
-// user home directory, preserving the folder structure.
-func InjectData(target string, result *DataSlurpResult, composeFsNative bool) error {
+// user home directory, preserving the folder structure. varDir is the /var
+// the booted system sees (deploy.Deployment.Var), as for InjectWallpapers.
+func InjectData(varDir string, result *DataSlurpResult) error {
 	if result == nil || !result.Found {
 		return nil
 	}
 
-	var homeBase string
-	if composeFsNative {
-		homeBase = filepath.Join(target, "state", "os", "default", "var", "home")
-	} else {
-		homeBase = filepath.Join(target, "var", "home")
-	}
+	homeBase := filepath.Join(varDir, "home")
 
 	for _, user := range result.Users {
 		// Map to first user's home (UID 1000) — most single-user installs
