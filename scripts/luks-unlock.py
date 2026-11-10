@@ -15,6 +15,12 @@ Passphrase keystrokes are injected via QEMU HMP sendkey over the monitor socket.
 Usage:
   luks-unlock.py qemu <monitor-sock> <passphrase> <serial-log>
 
+Environment:
+  LUKS_UNLOCK_SERIAL_ONLY=1 — never use the framebuffer fallback to decide
+      that the prompt is up. For a guest whose firmware shows a static screen
+      before the kernel starts (shim's "Boot Option Restoration" on a machine
+      with a TPM), where the fallback would type the passphrase too early.
+
 Exit codes:
   0 — passphrase sent and boot succeeded (SSH will become available shortly)
   1 — Plymouth prompt never appeared (timeout)
@@ -32,6 +38,7 @@ POLL_INTERVAL   = 3    # seconds between screendump polls
 PLYMOUTH_WAIT   = 10   # seconds to wait after detecting prompt before sending keys
 PROMPT_DEADLINE = 300  # seconds to wait for Plymouth to appear
 BOOT_DEADLINE   = 300  # seconds to wait for boot to succeed after passphrase
+SERIAL_ONLY     = os.environ.get("LUKS_UNLOCK_SERIAL_ONLY", "") == "1"
 
 
 # ── QEMU monitor helpers ──────────────────────────────────────────────────────
@@ -169,6 +176,10 @@ def run_qemu(monitor_sock: str, passphrase: str, serial_log: str):
             else:
                 stable_count = 0
             prev_hash = md5
+
+        if SERIAL_ONLY:
+            time.sleep(POLL_INTERVAL)
+            continue
 
         if had_content and stable_count >= STABLE_POLLS:
             print(

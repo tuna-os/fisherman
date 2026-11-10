@@ -150,6 +150,31 @@ echo "Artifacts dir: $ARTIFACTS_DIR (serial=$SERIAL_LOG)"
 OVMF_VARS_TEMP="/tmp/ovmf-vars-$$.fd"
 cp "$OVMF_VARS" "$OVMF_VARS_TEMP"
 
+# A machine with a TPM keeps its firmware variables between boots, and it
+# must be allowed to reset once.
+#
+# The disk is booted from the removable path (EFI/BOOT/BOOTX64.EFI), because
+# a fresh OVMF_VARS has no boot entry. On a GRUB image that path is shim, and
+# shim starts fallback.efi, which writes the boot entry ("Boot Option
+# Restoration"). With no TPM, fallback then starts GRUB. With a TPM it resets
+# the machine, so that the next boot is measured through the entry it wrote.
+# Under -no-reboot that reset ended QEMU: the first run of the tpm2-luks
+# entry (PR #425) stopped at "Reset System" and never reached the kernel.
+#
+# So, with TPM_STATE_DIR: the variables live beside the TPM state and persist
+# (boot 2 starts from the entry that boot 1 wrote, as a real machine does),
+# and -no-reboot is dropped. A guest power-off still ends QEMU.
+QEMU_REBOOT_ARGS=(-no-reboot)
+OVMF_VARS_PERSISTENT=0
+if [ -n "${TPM_STATE_DIR:-}" ]; then
+  sudo mkdir -p "$TPM_STATE_DIR"
+  rm -f "$OVMF_VARS_TEMP"
+  OVMF_VARS_TEMP="$TPM_STATE_DIR/OVMF_VARS.fd"
+  sudo test -f "$OVMF_VARS_TEMP" || sudo cp "$OVMF_VARS" "$OVMF_VARS_TEMP"
+  OVMF_VARS_PERSISTENT=1
+  QEMU_REBOOT_ARGS=()
+fi
+
 # Attempt UEFI boot entry workaround for systemd-boot images
 if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-composefs" ] || \
    [ "$IMAGE_NAME" = "arch-bootc" ] || [ "$IMAGE_NAME" = "arch-bootc-composefs" ]; then
@@ -169,12 +194,17 @@ sudo sh -c "rm -f \"$SERIAL_LOG\" 2>/dev/null; touch \"$SERIAL_LOG\" && chmod 66
 # When BOOTCREW_KEEP_VM=1 and we hit a failure we leave the QEMU monitor
 # socket alone too so an operator can attach to the still-running guest.
 cleanup_temp() {
+  # QEMU, swtpm and the screendumps write as root. The CI upload step runs
+  # as the runner user and fails the whole artifact on one unreadable file:
+  # a root-only swtpm log cost the serial log of the first tpm2-luks run.
+  sudo chmod -R a+rX "$ARTIFACTS_DIR" 2>/dev/null || true
+  # The persistent variables belong to the caller, like the TPM state.
+  [ "$OVMF_VARS_PERSISTENT" -eq 1 ] || sudo rm -f "$OVMF_VARS_TEMP" 2>/dev/null || true
   if [ "$BOOTCREW_KEEP_VM" = "1" ] && [ -n "$FAIL_PATH" ]; then
     echo "BOOTCREW_KEEP_VM=1: leaving QEMU monitor socket at $QEMU_MONITOR_SOCK for inspection"
-    sudo rm -f "$OVMF_VARS_TEMP" 2>/dev/null || true
     return
   fi
-  sudo rm -f "$OVMF_VARS_TEMP" "$QEMU_MONITOR_SOCK" 2>/dev/null || true
+  sudo rm -f "$QEMU_MONITOR_SOCK" 2>/dev/null || true
   # swtpm --terminate exits with QEMU; this covers a QEMU that never
   # connected. The state directory is the caller's and is left alone.
   if [ -n "$SWTPM_PID_FILE" ] && sudo test -f "$SWTPM_PID_FILE"; then
@@ -250,7 +280,7 @@ sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -monitor "unix:$QEMU_MONITOR_SOCK,server=on,wait=off" \
   -serial "file:$SERIAL_LOG" \
   -display none \
-  -no-reboot >"$QEMU_STDOUT_LOG" 2>&1 &
+  "${QEMU_REBOOT_ARGS[@]}" >"$QEMU_STDOUT_LOG" 2>&1 &
 
 QEMU_PID=$!
 echo "QEMU PID: $QEMU_PID"
@@ -260,7 +290,15 @@ LUKS_PID=""
 if [ -n "$LUKS_PASSPHRASE" ]; then
   echo "=== LUKS mode: starting passphrase injector ==="
   # Run as sudo so it can connect to the root-owned QEMU monitor socket.
-  sudo python3 "$SCRIPT_DIR/luks-unlock.py" qemu \
+  # With a TPM the firmware shows a static screen before the reset described
+  # above. The framebuffer fallback would take it for the passphrase prompt
+  # and type the key into it ("Press any key to stop system reset"), so only
+  # the serial marker counts there.
+  LUKS_UNLOCK_ENV=()
+  if [ -n "${TPM_STATE_DIR:-}" ]; then
+    LUKS_UNLOCK_ENV=("LUKS_UNLOCK_SERIAL_ONLY=1")
+  fi
+  sudo env "${LUKS_UNLOCK_ENV[@]}" python3 "$SCRIPT_DIR/luks-unlock.py" qemu \
     "$QEMU_MONITOR_SOCK" "$LUKS_PASSPHRASE" "$SERIAL_LOG" &
   LUKS_PID=$!
   echo "luks-unlock.py PID: $LUKS_PID"
@@ -460,12 +498,26 @@ if [ -n "${VERIFY_USER:-}" ]; then
       fi
     done
 
-    # A login session: the shell is valid and the home is reachable.
-    SESSION_USER=$(ssh_root "runuser -l '$VERIFY_USER' -c 'id -un'" 2>/dev/null | tail -1 || true)
-    if [ "$SESSION_USER" = "$VERIFY_USER" ]; then
-      echo "✅ login session opens for $VERIFY_USER"
-    else
-      check_fail "could not open a login session for '$VERIFY_USER' (runuser -l printed '${SESSION_USER}')"
+    # A login session: the shell is valid and the home is reachable. Root
+    # needs no password for either tool. runuser is tried first; an image
+    # can ship su without it. stderr is kept: the first run of this check
+    # (PR #425, dakota-user) failed with an empty result and nothing to read.
+    SESSION_OK=0
+    SESSION_LOG=""
+    for tool in runuser su; do
+      SESSION_OUT=$(ssh_root "$tool -l '$VERIFY_USER' -c 'id -un' 2>&1; echo \"exit=\$?\"" 2>&1 || true)
+      SESSION_LOG="$SESSION_LOG--- $tool -l $VERIFY_USER -c 'id -un' ---"$'\n'"$SESSION_OUT"$'\n'
+      if printf '%s\n' "$SESSION_OUT" | grep -qx "$VERIFY_USER" \
+          && printf '%s\n' "$SESSION_OUT" | grep -qx "exit=0"; then
+        echo "✅ login session opens for $VERIFY_USER ($tool -l)"
+        SESSION_OK=1
+        break
+      fi
+    done
+    if [ "$SESSION_OK" -ne 1 ]; then
+      check_fail "could not open a login session for '$VERIFY_USER' with runuser or su"
+      printf '%s' "$SESSION_LOG"
+      ssh_root "ls -ld '$USER_HOME' /bin/bash /usr/bin/bash; command -v runuser su; grep -n . /etc/pam.d/runuser-l /etc/pam.d/su-l 2>&1 | head -20" 2>&1 || true
     fi
 
     # The password. /etc/shadow must hold a real hash, and the recipe's
