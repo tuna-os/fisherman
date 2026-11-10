@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "live_host": {
+    "context": "live-host",
+    "is_live": false,
+    "image": "ghcr.io/example/os:stable",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "platform": "x86_64",
+    "backend": "ostree",
+    "bootc_version": "1.17.1"
+  },
+  "source": {
+    "selected": true,
+    "ref": "containers-storage:ghcr.io/example/os:stable",
+    "transport": "containers-storage",
+    "locality": "local",
+    "store": "/usr/share/tuna-installer/oci-store",
+    "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+    "digest_from": "store_index",
+    "platform": ""
+  },
+  "execution_root": {
+    "context": "none",
+    "established": false,
+    "reason": "digest_mismatch",
+    "backend": "",
+    "bootc_version": ""
+  },
+  "target": {
+    "update_ref": "ghcr.io/example/os:stable",
+    "update_ref_from": "target_imgref",
+    "state": "not_installed"
+  },
+  "features": {
+    "bootc_image_storage": {
+      "status": "unknown",
+      "reason": "source_root_unavailable",
+      "context": "none"
+    },
+    "deployment_mount": {
+      "status": "unknown",
+      "reason": "source_root_unavailable",
+      "context": "none"
+    },
+    "finalization": {
+      "status": "unknown",
+      "reason": "source_root_unavailable",
+      "context": "none"
+    },
+    "install_configuration": {
+      "status": "unknown",
+      "reason": "source_root_unavailable",
+      "context": "none"
+    },
+    "native_inspection": {
+      "status": "unknown",
+      "reason": "source_root_unavailable",
+      "context": "none"
+    },
+    "unified_storage": {
+      "status": "unsupported",
+      "reason": "fisherman_refuses",
+      "context": "fisherman"
+    }
+  },
+  "install_defaults": {
+    "observed": false,
+    "root_filesystem": "",
+    "block_setups": [],
+    "bootloader": ""
+  },
+  "image": {
+    "observed": false,
+    "kernel_version": "",
+    "kernel_unified": false
+  }
+}

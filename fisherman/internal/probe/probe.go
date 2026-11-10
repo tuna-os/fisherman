@@ -39,6 +39,9 @@ type Result struct {
 	Bootc Bootc `json:"bootc"`
 	GPUs  []GPU `json:"gpus"`
 	DMI   DMI   `json:"dmi"`
+	// Capabilities is the versioned, source-scoped bootc report
+	// (tuna-os/fisherman#383). It has its own version field.
+	Capabilities Capabilities `json:"capabilities"`
 }
 
 // Runner runs a command on the host and returns its stdout. In production it
@@ -59,6 +62,12 @@ type Prober struct {
 	// runner.InFlatpak in production: internal/runner owns the one sandbox
 	// detector, and its Output already forwards Run to the host there.
 	Sandboxed func() bool
+	// Selection names the source the frontend selected. The zero value
+	// selects nothing; see Capabilities.
+	Selection Selection
+
+	// status caches the host's `bootc status --json` for one probe.
+	status *bootcHostStatus
 }
 
 // Probe gathers every section. Only a failure that leaves a section
@@ -73,16 +82,18 @@ func (p *Prober) Probe() (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("system: %w", err)
 	}
+	live, offline, bootc := p.Live(), p.Offline(), p.Bootc()
 	return &Result{
 		ProtocolVersion: ProtocolVersion,
 		Disks:           disks,
 		TPM:             p.TPM(),
 		System:          sys,
-		Live:            p.Live(),
-		Offline:         p.Offline(),
-		Bootc:           p.Bootc(),
+		Live:            live,
+		Offline:         offline,
+		Bootc:           bootc,
 		GPUs:            p.GPUs(),
 		DMI:             p.DMI(),
+		Capabilities:    p.Capabilities(live, offline, bootc),
 	}, nil
 }
 

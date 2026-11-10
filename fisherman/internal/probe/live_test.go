@@ -7,7 +7,9 @@ import (
 )
 
 const bootcStatusLive = `{"apiVersion":"org.containers.bootc/v1","kind":"BootcHost",
-"status":{"booted":{"image":{"image":{"image":"ghcr.io/example/os:stable","transport":"registry"}}}}}`
+"status":{"booted":{"image":{"image":{"image":"ghcr.io/example/os:stable","transport":"registry"},
+"imageDigest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","architecture":"x86_64"},
+"ostree":{"checksum":"0a1b","deploySerial":0,"stateroot":"default"}}}}`
 
 func TestLive(t *testing.T) {
 	tests := []struct {

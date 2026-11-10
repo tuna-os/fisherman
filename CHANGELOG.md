@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **Source-scoped bootc capabilities in `fisherman probe --json`** (#383):
+  a new `capabilities` object with its own `version` (1). `--source <ref>`,
+  `--live-root` and `--target-imgref <ref>` select the source; the live
+  host, the source, the execution root and the target are separate objects.
+  The probe runs bootc for the source only when the host booted the
+  source's exact digest, and there only `bootc container inspect --json`,
+  `bootc install print-configuration` and `bootc install finalize --help`.
+  Six features (`native_inspection`, `install_configuration`,
+  `finalization`, `deployment_mount`, `unified_storage`,
+  `bootc_image_storage`) answer `supported`/`unsupported`/`unknown` with a
+  stable reason and the context that established it; `supported` needs an
+  observed command, never a version or help text. Adapters copy only
+  documented fields, and every probe command is now bounded (20 s, 8 MiB,
+  stderr discarded). No pull, mount, container or registry access. Golden
+  fixtures in `internal/probe/testdata/golden/caps-*.json`; contract in
+  docs/PROBE.md.
+
 - **fisherman sets `BootNext` itself** (tuna-os/bootc-installer#318): after
   the install it points the firmware's next boot at the installed system's
   entry, while it is root. On live media by default; elsewhere only with

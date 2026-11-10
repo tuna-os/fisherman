@@ -245,7 +245,7 @@ holds both fields.
 | `experimental` | each entry is `zfs` | `experimental_unsupported` |
 | `btrfsSubvolumes` | needs `filesystem: btrfs` | `btrfs_subvolumes_require_btrfs` |
 | `composeFsBackend` | needs fs-verity, so not XFS | `composefs_requires_fsverity` |
-| `unifiedStorage` | `false` or absent. `true` asks for bootc's `--experimental-unified-storage`, which fisherman does not pass (it runs bootc in a container, where that storage does not resolve). The install used to finish without it and report success. It is not `composeFsBackend` and not `additionalImageStores`; both are supported. | `unified_storage_unsupported` |
+| `unifiedStorage` | `false` or absent. `true` asks for bootc's `--experimental-unified-storage`, which fisherman does not pass (it runs bootc in a container, where that storage does not resolve). The install used to finish without it and report success. It is not `composeFsBackend` and not `additionalImageStores`; both are supported. `fisherman probe --json` reports the same answer as `capabilities.features.unified_storage` (`unsupported`, `fisherman_refuses`; see docs/PROBE.md). | `unified_storage_unsupported` |
 | `encryption.type` | one of the encryption choices (below); `""` means `none` | `encryption_unsupported` |
 | `encryption.type` | not LUKS on ZFS | `encryption_unsupported_on_zfs` |
 | `encryption.type` | not encrypted with `customMounts` (the manual path runs no `luksFormat`) | `encryption_unsupported_on_manual_layout` |
