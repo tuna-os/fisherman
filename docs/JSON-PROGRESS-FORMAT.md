@@ -172,6 +172,13 @@ LUKS. It exits 0 right after this event.
 **Usage:** Set the bar to 100% and mark the install successful. A frontend
 can use `boot_id` to set `BootNext` before rebooting.
 
+fisherman also sets `BootNext` itself, while it is root, when the host booted
+from live media or the recipe has `"setBootNext": true`. The `info` line
+before `complete` says what happened: `BootNext set to Boot0001: …`,
+`BootNext not set: …` with the reason, or `Warning: could not set BootNext
+…`. A frontend that runs as the desktop user cannot write the variable, and
+need not try when the line says it is set.
+
 ### `error`
 
 The install failed.

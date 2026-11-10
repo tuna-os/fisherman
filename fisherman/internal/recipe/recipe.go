@@ -138,6 +138,12 @@ type Recipe struct {
 	// values of Experimentals ("zfs"). A feature is experimental when no VM
 	// test covers it; without its name here the recipe is refused.
 	Experimental []string `json:"experimental,omitempty"`
+	// SetBootNext says whether fisherman sets the firmware's BootNext
+	// variable to the installed system's boot entry when the install ends,
+	// so the next boot starts it whatever the boot order says. It changes
+	// the firmware of the machine fisherman runs on. Absent (null): only
+	// when that machine booted from live media. true: always. false: never.
+	SetBootNext *bool `json:"setBootNext,omitempty"`
 	// Locale is the system locale written to the installed system's
 	// /etc/locale.conf as LANG, e.g. "de_DE.UTF-8". Empty: the image's.
 	Locale string `json:"locale,omitempty"`

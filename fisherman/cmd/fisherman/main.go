@@ -1156,7 +1156,10 @@ func main() {
 		progress.Info(fmt.Sprintf("Warning: teardown after install was incomplete: %v", err))
 	}
 
-	// Find the EFI boot entry so the frontend can set BootNext before rebooting.
+	// Find the installed system's EFI boot entry, and make it the next boot
+	// while fisherman is root: a frontend runs as the desktop user and cannot
+	// write an EFI variable (tuna-os/bootc-installer#318). The id still goes
+	// out in the complete event.
 	// Non-fatal: on VMs or systems without efibootmgr this may return empty.
 	bootID, err := post.FindBootNextID(activeEfiPart)
 	if err != nil {
@@ -1165,6 +1168,7 @@ func main() {
 	} else if bootID != "" {
 		progress.Info(fmt.Sprintf("EFI boot entry for installed system: Boot%s", bootID))
 	}
+	progress.Info(applyBootNext(r, bootID, hostIsLive))
 
 	progress.Complete("Installation complete!", bootID)
 }

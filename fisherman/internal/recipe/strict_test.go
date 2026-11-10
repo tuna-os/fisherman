@@ -93,7 +93,7 @@ func TestFrontendRecipeKeysAreKnown(t *testing.T) {
 			"slurpWallpapers":true,"targetMount":"/mnt/t","zfsPoolName":"rpool",
 			"copyNetworkProfiles":true,"copyBluetoothPairings":false,
 			"extras":{"printServices":true,"oemSetup":true,"audioNames":true,"bootSplash":true},
-			"experimental":["zfs"],"locale":"de_DE.UTF-8","timezone":"Europe/Berlin",
+			"experimental":["zfs"],"setBootNext":true,"locale":"de_DE.UTF-8","timezone":"Europe/Berlin",
 			"keyboard":{"layout":"de","variant":"nodeadkeys","model":"pc105"}}`,
 	}
 	for name, raw := range recipes {

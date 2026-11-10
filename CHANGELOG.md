@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **fisherman sets `BootNext` itself** (tuna-os/bootc-installer#318): after
+  the install it points the firmware's next boot at the installed system's
+  entry, while it is root. On live media by default; elsewhere only with
+  `"setBootNext": true`; `false` never. A failure is a warning. The
+  `complete` event still carries `boot_id`.
+
 - **Locale, keyboard layout and time zone** (#405): optional recipe fields
   `locale`, `keyboard` (`layout`, `variant`, `model`) and `timezone`.
   fisherman writes `/etc/locale.conf`, `/etc/vconsole.conf` (console keymap
