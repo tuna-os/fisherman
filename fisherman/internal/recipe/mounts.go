@@ -72,17 +72,32 @@ func IsVarPath(path string) bool { return isUnder(path, "/var") }
 //
 // It reports each problem on the entry that causes it, so a frontend can mark
 // the row.
+//
+// It reads nothing from the machine: two partition entries are the same
+// device when their paths are equal. Problems, which may read the machine,
+// also resolves symlinks (checkCustomMountsPersistence with EvalSymlinks),
+// so /dev/disk/by-id/… and /dev/sda1 count as one device there.
 func CheckCustomMountsPersistence(r *Recipe) []Problem {
+	return checkCustomMountsPersistence(r, func(path string) string { return path })
+}
+
+// resolveSymlinks follows symlinks to the device node; a path that cannot be
+// resolved is compared as it is.
+func resolveSymlinks(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
+}
+
+func checkCustomMountsPersistence(r *Recipe, device func(path string) string) []Problem {
 	var ps []Problem
 	targets := map[string]int{}
 	parts := map[string]int{}
 	for i, cm := range r.CustomMounts {
 		kind := ClassifyCustomMount(cm.Target)
 		if cm.Partition != "" {
-			dev := cm.Partition
-			if resolved, err := filepath.EvalSymlinks(dev); err == nil {
-				dev = resolved
-			}
+			dev := device(cm.Partition)
 			if first, dup := parts[dev]; dup {
 				ps = append(ps, Problem{fmt.Sprintf("customMounts[%d].partition", i), CodeCustomMountPartitionDuplicate,
 					fmt.Sprintf("customMounts[%d]: partition %s is the same device as customMounts[%d]", i, cm.Partition, first)})

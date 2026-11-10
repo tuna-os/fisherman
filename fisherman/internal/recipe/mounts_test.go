@@ -125,6 +125,11 @@ func TestCustomMountsDuplicates(t *testing.T) {
 		if !hasCode(r.Problems(), "customMounts[3].partition", recipe.CodeCustomMountPartitionDuplicate) {
 			t.Errorf("want %s for a symlink to the root partition, got %+v", recipe.CodeCustomMountPartitionDuplicate, r.Problems())
 		}
+		// The partial form (validate --partial) reads nothing from the
+		// machine, so it cannot see through the symlink.
+		if hasCode(recipe.CheckCustomMountsPersistence(r), "customMounts[3].partition", recipe.CodeCustomMountPartitionDuplicate) {
+			t.Error("CheckCustomMountsPersistence resolved a symlink; --partial must read nothing")
+		}
 	})
 	t.Run("two swap partitions are fine", func(t *testing.T) {
 		r := manualRecipe(t, "ext4", "none")

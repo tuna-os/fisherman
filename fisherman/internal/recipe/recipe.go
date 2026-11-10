@@ -272,7 +272,7 @@ func (r *Recipe) Problems() []Problem {
 				"customMounts: no root (/) partition specified"})
 		}
 		ps = append(ps, CheckCustomMountsLayout(r)...)
-		ps = append(ps, CheckCustomMountsPersistence(r)...)
+		ps = append(ps, checkCustomMountsPersistence(r, resolveSymlinks)...)
 		// Encryption is NOT applied on the manual path: luksFormat/luksOpen run
 		// only in the auto-partition branch below, and TPM enrolment needs an
 		// activeRootPart that manual mode leaves empty. Accepting an encrypted

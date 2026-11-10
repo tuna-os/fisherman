@@ -200,7 +200,7 @@ A rule runs when its key is present:
 | `encryption` | encryption type, passphrase |
 | `bootloader` | bootloader |
 | `imageType` | imageType |
-| `customMounts` | each entry's target (not whether its partition exists), and the persistence rules: a target named once, a partition named once, a data mount the installed system can mount again. `composeFsBackend` counts as false when absent |
+| `customMounts` | each entry's target (not whether its partition exists), and the persistence rules: a target named once, a partition path named once (paths are compared as text; the full mode also follows symlinks), a data mount the installed system can mount again. `composeFsBackend` counts as false when absent |
 | `varDisk` | its combinations with `encryption.type`, `composeFsBackend` and `filesystem: zfs` (absent ones count as none / false). Not the disk itself |
 | `targetMount` | targetMount |
 | `flatpakVarPath` | flatpakVarPath |
