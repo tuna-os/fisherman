@@ -344,8 +344,223 @@ func loopRescan(disk string) error {
 	return nil
 }
 
+// blockNode is one entry of `lsblk -J -o NAME,PKNAME,MAJ:MIN,TYPE`.
+type blockNode struct {
+	Name     string      `json:"name"`
+	PKName   string      `json:"pkname"`
+	MajMin   string      `json:"maj:min"`
+	Type     string      `json:"type"`
+	Children []blockNode `json:"children"`
+}
+
+// blockSet is the selected disk and every block device stacked on it:
+// partitions, LUKS and other device-mapper mappings, LVM logical volumes.
+// It is built from the kernel's own parent/child records, never from device
+// names, so /dev/nvme0n1 does not take /dev/nvme0n10 with it (#357).
+type blockSet struct {
+	disk   string            // the path the caller selected
+	root   blockNode         // the selected disk as lsblk reports it
+	names  map[string]string // lsblk NAME → MAJ:MIN
+	majmin map[string]string // MAJ:MIN → lsblk NAME
+	// order lists every member's MAJ:MIN deepest-first, so a mapping is
+	// removed before the device it sits on.
+	order []string
+}
+
+func (b *blockSet) hasMajMin(mm string) bool { _, ok := b.majmin[mm]; return ok }
+
+// hasType reports whether any member has the given lsblk TYPE.
+func (b *blockSet) hasType(typ string) bool {
+	var walk func(n blockNode) bool
+	walk = func(n blockNode) bool {
+		if n.Type == typ {
+			return true
+		}
+		for _, c := range n.Children {
+			if walk(c) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(b.root)
+}
+
+// ownsDevicePath reports whether a device path from /proc/mounts names a
+// member of the set. The match is on the whole name: /dev/<name> for disks
+// and partitions, /dev/mapper/<name> for device-mapper devices.
+func (b *blockSet) ownsDevicePath(dev string) bool {
+	for _, prefix := range []string{"/dev/mapper/", "/dev/"} {
+		if name, ok := strings.CutPrefix(dev, prefix); ok && !strings.Contains(name, "/") {
+			if _, member := b.names[name]; member {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resolveBlockSet asks the host's lsblk for the block-device tree and returns
+// the selected disk with its descendants. It fails closed: when lsblk fails,
+// its output cannot be read, the disk is not in it, or a device stacked on
+// the disk also sits on a device outside it (an md array, a multipath map, a
+// logical volume that spans disks), it returns an error and the caller must
+// not tear anything down.
+func resolveBlockSet(disk string) (*blockSet, error) {
+	out, err := runner.Output("lsblk", "-J", "-o", "NAME,PKNAME,MAJ:MIN,TYPE")
+	if err != nil {
+		return nil, fmt.Errorf("cannot establish which block devices belong to %s: lsblk: %w", disk, err)
+	}
+	var parsed struct {
+		Blockdevices []blockNode `json:"blockdevices"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return nil, fmt.Errorf("cannot establish which block devices belong to %s: parsing lsblk output: %w", disk, err)
+	}
+
+	var normalize func(nodes []blockNode)
+	normalize = func(nodes []blockNode) {
+		for i := range nodes {
+			nodes[i].MajMin = strings.TrimSpace(nodes[i].MajMin)
+			normalize(nodes[i].Children)
+		}
+	}
+	normalize(parsed.Blockdevices)
+
+	// The caller may pass an alias (/dev/disk/by-id/…); lsblk reports kernel
+	// names. Accept either spelling, but only as a whole-name match.
+	want := map[string]bool{filepath.Base(disk): true}
+	if real, err := filepath.EvalSymlinks(disk); err == nil {
+		want[filepath.Base(real)] = true
+	}
+
+	var root *blockNode
+	var find func(nodes []blockNode)
+	find = func(nodes []blockNode) {
+		for i := range nodes {
+			n := &nodes[i]
+			if want[n.Name] && n.MajMin != "" {
+				if root == nil {
+					root = n
+				}
+				continue
+			}
+			find(n.Children)
+		}
+	}
+	find(parsed.Blockdevices)
+	if root == nil {
+		return nil, fmt.Errorf("cannot establish which block devices belong to %s: lsblk does not list it", disk)
+	}
+
+	set := &blockSet{disk: disk, root: *root, names: map[string]string{}, majmin: map[string]string{}}
+	var bad error
+	var collect func(n blockNode)
+	collect = func(n blockNode) {
+		for _, c := range n.Children {
+			collect(c)
+		}
+		if n.Name == "" || n.MajMin == "" {
+			bad = fmt.Errorf("cannot establish which block devices belong to %s: lsblk reported a device without a name or a major:minor number", disk)
+			return
+		}
+		if _, seen := set.majmin[n.MajMin]; !seen {
+			set.order = append(set.order, n.MajMin)
+		}
+		set.majmin[n.MajMin] = n.Name
+		set.names[n.Name] = n.MajMin
+	}
+	collect(*root)
+	if bad != nil {
+		return nil, bad
+	}
+
+	// Anything stacked on the disk that lsblk also reaches without passing
+	// through the disk is shared with other storage.
+	var shared []string
+	seenShared := map[string]bool{}
+	var outside func(nodes []blockNode)
+	outside = func(nodes []blockNode) {
+		for _, n := range nodes {
+			if n.MajMin == root.MajMin {
+				continue // the selected disk; its subtree is the set
+			}
+			if set.hasMajMin(n.MajMin) && !seenShared[n.MajMin] {
+				seenShared[n.MajMin] = true
+				shared = append(shared, fmt.Sprintf("%s (%s)", n.Name, n.MajMin))
+			}
+			outside(n.Children)
+		}
+	}
+	outside(parsed.Blockdevices)
+	if len(shared) > 0 {
+		return nil, fmt.Errorf("refusing to prepare %s: %s also uses a device that is not on this disk; "+
+			"stop it or remove this disk from it first", disk, strings.Join(shared, ", "))
+	}
+	return set, nil
+}
+
+// volumeGroupsOn returns the LVM volume groups whose physical volumes are all
+// members of set. A group that also has a physical volume elsewhere is an
+// error: deactivating it would take storage on another disk offline.
+func volumeGroupsOn(set *blockSet) ([]string, error) {
+	out, err := runner.Output("pvs", "--noheadings", "--separator", "|", "-o", "pv_name,vg_name,pv_major,pv_minor")
+	if err != nil {
+		// No lvm2 on the host means no volume groups. But when lsblk already
+		// shows a logical volume on this disk, LVM is in use and its layout
+		// must be known before anything is torn down.
+		if set.hasType("lvm") {
+			return nil, fmt.Errorf("cannot establish which volume groups use %s: pvs: %w", set.disk, err)
+		}
+		fmt.Fprintf(os.Stdout, "+ pvs unavailable (%v); no LVM on %s to deactivate\n", err, set.disk)
+		return nil, nil
+	}
+	inside := map[string][]string{}
+	outside := map[string][]string{}
+	var order []string
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Split(strings.TrimSpace(line), "|")
+		if len(f) != 4 {
+			continue
+		}
+		pv, vg := strings.TrimSpace(f[0]), strings.TrimSpace(f[1])
+		if vg == "" {
+			continue // an orphan physical volume belongs to no group
+		}
+		mm := strings.TrimSpace(f[2]) + ":" + strings.TrimSpace(f[3])
+		if _, known := inside[vg]; !known {
+			if _, known := outside[vg]; !known {
+				order = append(order, vg)
+			}
+		}
+		if set.hasMajMin(mm) {
+			inside[vg] = append(inside[vg], pv)
+		} else {
+			outside[vg] = append(outside[vg], pv)
+		}
+	}
+	var vgs []string
+	for _, vg := range order {
+		if len(inside[vg]) == 0 {
+			continue
+		}
+		if len(outside[vg]) > 0 {
+			return nil, fmt.Errorf("refusing to prepare %s: volume group %s also uses %s, which is not on this disk; "+
+				"remove this disk from the group (vgreduce) or pick a different disk",
+				set.disk, vg, strings.Join(outside[vg], ", "))
+		}
+		vgs = append(vgs, vg)
+	}
+	return vgs, nil
+}
+
 // unmountAll aggressively releases all kernel and userspace references to disk
 // so that sfdisk can safely repartition it.
+//
+// It first resolves the exact set of block devices that belong to disk
+// (resolveBlockSet) and the volume groups that live only on it
+// (volumeGroupsOn). Every teardown command below acts on that set and on
+// nothing else; if the set cannot be established, nothing is torn down.
 //
 // Flash drives and USB disks are managed by udisksd, which holds an open FD
 // on the block device even after umount -l. sfdisk detects that FD and refuses
@@ -362,11 +577,19 @@ func loopRescan(disk string) error {
 //  6. blockdev --flushbufs — flush pending I/O so the kernel can drop references.
 //  7. udevadm settle    — wait for udev/udisksd to release device references.
 func unmountAll(disk string) error {
+	set, err := resolveBlockSet(disk)
+	if err != nil {
+		return err
+	}
+	vgs, err := volumeGroupsOn(set)
+	if err != nil {
+		return err
+	}
+
 	data, err := os.ReadFile(procMountsPath)
 	if err != nil {
 		return fmt.Errorf("reading /proc/mounts: %w", err)
 	}
-	base := filepath.Base(disk) // e.g. "sda"
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
@@ -374,8 +597,7 @@ func unmountAll(disk string) error {
 		}
 		dev := fields[0] // e.g. /dev/sda1
 		mp := fields[1]  // e.g. /run/media/james/Yellowfin_Live
-		devBase := filepath.Base(dev)
-		if !strings.HasPrefix(devBase, base) {
+		if !set.ownsDevicePath(dev) {
 			continue
 		}
 
@@ -400,7 +622,7 @@ func unmountAll(disk string) error {
 	// disk. Without this, the LVM/dm layer holds the disk open and sfdisk's
 	// BLKRRPART ioctl fails, forcing --no-reread and leaving the kernel with
 	// a stale (potentially much smaller) partition table.
-	deactivateLVM(disk)
+	deactivateLVM(set, vgs)
 
 	// Kill any processes still holding FDs open on any partition of this disk.
 	// fuser exits non-zero when no processes are found — that is fine.
@@ -432,51 +654,48 @@ func isNBD(disk string) bool {
 	return strings.HasPrefix(filepath.Base(disk), "nbd")
 }
 
-// deactivateLVM removes LVM volume groups and device-mapper (dm-crypt, LUKS)
-// devices that are backed by partitions of disk. This is required before
-// repartitioning a disk that previously held LVM or LUKS — the device-mapper
-// layer keeps an open reference on the underlying block device, causing sfdisk
-// to fail with "disk is currently in use" even after all filesystems are
-// unmounted.
-func deactivateLVM(disk string) {
-	base := filepath.Base(disk) // e.g. "sda"
-
-	// Step 1: deactivate any LVM VGs that contain a PV on this disk.
-	// `pvs` lists physical volumes; we match those whose PV name starts with
-	// the disk path (e.g. /dev/sda1, /dev/sda2 ...).
-	pvsName, pvsArgs := runner.HostArgs("pvs", []string{"--noheadings", "-o", "pv_name,vg_name"})
-	pvOut, err := runner.WrappedCommand(pvsName, pvsArgs...).Output()
-	if err == nil {
-		for _, line := range strings.Split(string(pvOut), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) != 2 {
-				continue
-			}
-			pvName, vgName := fields[0], fields[1]
-			if strings.HasPrefix(pvName, disk) && vgName != "" {
-				fmt.Fprintf(os.Stdout, "+ vgchange -an %s (LVM VG on %s)\n", vgName, pvName)
-				_ = runner.Run("vgchange", "-an", vgName)
-			}
-		}
+// deactivateLVM deactivates the volume groups in vgs and removes the
+// device-mapper devices (dm-crypt, LUKS, leftover LVs) that are members of
+// set. This is required before repartitioning a disk that previously held LVM
+// or LUKS — the device-mapper layer keeps an open reference on the underlying
+// block device, causing sfdisk to fail with "disk is currently in use" even
+// after all filesystems are unmounted.
+//
+// Both lists come from unmountAll's verified block set. A mapper is removed
+// only when the kernel's current `dmsetup ls` shows it under the same name
+// and the same major:minor number that lsblk reported as a descendant of the
+// disk; a name or a number that merely looks similar is never enough.
+func deactivateLVM(set *blockSet, vgs []string) {
+	for _, vg := range vgs {
+		fmt.Fprintf(os.Stdout, "+ vgchange -an %s (LVM VG on %s)\n", vg, set.disk)
+		_ = runner.Run("vgchange", "-an", vg)
 	}
 
-	// Step 2: remove any device-mapper devices (LUKS, dm-crypt, LVM LVs)
-	// whose block-device dependency includes a partition of this disk.
-	// `dmsetup deps -o devname` prints the underlying devices for each mapper.
-	lsName, lsArgs := runner.HostArgs("dmsetup", []string{"ls"})
-	dmList, err := runner.WrappedCommand(lsName, lsArgs...).Output()
-	if err == nil {
-		for _, line := range strings.Split(string(dmList), "\n") {
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
-			dmName := strings.Fields(line)[0]
-			depsName, depsArgs := runner.HostArgs("dmsetup", []string{"deps", "-o", "devname", dmName})
-			deps, err := runner.WrappedCommand(depsName, depsArgs...).Output()
-			if err == nil && strings.Contains(string(deps), base) {
-				fmt.Fprintf(os.Stdout, "+ dmsetup remove --force %s (backed by %s)\n", dmName, disk)
-				_ = runner.Run("dmsetup", "remove", "--force", dmName)
-			}
+	dmList, err := runner.Output("dmsetup", "ls")
+	if err != nil {
+		return
+	}
+	// `dmsetup ls` prints "name (253:0)"; older releases print "(253, 0)".
+	live := map[string]string{} // MAJ:MIN → mapper name
+	for _, line := range strings.Split(string(dmList), "\n") {
+		open := strings.LastIndex(line, "(")
+		closeIdx := strings.LastIndex(line, ")")
+		if open < 0 || closeIdx < open {
+			continue
 		}
+		name := strings.TrimSpace(line[:open])
+		nums := strings.FieldsFunc(line[open+1:closeIdx], func(r rune) bool { return r == ':' || r == ',' || r == ' ' })
+		if name == "" || len(nums) != 2 {
+			continue
+		}
+		live[nums[0]+":"+nums[1]] = name
+	}
+	for _, mm := range set.order {
+		name, ok := live[mm]
+		if !ok || set.majmin[mm] != name || mm == set.root.MajMin {
+			continue
+		}
+		fmt.Fprintf(os.Stdout, "+ dmsetup remove --force %s (%s, backed by %s)\n", name, mm, set.disk)
+		_ = runner.Run("dmsetup", "remove", "--force", name)
 	}
 }

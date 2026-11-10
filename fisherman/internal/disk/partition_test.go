@@ -22,6 +22,9 @@ type execCall struct {
 type recorder struct {
 	calls []execCall
 	err   error
+	// host answers the read-only queries (lsblk, pvs, dmsetup ls, …) that go
+	// through runner.Output. See partition_identity_test.go.
+	host *fakeHost
 }
 
 func (r *recorder) run(stdin io.Reader, name string, args ...string) error {
@@ -36,7 +39,7 @@ func (r *recorder) run(stdin io.Reader, name string, args ...string) error {
 
 func setupRecorder(t *testing.T) *recorder {
 	t.Helper()
-	rec := &recorder{}
+	rec := &recorder{host: newFakeHost(t)}
 	runner.RunFn = rec.run
 	t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
 	return rec
@@ -550,6 +553,7 @@ func TestPartition_PartprobeAfterForceReread(t *testing.T) {
 	disk.SetProcMountsPath(f.Name())
 	t.Cleanup(func() { disk.SetProcMountsPath("/proc/mounts") })
 
+	newFakeHost(t)
 	rec := &sfdiskFailOnceRecorder{}
 	runner.RunFn = rec.run
 	t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
