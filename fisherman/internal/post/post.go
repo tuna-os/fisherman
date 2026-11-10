@@ -716,20 +716,55 @@ func CopyWiFiConnections(target string) (int, error) {
 	return len(profiles), nil
 }
 
-// EnablePrintServices enables cups-browsed, avahi-daemon, and ipp-usb in the
-// installed system so printers are auto-discovered on first boot without any
-// user configuration. All three are non-fatal: if the unit file is missing in
-// the target image the symlink is skipped with a warning.
-func EnablePrintServices(target string) {
-	services := []string{
-		"cups-browsed.service",
-		"avahi-daemon.service",
-		"ipp-usb.service",
+// PrintServices are the units EnablePrintServices enables: printer
+// auto-discovery for a desktop. They listen on the network (cups-browsed was
+// the CVE-2024-47176 vector), so the install enables them only when the
+// recipe or the image catalog asks (extras.printServices), never for an
+// image it knows nothing about (#412).
+var PrintServices = []string{
+	"cups-browsed.service",
+	"avahi-daemon.service",
+	"ipp-usb.service",
+}
+
+// EnablePrintServices enables the PrintServices units in the installed
+// system, each one only when the installed image has it. It returns what it
+// enabled and what the image does not have, and logs exactly that: a run
+// that enabled nothing says "skipped".
+//
+// On composefs the image's /usr cannot be inspected offline. A unit is then
+// enabled without the check, and the log line says so.
+func EnablePrintServices(target string) (enabled, missing []string) {
+	unchecked := false
+	for _, svc := range PrintServices {
+		switch enableSystemService(target, svc) {
+		case unitEnabled:
+			enabled = append(enabled, svc)
+		case unitEnabledUnchecked:
+			enabled = append(enabled, svc)
+			unchecked = true
+		case unitMissing:
+			missing = append(missing, svc)
+		case unitFailed:
+			// already logged
+		}
 	}
-	for _, svc := range services {
-		enableSystemService(target, svc)
+	switch {
+	case len(enabled) == 0 && len(missing) > 0:
+		progress.Info("Print services: skipped, the image has none of " + strings.Join(missing, ", "))
+	case len(enabled) == 0:
+		progress.Info("Print services: skipped, could not enable any unit")
+	default:
+		msg := "Print services enabled: " + strings.Join(enabled, ", ")
+		if unchecked {
+			msg += " (not checked: the image's /usr cannot be read on a composefs target)"
+		}
+		if len(missing) > 0 {
+			msg += "; not in the image: " + strings.Join(missing, ", ")
+		}
+		progress.Info(msg)
 	}
-	progress.Info("Print services enabled: cups-browsed, avahi-daemon, ipp-usb")
+	return enabled, missing
 }
 
 // AppendFstabEntry appends an fstab entry to the installed system at target.

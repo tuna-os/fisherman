@@ -94,6 +94,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🔒 Security
 
+- **Desktop and product steps are opt-in** (#412). `cups-browsed`,
+  `avahi-daemon` and `ipp-usb`, the Homebrew OEM unit, the WirePlumber rules
+  and `rhgb quiet` were applied to every image. They now need the recipe's
+  `extras` object or an `extras` entry in the image catalog, and are off for
+  an image fisherman does not know. A unit is enabled only when the
+  installed image has it. The running session's audio configuration is
+  changed only on live media. Every image of the shipped catalog keeps all
+  four.
+
 - **First-boot TPM2 enrolment never stages the user's passphrase** (#409,
   #360). The install adds a random key in its own LUKS keyslot (31) and
   stages only that, in the installed deployment's `/etc`. The unit retries

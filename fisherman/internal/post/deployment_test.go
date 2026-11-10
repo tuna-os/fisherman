@@ -149,16 +149,72 @@ func TestCreateUser_ComposeFsFixture(t *testing.T) {
 	assertNoStrays(t, fx)
 }
 
-func TestEnablePrintServices_Fixtures(t *testing.T) {
-	for name, fx := range fixtures(t) {
-		t.Run(name, func(t *testing.T) {
-			realFileCommands(t)
-			post.EnablePrintServices(fx.Path)
-			link := filepath.Join(fx.Etc, "systemd", "system", "multi-user.target.wants", "avahi-daemon.service")
-			if _, err := os.Lstat(link); err != nil {
-				t.Errorf("wants link in the deployment etc: %v", err)
-			}
-			assertNoStrays(t, fx)
-		})
+// tuna-os/fisherman#412: a unit is enabled only when the installed image has
+// it, and the log says what happened, never "enabled" for a unit that is
+// not there.
+func TestEnablePrintServices_OnlyUnitsTheImageHas(t *testing.T) {
+	fx := deploytest.Ostree(t)
+	realFileCommands(t)
+	unitDir := filepath.Join(fx.Root, "usr", "lib", "systemd", "system")
+	if err := os.WriteFile(filepath.Join(unitDir, "avahi-daemon.service"), nil, 0o644); err != nil {
+		t.Fatal(err)
 	}
+	wants := filepath.Join(fx.Etc, "systemd", "system", "multi-user.target.wants")
+
+	var enabled, missing []string
+	out := captureStdout(t, func() { enabled, missing = post.EnablePrintServices(fx.Path) })
+	if strings.Join(enabled, ",") != "avahi-daemon.service" ||
+		strings.Join(missing, ",") != "cups-browsed.service,ipp-usb.service" {
+		t.Errorf("enabled=%v missing=%v", enabled, missing)
+	}
+	if _, err := os.Lstat(filepath.Join(wants, "avahi-daemon.service")); err != nil {
+		t.Errorf("unit the image has is not enabled: %v", err)
+	}
+	for _, svc := range []string{"cups-browsed.service", "ipp-usb.service"} {
+		if _, err := os.Lstat(filepath.Join(wants, svc)); err == nil {
+			t.Errorf("%s enabled, but the image does not have it", svc)
+		}
+	}
+	if !strings.Contains(out, "Print services enabled: avahi-daemon.service; not in the image: cups-browsed.service, ipp-usb.service") {
+		t.Errorf("log:\n%s", out)
+	}
+	assertNoStrays(t, fx)
+}
+
+// An image with none of the units (centos-bootc, a server image): nothing is
+// enabled, no wants directory appears, and the step reports "skipped".
+func TestEnablePrintServices_ImageWithNoneIsSkipped(t *testing.T) {
+	fx := deploytest.Ostree(t)
+	realFileCommands(t)
+	var enabled []string
+	out := captureStdout(t, func() { enabled, _ = post.EnablePrintServices(fx.Path) })
+	if len(enabled) != 0 {
+		t.Errorf("enabled %v in an image that has none", enabled)
+	}
+	if _, err := os.Stat(filepath.Join(fx.Etc, "systemd", "system", "multi-user.target.wants")); err == nil {
+		t.Error("created a wants directory with nothing to enable")
+	}
+	if !strings.Contains(out, "Print services: skipped, the image has none of") || strings.Contains(out, "enabled:") {
+		t.Errorf("log:\n%s", out)
+	}
+}
+
+// composefs keeps /usr in its object store: the unit cannot be checked. The
+// step was asked for, so it enables, in the deployment etc, and says that it
+// did not check.
+func TestEnablePrintServices_ComposeFsIsUnchecked(t *testing.T) {
+	fx := deploytest.ComposeFs(t)
+	realFileCommands(t)
+	var enabled, missing []string
+	out := captureStdout(t, func() { enabled, missing = post.EnablePrintServices(fx.Path) })
+	if len(enabled) != 3 || len(missing) != 0 {
+		t.Errorf("enabled=%v missing=%v", enabled, missing)
+	}
+	if _, err := os.Lstat(filepath.Join(fx.Etc, "systemd", "system", "multi-user.target.wants", "avahi-daemon.service")); err != nil {
+		t.Errorf("wants link in the deployment etc: %v", err)
+	}
+	if !strings.Contains(out, "not checked: the image's /usr cannot be read on a composefs target") {
+		t.Errorf("log does not say the units were not checked:\n%s", out)
+	}
+	assertNoStrays(t, fx)
 }

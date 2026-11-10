@@ -112,40 +112,60 @@ func normalizeVendor(raw string) string {
 	return vendorMap[strings.ToLower(strings.TrimSpace(raw))]
 }
 
-// InstallOEMPackages detects the hardware vendor and writes a first-boot
-// systemd user service that installs vendor-specific packages via brew.
-// Also enables any required system services in the target.
-// Sets the vendor's logo as the shell menu icon for hardware confidence.
+// InstallOEMPackages detects the hardware vendor and writes a first-login
+// systemd user service that installs vendor-specific packages with brew
+// (the casks are from the ublue-os tap), enables the vendor's system service
+// when the image has it, and sets the vendor's logo as the shell menu icon.
+//
+// It is a product step: it assumes an image with Homebrew and a GNOME
+// extension, so the install runs it only when the recipe or the image
+// catalog asks (extras.oemSetup), never for an unknown image (#412).
+//
 // distroID is used to name paths/services (defaults to "bootc" if empty).
 // brewTap is an optional Homebrew tap to add before installing packages.
-// Non-fatal: always returns nil (best-effort).
+// It logs what it did, or "skipped" when the hardware has no OEM setup.
 func InstallOEMPackages(target, distroID, brewTap string) error {
 	if distroID == "" {
 		distroID = "bootc"
 	}
 	raw := detectVendor()
 	vendor := normalizeVendor(raw)
+	did := false
 
 	if vendor != "" {
 		pkgs, hasPkgs := vendorPackages[vendor]
-		svcs, hasSvcs := vendorServices[vendor]
+		svcs := vendorServices[vendor]
 
 		// Write a first-boot systemd user service that installs brew packages.
 		if hasPkgs && len(pkgs) > 0 {
 			if err := writeOEMBrewService(target, vendor, pkgs, distroID, brewTap); err != nil {
 				return fmt.Errorf("writing OEM brew service: %w", err)
 			}
+			did = true
 		}
 
-		// Enable system-level services (e.g. asusd) in the target.
-		if hasSvcs {
-			for _, svc := range svcs {
-				enableSystemService(target, svc)
+		// Enable system-level services (e.g. asusd), when the image has them.
+		var enabled, missing []string
+		for _, svc := range svcs {
+			switch enableSystemService(target, svc) {
+			case unitEnabled, unitEnabledUnchecked:
+				enabled = append(enabled, svc)
+			case unitMissing:
+				missing = append(missing, svc)
+			case unitFailed:
+				// already logged
 			}
 		}
 
-		progress.Info(fmt.Sprintf("OEM setup for %s: %d packages queued, %d services enabled",
-			vendor, len(pkgs), len(svcs)))
+		if hasPkgs || len(svcs) > 0 {
+			msg := fmt.Sprintf("OEM setup for %s: %d packages queued, %d services enabled",
+				vendor, len(pkgs), len(enabled))
+			if len(missing) > 0 {
+				msg += "; not in the image: " + strings.Join(missing, ", ")
+			}
+			progress.Info(msg)
+			did = did || len(enabled) > 0
+		}
 	}
 
 	// Set menu icon. Priority: sub-brand > vendor > NVIDIA GPU > ARM arch.
@@ -166,20 +186,28 @@ func InstallOEMPackages(target, distroID, brewTap string) error {
 		}
 	}
 
-	if iconVendor == "" {
-		return nil
-	}
-
 	if icon, ok := vendorMenuIcons[iconVendor]; ok {
-		if err := installVendorIcon(target, iconVendor); err != nil {
+		installed, err := installVendorIcon(target, iconVendor)
+		switch {
+		case err != nil:
 			progress.Info(fmt.Sprintf("Warning: could not install icon for %s: %v", iconVendor, err))
+		case !installed:
+			// No icon file in the image and none installed: an override
+			// would name an icon that does not exist.
+			progress.Info(fmt.Sprintf("Menu icon for %s: skipped, the icon cannot be added to this image", iconVendor))
+		default:
+			if err := writeMenuIconOverride(target, icon); err != nil {
+				progress.Info(fmt.Sprintf("Warning: could not set menu icon for %s: %v", iconVendor, err))
+			} else {
+				progress.Info(fmt.Sprintf("Menu icon set to %s", icon))
+				did = true
+			}
 		}
-		if err := writeMenuIconOverride(target, icon); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not set menu icon for %s: %v", iconVendor, err))
-		}
-		progress.Info(fmt.Sprintf("Menu icon set to %s", icon))
 	}
 
+	if !did {
+		progress.Info("OEM setup: skipped, nothing applies to this hardware")
+	}
 	return nil
 }
 
@@ -294,20 +322,41 @@ WantedBy=default.target
 	return nil
 }
 
-// enableSystemService enables a systemd system service in the target.
-func enableSystemService(target string, service string) {
-	// Create a symlink in the deployment's multi-user.target.wants.
+// unitResult is what enableSystemService did.
+type unitResult int
+
+const (
+	// unitFailed: the wants link could not be written (already logged).
+	unitFailed unitResult = iota
+	// unitMissing: the installed image does not have the unit; not enabled.
+	unitMissing
+	// unitEnabled: the image has the unit and it is enabled.
+	unitEnabled
+	// unitEnabledUnchecked: enabled, but the image's /usr could not be
+	// inspected (composefs), so the unit may not exist.
+	unitEnabledUnchecked
+)
+
+// enableSystemService enables a systemd system service in the installed
+// system, in the deployment's /etc, and only when the installed image has
+// the unit (#412: the links were written for every image, and the log said
+// "enabled" for units that did not exist).
+func enableSystemService(target string, service string) unitResult {
 	d, err := ResolveDeployment(target)
 	if err != nil {
 		progress.Info(fmt.Sprintf("Warning: could not enable %s: %v", service, err))
-		return
+		return unitFailed
+	}
+	present, known := d.HasUnit(service)
+	if known && !present {
+		return unitMissing
 	}
 	etcDir := d.Etc
 
 	wantsDir := filepath.Join(etcDir, "systemd", "system", "multi-user.target.wants")
 	if err := os.MkdirAll(wantsDir, 0o755); err != nil {
 		progress.Info(fmt.Sprintf("Warning: could not create wants dir for %s: %v", service, err))
-		return
+		return unitFailed
 	}
 
 	// Symlink to the unit file in /usr/lib/systemd/system/
@@ -319,8 +368,13 @@ func enableSystemService(target string, service string) {
 		// Fallback: use runner to create the symlink (handles permission issues)
 		if err2 := runner.Run("ln", "-sf", unitTarget, link); err2 != nil {
 			progress.Info(fmt.Sprintf("Warning: could not enable %s: %v", service, err2))
+			return unitFailed
 		}
 	}
+	if !known {
+		return unitEnabledUnchecked
+	}
+	return unitEnabled
 }
 
 // writeMenuIconOverride writes a dconf override that sets the custom-command-menu

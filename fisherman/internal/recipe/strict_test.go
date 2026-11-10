@@ -36,6 +36,8 @@ func TestUnknownFieldsPaths(t *testing.T) {
 		{"slurp users", `{"slurp":{"sourcePartition":"/dev/sda3","users":[{"name":"a","cats":[]}]}}`,
 			[]string{"slurp.users[0].cats"}},
 		{"sorted, all reported", `{"zz":1,"aa":2,"user":{"x":1}}`, []string{"aa", "user.x", "zz"}},
+		{"a misspelt extra is not dropped", `{"extras":{"printServices":true,"printService":true}}`,
+			[]string{"extras.printService"}},
 		// encoding/json matches keys without regard to case, so these are
 		// applied, not dropped, and are not "unknown".
 		{"case-insensitive like the decoder", `{"Hostname":"a","ENCRYPTION":{"Type":"none"}}`, nil},
@@ -89,7 +91,8 @@ func TestFrontendRecipeKeysAreKnown(t *testing.T) {
 		"schema-only and embedder keys": `{"brewTap":"o/n","genericImage":true,"luksMapperName":"m",
 			"slurp":{"sourcePartition":"/dev/sda3","users":[{"name":"n","categories":["Documents"]}]},
 			"slurpWallpapers":true,"targetMount":"/mnt/t","zfsPoolName":"rpool",
-			"copyNetworkProfiles":true,"copyBluetoothPairings":false}`,
+			"copyNetworkProfiles":true,"copyBluetoothPairings":false,
+			"extras":{"printServices":true,"oemSetup":true,"audioNames":true,"bootSplash":true}}`,
 	}
 	for name, raw := range recipes {
 		if ps := UnknownFields([]byte(raw)); len(ps) > 0 {

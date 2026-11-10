@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/tuna-os/fisherman/internal/images"
+	"github.com/tuna-os/fisherman/internal/recipe"
 )
 
 const (
@@ -120,6 +121,9 @@ func printNodeDetail(r *images.NodeResult, catalog *images.Catalog, defaultImg s
 		} else {
 			fmt.Printf("Needs user creation: no\n")
 		}
+		if resolved.Extras != nil {
+			fmt.Printf("Extras: %s\n", extrasText(resolved.Extras))
+		}
 		if resolved.SearchExtra != "" {
 			fmt.Printf("Search keywords: %s\n", resolved.SearchExtra)
 		}
@@ -173,6 +177,9 @@ func printNodeDetail(r *images.NodeResult, catalog *images.Catalog, defaultImg s
 	}
 	if resolved.Flatpaks != "" {
 		fmt.Printf("  %sflatpaks:%s %s\n", dim, reset, resolved.Flatpaks)
+	}
+	if resolved.Extras != nil {
+		fmt.Printf("  %sextras:%s  %s\n", dim, reset, extrasText(resolved.Extras))
 	}
 	if resolved.SearchExtra != "" {
 		fmt.Printf("  %skeywords:%s %s%s%s\n", dim, reset, dim, resolved.SearchExtra, reset)
@@ -237,4 +244,18 @@ func printNode(n *images.Node, prefix string, last bool, defaultImg string, plai
 		childLast := i == len(n.Children)-1
 		printNode(child, childPrefix, childLast, defaultImg, plain)
 	}
+}
+
+// extrasText lists the desktop extras a catalog entry turns on.
+func extrasText(e *images.Extras) string {
+	on := recipe.Extras{
+		PrintServices: e.PrintServices,
+		OEMSetup:      e.OEMSetup,
+		AudioNames:    e.AudioNames,
+		BootSplash:    e.BootSplash,
+	}.Names()
+	if len(on) == 0 {
+		return "none"
+	}
+	return strings.Join(on, ", ")
 }

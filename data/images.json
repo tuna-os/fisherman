@@ -16,6 +16,12 @@
       "registry": "ghcr.io/ublue-os/aurora",
       "flatpaks": "@aurora_brew",
       "search_extra": "universal blue ublue aurora kde plasma",
+      "extras": {
+        "printServices": true,
+        "oemSetup": true,
+        "audioNames": true,
+        "bootSplash": true
+      },
       "children": [
         {
           "name": "Aurora DX",
@@ -101,6 +107,12 @@
     {
       "name": "Bazzite",
       "search_extra": "universal blue ublue bazzite gaming steam",
+      "extras": {
+        "printServices": true,
+        "oemSetup": true,
+        "audioNames": true,
+        "bootSplash": true
+      },
       "children": [
         {
           "name": "GNOME Desktop",
@@ -772,6 +784,12 @@
           "description": "Bluefin uses bootc for atomic, container-native OS updates from GHCR."
         }
       ],
+      "extras": {
+        "printServices": true,
+        "oemSetup": true,
+        "audioNames": true,
+        "bootSplash": true
+      },
       "children": [
         {
           "name": "Dakota",
@@ -856,6 +874,12 @@
     {
       "name": "Frostyard",
       "search_extra": "frostyard snow debian composefs systemd-boot",
+      "extras": {
+        "printServices": true,
+        "oemSetup": true,
+        "audioNames": true,
+        "bootSplash": true
+      },
       "children": [
         {
           "name": "Snow",
@@ -882,6 +906,12 @@
     {
       "name": "TunaOS",
       "search_extra": "tunaos tuna",
+      "extras": {
+        "printServices": true,
+        "oemSetup": true,
+        "audioNames": true,
+        "bootSplash": true
+      },
       "children": [
         {
           "name": "Albacore",
@@ -1306,6 +1336,12 @@
       "name": "Zirconium",
       "search_extra": "zirconium fedora",
       "icon": "org.gnome.Software",
+      "extras": {
+        "printServices": true,
+        "oemSetup": true,
+        "audioNames": true,
+        "bootSplash": true
+      },
       "children": [
         {
           "name": "Zirconium",
@@ -1379,6 +1415,12 @@
       "name": "Ubuntu",
       "search_extra": "ubuntu canonical desktop gnome",
       "icon": "org.gnome.Software",
+      "extras": {
+        "printServices": true,
+        "oemSetup": true,
+        "audioNames": true,
+        "bootSplash": true
+      },
       "children": [
         {
           "name": "26.04 Desktop",

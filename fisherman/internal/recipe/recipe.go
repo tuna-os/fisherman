@@ -128,6 +128,50 @@ type Recipe struct {
 	// CopyBluetoothPairings is the same choice for the host's Bluetooth
 	// pairings (/var/lib/bluetooth, which holds the link keys).
 	CopyBluetoothPairings *bool `json:"copyBluetoothPairings,omitempty"`
+	// Extras turns on the desktop and product steps of the post-install
+	// stage. Each is off unless asked for. Absent (null): fisherman looks
+	// the image up in its catalog (data/images.json, key "extras") and uses
+	// that entry's values; an image the catalog does not know gets none.
+	// An object, {} included, is used exactly as given.
+	Extras *Extras `json:"extras,omitempty"`
+}
+
+// Extras are the post-install steps that suit a desktop product image and
+// are wrong for an image fisherman knows nothing about (a server image, a
+// base image). See the README, "Desktop extras".
+type Extras struct {
+	// PrintServices enables cups-browsed, avahi-daemon and ipp-usb, each
+	// only when the installed image has the unit.
+	PrintServices bool `json:"printServices,omitempty"`
+	// OEMSetup writes the first-login unit that installs vendor packages
+	// with Homebrew (ublue-os tap), enables the vendor's system service
+	// when the image has it, and sets a vendor menu icon.
+	OEMSetup bool `json:"oemSetup,omitempty"`
+	// AudioNames writes WirePlumber rules with friendly device names into
+	// the installed system, and applies them to the running session when
+	// the host is live media.
+	AudioNames bool `json:"audioNames,omitempty"`
+	// BootSplash adds `rhgb quiet` to every boot entry.
+	BootSplash bool `json:"bootSplash,omitempty"`
+}
+
+// Names lists the extras that are on, in a fixed order, for a log line.
+func (e Extras) Names() []string {
+	var on []string
+	for _, x := range []struct {
+		name string
+		on   bool
+	}{
+		{"printServices", e.PrintServices},
+		{"oemSetup", e.OEMSetup},
+		{"audioNames", e.AudioNames},
+		{"bootSplash", e.BootSplash},
+	} {
+		if x.on {
+			on = append(on, x.name)
+		}
+	}
+	return on
 }
 
 // FollowLive resolves an optional yes/no recipe field whose default follows

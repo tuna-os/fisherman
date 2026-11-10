@@ -66,7 +66,7 @@ fisherman is a Go CLI that reads a JSON recipe and runs an install pipeline. The
 | Install OS | `bootc install to-filesystem --skip-finalize` through `podman run --privileged` | always |
 | Enrol TPM2 | add a single-use keyslot, stage the first-boot unit that binds the LUKS volume to the TPM, and emit the recovery key | TPM recipes |
 | Copy Flatpaks | copy the host's system Flatpak installation to the target | always; copies nothing when `flatpaks` is `[]` |
-| Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi profiles and Bluetooth pairings copied from the host (live media, or on request), audio names, OEM extras, print services | always |
+| Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi profiles and Bluetooth pairings copied from the host (live media, or on request), and the [desktop extras](#desktop-extras) the recipe or the catalog turns on | always |
 | Finalize | fstrim → remount read-only → fsfreeze, then thaw | always (skipped on ZFS) |
 
 The separate ext4 `/boot` partition is required for GRUB because GRUB cannot read modern XFS features (`nrext64`, `exchange`, `rmapbt`). For composefs/systemd-boot images the EFI partition holds the kernel and initrd directly.
@@ -159,6 +159,7 @@ Things a recipe author should know today:
 - `varDisk` is not encrypted, even when the root is (#406).
 - There is no field for locale, keyboard layout or time zone (#405).
 - The host's Wi-Fi profiles and Bluetooth pairings are copied to the target only when the host booted from live media. `"copyNetworkProfiles"` and `"copyBluetoothPairings"` (`true` or `false`) override that for each kind. On an installed host the default is not to copy: the keys are the operator's.
+- Print services, the OEM setup unit, friendly audio names and `rhgb quiet` are applied only when the recipe's `extras` or the image catalog turns them on. See [Desktop extras](#desktop-extras).
 - fisherman builds no caches in the target. The image must carry its font, icon, schema and linker caches.
 
 **Encryption types:** `none`, `luks-passphrase`, `tpm2-luks`, `tpm2-luks-passphrase`
@@ -220,6 +221,34 @@ image picker. fisherman looks for the catalog in this order:
 A frontend can ship its own catalog; bootc-installer reads
 `/etc/bootc-installer/images.json` (see its
 [customising guide](https://github.com/tuna-os/bootc-installer/blob/dev/docs/guide/customising.md)).
+
+### Desktop extras
+
+Four post-install steps suit a desktop product image and are wrong for an
+image fisherman knows nothing about. They are off unless something turns
+them on.
+
+| `extras` key | Step |
+|---|---|
+| `printServices` | Enable `cups-browsed`, `avahi-daemon` and `ipp-usb`. Each unit only when the installed image has it. |
+| `oemSetup` | Write the first-login unit that installs vendor packages with Homebrew (`ublue-os/tap`), enable the vendor's service when the image has it, and set a vendor menu icon. |
+| `audioNames` | Write WirePlumber rules with friendly device names to the installed system. On live media, also apply them to the running session. |
+| `bootSplash` | Add `rhgb quiet` to every boot entry. |
+
+The decision, in this order:
+
+1. The recipe's `extras` object. fisherman uses it exactly as given; `{}` turns all four off.
+2. With no `extras` in the recipe, the catalog entry of the image. fisherman looks up the recipe's `targetImgref` and `image` (and the live image) in `/etc/bootc-installer/images.json`, `/etc/tuna-installer/images.json` and then the paths above. A node's `extras` object applies to its children; a child's own object replaces it whole.
+3. Otherwise none. The log says `Desktop extras: none (…)`.
+
+Every entry of the shipped catalog has all four on, because every install
+did all four before the field existed. An image that is not in a catalog
+(`centos-bootc`, a server image, your own build) gets none of them unless
+its recipe asks.
+
+A frontend that builds a recipe from a catalog entry should copy that
+entry's inherited `extras` object into the recipe. Then the result does not
+depend on which catalog fisherman can find on the host.
 
 ## Building
 

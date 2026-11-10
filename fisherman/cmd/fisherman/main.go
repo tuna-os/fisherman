@@ -477,11 +477,31 @@ func main() {
 	totalSteps := len(profile)
 	step := 1
 
+	// ── Desktop extras ───────────────────────────────────────────────────
+	// Print services, the OEM brew unit, friendly audio names and the boot
+	// splash suit a desktop product image. They are off unless the recipe
+	// (`extras`) or the image catalog turns them on (#412).
+	extraRefs := []string{r.TargetImgref, r.Image, live.LiveImage}
+	if mediaInput != nil {
+		extraRefs = append(extraRefs, mediaInput.TargetImgref, mediaInput.Image)
+	}
+	extras, extrasLine := resolveExtras(r, extraRefs...)
+	progress.Info(extrasLine)
+
+	// hostIsLive: the host booted from live media. Asked at most once.
+	hostIsLive := liveOnce(live)
+
 	// ── Immediate: Apply friendly audio names to live session ─────────────
-	// Detect hardware, rename ugly ALSA names, hide S/PDIF etc. Takes effect
-	// immediately via WirePlumber restart. Non-fatal.
-	if err := post.ApplyAudioConfigLive(); err != nil {
-		progress.Info(fmt.Sprintf("Live audio config skipped: %v", err))
+	// Detect hardware, rename ugly ALSA names, hide S/PDIF etc. This changes
+	// the RUNNING session (the user's WirePlumber configuration and the
+	// host's /etc/wireplumber), so it runs only on live media, where that
+	// session is the installer's own. Non-fatal.
+	if extras.AudioNames {
+		if !hostIsLive() {
+			progress.Info("Live audio config: skipped, this host is not live media and its session is not the installer's to change")
+		} else if err := post.ApplyAudioConfigLive(); err != nil {
+			progress.Info(fmt.Sprintf("Live audio config skipped: %v", err))
+		}
 	}
 
 	// ── Pre-partition: Wallpaper slurp (easter egg) ──────────────────────────
@@ -991,13 +1011,18 @@ func main() {
 		}
 	}
 
-	// Ensure rhgb and quiet are in every BLS loader entry so Plymouth shows
-	// the graphical boot splash. Non-fatal: the system boots fine without it.
-	n, err := post.EnsurePlymouthArgs(activeTargetMount)
-	if err != nil {
-		progress.Info(fmt.Sprintf("Warning: could not set Plymouth kernel args: %v", err))
-	} else if n > 0 {
-		progress.Info(fmt.Sprintf("Added Plymouth boot args to %d loader entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+	// rhgb and quiet in every BLS loader entry, for the graphical boot
+	// splash: only for an image that asks (extras.bootSplash). Another
+	// image keeps the kernel arguments it ships. Non-fatal.
+	if extras.BootSplash {
+		n, err := post.EnsurePlymouthArgs(activeTargetMount)
+		if err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not set Plymouth kernel args: %v", err))
+		} else if n > 0 {
+			progress.Info(fmt.Sprintf("Added Plymouth boot args to %d loader entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+		} else {
+			progress.Info("Plymouth boot args: already in every loader entry")
+		}
 	}
 
 	// Inject rd.luks.name=<UUID>=root into every BLS entry so the initrd
@@ -1016,18 +1041,16 @@ func main() {
 	// Wi-Fi profiles and Bluetooth pairings hold secrets (passwords, link
 	// keys). They follow the user from live media to the disk; from any
 	// other host they are copied only when the recipe asks (#411).
-	copyHostSecrets(activeTargetMount, r, func() bool {
-		if live.IsLive {
-			return true
-		}
-		return hostLive().IsLive
-	})
+	copyHostSecrets(activeTargetMount, r, hostIsLive)
 
 	// Generate friendly audio device names and hide useless outputs (S/PDIF,
-	// Pro Audio, monitor loopbacks). Writes WirePlumber rules to /etc/ so no
-	// GNOME extensions are needed. Non-fatal.
-	if err := post.GenerateAudioConfig(activeTargetMount); err != nil {
-		progress.Info(fmt.Sprintf("Warning: could not configure audio devices: %v", err))
+	// Pro Audio, monitor loopbacks). Writes WirePlumber rules to the
+	// deployment's /etc. Only for an image that asks (extras.audioNames).
+	// Non-fatal.
+	if extras.AudioNames {
+		if err := post.GenerateAudioConfig(activeTargetMount); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not configure audio devices: %v", err))
+		}
 	}
 
 	// Inject slurped Windows data into the installed system's /var (the one
@@ -1054,15 +1077,20 @@ func main() {
 	}
 
 	// Detect OEM hardware (ASUS, Framework) and queue vendor-specific packages
-	// for first-login install via brew. Also enables required system services. Non-fatal.
-	if err := post.InstallOEMPackages(activeTargetMount, r.DistroID, r.BrewTap); err != nil {
-		progress.Info(fmt.Sprintf("Warning: OEM package setup: %v", err))
+	// for first-login install via brew; enable the vendor's service when the
+	// image has it. Only for an image that asks (extras.oemSetup). Non-fatal.
+	if extras.OEMSetup {
+		if err := post.InstallOEMPackages(activeTargetMount, r.DistroID, r.BrewTap); err != nil {
+			progress.Info(fmt.Sprintf("Warning: OEM package setup: %v", err))
+		}
 	}
 
-	// Enable print auto-discovery services (cups-browsed, avahi-daemon, ipp-usb)
-	// so USB and network printers are found on first boot without configuration.
-	// Non-fatal: services are skipped if their unit files are absent from the image.
-	post.EnablePrintServices(activeTargetMount)
+	// Print auto-discovery (cups-browsed, avahi-daemon, ipp-usb): only for an
+	// image that asks (extras.printServices), and each unit only when the
+	// installed image has it.
+	if extras.PrintServices {
+		post.EnablePrintServices(activeTargetMount)
+	}
 
 	// No cache warming and no thumbnail generation here: the image's /usr is
 	// read-only (and, on ostree, hard-linked into the repository), its caches
