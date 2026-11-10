@@ -86,14 +86,17 @@ type Recipe struct {
 	Slurp *SlurpSpec `json:"slurp,omitempty"`
 	// TargetMount overrides the host path where fisherman assembles the
 	// target filesystem hierarchy. Defaults to "/mnt/fisherman-target".
-	// Use this to run multiple installs in parallel on the same host
-	// (e.g. CI matrix on a single runner) without colliding mount points.
+	// Use it when the default path is taken on the host. It does not make
+	// two installs safe side by side: they share the scratch directory, and
+	// a second install on one host is refused by the install lock
+	// (cmd/fisherman/lock.go).
 	TargetMount string `json:"targetMount,omitempty"`
 	// LuksMapperName overrides the cryptsetup mapper name used for the
-	// LUKS root device. Defaults to "fisherman-root". Like TargetMount,
-	// this is intended primarily for parallel test runs — production
-	// installs should leave it at the default since the same name is
-	// hard-coded into installed system kernel cmdlines (rd.luks.name).
+	// LUKS root device. Defaults to "fisherman-root". Like TargetMount, it
+	// is for a host where the default name is taken, not for parallel
+	// installs. Production installs should leave it at the default since
+	// the same name is hard-coded into installed system kernel cmdlines
+	// (rd.luks.name).
 	LuksMapperName string `json:"luksMapperName,omitempty"`
 	// DistroID is a short lowercase identifier for the distribution, used
 	// to name OEM setup paths and service files written to the target

@@ -102,8 +102,9 @@ const (
 
 	// Install-only: reported in the install's error event, not by validate,
 	// which needs no root and does not look for host tools.
-	CodeNotRoot         = "not_root"
-	CodeHostToolMissing = "host_tool_missing"
+	CodeNotRoot               = "not_root"
+	CodeHostToolMissing       = "host_tool_missing"
+	CodeInstallAlreadyRunning = "install_already_running"
 )
 
 // Filesystems is the set of root filesystems the auto-partition path can

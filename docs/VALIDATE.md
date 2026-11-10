@@ -416,6 +416,7 @@ does: it needs no root.
 | Code | Field | Cause | Fix |
 |---|---|---|---|
 | `not_root` | (none) | The install did not run as root | Run fisherman through `pkexec` or `sudo` |
+| `install_already_running` | (none) | Another fisherman install holds the host-wide install lock (`/run/lock/fisherman-install.lock`). Two installs on one host share the scratch directory, so the second is refused before it reads its recipe. The message names the other process | Wait for the other install, or cancel it. A lock file left by a dead process does not block: the kernel drops the lock with the process |
 | `host_tool_missing` | (none) | A program the install of this recipe runs is not on the host. The message names it and its package | Install the package on the host |
 
 The host-tool list comes from the recipe. The auto layout needs `sfdisk`,

@@ -344,6 +344,15 @@ func main() {
 				"`fisherman validate` and `fisherman probe` need no root"})
 	}
 
+	// One install per host at a time; see acquireInstallLock.
+	if err := acquireInstallLock(); err != nil {
+		if errors.Is(err, errInstallRunning) {
+			fatalProblem("cannot install", recipe.Problem{Code: recipe.CodeInstallAlreadyRunning,
+				Message: err.Error() + "; wait for it to finish, or cancel it, then start this install again"})
+		}
+		fatal("cannot take the install lock %s: %v", installLockPath, err)
+	}
+
 	r, err := loadRecipe(os.Args[1])
 	if err != nil {
 		fatalLoad(err)

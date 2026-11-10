@@ -220,7 +220,10 @@ empty`. An empty `image` on a host that did not boot from live media is
 key fisherman does not know is `loading recipe: unknown recipe field …`
 (`code` `recipe_unknown_field`). A run that is not root is `cannot install:
 fisherman must run as root …` (`code` `not_root`); it is refused before the
-recipe is read. A disk that is not an eligible target is `invalid recipe:
+recipe is read. A second install on a host where one is running is `cannot
+install: another fisherman install is running on this host (process N); …`
+(`code` `install_already_running`); it too is refused before the recipe is
+read, and it touches nothing the running install owns. A disk that is not an eligible target is `invalid recipe:
 disk … ` with one of the `disk_*` codes
 ([VALIDATE.md](VALIDATE.md#target-eligibility)). A missing host program is
 `missing required host tool: "mkfs.xfs" not found on the host; install the
