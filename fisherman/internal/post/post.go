@@ -775,20 +775,11 @@ func EnablePrintServices(target string) {
 // AppendFstabEntry appends an fstab entry to the installed system at target.
 // Works for both composefs-native and ostree-based deployments.
 func AppendFstabEntry(target, uuid, mountpoint, fstype, options string) error {
-	var etcDir string
-	if isComposeFsNative(target) {
-		var err error
-		etcDir, err = ComposeFsDeployEtcDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding composefs deploy etc for fstab: %w", err)
-		}
-	} else {
-		deployDir, err := DeploymentDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding deployment dir for fstab: %w", err)
-		}
-		etcDir = filepath.Join(deployDir, "etc")
+	d, err := ResolveDeployment(target)
+	if err != nil {
+		return fmt.Errorf("finding the deployment for fstab: %w", err)
 	}
+	etcDir := d.Etc
 	if err := os.MkdirAll(etcDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", etcDir, err)
 	}

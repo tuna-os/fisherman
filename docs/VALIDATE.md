@@ -200,7 +200,8 @@ A rule runs when its key is present:
 | `encryption` | encryption type, passphrase |
 | `bootloader` | bootloader |
 | `imageType` | imageType |
-| `customMounts` | each entry's target (not its partition) |
+| `customMounts` | each entry's target (not whether its partition exists), and the persistence rules: a target named once, a partition path named once (paths are compared as text; the full mode also follows symlinks), a data mount the installed system can mount again. `composeFsBackend` counts as false when absent |
+| `varDisk` | its combinations with `encryption.type`, `composeFsBackend` and `filesystem: zfs` (absent ones count as none / false). Not the disk itself |
 | `targetMount` | targetMount |
 | `flatpakVarPath` | flatpakVarPath |
 | `zfsPoolName` | zfsPoolName |
@@ -208,7 +209,8 @@ A rule runs when its key is present:
 | `additionalImageStores` | each entry's path syntax (not whether it exists) |
 | `override` | override |
 
-Everything else (`disk`, the `customMounts` partitions, `varDisk`, the TPM)
+Everything else (`disk`, whether the `customMounts` partitions and the
+`varDisk` disk exist and are eligible, the TPM)
 is ignored in partial mode: those read the machine, and the full mode checks
 them. Keys fisherman does not know are ignored too
 ([Unknown keys](#unknown-keys)).
@@ -249,12 +251,17 @@ holds both fields.
 | `customMounts[i].fstype` | one of `fat32`, `ext3`, `ext4`, `xfs`, `btrfs`, `swap`, `unformatted`, `""` | `custom_mount_fstype_unsupported` |
 | `customMounts[i].target` | `""`, `swap`, or an absolute path with no `..` component. It is appended to `targetMount`, so `/../../etc` would mount the partition over the host's `/etc` and a relative `etc` would land beside the target. | `custom_mount_target_invalid` |
 | `customMounts` | one entry targets `/` | `custom_mounts_no_root` |
+| `customMounts[i].target` | no other entry has the same mountpoint (`/boot` and `/boot/` are the same) | `custom_mount_target_duplicate` |
+| `customMounts[i].partition` | no other entry names the same device. A symlink (`/dev/disk/by-id/…`) to a device already named counts. | `custom_mount_partition_duplicate` |
+| `customMounts[i].target` | a data mount (any target except `""`, `swap`, `/`, `/boot`, `/boot/efi`) is one the installed system can mount again: `/var`, a path below `/var`, or `/home`, `/root`, `/srv`, `/opt`, `/mnt`, `/media`, `/usr/local` and paths below them. With `composeFsBackend` it is a path below `/var`, not `/var` itself (#252). See [Mounts after the install](#mounts-after-the-install). | `custom_mount_not_persistable` |
 | `customMounts` | one entry targets `/boot/efi` (the EFI system partition). bootc writes the boot loader there, and the install reads that entry to find the EFI boot entry. | `custom_mounts_no_esp` |
 | `customMounts` | for GRUB (`bootloader` `""` or `grub2`) with a root of fstype `xfs`: one entry targets `/boot`, and its fstype is not `xfs`. GRUB cannot read modern XFS features; the auto layout always makes an ext4 `/boot` for the same reason. A root kept as it is (`unformatted`) is not judged. | `custom_mounts_no_boot` |
 | `targetMount` | empty is valid (`/mnt/fisherman-target`). Otherwise an absolute path with no `..` component that is not `/`: the root filesystem is mounted there and every post-install write goes under it. | `target_mount_invalid` |
 | `flatpakVarPath` | empty is valid (auto-detect). Otherwise no `..` component: it is joined under the installed root for the flatpak copy. | `flatpak_var_path_invalid` |
 | `varDisk.disk` | required, exists, differs from `disk` (also when the two paths are different names for one device) | `var_disk_required`, `var_disk_not_found`, `var_disk_same_as_disk` |
 | `varDisk.disk` | a whole disk that does not hold the running system and is writable. Full mode only. | `var_disk_not_disk`, `var_disk_boot_disk`, `var_disk_read_only`, `var_disk_unverified` |
+| `varDisk` | not set on a composefs-native target (`composeFsBackend`, or `filesystem: zfs`, which forces composefs). The initramfs mounts the deployment's own `/var` there, so the separate disk would not be used ([#252](https://github.com/tuna-os/fisherman/issues/252)). | `var_disk_unsupported_composefs` |
+| `varDisk` | not set with an encrypted `encryption.type`. fisherman has no LUKS step for the `/var` disk: `/var`, and `/var/home` on it, would be plain text beside an encrypted root ([#406](https://github.com/tuna-os/fisherman/issues/406)). | `var_disk_encryption_unsupported` |
 | `image` | non-empty unless this host booted from live media (probe's `live.is_live`), where empty means "install the running live image". Full mode only. | `image_required` |
 | `imageType` | `""` or `bootc` | `image_type_unsupported` |
 | `bootloader` | `""`, `grub2` or `systemd` | `bootloader_unsupported` |
@@ -265,6 +272,53 @@ Not fisherman rules, and left to the frontend: the password itself (fisherman
 accepts an empty one, which leaves the account locked), "password and
 confirmation match", whether a user is required for the chosen image
 (`needs_user_creation`), and password strength.
+
+## Mounts after the install
+
+A `varDisk`, and every `customMounts` entry, is mounted for the install. This
+table says what the installed system has after the reboot.
+
+| Entry | During the install | On the installed system |
+|---|---|---|
+| target `/`, `/boot`, `/boot/efi` | formatted (unless kept) and mounted | bootc and the boot loader make these persistent. fisherman writes no fstab line for them. |
+| target `""` | nothing | nothing |
+| target `swap`, fstype `swap` | `mkswap`, `swapon` | fstab: `UUID=… none swap defaults,nofail` |
+| a data mount: any other target | formatted (unless kept) and mounted | fstab: `UUID=… <mountpoint> <type> defaults,nofail,x-systemd.device-timeout=30s` |
+| `varDisk` | formatted XFS with label `var` (unless kept) and mounted | fstab, as a data mount at `/var`, plus `x-systemd.before=local-fs.target` |
+
+- The filesystem type and the UUID in the fstab line come from `blkid`. A kept
+  disk with ext4 gets an ext4 line.
+- `nofail` and the device timeout mean that a missing disk delays the boot for
+  30 seconds. It does not end the boot in emergency mode.
+- The fstab line goes into the `/etc` of the deployment, on ostree and on
+  composefs-native targets.
+- The mountpoint in the fstab line is the target as the installed image
+  resolves it. On an image where `/home` is a symlink to `var/home`, the line
+  for target `/home` names `/var/home`. A composefs-native deployment has no
+  root filesystem to resolve in at install time, so there the recipe must
+  name the `/var/…` path.
+- The post-install steps write the user's home and the Flatpaks to the device
+  that the first boot mounts. A separate `/var` (a `varDisk`, or a manual
+  `/var` partition) is the `/var` those steps use. With no separate `/var`,
+  fisherman mounts a device for a path below `/var` a second time, on the
+  deployment's `var` directory, after bootc installs the image.
+- fisherman does not replace an fstab line of the image. If the image's fstab
+  mounts another device at the same mountpoint, the install fails.
+- A second run on the same deployment adds no second line.
+
+The install stops, after bootc ran, when it cannot keep that promise:
+`blkid` reports no UUID or type for the device, the resolved mountpoint is
+not below `/var` and is not a directory of the image, the image's fstab
+conflicts, or an ostree image discards `/etc` at every boot
+(`[etc] transient = true` in `prepare-root.conf`). These failures carry no
+code: only the installed image shows them.
+
+Before any disk work, the install also checks each device that the recipe
+keeps as it is (`varDisk.keepExisting`, or a mounted `customMounts` entry
+with fstype `unformatted` or `""`). `blkid` must find a filesystem on it that
+can be mounted; for `/var` that is xfs, ext4, btrfs or another POSIX
+filesystem. If not, the install fails with `kept_filesystem_unusable`
+([Install only](#install-only)).
 
 ## Encryption choices: `data/encryption-choices.json`
 
@@ -333,6 +387,11 @@ This section maps error codes to their causes and corrective actions. Each code 
 | `var_disk_required` | `varDisk.disk` | No `/var` disk specified when `varDisk` is used | Add `"varDisk": {"disk": "/dev/sdY"}` |
 | `var_disk_not_found` | `varDisk.disk` | The `/var` disk path does not exist | Check the disk path |
 | `var_disk_same_as_disk` | `varDisk.disk` | The `/var` disk is the same as the root disk | Use a different disk for `/var` |
+| `var_disk_unsupported_composefs` | `varDisk` | `varDisk` is set with `composeFsBackend` or `filesystem: zfs`. The disk would not be used at boot (#252) | Remove `varDisk`, or use an ostree target (no `composeFsBackend`, not `zfs`) |
+| `var_disk_encryption_unsupported` | `varDisk` | `varDisk` is set with an encrypted `encryption.type`. The `/var` disk would stay plain text (#406) | Remove `varDisk`, or set `encryption.type` to `none` |
+| `custom_mount_target_duplicate` | `customMounts[i].target` | Another entry has the same mountpoint | Keep one entry for each mountpoint |
+| `custom_mount_partition_duplicate` | `customMounts[i].partition` | Another entry names the same device (by this path or another) | Give each entry its own partition |
+| `custom_mount_not_persistable` | `customMounts[i].target` | The installed system cannot mount this target again: it is on the read-only root, or it is `/var` (or a symlinked directory) on a composefs-native target | Use a path below `/var`. On an ostree target `/var`, `/home`, `/root`, `/srv`, `/opt`, `/mnt`, `/media` and `/usr/local` are accepted too |
 | `custom_mount_partition_required` | `customMounts[i].partition` | Partition path is missing in custom mount | Specify a partition path |
 | `custom_mount_partition_not_found` | `customMounts[i].partition` | The partition path does not exist | Check the partition path |
 | `custom_mounts_no_root` | `customMounts` | No custom mount targets `/` (root filesystem) | Add an entry with `"target": "/"` |
@@ -418,6 +477,7 @@ does: it needs no root.
 | `not_root` | (none) | The install did not run as root | Run fisherman through `pkexec` or `sudo` |
 | `install_already_running` | (none) | Another fisherman install holds the host-wide install lock (`/run/lock/fisherman-install.lock`). Two installs on one host share the scratch directory, so the second is refused before it reads its recipe. The message names the other process | Wait for the other install, or cancel it. A lock file left by a dead process does not block: the kernel drops the lock with the process |
 | `host_tool_missing` | (none) | A program the install of this recipe runs is not on the host. The message names it and its package | Install the package on the host |
+| `kept_filesystem_unusable` | `varDisk.disk`, `customMounts[i].partition` | The recipe keeps this device as it is, and `blkid` finds no filesystem on it that can be mounted (none, a LUKS or LVM volume, swap, or for `/var` a filesystem with no POSIX owners). Reported before any disk is changed | Format the device (`keepExisting: false`, or a real `fstype`), or name the device that holds the filesystem |
 
 The host-tool list comes from the recipe. The auto layout needs `sfdisk`,
 `mkfs.fat`, `mkfs.ext4`, the `mkfs` of `filesystem` (or `zpool` and `zfs`),
@@ -427,7 +487,9 @@ the installed system, with the image's own tool, and the install looks for
 it in the installed image. A manual layout needs no `sfdisk`: it needs the
 `mkfs` of each `customMounts[].fstype` it formats (`mkfs.fat`, `mkfs.ext3`, `mkfs.ext4`,
 `mkfs.xfs`, `mkfs.btrfs`), and `mkswap`, `swapon` and `swapoff` for a swap
-entry. A `varDisk` that is not kept needs `mkfs.xfs`. Every install needs
+entry. A `varDisk` that is not kept needs `wipefs` and `mkfs.xfs`. A
+`varDisk`, a data or swap entry, and a boot entry that is kept need `blkid`.
+Every install needs
 `skopeo` and `podman`. fisherman looks for them where they run: on the host,
 through `flatpak-spawn --host` inside a Flatpak sandbox.
 
