@@ -52,7 +52,6 @@ on:
 
 permissions:
   contents: write
-  actions: write
   checks: read
 
 concurrency:
@@ -82,7 +81,7 @@ jobs:
       sha: ${{ steps.candidate.outputs.sha }}
       reason: ${{ steps.decide.outputs.reason }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: dev
           fetch-depth: 0
@@ -217,7 +216,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.gate.outputs.sha }}
           fetch-depth: 0
