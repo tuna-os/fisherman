@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "context": "live-host",
+  "available": true,
+  "reason": "observed",
+  "machine_platform": "x86_64",
+  "sources": {
+    "bootc_status": "observed",
+    "store_index": "malformed_output",
+    "image_list": "malformed_output"
+  },
+  "ignored_entries": 0,
+  "items": [
+    {
+      "ref": "ghcr.io/example/os:stable",
+      "owner": "bootc",
+      "context": "live-host",
+      "storage": "ostree",
+      "roles": [
+        "booted"
+      ],
+      "availability": "deployed",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "digest_from": "bootc_status",
+      "platform": "x86_64",
+      "matches_machine": true
+    }
+  ]
+}
