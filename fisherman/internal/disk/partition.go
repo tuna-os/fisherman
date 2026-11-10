@@ -3,8 +3,10 @@ package disk
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -202,7 +204,10 @@ func PartitionZFS(disk string) error {
 	return partition(disk, script)
 }
 
-// partition is the shared implementation for Partition and PartitionEncrypted.
+// partition is the shared implementation for Partition, PartitionSystemdBoot
+// and PartitionZFS. It returns nil only when the kernel's view of every
+// planned partition has been checked against the table sfdisk wrote, so the
+// caller can format PartName(disk, n) without guessing (#365).
 func partition(disk, script string) error {
 	// Unmount any mounted partitions on this disk before partitioning.
 	if err := unmountAll(disk); err != nil {
@@ -212,28 +217,50 @@ func partition(disk, script string) error {
 	// First attempt without --force.
 	err := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", disk)
 	if err != nil {
-		// The disk may still be considered "in use" by the kernel even after
-		// aggressive unmounting (e.g. a race with udev re-probing). Retry once
-		// with --force --no-reread so sfdisk writes the table unconditionally.
-		fmt.Fprintf(os.Stdout, "+ sfdisk first attempt failed (%v), retrying with --force\n", err)
+		// sfdisk refuses a disk the kernel still reports as in use, which can
+		// happen after aggressive unmounting when udev re-probes the device.
+		// That one state is safe to write through with --force --no-reread,
+		// because the re-read is then done, and checked, below. Any other
+		// failure (bad script, I/O error, read-only or missing device) is
+		// not: --force also switches off sfdisk's consistency checks.
 		time.Sleep(500 * time.Millisecond)
 		_ = runner.Run("udevadm", "settle")
-		if err2 := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", "--force", "--no-reread", disk); err2 != nil {
-			return fmt.Errorf("sfdisk: %w", err2)
+		state, why := rereadState(disk)
+		switch state {
+		case rereadOK:
+			// Whatever held the disk has let go. Try once more as before,
+			// with every sfdisk check still on.
+			fmt.Fprintf(os.Stdout, "+ sfdisk first attempt failed (%v); %s; retrying without --force\n", err, why)
+			if err2 := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", disk); err2 != nil {
+				return fmt.Errorf("sfdisk: %w (not retried with --force: %s)", err2, why)
+			}
+		case rereadBusy:
+			fmt.Fprintf(os.Stdout, "+ sfdisk first attempt failed (%v); %s; retrying with --force --no-reread\n", err, why)
+			if err2 := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", "--force", "--no-reread", disk); err2 != nil {
+				return fmt.Errorf("sfdisk: %w", err2)
+			}
+			// --no-reread means the kernel still holds the OLD partition table.
+			// Force a re-read with partprobe so subsequent mkfs calls see the
+			// correct partition sizes. Without this, mkfs operates on stale
+			// (possibly much smaller) partition boundaries → "no space left".
+			// If the re-read fails the old boundaries are still live, so stop.
+			fmt.Fprintf(os.Stdout, "+ partprobe %s (force kernel partition table re-read after --no-reread)\n", disk)
+			time.Sleep(500 * time.Millisecond)
+			if err := runner.Run("partprobe", disk); err != nil {
+				return fmt.Errorf("the new partition table is on %s but the kernel could not re-read it, "+
+					"so nothing was formatted; close every program that uses the disk (or reboot) and run the install again: %w", disk, err)
+			}
+		default:
+			return fmt.Errorf("sfdisk: %w (not retried with --force: %s)", err, why)
 		}
-		// --no-reread means the kernel still holds the OLD partition table.
-		// Force a re-read with partprobe so subsequent mkfs calls see the
-		// correct partition sizes. Without this, mkfs operates on stale
-		// (possibly much smaller) partition boundaries → "no space left".
-		fmt.Fprintf(os.Stdout, "+ partprobe %s (force kernel partition table re-read after --no-reread)\n", disk)
-		time.Sleep(500 * time.Millisecond)
-		_ = runner.Run("partprobe", disk)
-		_ = runner.Run("udevadm", "settle")
 	}
 
-	// Brief sleep then settle — mirrors bootc's approach.
+	// Brief sleep then settle — mirrors bootc's approach. A settle that fails
+	// means udev has not finished creating the partition nodes.
 	time.Sleep(200 * time.Millisecond)
-	_ = runner.Run("udevadm", "settle")
+	if err := runner.Run("udevadm", "settle"); err != nil {
+		return fmt.Errorf("waiting for udev after partitioning %s: %w", disk, err)
+	}
 
 	// Loop devices reject the BLKRRPART ioctl that sfdisk uses to notify the
 	// kernel.  Re-attach with --partscan so /dev/loopNpM nodes are created.
@@ -243,6 +270,207 @@ func partition(disk, script string) error {
 		}
 	}
 
+	if err := verifyLayout(disk, script); err != nil {
+		return fmt.Errorf("partition layout on %s could not be verified, so nothing was formatted: %w", disk, err)
+	}
+	return nil
+}
+
+type rereadResult int
+
+const (
+	rereadOK     rereadResult = iota // the kernel re-read the table: not in use
+	rereadBusy                       // EBUSY: the disk is in use
+	rereadFailed                     // anything else
+)
+
+// rereadState asks the kernel to re-read disk's current partition table and
+// classifies the answer. `blockdev --rereadpt` issues the same BLKRRPART
+// ioctl sfdisk uses for its in-use check, and its message carries the errno.
+// sfdisk's own failure cannot be classified: runner.Run streams the command's
+// output instead of returning it.
+func rereadState(disk string) (rereadResult, string) {
+	_, err := runner.Output("blockdev", "--rereadpt", disk)
+	if err == nil {
+		return rereadOK, "the kernel no longer reports the disk as in use"
+	}
+	msg := err.Error()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		msg += ": " + strings.TrimSpace(string(exit.Stderr))
+	}
+	if strings.Contains(strings.ToLower(msg), "device or resource busy") {
+		return rereadBusy, "the kernel reports the disk as in use"
+	}
+	return rereadFailed, "the in-use check failed for another reason: " + msg
+}
+
+// plannedPart is one partition line of an sfdisk script.
+type plannedPart struct {
+	name  string
+	bytes uint64 // 0: the partition takes the rest of the disk
+}
+
+// parsePlan reads the partition lines of the sfdisk scripts this package
+// writes (`size=2GiB, type=uefi, name="EFI-SYSTEM"`).
+func parsePlan(script string) ([]plannedPart, error) {
+	units := []struct {
+		suffix string
+		mult   uint64
+	}{{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"GiB", 1 << 30}, {"TiB", 1 << 40}}
+	var plan []plannedPart
+	for _, line := range strings.Split(script, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, "=") {
+			continue // blank, or a header such as "label: gpt"
+		}
+		var p plannedPart
+		for _, field := range strings.Split(line, ",") {
+			k, v, _ := strings.Cut(strings.TrimSpace(field), "=")
+			switch strings.TrimSpace(k) {
+			case "name":
+				p.name = strings.Trim(strings.TrimSpace(v), `"`)
+			case "size":
+				v = strings.TrimSpace(v)
+				parsed := false
+				for _, u := range units {
+					if num, ok := strings.CutSuffix(v, u.suffix); ok {
+						n, err := strconv.ParseUint(num, 10, 64)
+						if err != nil {
+							return nil, fmt.Errorf("unreadable size %q in the partition plan", v)
+						}
+						p.bytes, parsed = n*u.mult, true
+					}
+				}
+				if !parsed {
+					return nil, fmt.Errorf("unreadable size %q in the partition plan", v)
+				}
+			}
+		}
+		plan = append(plan, p)
+	}
+	if len(plan) == 0 {
+		return nil, errors.New("the partition plan is empty")
+	}
+	return plan, nil
+}
+
+// sysBlockPath is where the kernel publishes its block devices. Overridden in
+// tests.
+var sysBlockPath = "/sys/class/block"
+
+// SetSysBlockPath overrides the sysfs block directory. For testing only.
+func SetSysBlockPath(p string) { sysBlockPath = p }
+
+// kernelSectors reads one of the kernel's per-partition values (start, size),
+// which sysfs always gives in 512-byte sectors. The path goes through the
+// disk's own directory, so a value is found only for a partition whose parent
+// is this disk.
+func kernelSectors(diskName, partName, attr string) (uint64, error) {
+	raw, err := os.ReadFile(filepath.Join(sysBlockPath, diskName, partName, attr))
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+}
+
+// verifyLayout checks, before anything is formatted, that
+//
+//  1. the table on disk (sfdisk --json) has the planned partitions, in order,
+//     with the planned names and sizes and without overlap; and
+//  2. the kernel has, for each of them, a partition of this disk with the
+//     same start and size, and has no leftover partition from an older table.
+//
+// Any difference is an error: a stale kernel view means mkfs would write to
+// the old boundaries.
+func verifyLayout(disk, script string) error {
+	plan, err := parsePlan(script)
+	if err != nil {
+		return err
+	}
+	out, err := runner.Output("sfdisk", "--json", disk)
+	if err != nil {
+		return fmt.Errorf("reading the partition table back: %w", err)
+	}
+	var parsed struct {
+		Table struct {
+			SectorSize uint64 `json:"sectorsize"`
+			Partitions []struct {
+				Node  string `json:"node"`
+				Start uint64 `json:"start"`
+				Size  uint64 `json:"size"`
+				Name  string `json:"name"`
+			} `json:"partitions"`
+		} `json:"partitiontable"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return fmt.Errorf("parsing sfdisk --json output: %w", err)
+	}
+	table := parsed.Table
+	if table.SectorSize == 0 {
+		table.SectorSize = 512 // util-linux before 2.35 does not print it
+	}
+	if len(table.Partitions) != len(plan) {
+		return fmt.Errorf("the table on disk has %d partition(s), the plan has %d", len(table.Partitions), len(plan))
+	}
+
+	// sysfs names partitions after the kernel name, which an alias such as
+	// /dev/disk/by-id/… does not carry.
+	kdisk := disk
+	if real, err := filepath.EvalSymlinks(disk); err == nil {
+		kdisk = real
+	}
+	diskName := filepath.Base(kdisk)
+
+	var prevEnd uint64
+	for i, want := range plan {
+		got := table.Partitions[i]
+		num := i + 1
+		startBytes, sizeBytes := got.Start*table.SectorSize, got.Size*table.SectorSize
+		if got.Name != want.name {
+			return fmt.Errorf("partition %d on disk is named %q, the plan says %q", num, got.Name, want.name)
+		}
+		if got.Size == 0 || startBytes < prevEnd {
+			return fmt.Errorf("partition %d on disk is empty or overlaps partition %d (start %d, size %d sectors)", num, num-1, got.Start, got.Size)
+		}
+		if want.bytes != 0 && sizeBytes != want.bytes {
+			return fmt.Errorf("partition %d on disk is %d bytes, the plan says %d", num, sizeBytes, want.bytes)
+		}
+		prevEnd = startBytes + sizeBytes
+
+		partName := filepath.Base(PartName(kdisk, num))
+		kStart, err := kernelSectors(diskName, partName, "start")
+		if err != nil {
+			return fmt.Errorf("the kernel has no partition %s on %s (%v); it has not read the new table", partName, diskName, err)
+		}
+		kSize, err := kernelSectors(diskName, partName, "size")
+		if err != nil {
+			return fmt.Errorf("the kernel reports no size for %s: %v", partName, err)
+		}
+		if kStart*512 != startBytes || kSize*512 != sizeBytes {
+			return fmt.Errorf("the kernel still has an old layout for %s: it reports start %d, size %d bytes; the table on disk says start %d, size %d bytes. "+
+				"Close every program that uses the disk (or reboot) and run the install again",
+				partName, kStart*512, kSize*512, startBytes, sizeBytes)
+		}
+	}
+
+	// A partition the kernel still has beyond the plan comes from the old
+	// table.
+	entries, err := os.ReadDir(filepath.Join(sysBlockPath, diskName))
+	if err != nil {
+		return fmt.Errorf("listing the kernel's partitions of %s: %w", diskName, err)
+	}
+	prefix := filepath.Base(PartName(kdisk, 0))
+	prefix = prefix[:len(prefix)-1] // "sda" or "nvme0n1p"
+	for _, e := range entries {
+		num, ok := strings.CutPrefix(e.Name(), prefix)
+		if !ok {
+			continue
+		}
+		if n, err := strconv.Atoi(num); err == nil && n > len(plan) {
+			return fmt.Errorf("the kernel still has partition %s from the previous table on %s", e.Name(), diskName)
+		}
+	}
 	return nil
 }
 

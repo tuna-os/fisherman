@@ -28,6 +28,14 @@ type fakeHost struct {
 	pvsErr    error
 	dmsetupLs string
 	queries   []execCall
+
+	// Partition-table state for #365; see partition_verify_test.go.
+	rereadErr    error                       // result of `blockdev --rereadpt`
+	tableErr     error                       // result of `sfdisk --json`
+	onDisk       []fakePart                  // the table sfdisk last wrote
+	sysDir       string                      // fake /sys/class/block
+	mutateTable  func([]fakePart) []fakePart // what `sfdisk --json` reports
+	mutateKernel func([]fakePart) []fakePart // what the kernel ends up with
 }
 
 // defaultLsblk is an ordinary machine: the disks the older tests in this
@@ -47,10 +55,14 @@ const defaultLsblk = `{"blockdevices":[
 // newFakeHost installs a fakeHost as runner.OutputFn for the test.
 func newFakeHost(t *testing.T) *fakeHost {
 	t.Helper()
-	h := &fakeHost{lsblk: defaultLsblk, pvsErr: errors.New("pvs: command not found")}
+	h := &fakeHost{lsblk: defaultLsblk, pvsErr: errors.New("pvs: command not found"), sysDir: t.TempDir()}
 	orig := runner.OutputFn
 	runner.OutputFn = h.output
-	t.Cleanup(func() { runner.OutputFn = orig })
+	disk.SetSysBlockPath(h.sysDir)
+	t.Cleanup(func() {
+		runner.OutputFn = orig
+		disk.SetSysBlockPath("/sys/class/block")
+	})
 	return h
 }
 
@@ -63,6 +75,10 @@ func (h *fakeHost) output(name string, args ...string) ([]byte, error) {
 		return []byte(h.pvs), h.pvsErr
 	case name == "dmsetup" && len(args) > 0 && args[0] == "ls":
 		return []byte(h.dmsetupLs), nil
+	case name == "blockdev" && len(args) == 2 && args[0] == "--rereadpt":
+		return nil, h.rereadErr
+	case name == "sfdisk" && len(args) == 2 && args[0] == "--json":
+		return h.tableJSON(args[1])
 	}
 	return nil, fmt.Errorf("fakeHost: unexpected query %s %v", name, args)
 }
