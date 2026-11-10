@@ -175,6 +175,9 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 		ps = append(ps, recipe.CheckFilesystem(r.Filesystem)...)
 		ps = append(ps, recipe.CheckLayoutCombos(&r)...)
 	}
+	if has("unifiedStorage") {
+		ps = append(ps, recipe.CheckUnifiedStorage(r.UnifiedStorage)...)
+	}
 	if has("imageType") {
 		ps = append(ps, recipe.CheckImageType(r.ImageType)...)
 	}

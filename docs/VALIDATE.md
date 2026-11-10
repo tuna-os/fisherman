@@ -195,6 +195,7 @@ A rule runs when its key is present:
 | `slurp` | slurp |
 | `distroID` | distroID |
 | `brewTap` | brewTap |
+| `unifiedStorage` | unifiedStorage |
 | `filesystem` | filesystem, and its combinations with `btrfsSubvolumes`, `composeFsBackend` and `encryption.type` (absent ones count as false / none) |
 | `encryption` | encryption type, passphrase |
 | `bootloader` | bootloader |
@@ -230,6 +231,7 @@ holds both fields.
 | `filesystem` (auto layout) | one of `xfs`, `ext4`, `btrfs`, `zfs` (`recipe.Filesystems`) | `filesystem_unsupported` |
 | `btrfsSubvolumes` | needs `filesystem: btrfs` | `btrfs_subvolumes_require_btrfs` |
 | `composeFsBackend` | needs fs-verity, so not XFS | `composefs_requires_fsverity` |
+| `unifiedStorage` | `false` or absent. `true` asks for bootc's `--experimental-unified-storage`, which fisherman does not pass (it runs bootc in a container, where that storage does not resolve). The install used to finish without it and report success. It is not `composeFsBackend` and not `additionalImageStores`; both are supported. | `unified_storage_unsupported` |
 | `encryption.type` | one of the encryption choices (below); `""` means `none` | `encryption_unsupported` |
 | `encryption.type` | not LUKS on ZFS | `encryption_unsupported_on_zfs` |
 | `encryption.type` | not encrypted with `customMounts` (the manual path runs no `luksFormat`) | `encryption_unsupported_on_manual_layout` |
@@ -348,6 +350,7 @@ This section maps error codes to their causes and corrective actions. Each code 
 | `btrfs_subvolumes_require_btrfs` | `btrfsSubvolumes` | `btrfsSubvolumes` requires `filesystem: btrfs` | Either remove `btrfsSubvolumes` or change filesystem to `btrfs` |
 | `composefs_requires_fsverity` | `composeFsBackend` | composefs backend requires fs-verity support, which XFS does not provide | Change filesystem to `ext4`, `btrfs`, or `zfs`; or disable `composeFsBackend` |
 | `custom_mount_fstype_unsupported` | `customMounts[i].fstype` | Custom mount filesystem type is not supported | Use one of: `fat32`, `ext3`, `ext4`, `xfs`, `btrfs`, `swap`, `unformatted`, or empty |
+| `unified_storage_unsupported` | `unifiedStorage` | `unifiedStorage` is `true`. fisherman does not pass `--experimental-unified-storage` to bootc, so the install would not have it | Set it to `false`, or remove the field |
 
 ### Encryption
 

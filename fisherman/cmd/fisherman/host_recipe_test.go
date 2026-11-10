@@ -199,6 +199,7 @@ func TestStdinRecipeCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	noImage, _ := json.Marshal(map[string]any{"disk": disk, "filesystem": "ext4", "hostname": "h"})
+	unified := `{"disk":"` + disk + `","filesystem":"xfs","hostname":"a","image":"x","unifiedStorage":true}`
 	misspelt := `{"disk":"` + disk + `","filesystem":"xfs","hostname":"a","image":"x","encrypton":{"type":"luks-passphrase","passphrase":"x"}}`
 
 	tests := []struct {
@@ -214,6 +215,9 @@ func TestStdinRecipeCLI(t *testing.T) {
 		{"install: empty image, not live", "-", string(noImage), 1, "invalid recipe: image is required", recipe.CodeImageRequired},
 		// tuna-os/fisherman#404: a misspelt "encryption" used to install unencrypted.
 		{"install: unknown field", "-", misspelt, 1, `loading recipe: unknown recipe field "encrypton"`, recipe.CodeRecipeUnknownField},
+		// tuna-os/fisherman#366: unifiedStorage true used to install without the
+		// storage it asked for, and report success.
+		{"install: unifiedStorage true", "-", unified, 1, "invalid recipe: unifiedStorage is not supported", recipe.CodeUnifiedStorageUnsupported},
 		{"validate: invalid JSON", "validate -", "nope", 1, "parsing recipe", ""},
 		{"validate: empty stdin", "validate -", "", 1, "recipe is empty", ""},
 		{"validate: empty image, not live", "validate -", string(noImage), 1, "image is required", ""},

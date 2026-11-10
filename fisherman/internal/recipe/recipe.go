@@ -14,7 +14,7 @@ type Recipe struct {
 	Image           string     `json:"image"`        // source OCI image reference
 	TargetImgref    string     `json:"targetImgref"` // update-tracking ref (optional)
 	SelinuxDisabled bool       `json:"selinuxDisabled"`
-	UnifiedStorage  bool       `json:"unifiedStorage"` // pass --experimental-unified-storage
+	UnifiedStorage  bool       `json:"unifiedStorage"` // true is refused (CheckUnifiedStorage): the flag is not passed
 	// ComposeFsBackend passes --composefs-backend to bootc install to-filesystem.
 	// Required for composefs-native images (e.g. ghcr.io/bootcrew/*).
 	// Independent of UnifiedStorage — these are different bootc features.
@@ -291,6 +291,7 @@ func (r *Recipe) Problems() []Problem {
 		ps = append(ps, CheckFilesystem(r.Filesystem)...)
 		ps = append(ps, CheckLayoutCombos(r)...)
 	}
+	ps = append(ps, CheckUnifiedStorage(r.UnifiedStorage)...)
 	ps = append(ps, CheckImageType(r.ImageType)...)
 	ps = append(ps, CheckBootloader(r.Bootloader)...)
 	ps = append(ps, CheckEncryption(r.Encryption)...)

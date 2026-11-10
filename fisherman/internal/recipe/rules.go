@@ -95,6 +95,8 @@ const (
 	CodeZFSPoolNameInvalid           = "zfs_pool_name_invalid"
 	CodeLuksMapperNameInvalid        = "luks_mapper_name_invalid"
 
+	CodeUnifiedStorageUnsupported = "unified_storage_unsupported"
+
 	CodeCustomMountsNoESP  = "custom_mounts_no_esp"
 	CodeCustomMountsNoBoot = "custom_mounts_no_boot"
 
@@ -340,6 +342,26 @@ func CheckLayoutCombos(r *Recipe) []Problem {
 			"ZFS filesystem does not support LUKS encryption in this version"})
 	}
 	return ps
+}
+
+// CheckUnifiedStorage applies the unifiedStorage rule: an explicit true is
+// refused. The field asks for bootc's --experimental-unified-storage, which
+// fisherman does not pass: it runs bootc inside `podman run --privileged`,
+// where bootc's unified storage does not resolve (install.Options has the
+// detail). A recipe that set true used to install without what it asked
+// for, and report success. false and absent are unchanged.
+//
+// It is not composeFsBackend, and it is not additionalImageStores; those
+// are separate features and are supported. Do not turn this rule off
+// because a bootc version or its help text changed: the flag needs a tested
+// storage profile first.
+func CheckUnifiedStorage(unified bool) []Problem {
+	if !unified {
+		return nil
+	}
+	return []Problem{{"unifiedStorage", CodeUnifiedStorageUnsupported,
+		"unifiedStorage is not supported: fisherman does not pass bootc's --experimental-unified-storage, " +
+			"so the install would complete without it; set it to false or leave it out"}}
 }
 
 // CheckImageType applies the imageType rule.
