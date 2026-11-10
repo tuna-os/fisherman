@@ -94,6 +94,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🔒 Security
 
+- **First-boot TPM2 enrolment never stages the user's passphrase** (#409,
+  #360). The install adds a random key in its own LUKS keyslot (31) and
+  stages only that, in the installed deployment's `/etc`. The unit retries
+  at most three times in one boot, then removes the keyslot and the file in
+  `ExecStopPost=`, which also runs when the enrolment fails. The unit and
+  key were staged in the physical sysroot before, where no booted system
+  reads them: the enrolment never ran and the key stayed on the disk.
+  `systemd-cryptenroll` is now looked for in the installed image, not on the
+  installer host.
+- **Host Wi-Fi profiles and Bluetooth keys are copied only on live media**
+  (#411), or when the recipe sets `copyNetworkProfiles` /
+  `copyBluetoothPairings` to `true`. `false` opts out on live media.
+
 - **`distroID` and `brewTap` are validated before use** (#299): both are
   written as root into generated paths, unit names and the OEM setup shell
   script (`/etc/<distroID>/oem/`, `<distroID>-oem-setup.service`,
@@ -134,8 +147,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `blkid` before any disk work (`kept_filesystem_unusable`).
 - **Data and swap entries of a manual layout stay mounted after the reboot**
   (#372): each gets an fstab line in the deployment (UUID and type from
-  `blkid`, `nofail`, mountpoint resolved in the installed image). The `/var`
-  devices are mounted on the deployment's `var` for the post-install steps,
+  `blkid`, `nofail`, mountpoint resolved in the installed image). A device
+  for a path below `/var` is mounted on the deployment's `var` for the
+  post-install steps, and a manual `/var` partition is the resolver's `/var`,
   so the user's home and the Flatpaks are on them. New rules refuse a layout
   before any disk work: `custom_mount_target_duplicate`,
   `custom_mount_partition_duplicate` and `custom_mount_not_persistable` (a
@@ -148,6 +162,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   composefs), reads every BLS entry back, patches what is missing, and fails
   if any entry lacks the argument. A LUKS UUID that cannot be read fails
   before bootc runs.
+- **One deployment resolver** (`internal/deploy`) says where the booted
+  system's root, `/etc` and `/var` are on the mounted target, for ostree and
+  composefs. Bluetooth pairings and migrated wallpapers went to
+  `<target>/var`, and audio configuration to `<target>/etc`, on ostree: the
+  physical sysroot, which is never mounted there (#407).
+- **No cache warming, no thumbnails** (#407). The warmers looked for
+  `<target>/usr`, which exists on neither layout, did nothing, and logged
+  "Pre-warmed 8/8 system caches". Pointed at the real deployment they would
+  write the host's caches into a tree that is hard-linked into the ostree
+  repository. They are removed; an image carries its own caches.
+- **Target-resident scratch is deleted while the target is mounted** (#307):
+  before finalize on success, first thing in teardown otherwise. It was
+  deleted after the unmount, which removed an empty mountpoint on the host
+  and left the image cache on the installed disk. A scratch bind mount that
+  fails leaves no directory behind (#291).
 
 - **Bound offline media accepts full uncompressed images**: the aggregate unique
   blob budget now matches the existing 16 GiB per-blob ceiling instead of rejecting

@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/tuna-os/fisherman/internal/deploy"
 	"github.com/tuna-os/fisherman/internal/disk"
 	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/progress"
@@ -53,7 +54,8 @@ type persistentMount struct {
 }
 
 // deployment is where the installed system keeps the files fisherman needs
-// for a persistent mount.
+// for a persistent mount. It comes from post.ResolveDeployment, the one
+// resolver every post-install step uses.
 type deployment struct {
 	EtcDir string // the deployment's /etc, where fstab goes
 	VarDir string // what the installed system sees as /var
@@ -62,25 +64,17 @@ type deployment struct {
 
 // resolveDeployment finds the deployment bootc installed at target.
 func resolveDeployment(target string) (deployment, error) {
-	if post.IsComposeFsNativeExported(target) {
-		etc, err := post.ComposeFsDeployEtcDirFn(target)
-		if err != nil {
-			return deployment{}, fmt.Errorf("finding the composefs deployment: %w", err)
-		}
-		return deployment{EtcDir: etc, VarDir: post.ComposeFsVarDir(target)}, nil
-	}
-	deployDir, err := post.DeploymentDirFn(target)
+	d, err := post.ResolveDeployment(target)
 	if err != nil {
-		return deployment{}, fmt.Errorf("finding the deployment: %w", err)
+		return deployment{}, err
 	}
-	// <sysroot>/ostree/deploy/<stateroot>/deploy/<checksum>.<n>; the
-	// stateroot's var is what ostree mounts at /var.
-	stateroot := filepath.Dir(filepath.Dir(deployDir))
-	return deployment{
-		EtcDir: filepath.Join(deployDir, "etc"),
-		VarDir: filepath.Join(stateroot, "var"),
-		Root:   deployDir,
-	}, nil
+	dep := deployment{EtcDir: d.Etc, VarDir: d.Var}
+	// Only an ostree deployment is a root filesystem to resolve paths in;
+	// a composefs-native one holds /etc alone.
+	if d.Layout == deploy.Ostree {
+		dep.Root = d.Root
+	}
+	return dep, nil
 }
 
 // resolveInRoot resolves an absolute path inside root the way the booted
@@ -298,24 +292,42 @@ func writePersistentMounts(target string, dep deployment, plan []persistentMount
 	return nil
 }
 
-// mountDataInDeployment mounts every planned /var mount a second time, where
-// the installed system will see it: under the deployment's var directory.
-// The post-install steps write the user's home and the Flatpaks there. On
-// the first boot the fstab line mounts the device over that directory, so
-// without this the files written during the install would sit on the root
-// filesystem, hidden under the mount. mounted is called for each new mount.
-func mountDataInDeployment(dep deployment, plan []persistentMount, mounted func(path string)) error {
+// mountDataInDeployment makes every planned /var mount the place the
+// post-install steps write to. Those steps write the user's home and the
+// Flatpaks under the resolver's Var. On the first boot the fstab line mounts
+// the device there, so files written anywhere else during the install would
+// sit on the root filesystem, hidden under the mount.
+//
+//   - A separate /var (a varDisk, or a manual /var partition) is mounted at
+//     <target>/var already. post.SetBootedVar makes that the resolver's Var.
+//     Mounts below it (<target>/var/home) are then in place too.
+//   - With no separate /var, a mount below /var is mounted a second time
+//     under the deployment's var. mounted is called for each new mount.
+func mountDataInDeployment(target string, plan []persistentMount, mounted func(path string)) error {
 	// A parent first: /var before /var/home.
 	ordered := append([]persistentMount(nil), plan...)
 	sort.SliceStable(ordered, func(i, j int) bool {
 		return strings.Count(ordered[i].Mountpoint, "/") < strings.Count(ordered[j].Mountpoint, "/")
 	})
 	for _, m := range ordered {
-		if !recipe.IsVarPath(m.Mountpoint) {
+		if m.Mountpoint == "/var" {
+			post.SetBootedVar(filepath.Join(target, "var"))
+			progress.Info(fmt.Sprintf("%s is the installed system's /var", m.Device))
+		}
+	}
+	dep, err := resolveDeployment(target)
+	if err != nil {
+		return err
+	}
+	for _, m := range ordered {
+		if !recipe.IsVarPath(m.Mountpoint) || m.Mountpoint == "/var" {
 			continue
 		}
 		rel, _ := filepath.Rel("/var", m.Mountpoint)
 		dir := filepath.Join(dep.VarDir, rel)
+		if dir == filepath.Join(target, m.Mountpoint) {
+			continue // the layout mounted it there, on the separate /var
+		}
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("%s: creating %s: %w", m.Field, dir, err)
 		}
@@ -362,7 +374,7 @@ func persistMounts(r *recipe.Recipe, target string, mounted func(path string)) e
 	if err != nil {
 		return err
 	}
-	if err := mountDataInDeployment(dep, plan, mounted); err != nil {
+	if err := mountDataInDeployment(target, plan, mounted); err != nil {
 		return err
 	}
 	return writePersistentMounts(target, dep, plan)

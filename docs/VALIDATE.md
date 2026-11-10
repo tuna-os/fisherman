@@ -297,10 +297,11 @@ table says what the installed system has after the reboot.
   for target `/home` names `/var/home`. A composefs-native deployment has no
   root filesystem to resolve in at install time, so there the recipe must
   name the `/var/…` path.
-- After bootc installs the image, fisherman mounts each `/var` device a second
-  time, on the deployment's `var` directory. The user's home and the Flatpaks
-  that the install writes are then on that device, where the first boot finds
-  them.
+- The post-install steps write the user's home and the Flatpaks to the device
+  that the first boot mounts. A separate `/var` (a `varDisk`, or a manual
+  `/var` partition) is the `/var` those steps use. With no separate `/var`,
+  fisherman mounts a device for a path below `/var` a second time, on the
+  deployment's `var` directory, after bootc installs the image.
 - fisherman does not replace an fstab line of the image. If the image's fstab
   mounts another device at the same mountpoint, the install fails.
 - A second run on the same deployment adds no second line.
@@ -480,9 +481,11 @@ does: it needs no root.
 
 The host-tool list comes from the recipe. The auto layout needs `sfdisk`,
 `mkfs.fat`, `mkfs.ext4`, the `mkfs` of `filesystem` (or `zpool` and `zfs`),
-`cryptsetup` for an encrypted root and `systemd-cryptenroll` for a `tpm2-*`
-type. A manual layout needs no `sfdisk`: it needs the `mkfs` of each
-`customMounts[].fstype` it formats (`mkfs.fat`, `mkfs.ext3`, `mkfs.ext4`,
+and `cryptsetup` for an encrypted root. A `tpm2-*` type needs no
+`systemd-cryptenroll` on the host: the enrolment runs on the first boot of
+the installed system, with the image's own tool, and the install looks for
+it in the installed image. A manual layout needs no `sfdisk`: it needs the
+`mkfs` of each `customMounts[].fstype` it formats (`mkfs.fat`, `mkfs.ext3`, `mkfs.ext4`,
 `mkfs.xfs`, `mkfs.btrfs`), and `mkswap`, `swapon` and `swapoff` for a swap
 entry. A `varDisk` that is not kept needs `wipefs` and `mkfs.xfs`. A
 `varDisk`, a data or swap entry, and a boot entry that is kept need `blkid`.

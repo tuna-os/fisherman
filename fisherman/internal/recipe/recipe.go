@@ -112,6 +112,25 @@ type Recipe struct {
 	// data (the boot disk, a read-only disk, a path that is not a whole
 	// disk) cannot be overridden. See docs/VALIDATE.md, "Target eligibility".
 	Override []string `json:"override,omitempty"`
+	// CopyNetworkProfiles says whether the host's NetworkManager connection
+	// profiles (/etc/NetworkManager/system-connections/*.nmconnection: Wi-Fi
+	// passwords, 802.1X credentials) are copied to the installed system.
+	// Absent (null): copy only when the host booted from live media, where
+	// the profiles are the ones the user just typed into the installer.
+	// true copies on any host; false never copies.
+	CopyNetworkProfiles *bool `json:"copyNetworkProfiles,omitempty"`
+	// CopyBluetoothPairings is the same choice for the host's Bluetooth
+	// pairings (/var/lib/bluetooth, which holds the link keys).
+	CopyBluetoothPairings *bool `json:"copyBluetoothPairings,omitempty"`
+}
+
+// FollowLive resolves an optional yes/no recipe field whose default follows
+// live media: an explicit value wins; absent means "only on live media".
+func FollowLive(field *bool, isLive bool) bool {
+	if field != nil {
+		return *field
+	}
+	return isLive
 }
 
 // Overrides are the values Recipe.Override accepts. They are probe's own

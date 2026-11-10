@@ -64,9 +64,9 @@ fisherman is a Go CLI that reads a JSON recipe and runs an install pipeline. The
 | Mount | mount everything at `/mnt/fisherman-target` | always |
 | Format data disk | a second disk for `/var` | recipes that name one |
 | Install OS | `bootc install to-filesystem --skip-finalize` through `podman run --privileged` | always |
-| Enrol TPM2 | bind the LUKS volume to the TPM and emit the recovery key | TPM recipes |
+| Enrol TPM2 | add a single-use keyslot, stage the first-boot unit that binds the LUKS volume to the TPM, and emit the recovery key | TPM recipes |
 | Copy Flatpaks | copy system Flatpaks from the host to the target | always |
-| Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi and Bluetooth copied from the host, audio names, OEM extras, print services, caches | always |
+| Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi profiles and Bluetooth pairings copied from the host (live media, or on request), audio names, OEM extras, print services | always |
 | Finalize | fstrim → remount read-only → fsfreeze, then thaw | always (skipped on ZFS) |
 
 The separate ext4 `/boot` partition is required for GRUB because GRUB cannot read modern XFS features (`nrext64`, `exchange`, `rmapbt`). For composefs/systemd-boot images the EFI partition holds the kernel and initrd directly.
@@ -160,7 +160,8 @@ Things a recipe author should know today:
 - A `varDisk`, and each data or swap entry of `customMounts`, gets an fstab line on the installed system (type and UUID from `blkid`, `nofail`). A target that cannot be mounted again is refused (`custom_mount_not_persistable`). See [`docs/VALIDATE.md`](docs/VALIDATE.md#mounts-after-the-install).
 - An encrypted install fails if its boot entries do not carry `rd.luks.name` at the end. Only systemd-boot with composefs is exempt (#410).
 - There is no field for locale, keyboard layout or time zone (#405).
-- Wi-Fi profiles and Bluetooth pairings are copied from the host to the target on every install (#411).
+- The host's Wi-Fi profiles and Bluetooth pairings are copied to the target only when the host booted from live media. `"copyNetworkProfiles"` and `"copyBluetoothPairings"` (`true` or `false`) override that for each kind. On an installed host the default is not to copy: the keys are the operator's.
+- fisherman builds no caches in the target. The image must carry its font, icon, schema and linker caches.
 
 **Encryption types:** `none`, `luks-passphrase`, `tpm2-luks`, `tpm2-luks-passphrase`
 

@@ -61,7 +61,13 @@ func ostreeTarget(t *testing.T) (target string, dep deployment) {
 	}
 	orig := post.DeploymentDirFn
 	post.DeploymentDirFn = func(string) (string, error) { return deployDir, nil }
-	t.Cleanup(func() { post.DeploymentDirFn = orig })
+	// post tells the layouts apart with `ls` through the runner.
+	runner.RunFn = (&fakeHostRunner{on: lsLikeHost(nil)}).run
+	t.Cleanup(func() {
+		post.DeploymentDirFn = orig
+		runner.RunFn = runner.DefaultRun
+		post.SetBootedVar("")
+	})
 	dep, err := resolveDeployment(target)
 	if err != nil {
 		t.Fatal(err)
@@ -271,33 +277,56 @@ func TestWritePersistentMounts(t *testing.T) {
 	}
 }
 
-// Each /var device is mounted a second time under the deployment's var, a
-// parent before its children, and each mount is handed to the teardown.
-func TestMountDataInDeployment(t *testing.T) {
-	_, dep := ostreeTarget(t)
-	fake := &fakeHostRunner{}
+// With no separate /var, a /var/home device is mounted a second time under
+// the deployment's var, and the mount is handed to the teardown. Mounts
+// outside /var and swap are not touched.
+func TestMountDataInDeployment_SubMount(t *testing.T) {
+	target, dep := ostreeTarget(t)
+	fake := &fakeHostRunner{on: lsLikeHost(nil)}
 	runner.RunFn = fake.run
-	t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
 
 	plan := []persistentMount{
 		{Field: "customMounts[3]", Device: "/dev/sda4", Mountpoint: "/var/home", Fstype: "btrfs"},
 		{Field: "customMounts[4]", Device: "/dev/sda5", Mountpoint: "none", Fstype: "swap"},
 		{Field: "customMounts[5]", Device: "/dev/sda6", Mountpoint: "/srv", Fstype: "ext4"},
-		{Field: "varDisk", Device: "/dev/sdb", Mountpoint: "/var", Fstype: "xfs"},
 	}
 	var registered []string
-	if err := mountDataInDeployment(dep, plan, func(p string) { registered = append(registered, p) }); err != nil {
+	if err := mountDataInDeployment(target, plan, func(p string) { registered = append(registered, p) }); err != nil {
 		t.Fatal(err)
 	}
-	wantCalls := []string{
-		"mount -t xfs /dev/sdb " + dep.VarDir,
-		"mount -t btrfs -o compress=zstd:1 /dev/sda4 " + filepath.Join(dep.VarDir, "home"),
+	home := filepath.Join(dep.VarDir, "home")
+	if got, want := fake.only("mount"), []string{"mount -t btrfs -o compress=zstd:1 /dev/sda4 " + home}; !reflect.DeepEqual(got, want) {
+		t.Errorf("mounts = %q, want %q", got, want)
 	}
-	if !reflect.DeepEqual(fake.calls, wantCalls) {
-		t.Errorf("calls = %q, want %q", fake.calls, wantCalls)
+	if !reflect.DeepEqual(registered, []string{home}) {
+		t.Errorf("registered for teardown = %q, want %q", registered, []string{home})
 	}
-	if want := []string{dep.VarDir, filepath.Join(dep.VarDir, "home")}; !reflect.DeepEqual(registered, want) {
-		t.Errorf("registered for teardown = %q, want %q", registered, want)
+	if d, err := post.ResolveDeployment(target); err != nil || d.Var != dep.VarDir {
+		t.Errorf("the resolver's Var = %v, %v; want the stateroot var %s", d, err, dep.VarDir)
+	}
+}
+
+// A separate /var (varDisk or a manual /var partition) is mounted at
+// <target>/var already: the resolver is pointed at it, in the way #433 set
+// up, and nothing is mounted twice. A /var/home below it is in place too.
+func TestMountDataInDeployment_SeparateVar(t *testing.T) {
+	target, _ := ostreeTarget(t)
+	fake := &fakeHostRunner{on: lsLikeHost(nil)}
+	runner.RunFn = fake.run
+
+	plan := []persistentMount{
+		{Field: "customMounts[4]", Device: "/dev/sda5", Mountpoint: "/var/home", Fstype: "ext4"},
+		{Field: "customMounts[3]", Device: "/dev/sda4", Mountpoint: "/var", Fstype: "xfs"},
+	}
+	if err := mountDataInDeployment(target, plan, func(p string) { t.Errorf("unexpected new mount %s", p) }); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.only("mount"); len(got) != 0 {
+		t.Errorf("mounts = %q, want none", got)
+	}
+	d, err := post.ResolveDeployment(target)
+	if err != nil || d.Var != filepath.Join(target, "var") {
+		t.Fatalf("the resolver's Var = %v, %v; want %s", d, err, filepath.Join(target, "var"))
 	}
 }
 
@@ -374,30 +403,44 @@ func TestPersistMounts_VarDisk(t *testing.T) {
 	fakeBlkid(t, map[string][2]string{"/dev/vdb": {"abcd-1234", "xfs"}})
 	fake := &fakeHostRunner{on: lsLikeHost(nil)}
 	runner.RunFn = fake.run
-	t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
 
-	var registered []string
 	r := &recipe.Recipe{Disk: "/dev/vda", VarDisk: &recipe.VarDiskSpec{Disk: "/dev/vdb"}}
-	if err := persistMounts(r, target, func(p string) { registered = append(registered, p) }); err != nil {
+	if err := persistMounts(r, target, func(p string) { t.Errorf("unexpected new mount %s", p) }); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := fake.only("mount"), []string{"mount -t xfs /dev/vdb " + dep.VarDir}; !reflect.DeepEqual(got, want) {
-		t.Errorf("mounts = %q, want %q", got, want)
+	// The disk is at <target>/var since before bootc ran; the post-install
+	// steps are pointed there and nothing is mounted again.
+	if got := fake.only("mount"); len(got) != 0 {
+		t.Errorf("mounts = %q, want none", got)
 	}
-	if !reflect.DeepEqual(registered, []string{dep.VarDir}) {
-		t.Errorf("registered = %q", registered)
+	if d, err := post.ResolveDeployment(target); err != nil || d.Var != filepath.Join(target, "var") {
+		t.Errorf("the resolver's Var = %v, %v; want the var disk at %s", d, err, filepath.Join(target, "var"))
 	}
 	want := "UUID=abcd-1234\t/var\txfs\tdefaults,nofail,x-systemd.device-timeout=30s,x-systemd.before=local-fs.target\t0 0\n"
 	if got := readFstab(t, dep); got != want {
 		t.Errorf("fstab = %q, want %q", got, want)
 	}
 
-	// A mount failure is an error, and fstab is not written a second time.
-	fake.on = lsLikeHost(errors.New("mount: wrong fs type"))
+	// A second run adds no second line.
+	if err := persistMounts(r, target, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readFstab(t, dep); got != want {
+		t.Errorf("fstab after a second run = %q, want it unchanged", got)
+	}
+}
+
+// A sub-mount that cannot be mounted on the deployment's var ends the step
+// before fstab is written.
+func TestPersistMounts_MountFailure(t *testing.T) {
+	target, dep := ostreeTarget(t)
+	fakeBlkid(t, map[string][2]string{"/dev/sda4": {"h0me", "ext4"}})
+	runner.RunFn = (&fakeHostRunner{on: lsLikeHost(errors.New("mount: wrong fs type"))}).run
+	r := manualWith(recipe.CustomMount{Partition: "/dev/sda4", Target: "/var/home", Fstype: "ext4"})
 	if err := persistMounts(r, target, func(string) {}); err == nil {
 		t.Fatal("a failed mount must be an error")
 	}
-	if got := readFstab(t, dep); got != want {
-		t.Errorf("fstab after a failed run = %q, want it unchanged", got)
+	if got := readFstab(t, dep); got != "" {
+		t.Errorf("fstab = %q, want nothing written", got)
 	}
 }

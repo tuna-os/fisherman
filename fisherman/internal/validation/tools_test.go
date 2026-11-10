@@ -32,7 +32,7 @@ func TestRequiredTools(t *testing.T) {
 		{"auto ext4", &recipe.Recipe{Filesystem: "ext4"},
 			[]string{"sfdisk", "mkfs.fat", "mkfs.ext4", "skopeo", "podman"}},
 		{"auto btrfs with luks and tpm", &recipe.Recipe{Filesystem: "btrfs", Encryption: recipe.Encryption{Type: "tpm2-luks-passphrase"}},
-			[]string{"sfdisk", "mkfs.fat", "mkfs.ext4", "mkfs.btrfs", "cryptsetup", "systemd-cryptenroll", "skopeo", "podman"}},
+			[]string{"sfdisk", "mkfs.fat", "mkfs.ext4", "mkfs.btrfs", "cryptsetup", "skopeo", "podman"}},
 		{"auto luks passphrase", &recipe.Recipe{Filesystem: "xfs", Encryption: recipe.Encryption{Type: "luks-passphrase"}},
 			[]string{"sfdisk", "mkfs.fat", "mkfs.ext4", "mkfs.xfs", "cryptsetup", "skopeo", "podman"}},
 		{"auto zfs", &recipe.Recipe{Filesystem: "zfs"},

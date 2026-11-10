@@ -183,14 +183,18 @@ func prepareScratchDir(activeTargetMount string, liveISO bool) (string, error) {
 	if liveISO {
 		// Self-bind so bootc sees a mount point, not a plain directory.
 		if err := bindMount(scratchDir, scratchDir); err != nil {
+			// Nothing is mounted and nothing is registered: leave no
+			// directory behind on the target either (#291).
+			_ = os.Remove(scratchDir)
 			return "", err
 		}
-		cleanup.AddMount(scratchDir)
-		// Removal is registered as a post-removal so it runs *after* the
-		// unmount above and after the LUKS close — and crucially it still
-		// fires on the fatal() error path, where os.Exit(1) would otherwise
-		// skip a deferred RemoveAll and leak the OCI cache on the target disk.
-		cleanup.AddPostRemoval(scratchDir)
+		// One registration for the bind mount AND the directory under it:
+		// teardown releases the bind and deletes the directory while the
+		// target filesystem is still mounted, before any other unmount and
+		// before the LUKS close. Deleting it after them (as a post-removal)
+		// only deleted an empty mountpoint on the host and left the OCI cache
+		// on the installed disk (#307).
+		cleanup.AddTargetScratch(scratchDir)
 	}
 	return scratchDir, nil
 }
@@ -777,12 +781,12 @@ func main() {
 	// redirects host-side OCI staging while podman creates the container:
 	// that import runs before the container's scratch bind mount exists.
 	//
-	// For the live-ISO path scratchDir is on the target disk and removal is
-	// handled by cleanup.AddPostRemoval (registered in prepareScratchDir),
-	// which also fires on the fatal() error path. For the non-live path the
-	// directory is /var/fisherman-tmp on the host and is cleaned up here
-	// AND via cleanup.AddPostRemoval so it also fires on fatal() paths
-	// (os.Exit bypasses defers).
+	// On live media scratchDir is on the target disk: prepareScratchDir
+	// registered it with cleanup.AddTargetScratch, which removes it while the
+	// target is still mounted (before finalize on success, first thing in
+	// teardown otherwise). Elsewhere it is /var/fisherman-tmp on the host,
+	// removed here AND via cleanup.AddPostRemoval so it also goes on fatal()
+	// paths (os.Exit bypasses defers).
 	if !liveISO {
 		cleanup.AddPostRemoval(scratchDir)
 		defer os.RemoveAll(scratchDir)
@@ -931,8 +935,12 @@ func main() {
 	}
 
 	// ── Persistent mounts (varDisk, customMounts data and swap) ──────────────
-	// The fstab lines for the installed system, and a second mount of each
-	// /var device where the steps below write. See mounts.go (#406, #372).
+	// From here on every step writes into the installed system through the
+	// deployment resolver (post.ResolveDeployment). persistMounts tells it
+	// that a separate /var (a varDisk, or a manual /var partition) is what
+	// the booted system mounts at /var, mounts the other /var devices where
+	// those steps write, and writes the fstab lines. See mounts.go (#406,
+	// #372).
 	if err := persistMounts(r, activeTargetMount, cleanup.AddMount); err != nil {
 		fatal("persistent mounts: %v", err)
 	}
@@ -951,17 +959,7 @@ func main() {
 		if r.Encryption.Type == "tpm2-luks" {
 			unlockPassphrase = luksRecoveryKey
 		}
-		// Enroll TPM2 on the FIRST BOOT of the installed system, not here:
-		// --tpm2-pcrs=7 seals against PCR 7 as measured in the live
-		// installer, but the installed system boots a different chain and
-		// measures a different PCR 7 — so an install-time enrollment can
-		// never unseal on first boot. Staging a first-boot oneshot captures
-		// the correct PCR 7. The recovery/passphrase key unlocks until then.
-		if err := luks.StageFirstBootEnrollment(activeTargetMount, activeLuksUUID, unlockPassphrase); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not stage first-boot TPM2 enrollment (recovery key unlock still works): %v", err))
-		} else {
-			progress.Info("TPM2 auto-unlock will be enrolled on first boot")
-		}
+		progress.Info(stageTPM2Enrollment(activeTargetMount, activeRootPart, activeLuksUUID, unlockPassphrase))
 
 		// For tpm2-luks the user never chose a passphrase, so we emit the
 		// random one as a recovery key they must save before rebooting.
@@ -1026,16 +1024,15 @@ func main() {
 		progress.Info(msg)
 	}
 
-	// Copy Bluetooth pairings from live session so paired keyboards/mice
-	// reconnect on first boot without re-pairing. Non-fatal.
-	if err := post.CopyBluetoothPairings(activeTargetMount); err != nil {
-		progress.Info(fmt.Sprintf("Warning: could not copy Bluetooth pairings: %v", err))
-	}
-
-	// Copy WiFi connections from live session so network reconnects on first boot. Non-fatal.
-	if err := post.CopyWiFiConnections(activeTargetMount); err != nil {
-		progress.Info(fmt.Sprintf("Warning: could not copy WiFi connections: %v", err))
-	}
+	// Wi-Fi profiles and Bluetooth pairings hold secrets (passwords, link
+	// keys). They follow the user from live media to the disk; from any
+	// other host they are copied only when the recipe asks (#411).
+	copyHostSecrets(activeTargetMount, r, func() bool {
+		if live.IsLive {
+			return true
+		}
+		return hostLive().IsLive
+	})
 
 	// Generate friendly audio device names and hide useless outputs (S/PDIF,
 	// Pro Audio, monitor loopbacks). Writes WirePlumber rules to /etc/ so no
@@ -1044,33 +1041,27 @@ func main() {
 		progress.Info(fmt.Sprintf("Warning: could not configure audio devices: %v", err))
 	}
 
-	// Inject slurped Windows data into the installed system. Non-fatal.
-	if dataResult != nil && dataResult.Found {
-		composefs := post.IsComposeFsNativeExported(activeTargetMount)
-		if err := slurp.InjectData(activeTargetMount, dataResult, composefs); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not inject user data: %v", err))
-		}
-	}
-	if wallpaperResult != nil && wallpaperResult.Found {
-		composefs := post.IsComposeFsNativeExported(activeTargetMount)
-		if err := slurp.InjectWallpapers(activeTargetMount, wallpaperResult, composefs); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not inject wallpapers: %v", err))
+	// Inject slurped Windows data into the installed system's /var (the one
+	// the booted system mounts, from the deployment resolver). Non-fatal.
+	if (dataResult != nil && dataResult.Found) || (wallpaperResult != nil && wallpaperResult.Found) {
+		if d, err := post.ResolveDeployment(activeTargetMount); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not inject migrated data: %v", err))
+		} else {
+			if dataResult != nil && dataResult.Found {
+				if err := slurp.InjectData(d.Var, dataResult); err != nil {
+					progress.Info(fmt.Sprintf("Warning: could not inject user data: %v", err))
+				}
+			}
+			if wallpaperResult != nil && wallpaperResult.Found {
+				if err := slurp.InjectWallpapers(d.Var, wallpaperResult); err != nil {
+					progress.Info(fmt.Sprintf("Warning: could not inject wallpapers: %v", err))
+				}
+			}
 		}
 	}
 	// Cleanup scratch space (both data and wallpaper slurps use /run/fisherman-slurp)
 	if dataResult != nil || wallpaperResult != nil {
 		slurp.CleanupScratch()
-	}
-
-	// Pre-generate thumbnails for ALL wallpapers (system + user-injected) so
-	// the GNOME wallpaper capplet opens instantly on first boot. Non-fatal.
-	{
-		composefs := post.IsComposeFsNativeExported(activeTargetMount)
-		progress.Substep("Pre-generating wallpaper thumbnails")
-		n := slurp.GenerateSystemThumbnails(activeTargetMount, composefs)
-		if n > 0 {
-			progress.Info(fmt.Sprintf("Pre-generated %d wallpaper thumbnail(s)", n))
-		}
 	}
 
 	// Detect OEM hardware (ASUS, Framework) and queue vendor-specific packages
@@ -1084,10 +1075,17 @@ func main() {
 	// Non-fatal: services are skipped if their unit files are absent from the image.
 	post.EnablePrintServices(activeTargetMount)
 
-	// Warm all system caches (fonts, icons, schemas, pixbuf, ldconfig, man-db,
-	// flatpak appstream) so first boot is instant. Non-fatal.
-	progress.Substep("Pre-warming system caches for first boot")
-	post.WarmCaches(activeTargetMount)
+	// No cache warming and no thumbnail generation here: the image's /usr is
+	// read-only (and, on ostree, hard-linked into the repository), its caches
+	// are built with the image, and the host's tools would write the host's
+	// answers (#407).
+
+	// Target-resident scratch (live media) goes now, while the target is
+	// still mounted read-write: finalize makes it read-only, and after the
+	// unmount the path no longer names the target's data (#307).
+	if err := cleanup.RemoveTargetScratch(); err != nil {
+		progress.Info(fmt.Sprintf("Warning: could not remove the install scratch from the target: %v", err))
+	}
 
 	// ── Step 9: Finalize ─────────────────────────────────────────────────────
 	// bootc's --skip-finalize kept the target writable for post-install writes.
