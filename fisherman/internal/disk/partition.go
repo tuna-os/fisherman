@@ -250,7 +250,7 @@ func partition(disk, script string) error {
 				return fmt.Errorf("the new partition table is on %s but the kernel could not re-read it, "+
 					"so nothing was formatted; close every program that uses the disk (or reboot) and run the install again: %w", disk, err)
 			}
-		default:
+		case rereadFailed:
 			return fmt.Errorf("sfdisk: %w (not retried with --force: %s)", err, why)
 		}
 	}
