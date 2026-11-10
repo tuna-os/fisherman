@@ -368,6 +368,7 @@ looks like for each.
 | 1 | No arguments. Help is printed to stdout. | None. |
 | 1 | `scan` without a disk, or `scan` failed. Message on stderr. | None. |
 | 130 | Cancelled: SIGTERM, SIGINT or SIGHUP, or the parent process (the frontend's wrapper) died. Children are stopped and the target is torn down first; see [Cancelling an install](#cancelling-an-install). | Ends with `error`: `installation cancelled (SIGTERM)` (the signal name varies). |
+| 130 | Cancelled: the reader of stdout went away (a closed pipe). Children are stopped and the target is torn down first; see [A closed stdout](#a-closed-stdout). | The `error` event `installation cancelled (stdout closed)` is written, but nobody can read it. The same line is on stderr. |
 | 2 | The argument looks like a command, not a recipe path (a flag, or a bare word with no file behind it). A lone `-` is not one: it reads the recipe from stdin. Message and help on stderr and stdout. | None. |
 
 The `images` and `validate` subcommands (in `images.go` and `validate.go`)
@@ -391,6 +392,9 @@ Other ways the process can end:
 - **Signals.** SIGTERM, SIGINT and SIGHUP cancel the install and exit 130;
   see [Cancelling an install](#cancelling-an-install). SIGKILL cannot be
   handled: no `error` event, no cleanup.
+- **A closed pipe.** A closed stdout cancels the install with teardown and
+  exits 130; see [A closed stdout](#a-closed-stdout). It is no longer one of
+  the exits without cleanup. A closed stderr does not stop the install.
 - **pkexec.** Frontends run fisherman through `pkexec`. pkexec returns
   fisherman's exit code, but exits 126 when the user dismisses the
   authentication dialog and 127 when authorization fails. fisherman never
@@ -427,6 +431,33 @@ On a cancel, fisherman:
    `; cleanup failed, the target may still be mounted or unlocked: …` appended
    if teardown did not finish;
 4. exits 130.
+
+### A closed stdout
+
+The reader of the event stream can go away while fisherman's parent is still
+alive: the frontend crashes behind its wrapper shell, or
+`sudo fisherman recipe.json | tee log` loses its `tee`. The parent-death
+signal does not fire, because the parent did not die.
+
+fisherman used to die of SIGPIPE on its next event, with no teardown: the
+target stayed mounted, the LUKS mapping stayed open and the child processes
+kept running. Now SIGPIPE is handled. The first event that cannot be written
+(`EPIPE`) starts the same cancel as a signal:
+
+1. fisherman points its stdout at `/dev/null`, so the teardown commands do
+   not write into the closed pipe;
+2. it stops its children, thaws, turns off swap, unmounts and closes LUKS,
+   as above;
+3. it writes `fisherman: cancelled: installation cancelled (stdout closed)`
+   to stderr and exits 130.
+
+The cancel starts at the next event, not at the moment the reader goes away.
+A child that writes to the closed pipe itself (bootc, podman) gets its own
+SIGPIPE, and its failure ends the install through `fatal()` with the same
+teardown.
+
+A closed **stderr** does not cancel. fisherman's own stderr lines are lost,
+and the install goes on: the event stream on stdout is the contract.
 
 A second signal during teardown is logged and ignored, so it cannot leave
 the disk half torn down. A signal that arrives after the install has
@@ -485,7 +516,9 @@ grown over time:
   `elapsed_ms` on every event; `boot_id` on `complete`.
 - v0.3.0: the `recovery_key` event and the `error` event (#195).
 - Unreleased: `overall_pct` on `step`, `substep` and `complete`, and `step_id`
-  on `step` (#270); exit code 130 on cancel (#267).
+  on `step` (#270); exit code 130 on cancel (#267); `code` and `field` on
+  `error` (#404, #402); a closed stdout is a cancel with teardown, not a
+  death by SIGPIPE (#403).
 
 New event types and fields may appear in any release. Consumers must ignore
 event types and fields they do not know.

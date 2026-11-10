@@ -2,9 +2,11 @@ package progress
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -174,5 +176,42 @@ func writeLocked(v any) {
 		fmt.Fprintf(os.Stderr, "progress: marshal error: %v\n", err)
 		return
 	}
-	fmt.Fprintf(os.Stdout, "%s\n", data)
+	if _, err := fmt.Fprintf(os.Stdout, "%s\n", data); err != nil && errors.Is(err, syscall.EPIPE) {
+		reportBrokenPipe()
+	}
+}
+
+// Broken-pipe handling. The reader of the event stream can go away while
+// fisherman is still running: the frontend crashes, or `fisherman … | tee
+// log` loses its tee. Every later event write then fails with EPIPE. The
+// installer cannot report anything any more, so going on would be an
+// unattended install; the handler set here cancels it instead.
+var (
+	brokenPipeMu      sync.Mutex
+	brokenPipeHandler func()
+	brokenPipeSeen    bool
+)
+
+// OnBrokenPipe sets the function called, once and on its own goroutine, the
+// first time an event cannot be written because the reader of stdout has
+// gone (EPIPE). The process must have SIGPIPE handled (signal.Notify), or Go
+// ends it on that write before any handler can run.
+func OnBrokenPipe(handler func()) {
+	brokenPipeMu.Lock()
+	defer brokenPipeMu.Unlock()
+	brokenPipeHandler = handler
+	brokenPipeSeen = false
+}
+
+func reportBrokenPipe() {
+	brokenPipeMu.Lock()
+	handler := brokenPipeHandler
+	first := !brokenPipeSeen
+	brokenPipeSeen = true
+	brokenPipeMu.Unlock()
+	if handler != nil && first {
+		// Not on this goroutine: the caller holds mu, and the handler
+		// emits an event of its own.
+		go handler()
+	}
 }
