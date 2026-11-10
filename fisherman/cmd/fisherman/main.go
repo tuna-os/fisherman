@@ -817,6 +817,18 @@ func main() {
 	}
 
 	opts := buildBootcInstallOptions(r, sourceImgref, targetImgref, activeTargetMount, scratchDir, imageStores, imageCheck.NeedsPull, imageCheck.LayerCount)
+	if hasEncryption && !isManual {
+		// Without the UUID no loader entry can name the LUKS container.
+		// Stop before the image is deployed, not after "complete" (#410).
+		if activeLuksUUID == "" {
+			fatal("LUKS: could not read the UUID of the encrypted root partition %s", activeRootPart)
+		}
+		// Where nothing else finds the root, bootc writes the argument
+		// into the entries it creates, the way rootflags gets there.
+		if luksNeedsKarg(isSystemdBoot, r.ComposeFsBackend) {
+			opts.KernelArguments = append(opts.KernelArguments, post.LuksKarg(activeLuksUUID))
+		}
+	}
 	if err := bootcInstall(opts); err != nil {
 		fatal("bootc install: %v", err)
 	}
@@ -1000,17 +1012,18 @@ func main() {
 		progress.Info(fmt.Sprintf("Added Plymouth boot args to %d loader entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
 	}
 
-	// Inject rd.luks.name=<UUID>=root into every BLS entry so the initrd
+	// Every BLS entry must carry rd.luks.name=<UUID>=root so the initrd
 	// unlocks the LUKS container and maps it to /dev/mapper/root before
 	// mounting the root filesystem. bootc install to-filesystem only sees the
-	// open mapper device and never writes LUKS parameters itself.
+	// open mapper device and never writes LUKS parameters itself; the --karg
+	// above asks it to, and this checks every entry and patches what is
+	// missing. Fatal unless GPT auto-discovery finds the root (#410).
 	if activeLuksUUID != "" {
-		n, err := post.EnsureLuksArgs(activeTargetMount, activeLuksUUID)
+		msg, err := ensureLuksBoot(activeTargetMount, activeLuksUUID, luksNeedsKarg(isSystemdBoot, r.ComposeFsBackend))
 		if err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not inject LUKS boot args: %v", err))
-		} else if n > 0 {
-			progress.Info(fmt.Sprintf("Injected rd.luks.name into %d boot entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+			fatal("LUKS boot arguments: %v", err)
 		}
+		progress.Info(msg)
 	}
 
 	// Copy Bluetooth pairings from live session so paired keyboards/mice

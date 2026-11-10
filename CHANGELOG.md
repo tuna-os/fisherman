@@ -140,6 +140,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before any disk work: `custom_mount_target_duplicate`,
   `custom_mount_partition_duplicate` and `custom_mount_not_persistable` (a
   target on the read-only root, or `/var` on a composefs-native target).
+- **A missing `rd.luks.name` ends an encrypted install** (#410): the
+  injection was a warning, and no loader entry at all was silent, so the
+  install reported `complete` for a system that could not find its root.
+  fisherman now passes `--karg=rd.luks.name=<UUID>=root` to bootc where the
+  layout has no GPT auto-discovery (every layout except systemd-boot with
+  composefs), reads every BLS entry back, patches what is missing, and fails
+  if any entry lacks the argument. A LUKS UUID that cannot be read fails
+  before bootc runs.
 
 - **Bound offline media accepts full uncompressed images**: the aggregate unique
   blob budget now matches the existing 16 GiB per-blob ceiling instead of rejecting
