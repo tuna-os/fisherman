@@ -128,6 +128,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Bug Fixes
 
+- **`varDisk` with an encrypted root is refused** (#406): fisherman has no
+  LUKS step for the `/var` disk, so `/var` and `/var/home` stayed plain text
+  beside an encrypted root. Validation now fails with
+  `var_disk_encryption_unsupported` before any disk is touched.
+- **`varDisk` is refused on composefs-native targets** (#252): with
+  `composeFsBackend` or `filesystem: zfs`, the initramfs mounts the
+  deployment's own `/var`, so the separate disk was formatted but never used.
+  Validation now fails with `var_disk_unsupported_composefs` before any disk
+  is partitioned or formatted. ostree-backed `varDisk` installs are unchanged.
+- **The `/var` disk fstab line is correct, and the disk is released before
+  the format** (#406): the type comes from `blkid` (a kept ext4 or btrfs disk
+  got an `xfs` line and the boot dropped to emergency mode), the options are
+  `defaults,nofail,x-systemd.device-timeout=30s,x-systemd.before=local-fs.target`,
+  and a missing UUID or a failed write ends the install (it was a warning).
+  Before `mkfs.xfs`, the disk is unmounted, its LVM and device-mapper holders
+  are removed and old signatures are wiped. A kept disk is checked with
+  `blkid` before any disk work (`kept_filesystem_unusable`).
+- **Data and swap entries of a manual layout stay mounted after the reboot**
+  (#372): each gets an fstab line in the deployment (UUID and type from
+  `blkid`, `nofail`, mountpoint resolved in the installed image). A device
+  for a path below `/var` is mounted on the deployment's `var` for the
+  post-install steps, and a manual `/var` partition is the resolver's `/var`,
+  so the user's home and the Flatpaks are on them. New rules refuse a layout
+  before any disk work: `custom_mount_target_duplicate`,
+  `custom_mount_partition_duplicate` and `custom_mount_not_persistable` (a
+  target on the read-only root, or `/var` on a composefs-native target).
+- **A missing `rd.luks.name` ends an encrypted install** (#410): the
+  injection was a warning, and no loader entry at all was silent, so the
+  install reported `complete` for a system that could not find its root.
+  fisherman now passes `--karg=rd.luks.name=<UUID>=root` to bootc where the
+  layout has no GPT auto-discovery (every layout except systemd-boot with
+  composefs), reads every BLS entry back, patches what is missing, and fails
+  if any entry lacks the argument. A LUKS UUID that cannot be read fails
+  before bootc runs.
 - **One deployment resolver** (`internal/deploy`) says where the booted
   system's root, `/etc` and `/var` are on the mounted target, for ostree and
   composefs. Bluetooth pairings and migrated wallpapers went to

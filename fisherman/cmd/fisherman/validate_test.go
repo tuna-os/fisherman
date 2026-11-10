@@ -48,6 +48,7 @@ func TestValidateJSONGolden(t *testing.T) {
 		{"partial-page", true, 1},
 		{"partial-valid", true, 0},
 		{"partial-paths", true, 1},
+		{"partial-mounts", true, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -291,6 +291,7 @@ func (r *Recipe) Problems() []Problem {
 				"customMounts: no root (/) partition specified"})
 		}
 		ps = append(ps, CheckCustomMountsLayout(r)...)
+		ps = append(ps, checkCustomMountsPersistence(r, resolveSymlinks)...)
 		// Encryption is NOT applied on the manual path: luksFormat/luksOpen run
 		// only in the auto-partition branch below, and TPM enrolment needs an
 		// activeRootPart that manual mode leaves empty. Accepting an encrypted
@@ -317,6 +318,7 @@ func (r *Recipe) Problems() []Problem {
 	ps = append(ps, CheckImageType(r.ImageType)...)
 	ps = append(ps, CheckBootloader(r.Bootloader)...)
 	ps = append(ps, CheckEncryption(r.Encryption)...)
+	ps = append(ps, CheckVarDiskEncryption(r)...)
 	// image may be empty in live-ISO mode; bootc auto-detects the running
 	// container. Whether this host IS live media is a host fact, so that
 	// check is ValidateImage, called by the CLI with probe's answer.
@@ -333,6 +335,7 @@ func (r *Recipe) Problems() []Problem {
 					"varDisk.disk must differ from the system disk"})
 			}
 		}
+		ps = append(ps, CheckVarDiskBackend(r)...)
 	}
 	ps = append(ps, CheckHostname(r.Hostname)...)
 	// The username used to be checked only by useradd in the configure step,

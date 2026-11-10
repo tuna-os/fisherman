@@ -338,9 +338,14 @@ func TestLoad(t *testing.T) {
 func manualRecipe(t *testing.T, fstype string, enc string) *recipe.Recipe {
 	t.Helper()
 	// Validate() stats the partition paths, so use files that exist.
-	root := filepath.Join(t.TempDir(), "root")
-	if err := os.WriteFile(root, []byte{}, 0o600); err != nil {
-		t.Fatal(err)
+	// One file per partition: a device named twice is a problem of its own
+	// (custom_mount_partition_duplicate).
+	dir := t.TempDir()
+	root, esp, boot := filepath.Join(dir, "root"), filepath.Join(dir, "esp"), filepath.Join(dir, "boot")
+	for _, p := range []string{root, esp, boot, filepath.Join(dir, "extra")} {
+		if err := os.WriteFile(p, []byte{}, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	r := &recipe.Recipe{
 		Image:    "example.invalid/img:latest",
@@ -350,12 +355,17 @@ func manualRecipe(t *testing.T, fstype string, enc string) *recipe.Recipe {
 		// entry 0; tests append theirs as entry 3.
 		CustomMounts: []recipe.CustomMount{
 			{Partition: root, Target: "/", Fstype: fstype},
-			{Partition: root, Target: "/boot/efi", Fstype: "unformatted"},
-			{Partition: root, Target: "/boot", Fstype: "ext4"},
+			{Partition: esp, Target: "/boot/efi", Fstype: "unformatted"},
+			{Partition: boot, Target: "/boot", Fstype: "ext4"},
 		},
 	}
 	r.Encryption.Type = enc
 	return r
+}
+
+// extraPartition is a fourth existing "partition" beside manualRecipe's.
+func extraPartition(r *recipe.Recipe) string {
+	return filepath.Join(filepath.Dir(r.CustomMounts[0].Partition), "extra")
 }
 
 func TestValidateRejectsUnsupportedCustomMountFstype(t *testing.T) {
@@ -427,7 +437,7 @@ func hasCode(ps []recipe.Problem, field, code string) bool {
 func TestProblemsRejectEscapingCustomMountTargets(t *testing.T) {
 	for _, target := range []string{"/../../etc", "/boot/../../etc", "/..", "../etc", "etc", "boot/efi"} {
 		r := manualRecipe(t, "xfs", "none")
-		r.CustomMounts = append(r.CustomMounts, recipe.CustomMount{Partition: r.CustomMounts[0].Partition, Target: target, Fstype: "ext4"})
+		r.CustomMounts = append(r.CustomMounts, recipe.CustomMount{Partition: extraPartition(r), Target: target, Fstype: "ext4"})
 		if !hasCode(r.Problems(), "customMounts[3].target", recipe.CodeCustomMountTargetInvalid) {
 			t.Errorf("target %q must be rejected with %s", target, recipe.CodeCustomMountTargetInvalid)
 		}
@@ -437,7 +447,12 @@ func TestProblemsRejectEscapingCustomMountTargets(t *testing.T) {
 func TestProblemsAcceptValidCustomMountTargets(t *testing.T) {
 	for _, target := range []string{"/boot", "/boot/efi", "/var", "/home", "/var/home/", "/srv/..data", "swap", ""} {
 		r := manualRecipe(t, "xfs", "none")
-		r.CustomMounts = append(r.CustomMounts, recipe.CustomMount{Partition: r.CustomMounts[0].Partition, Target: target, Fstype: "ext4"})
+		// manualRecipe already has /boot and /boot/efi; a second entry on
+		// the same target is custom_mount_target_duplicate, not a path
+		// problem, so those two are checked as the entries they are.
+		if target != "/boot" && target != "/boot/efi" {
+			r.CustomMounts = append(r.CustomMounts, recipe.CustomMount{Partition: extraPartition(r), Target: target, Fstype: "ext4"})
+		}
 		for _, p := range r.Problems() {
 			t.Errorf("target %q: unexpected problem %s: %s", target, p.Code, p.Message)
 		}
