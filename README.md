@@ -60,14 +60,14 @@ fisherman is a Go CLI that reads a JSON recipe and runs an install pipeline. The
 | Partition | write the GPT; the layout depends on the bootloader (see below) | always |
 | Format EFI | `mkfs.fat -F32`, and `mkfs.ext4` for `/boot` on GRUB layouts | always |
 | Encrypt | `cryptsetup luksFormat` and open | encrypted recipes |
-| Format root | `mkfs.xfs`, `mkfs.btrfs` or `mkfs.ext4` | always |
+| Format root | `mkfs.xfs`, `mkfs.btrfs`, `mkfs.ext4` or a ZFS pool | always |
 | Mount | mount everything at `/mnt/fisherman-target` | always |
 | Format data disk | a second disk for `/var` | recipes that name one |
 | Install OS | `bootc install to-filesystem --skip-finalize` through `podman run --privileged` | always |
 | Enrol TPM2 | bind the LUKS volume to the TPM and emit the recovery key | TPM recipes |
 | Copy Flatpaks | copy system Flatpaks from the host to the target | always |
-| Configure | hostname, user account, kernel arguments for LUKS and Plymouth, first-boot data | always |
-| Finalize | fstrim → remount read-only → fsfreeze/thaw | always |
+| Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi and Bluetooth copied from the host, audio names, OEM extras, print services, caches | always |
+| Finalize | fstrim → remount read-only → fsfreeze, then thaw | always (skipped on ZFS) |
 
 The separate ext4 `/boot` partition is required for GRUB because GRUB cannot read modern XFS features (`nrext64`, `exchange`, `rmapbt`). For composefs/systemd-boot images the EFI partition holds the kernel and initrd directly.
 
@@ -77,10 +77,11 @@ The separate ext4 `/boot` partition is required for GRUB because GRUB cannot rea
 |---|---|---|---|---|
 | `grub2` (bluefin) | 3-partition GPT | **2 GiB** FAT32 | **2 GiB** ext4 | GRUB reads kernel from ext4 /boot |
 | `systemd` (dakota) | 2-partition GPT | **2 GiB** FAT32 | — | systemd-boot reads kernel directly from FAT32 ESP |
+| `filesystem: zfs` | 2-partition GPT | **1 GiB** FAT32 | — | ESP plus a ZFS pool; not covered by the VM matrix (#413) |
 
-All fleet images use a **2 GiB ESP** for consistency. Each kernel+initrd pair is 200–400 MiB; 2 GiB accommodates the booted entry, rollback, and a staged upgrade without running out of space.
+GRUB and systemd-boot layouts use a **2 GiB ESP** for consistency. Each kernel+initrd pair is 200–400 MiB; 2 GiB accommodates the booted entry, rollback, and a staged upgrade without running out of space.
 
-When running inside a Flatpak sandbox, fisherman automatically wraps host subprocess calls via `flatpak-spawn --host`.
+When running inside a Flatpak sandbox, fisherman wraps most host subprocess calls via `flatpak-spawn --host`. The frontends do not rely on this: they start fisherman itself on the host, and an install from live media refuses to run inside a sandbox.
 
 ## Usage
 
@@ -140,6 +141,21 @@ that is not one JSON object. Recipes are capped at 1 MiB.
   "flatpaks": ["org.mozilla.firefox"]
 }
 ```
+
+The example shows the common fields. A recipe can also carry `user`,
+`bootloader`, `targetImgref`, `btrfsSubvolumes`, `varDisk`, `customMounts`
+and more; the struct in
+[`fisherman/internal/recipe/recipe.go`](fisherman/internal/recipe/recipe.go)
+is the reference until #320 lands.
+
+Things a recipe author should know today:
+
+- Unknown keys are ignored, so a misspelt field is dropped without an error (#404).
+- `unifiedStorage` is accepted and does nothing (#366).
+- `flatpaks` does not filter: the host's whole `/var/lib/flatpak` is copied (#408).
+- `varDisk` is not encrypted, even when the root is (#406).
+- There is no field for locale, keyboard layout or time zone (#405).
+- Wi-Fi profiles and Bluetooth pairings are copied from the host to the target on every install (#411).
 
 **Encryption types:** `none`, `luks-passphrase`, `tpm2-luks`, `tpm2-luks-passphrase`
 
