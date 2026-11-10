@@ -183,14 +183,18 @@ func prepareScratchDir(activeTargetMount string, liveISO bool) (string, error) {
 	if liveISO {
 		// Self-bind so bootc sees a mount point, not a plain directory.
 		if err := bindMount(scratchDir, scratchDir); err != nil {
+			// Nothing is mounted and nothing is registered: leave no
+			// directory behind on the target either (#291).
+			_ = os.Remove(scratchDir)
 			return "", err
 		}
-		cleanup.AddMount(scratchDir)
-		// Removal is registered as a post-removal so it runs *after* the
-		// unmount above and after the LUKS close — and crucially it still
-		// fires on the fatal() error path, where os.Exit(1) would otherwise
-		// skip a deferred RemoveAll and leak the OCI cache on the target disk.
-		cleanup.AddPostRemoval(scratchDir)
+		// One registration for the bind mount AND the directory under it:
+		// teardown releases the bind and deletes the directory while the
+		// target filesystem is still mounted, before any other unmount and
+		// before the LUKS close. Deleting it after them (as a post-removal)
+		// only deleted an empty mountpoint on the host and left the OCI cache
+		// on the installed disk (#307).
+		cleanup.AddTargetScratch(scratchDir)
 	}
 	return scratchDir, nil
 }
@@ -769,12 +773,12 @@ func main() {
 	// redirects host-side OCI staging while podman creates the container:
 	// that import runs before the container's scratch bind mount exists.
 	//
-	// For the live-ISO path scratchDir is on the target disk and removal is
-	// handled by cleanup.AddPostRemoval (registered in prepareScratchDir),
-	// which also fires on the fatal() error path. For the non-live path the
-	// directory is /var/fisherman-tmp on the host and is cleaned up here
-	// AND via cleanup.AddPostRemoval so it also fires on fatal() paths
-	// (os.Exit bypasses defers).
+	// On live media scratchDir is on the target disk: prepareScratchDir
+	// registered it with cleanup.AddTargetScratch, which removes it while the
+	// target is still mounted (before finalize on success, first thing in
+	// teardown otherwise). Elsewhere it is /var/fisherman-tmp on the host,
+	// removed here AND via cleanup.AddPostRemoval so it also goes on fatal()
+	// paths (os.Exit bypasses defers).
 	if !liveISO {
 		cleanup.AddPostRemoval(scratchDir)
 		defer os.RemoveAll(scratchDir)
@@ -1070,6 +1074,13 @@ func main() {
 	// flatpak appstream) so first boot is instant. Non-fatal.
 	progress.Substep("Pre-warming system caches for first boot")
 	post.WarmCaches(activeTargetMount)
+
+	// Target-resident scratch (live media) goes now, while the target is
+	// still mounted read-write: finalize makes it read-only, and after the
+	// unmount the path no longer names the target's data (#307).
+	if err := cleanup.RemoveTargetScratch(); err != nil {
+		progress.Info(fmt.Sprintf("Warning: could not remove the install scratch from the target: %v", err))
+	}
 
 	// ── Step 9: Finalize ─────────────────────────────────────────────────────
 	// bootc's --skip-finalize kept the target writable for post-install writes.
