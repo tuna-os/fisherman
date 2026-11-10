@@ -273,11 +273,15 @@ images:
   # tpm2-luks with a software TPM. Two boots: the recovery key unlocks the
   # first, which must enrol the TPM; the second gets no passphrase.
   #
-  # ADVISORY: #360. fisherman stages the first-boot enrolment unit under the
-  # physical sysroot (<target>/usr/lib/systemd/system and <target>/etc), not
-  # in the deployment the system boots, so the booted system is expected not
-  # to run it: boot 1 then reports "no systemd-tpm2 token". Drop
-  # nightly_advisory when #360 closes and this entry passes.
+  # ADVISORY: #360, seen in PR #425 (run 42859890515). The install emits the
+  # recovery_key event, the key unlocks boot 1, and the guest has /dev/tpmrm0.
+  # Then the booted system has no fisherman-tpm2-enroll.service and no
+  # /etc/fisherman: fisherman stages both under the physical sysroot
+  # (<target>/usr/lib/systemd/system and <target>/etc), not in the ostree
+  # deployment that boots. So no systemd-tpm2 token is enrolled ("no
+  # systemd-tpm2 token on /dev/sda3 after 120s"), and the transient key file
+  # stays in the sysroot. Drop nightly_advisory when #360 closes and this
+  # entry passes both boots.
   - name: centos-bootc-tpm2-luks
     image: quay.io/centos-bootc/centos-bootc@sha256:9aedf2d189b85c498697f9b83112c893b084d359268da7dd6d5d848478d260de # c10s
     ssh_image_name: centos-bootc
