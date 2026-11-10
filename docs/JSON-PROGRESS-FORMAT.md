@@ -248,7 +248,7 @@ The steps depend on the recipe. They run in this order:
 | `Formatting data disk (/var)` | `format_var` | A separate `/var` disk is set and `keepExisting` is false. |
 | `Installing OS` | `install_os` | Always. Image pull, `bootc install to-filesystem`, bootloader. |
 | `Enrolling TPM2 auto-unlock` | `tpm2_enroll` | `tpm2-luks` or `tpm2-luks-passphrase`. Stages TPM2 enrolment for first boot. |
-| `Copying system Flatpaks` | `flatpaks` | Always. |
+| `Copying system Flatpaks` | `flatpaks` | Always. It copies nothing when the recipe's `flatpaks` is `[]`, or when the host has no system Flatpaks; an `info` line says so. |
 | `Configuring installed system` | `configure` | Always. Hostname, user, kernel arguments, network and Bluetooth copy (live media, or on request). |
 | `Finalizing installation` | `finalize` | Always. fstrim, remount read-only, fsfreeze/thaw (skipped on ZFS). |
 

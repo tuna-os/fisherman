@@ -25,6 +25,17 @@ func (c *realCommand) SetStdin(r io.Reader)  { c.Stdin = r }
 func (c *realCommand) SetStdout(w io.Writer) { c.Stdout = w }
 func (c *realCommand) SetStderr(w io.Writer) { c.Stderr = w }
 
+// Kill stops a started command. It is not part of the Command interface: a
+// caller that pipes two commands together asks for it with a type assertion,
+// to stop the survivor when the other side fails. A command that was never
+// started, or has already been reaped, is left alone.
+func (c *realCommand) Kill() error {
+	if c.Process == nil {
+		return nil
+	}
+	return c.Process.Kill()
+}
+
 // Executor creates Command instances.
 type Executor interface {
 	Command(name string, args ...string) Command

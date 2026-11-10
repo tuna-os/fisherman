@@ -65,7 +65,7 @@ fisherman is a Go CLI that reads a JSON recipe and runs an install pipeline. The
 | Format data disk | a second disk for `/var` | recipes that name one |
 | Install OS | `bootc install to-filesystem --skip-finalize` through `podman run --privileged` | always |
 | Enrol TPM2 | add a single-use keyslot, stage the first-boot unit that binds the LUKS volume to the TPM, and emit the recovery key | TPM recipes |
-| Copy Flatpaks | copy system Flatpaks from the host to the target | always |
+| Copy Flatpaks | copy the host's system Flatpak installation to the target | always; copies nothing when `flatpaks` is `[]` |
 | Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi profiles and Bluetooth pairings copied from the host (live media, or on request), audio names, OEM extras, print services | always |
 | Finalize | fstrim → remount read-only → fsfreeze, then thaw | always (skipped on ZFS) |
 
@@ -155,7 +155,7 @@ Things a recipe author should know today:
 - A manual layout (`customMounts`) needs a `/boot/efi` entry, and a `/boot` entry for GRUB with an XFS root.
 - `unifiedStorage: true` is refused (`unified_storage_unsupported`): fisherman does not pass that flag to bootc.
 - One install runs on a host at a time. A second one is refused (`install_already_running`).
-- `flatpaks` does not filter: the host's whole `/var/lib/flatpak` is copied (#408).
+- `flatpaks` says whether the host's system Flatpaks are copied, not which. Absent: the host's whole `/var/lib/flatpak` is copied. `[]`: nothing is copied. A list: the whole installation is copied all the same, nothing is downloaded, and the log names each listed app that the host does not have.
 - `varDisk` is not encrypted, even when the root is (#406).
 - There is no field for locale, keyboard layout or time zone (#405).
 - The host's Wi-Fi profiles and Bluetooth pairings are copied to the target only when the host booted from live media. `"copyNetworkProfiles"` and `"copyBluetoothPairings"` (`true` or `false`) override that for each kind. On an installed host the default is not to copy: the keys are the operator's.

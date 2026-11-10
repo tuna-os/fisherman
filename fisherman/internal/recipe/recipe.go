@@ -45,10 +45,16 @@ type Recipe struct {
 	// auto-detects based on whether the system is ostree or composefs-native.
 	// Override in images.json for non-standard layouts, e.g. GnomeOS/Dakota:
 	//   "flatpak_var_path": "state/os/default/var"
-	FlatpakVarPath string   `json:"flatpakVarPath,omitempty"`
-	Hostname       string   `json:"hostname"`
-	Flatpaks       []string `json:"flatpaks"` // flatpak app IDs to install; empty = fallback
-	User           UserSpec `json:"user"`     // optional user account to create
+	FlatpakVarPath string `json:"flatpakVarPath,omitempty"`
+	Hostname       string `json:"hostname"`
+	// Flatpaks decides whether the host's system Flatpaks (/var/lib/flatpak)
+	// are copied to the installed system. Absent (null): copy them. []: copy
+	// nothing. A non-empty list also copies them, all of them: it is not a
+	// filter and nothing is downloaded; fisherman only reports each listed
+	// app the host does not have. The nil/empty distinction is the
+	// contract, so keep the field a plain slice decoded by encoding/json.
+	Flatpaks []string `json:"flatpaks"`
+	User     UserSpec `json:"user"` // optional user account to create
 	// CustomMounts is set for manual partitioning. When non-empty, Disk/Filesystem/
 	// BtrfsSubvolumes and the auto-partition steps are skipped; fisherman formats and
 	// mounts the listed partitions directly.

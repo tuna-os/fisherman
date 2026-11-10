@@ -128,6 +128,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Bug Fixes
 
+- **`flatpaks` means what the code does** (#408): absent copies the host's
+  system Flatpaks, `[]` copies nothing, and a list copies the whole
+  installation too, with a log line that says it is not a filter and a
+  warning for each listed app the host lacks. The lines "Installing N
+  per-image flatpak apps" and "using 3 fallback apps" are gone: nothing was
+  ever installed or downloaded. fisherman no longer runs
+  `flatpak install --system` on the installer host.
+- **The Flatpak copy cannot hang** (#358): when `tar x` exits early (a full
+  target), the read end of the pipe is closed, `tar c` is killed and both are
+  reaped. A producer that cannot start no longer leaves the extractor
+  behind.
+
 - **One deployment resolver** (`internal/deploy`) says where the booted
   system's root, `/etc` and `/var` are on the mounted target, for ostree and
   composefs. Bluetooth pairings and migrated wallpapers went to

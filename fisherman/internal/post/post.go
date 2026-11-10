@@ -366,149 +366,106 @@ func WriteHostname(target, hostname string) error {
 	return nil
 }
 
-// fallbackFlatpaks is the core set installed when the recipe doesn't specify
-// a per-image list. Ensures a usable system with browser and terminal.
-var fallbackFlatpaks = []string{
-	"org.mozilla.firefox",
-	"org.gnome.Console",
-	"org.gnome.TextEditor",
+// hostFlatpakDir is the host's system Flatpak installation. A variable so
+// tests can point it at a fixture.
+var hostFlatpakDir = "/var/lib/flatpak"
+
+// bootedVarDir returns the /var the booted system mounts. It needs less
+// than ResolveDeployment and does not fail: the composefs /var has a fixed
+// place, and so has the ostree one once the stateroot is known.
+func bootedVarDir(target string) string {
+	if bootedVar != "" {
+		return bootedVar
+	}
+	if isComposeFsNative(target) {
+		return ComposeFsVarDir(target)
+	}
+	if d, err := ResolveDeployment(target); err == nil {
+		return d.Var
+	}
+	// No deployment to read the stateroot from: bootc's is "default".
+	return filepath.Join(target, "ostree", "deploy", deploy.DefaultStateroot, "var")
 }
 
-// CopyFlatpaks copies flatpaks to the installed system.
-// If wantedRefs is non-empty, only those app IDs are installed to the target
-// (downloading any that aren't cached locally). If empty, the fallback core
-// set is used. In either case, any locally-available system flatpaks matching
-// the wanted set are copied via tar rather than re-downloaded.
+// CopyFlatpaks copies the host's system Flatpak installation
+// (/var/lib/flatpak) into the installed system.
 //
-// flatpakVarPath optionally overrides the relative path within target where
-// the writable /var lives (e.g. "state/os/default/var" for GnomeOS/Dakota).
-// When empty, auto-detection is used: composefs-native → "state/os/default/var",
-// ostree → "ostree/deploy/default/var".
+// The recipe's `flatpaks` field decides whether, not what:
+//
+//	absent (nil)   copy the host's Flatpaks
+//	[]             copy nothing
+//	["a.b.C", ..]  copy the host's Flatpaks. The list is NOT a filter and
+//	               nothing is downloaded: the installation is one ostree
+//	               repository with shared runtimes, and it is copied whole.
+//	               Each listed app the host does not have is reported.
+//
+// Every app and runtime on the host is copied, also the ones no list
+// names. Nothing is installed on the host: an earlier version ran
+// `flatpak install --system` there to "promote" user apps.
+//
+// flatpakVarPath optionally overrides the path, relative to target, of the
+// installed system's /var (e.g. "state/os/default/var"). When empty the
+// deployment resolver decides.
+//
+// The installer's own Flatpak is removed from the copy.
 func CopyFlatpaks(target string, wantedRefs []string, flatpakVarPath string) error {
-	// Resolve wanted list: use recipe's per-image list, or fall back to defaults.
-	if len(wantedRefs) == 0 {
-		wantedRefs = fallbackFlatpaks
-		progress.Substep(fmt.Sprintf("No per-image flatpak list; using %d fallback apps", len(wantedRefs)))
-	} else {
-		progress.Substep(fmt.Sprintf("Installing %d per-image flatpak apps", len(wantedRefs)))
-	}
-	wantedSet := make(map[string]bool, len(wantedRefs))
-	for _, ref := range wantedRefs {
-		wantedSet[ref] = true
+	if wantedRefs != nil && len(wantedRefs) == 0 {
+		progress.Info("Flatpaks: skipped, the recipe's flatpaks list is empty")
+		return nil
 	}
 
-	// Target /var/lib/flatpak: resolve the writable var path.
-	// Priority: explicit flatpakVarPath from recipe > auto-detect from layout.
-	// composefs-native (GnomeOS/Dakota): state/os/default/var
-	// ostree/bootc standard:             ostree/deploy/default/var
 	var dst string
-	switch {
-	case flatpakVarPath != "":
+	if flatpakVarPath != "" {
 		dst = filepath.Join(target, flatpakVarPath, "lib", "flatpak")
-	case isComposeFsNative(target):
-		dst = filepath.Join(target, "state", "os", "default", "var", "lib", "flatpak")
-	default:
-		dst = filepath.Join(target, "ostree", "deploy", "default", "var", "lib", "flatpak")
+	} else {
+		dst = filepath.Join(bootedVarDir(target), "lib", "flatpak")
 	}
 	if err := runner.Run("mkdir", "-p", dst); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dst, err)
 	}
 
-	// 1. Collect all system-installed flatpak refs (apps + runtimes).
-	sysApps := flatpakList("--system", "--app")
-	sysAll := flatpakList("--system", "")
-	userApps := flatpakList("--user", "--app")
-
-	// Filter to only wanted apps.
-	var wantedSysApps []string
-	for _, r := range sysApps {
-		if wantedSet[flatpakAppName(r)] {
-			wantedSysApps = append(wantedSysApps, r)
-		}
-	}
-
-	if len(sysAll) == 0 && len(userApps) == 0 {
-		fmt.Fprintln(os.Stdout, "  no flatpaks installed locally; wanted list will be downloaded")
-	}
-
-	// Report what we found.
-	progress.Substep(fmt.Sprintf("Found %d/%d wanted apps in system install", len(wantedSysApps), len(wantedRefs)))
-
-	// 2. Figure out which user-only app refs are not in the system install,
-	//    filtered to only wanted apps.
-	sysSet := make(map[string]bool, len(sysAll))
-	for _, r := range sysAll {
-		sysSet[r] = true
-	}
-	var userOnly []string
-	for _, r := range userApps {
-		if !sysSet[r] && wantedSet[flatpakAppName(r)] {
-			userOnly = append(userOnly, r)
-		}
-	}
-
-	// 3. Install user-only app refs into the system repo so tar picks them up.
-	for i, ref := range userOnly {
-		name := flatpakAppName(ref)
-		progress.Substep(fmt.Sprintf("Promoting user app %d/%d: %s", i+1, len(userOnly), name))
-		fmt.Fprintf(os.Stdout, "  installing user flatpak to system: %s\n", ref)
-		if err := Exec.Command("flatpak", "install", "--system", "-y", "--noninteractive", ref).Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: could not install %s to system: %v\n", ref, err)
-		}
-	}
-
-	// 4. Copy system flatpak directory to the target via tar pipe.
-	src := "/var/lib/flatpak"
+	src := hostFlatpakDir
 	totalBytes := dirSize(src)
 	if totalBytes == 0 {
-		fmt.Fprintf(os.Stdout, "  no system flatpak data found at %s, skipping copy\n", src)
+		progress.Info(fmt.Sprintf("Flatpaks: skipped, the host has no system Flatpaks at %s", src))
+		reportMissingFlatpaks(wantedRefs, nil)
+		// The image may ship Flatpaks of its own in /var: the installer's
+		// must not be among them.
 		removeInstallerFlatpaks(dst)
 		return nil
 	}
 
-	allApps := flatpakList("--system", "--app")
-	// Emit a substep for each wanted app so the UI shows individual names.
-	copiedNames := make([]string, 0, len(wantedRefs))
-	for _, ref := range allApps {
-		name := flatpakAppName(ref)
-		if wantedSet[name] {
-			copiedNames = append(copiedNames, name)
-		}
+	hostApps := flatpakList("--system", "--app")
+	names := make([]string, 0, len(hostApps))
+	for _, ref := range hostApps {
+		names = append(names, flatpakAppName(ref))
 	}
-	for i, name := range copiedNames {
-		progress.Substep(fmt.Sprintf("Copying app %d/%d: %s", i+1, len(copiedNames), name))
+	if len(wantedRefs) > 0 {
+		progress.Info(fmt.Sprintf(
+			"Flatpaks: the recipe lists %d app(s); the list is not a filter, the host's whole Flatpak installation is copied (%d app(s), %s)",
+			len(wantedRefs), len(names), humanBytes(totalBytes)))
+		reportMissingFlatpaks(wantedRefs, names)
+	} else {
+		progress.Info(fmt.Sprintf("Flatpaks: copying the host's Flatpak installation (%d app(s), %s)",
+			len(names), humanBytes(totalBytes)))
 	}
-	if len(copiedNames) == 0 {
-		progress.Substep(fmt.Sprintf("Copying %d Flatpak apps (%s)", len(allApps), humanBytes(totalBytes)))
+	// One substep per app that is really copied, so the UI can show names.
+	for i, name := range names {
+		progress.Substep(fmt.Sprintf("Copying app %d/%d: %s", i+1, len(names), name))
 	}
 	fmt.Fprintf(os.Stdout, "  copying flatpaks: %s → %s (%d bytes)\n", src, dst, totalBytes)
 
-	// tar cf → countingReader → tar xf
 	tarC := Exec.Command("tar", "cf", "-", "-C", src, ".")
 	tarX := Exec.Command("tar", "xf", "-", "-C", dst)
-
-	pr, pw := io.Pipe()
-	var bytesRead atomic.Int64
-	cr := &countingReader{r: pr, n: &bytesRead}
-
-	tarC.SetStdout(pw)
 	tarC.SetStderr(os.Stdout)
-	tarX.SetStdin(cr)
 	tarX.SetStdout(os.Stdout)
 	tarX.SetStderr(os.Stdout)
 
-	if err := tarX.Start(); err != nil {
-		pw.Close()
-		return fmt.Errorf("tar extract start: %w", err)
-	}
-	if err := tarC.Start(); err != nil {
-		pw.Close()
-		return fmt.Errorf("tar create start: %w", err)
-	}
-
-	// Progress reporter goroutine.
+	var bytesRead atomic.Int64
 	stopProgress := make(chan struct{})
+	progressDone := make(chan struct{})
 	go func() {
+		defer close(progressDone)
 		lastPct := -1
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
@@ -517,40 +474,43 @@ func CopyFlatpaks(target string, wantedRefs []string, flatpakVarPath string) err
 			case <-stopProgress:
 				return
 			case <-ticker.C:
-				if totalBytes > 0 {
-					pct := int(bytesRead.Load() * 100 / totalBytes)
-					if pct > 100 {
-						pct = 100
-					}
-					if pct > lastPct+4 {
-						lastPct = pct
-						progress.Substep(fmt.Sprintf("Copying Flatpak data: %d%%", pct))
-					}
+				pct := int(bytesRead.Load() * 100 / totalBytes)
+				if pct > 100 {
+					pct = 100
+				}
+				if pct > lastPct+4 {
+					lastPct = pct
+					progress.Substep(fmt.Sprintf("Copying Flatpak data: %d%%", pct))
 				}
 			}
 		}
 	}()
-
-	// Wait for tar create to finish, then close the pipe so tar extract sees EOF.
-	errC := tarC.Wait()
-	pw.Close()
-	errX := tarX.Wait()
+	err := pipeCommands(tarC, tarX, &bytesRead)
 	close(stopProgress)
-
-	if errC != nil {
-		return fmt.Errorf("tar create: %w", errC)
+	<-progressDone
+	if err != nil {
+		return err
 	}
-	if errX != nil {
-		return fmt.Errorf("tar extract: %w", errX)
-	}
-
-	fmt.Fprintf(os.Stdout, "  copied %d apps (%d promoted from user)\n",
-		len(allApps), len(userOnly))
 
 	removeInstallerFlatpaks(dst)
 
-	progress.Substep(fmt.Sprintf("Copied %d Flatpak apps", len(allApps)))
+	progress.Substep(fmt.Sprintf("Copied %d Flatpak apps", len(names)))
 	return nil
+}
+
+// reportMissingFlatpaks says, for each app the recipe lists, that the host
+// does not have it and so the installed system will not either.
+func reportMissingFlatpaks(wanted, hostApps []string) {
+	have := make(map[string]bool, len(hostApps))
+	for _, n := range hostApps {
+		have[n] = true
+	}
+	for _, w := range wanted {
+		if !have[w] {
+			progress.Info(fmt.Sprintf(
+				"Warning: Flatpak %s is in the recipe but not on the host; it is not downloaded and will not be on the installed system", w))
+		}
+	}
 }
 
 // removeInstallerFlatpaks deletes all known installer Flatpak app IDs from dst
