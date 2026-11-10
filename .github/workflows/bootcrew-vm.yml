@@ -161,9 +161,9 @@ jobs:
           retention-days: 14
 
   # ── arm64: build, vet and unit tests on a native runner (#418). ───────────
-  # .goreleaser.yml ships linux/arm64 binaries of both modules, and every
-  # other job here is x86_64, so nothing compiled that code before a release,
-  # or ran its tests. ubuntu-24.04-arm is the hosted arm64 runner this
+  # .goreleaser.yml ships a linux/arm64 fisherman, and every other job here
+  # is x86_64, so nothing compiled that code before a release, or ran its
+  # tests. tui/ is checked too: consumers build it for arm64. ubuntu-24.04-arm is the hosted arm64 runner this
   # organisation already uses (bootc-installer's flatpak.yml and
   # publish-oci.yml), so the tests run natively, not only a cross-compile.
   #

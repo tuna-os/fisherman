@@ -1,3 +1,10 @@
+# `fisherman images` reads the catalog from <datadir>/fisherman/data
+# (images.FindPaths: /usr/share/... and, in a Flatpak, /app/share/...).
+install_data(
+  'data/images.json',
+  install_dir: get_option('datadir') / 'fisherman' / 'data',
+)
+
 go = find_program('go', required: false)
 
 if go.found()
