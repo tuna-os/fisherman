@@ -24,7 +24,8 @@ passphrase, so it never lands in a temp file or on the command line.
 - Exit `2`: bad arguments (no recipe, more than one, an unknown flag). The
   message and usage are on stderr; stdout is empty.
 - **No root**, writes nothing. The full mode `stat`s the disk and partition
-  paths and reads the TPM state from `/sys`; `--partial` reads nothing at all.
+  paths, asks `lsblk` about the target disk, and reads the TPM and firmware
+  state from `/sys`; `--partial` reads nothing at all.
 
 ## One rule set
 
@@ -50,7 +51,8 @@ a TPM type on a machine without a usable TPM 2.0).
   errors[]                   every problem found, in the order below; [] when valid
     field           string   JSON path of the recipe field: "hostname", "user.username",
                              "encryption.passphrase", "customMounts[0].fstype", ...;
-                             "" when the recipe itself could not be read
+                             "" when the recipe itself could not be read, or the
+                             problem is about the machine (firmware_not_uefi)
     code            string   stable id; see "Codes". Key copy on this, never on message
     message         string   English, for logs and CLI users; may change
 }
@@ -58,7 +60,8 @@ a TPM type on a machine without a usable TPM 2.0).
 
 Order: unknown keys (sorted by path), then the layout (disk or customMounts,
 filesystem and its combinations), then `imageType`, `bootloader`, `encryption`, `varDisk`, `hostname`,
-`user.username`, and the TPM check last. Each field reports at most one
+`user.username`, the other fields, the TPM check, `image`, and target
+eligibility (`disk`, `varDisk.disk`, the firmware) last. Each field reports at most one
 problem from its own rule (the first it breaks).
 
 ### Example
@@ -121,6 +124,56 @@ A frontend must send only keys in the schema of the fisherman commit it
 pins. There is no `recipeVersion` field yet (#293): to use a new field, bump
 the pin first.
 
+## Target eligibility
+
+`fisherman probe --json` tells a frontend which disks it may offer. A recipe
+can still name any path, so the install and the full `validate` judge the
+path again, with the same code as the probe (`probe.Target`), before any
+disk step. The install used to check only that the path existed: a recipe
+could name the live USB, a partition, or `/etc/hostname`.
+
+fisherman resolves symlinks first. `/dev/disk/by-id/…` is accepted when it
+points at a whole disk, and the install then uses the device node it points
+at.
+
+| Verdict (probe's identifier) | Code for `disk` | Code for `varDisk.disk` | Override |
+|---|---|---|---|
+| not a whole disk: a partition, a regular file, a character device, an optical drive, a RAM disk, zram, a device-mapper node (`not_disk`) | `disk_not_disk` | `var_disk_not_disk` | no |
+| the running system or the live medium is on it: it, or anything on it, is mounted at `/`, `/sysroot`, `/boot`, `/boot/efi`, `/efi`, `/usr`, `/var`, `/run/initramfs/live`, `/run/initramfs/isoscan` or `/run/media/iso` (`boot_disk`) | `disk_boot_disk` | `var_disk_boot_disk` | no |
+| the kernel reports it read-only (`read_only`) | `disk_read_only` | `var_disk_read_only` | no |
+| smaller than 50 GiB (`too_small`) | `disk_too_small` | does not apply | `"too_small"` |
+| the machine did not boot through UEFI (`system.unmet` has `uefi`) | `firmware_not_uefi`, with an empty `field` | | `"uefi"` |
+| `lsblk` failed, so there is no verdict | `disk_unverified` | `var_disk_unverified` | no |
+
+More than one verdict can apply to a disk; each is reported. `not_disk`
+stands alone.
+
+**Override.** The recipe field `override` is a list. It accepts `"too_small"`
+and `"uefi"` only, and any other value is `override_unsupported`:
+
+```json
+{"disk": "/dev/sdb", "override": ["too_small", "uefi"], "...": "..."}
+```
+
+The two are policy about this machine, not protection of data: a small disk
+can hold a small image, and a disk written on a BIOS machine can boot on
+another machine. The other verdicts have no override. An install to the boot
+disk destroys the system that runs the installer, and an install to a
+partition or a read-only disk fails after the partition table is gone.
+
+**Loop devices.** A whole loop device (`/dev/loopN`, an image file attached
+with `losetup`) is a valid target. The probe never offers one, but CI and
+image builds install to one. It is an image for another machine, so
+`too_small` and the firmware check do not apply to it. `boot_disk`,
+`read_only` and `not_disk` (a loop partition, `/dev/loop0p1`) do apply.
+
+**Manual layouts.** `customMounts` names partitions, not a disk, so there is
+no `disk` verdict. The firmware check applies.
+
+**Root.** `validate` needs no root. The install does, and it refuses a
+non-root run before it reads the recipe: its `error` event has the code
+`not_root`.
+
 ## Validating one page: `--partial`
 
 A frontend validates a page while it is filled in, before a whole recipe
@@ -149,6 +202,7 @@ A rule runs when its key is present:
 | `customMounts` | each entry's target (not its partition) |
 | `targetMount` | targetMount |
 | `flatpakVarPath` | flatpakVarPath |
+| `override` | override |
 
 Everything else (`disk`, the `customMounts` partitions, `varDisk`, the TPM)
 is ignored in partial mode: those read the machine, and the full mode checks
@@ -179,13 +233,17 @@ holds both fields.
 | `encryption.type` | a `tpm2-*` type needs a usable TPM 2.0 here: `probe --json`'s `tpm.usable`, including its `BOOTC_INSTALLER_FAKE_TPM` override. Full mode only. | `encryption_tpm_unavailable` |
 | `encryption.passphrase` | non-empty for a type with `needs_passphrase` | `encryption_passphrase_required` |
 | `disk` | required on the auto layout, and must exist. Full mode only. | `disk_required`, `disk_not_found` |
+| `disk` | an eligible target: a whole disk (symlinks resolved) that does not hold the running system, is writable and is at least 50 GiB. See [Target eligibility](#target-eligibility). Full mode only. | `disk_not_disk`, `disk_boot_disk`, `disk_read_only`, `disk_too_small`, `disk_unverified` |
+| (the machine) | booted through UEFI, unless the target is a loop device. Full mode only. | `firmware_not_uefi` |
+| `override` | each entry is `too_small` or `uefi` | `override_unsupported` |
 | `customMounts[i].partition` | required, and must exist unless the target is swap or empty | `custom_mount_partition_required`, `custom_mount_partition_not_found` |
 | `customMounts[i].fstype` | one of `fat32`, `ext3`, `ext4`, `xfs`, `btrfs`, `swap`, `unformatted`, `""` | `custom_mount_fstype_unsupported` |
 | `customMounts[i].target` | `""`, `swap`, or an absolute path with no `..` component. It is appended to `targetMount`, so `/../../etc` would mount the partition over the host's `/etc` and a relative `etc` would land beside the target. | `custom_mount_target_invalid` |
 | `customMounts` | one entry targets `/` | `custom_mounts_no_root` |
 | `targetMount` | empty is valid (`/mnt/fisherman-target`). Otherwise an absolute path with no `..` component that is not `/`: the root filesystem is mounted there and every post-install write goes under it. | `target_mount_invalid` |
 | `flatpakVarPath` | empty is valid (auto-detect). Otherwise no `..` component: it is joined under the installed root for the flatpak copy. | `flatpak_var_path_invalid` |
-| `varDisk.disk` | required, exists, differs from `disk` | `var_disk_required`, `var_disk_not_found`, `var_disk_same_as_disk` |
+| `varDisk.disk` | required, exists, differs from `disk` (also when the two paths are different names for one device) | `var_disk_required`, `var_disk_not_found`, `var_disk_same_as_disk` |
+| `varDisk.disk` | a whole disk that does not hold the running system and is writable. Full mode only. | `var_disk_not_disk`, `var_disk_boot_disk`, `var_disk_read_only`, `var_disk_unverified` |
 | `image` | non-empty unless this host booted from live media (probe's `live.is_live`), where empty means "install the running live image". Full mode only. | `image_required` |
 | `imageType` | `""` or `bootc` | `image_type_unsupported` |
 | `bootloader` | `""`, `grub2` or `systemd` | `bootloader_unsupported` |
@@ -250,6 +308,17 @@ This section maps error codes to their causes and corrective actions. Each code 
 |---|---|---|---|
 | `disk_required` | `disk` | No disk specified in auto-layout recipe | Add `"disk": "/dev/sdX"` or similar |
 | `disk_not_found` | `disk` | The disk path does not exist | Check the disk path; run `lsblk` to list available disks |
+| `disk_not_disk` | `disk` | The path is not a whole disk: a partition (`/dev/sda1`), a file, or another kind of device | Name the disk itself (`/dev/sda`); for partitions, use `customMounts` |
+| `disk_boot_disk` | `disk` | The running system or the live medium is on this disk | Choose another disk. There is no override |
+| `disk_read_only` | `disk` | The kernel reports the disk read-only | Remove the write protection, or choose another disk |
+| `disk_too_small` | `disk` | The disk is smaller than 50 GiB | Choose a larger disk, or add `"too_small"` to `override` |
+| `disk_unverified` | `disk` | `lsblk` failed, so fisherman cannot tell whether the disk is safe | Install `util-linux` on the host; read the message for the `lsblk` error |
+| `firmware_not_uefi` | (none) | The machine booted in BIOS (legacy) mode; fisherman installs UEFI boot loaders | Boot the installer in UEFI mode, or add `"uefi"` to `override` for a disk that another machine will boot |
+| `override_unsupported` | `override[i]` | The entry is not `too_small` or `uefi` | Remove it. The other target checks have no override |
+| `var_disk_not_disk` | `varDisk.disk` | The `/var` disk path is not a whole disk | Name the disk itself |
+| `var_disk_boot_disk` | `varDisk.disk` | The running system or the live medium is on the `/var` disk | Choose another disk |
+| `var_disk_read_only` | `varDisk.disk` | The `/var` disk is read-only | Remove the write protection, or choose another disk |
+| `var_disk_unverified` | `varDisk.disk` | `lsblk` failed | As for `disk_unverified` |
 | `var_disk_required` | `varDisk.disk` | No `/var` disk specified when `varDisk` is used | Add `"varDisk": {"disk": "/dev/sdY"}` |
 | `var_disk_not_found` | `varDisk.disk` | The `/var` disk path does not exist | Check the disk path |
 | `var_disk_same_as_disk` | `varDisk.disk` | The `/var` disk is the same as the root disk | Use a different disk for `/var` |
@@ -314,6 +383,16 @@ This section maps error codes to their causes and corrective actions. Each code 
 | `bootloader_unsupported` | `bootloader` | Bootloader is not empty, `grub2`, or `systemd` | Use one of: empty (auto), `grub2`, or `systemd` |
 | `slurp_unsupported` | `slurp` | User-data migration (slurp) without durable rescue storage is not supported | Specify a `slurpRescueStore` disk, or remove the `slurp` field |
 | `brew_tap_invalid` | `brewTap` | Homebrew tap format is invalid | Use `owner/name` format, with each part containing only letters, digits, `.`, `_`, and `-` |
+
+### Install only
+
+The install reports these in its `error` event
+([JSON-PROGRESS-FORMAT.md](JSON-PROGRESS-FORMAT.md#error)). `validate` never
+does: it needs no root.
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `not_root` | (none) | The install did not run as root | Run fisherman through `pkexec` or `sudo` |
 
 ### Interpreting Errors in JSON
 

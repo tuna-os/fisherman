@@ -140,6 +140,9 @@ func teardown() error {
 	return cleanup.Run()
 }
 
+// geteuid is os.Geteuid by default; replaced in tests.
+var geteuid = os.Geteuid
+
 // lookPath is exec.LookPath by default; replaced in tests.
 var lookPath = exec.LookPath
 
@@ -345,6 +348,16 @@ func main() {
 	term.watchSignals()
 	term.armParentDeathCancel()
 
+	// An install partitions, formats and mounts: it needs root for its first
+	// disk step, and before that step it already changes the host (the live
+	// audio configuration, mount points, scratch space). Refuse here, before
+	// the recipe is even read, rather than fail half-way.
+	if geteuid() != 0 {
+		fatalProblem("cannot install", recipe.Problem{Code: recipe.CodeNotRoot,
+			Message: "fisherman must run as root to install (run it through pkexec or sudo); " +
+				"`fisherman validate` and `fisherman probe` need no root"})
+	}
+
 	r, err := loadRecipe(os.Args[1])
 	if err != nil {
 		fatalLoad(err)
@@ -382,6 +395,7 @@ func main() {
 	if ps := installProblemsWith(r, imageErr); len(ps) > 0 {
 		fatalProblem("invalid recipe", ps[0])
 	}
+	resolveTargets(r)
 
 	// Recipe-level overrides for the otherwise-shared global mount paths.
 	// Keeps two parallel installs on the same host from colliding.

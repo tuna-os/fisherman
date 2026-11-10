@@ -218,7 +218,11 @@ recipe on stdin (`fisherman -`), empty stdin is `loading recipe: recipe is
 empty`. An empty `image` on a host that did not boot from live media is
 `invalid recipe: image is required: …` (`code` `image_required`). A recipe
 key fisherman does not know is `loading recipe: unknown recipe field …`
-(`code` `recipe_unknown_field`).
+(`code` `recipe_unknown_field`). A run that is not root is `cannot install:
+fisherman must run as root …` (`code` `not_root`); it is refused before the
+recipe is read. A disk that is not an eligible target is `invalid recipe:
+disk … ` with one of the `disk_*` codes
+([VALIDATE.md](VALIDATE.md#target-eligibility)).
 
 `error` is **not** emitted when fisherman exits 2 (unknown command) or
 panics, or when it is killed with SIGKILL. See [Exit codes](#exit-codes).

@@ -74,6 +74,24 @@ const (
 	CodeCustomMountTargetInvalid      = "custom_mount_target_invalid"
 	CodeTargetMountInvalid            = "target_mount_invalid"
 	CodeFlatpakVarPathInvalid         = "flatpak_var_path_invalid"
+
+	// Target eligibility (CheckTarget). The reason part is probe's
+	// excluded_reason / unmet identifier.
+	CodeDiskUnverified      = "disk_unverified"
+	CodeDiskNotDisk         = "disk_not_disk"
+	CodeDiskBootDisk        = "disk_boot_disk"
+	CodeDiskReadOnly        = "disk_read_only"
+	CodeDiskTooSmall        = "disk_too_small"
+	CodeFirmwareNotUEFI     = "firmware_not_uefi"
+	CodeVarDiskUnverified   = "var_disk_unverified"
+	CodeVarDiskNotDisk      = "var_disk_not_disk"
+	CodeVarDiskBootDisk     = "var_disk_boot_disk"
+	CodeVarDiskReadOnly     = "var_disk_read_only"
+	CodeOverrideUnsupported = "override_unsupported"
+
+	// Install-only: reported in the install's error event, not by validate,
+	// which needs no root.
+	CodeNotRoot = "not_root"
 )
 
 // Filesystems is the set of root filesystems the auto-partition path can
@@ -426,6 +444,111 @@ func CheckFlatpakVarPath(p string) []Problem {
 	}
 	return []Problem{{"flatpakVarPath", CodeFlatpakVarPathInvalid,
 		fmt.Sprintf("flatpakVarPath must stay inside the installed root (no \"..\" components), got %q", p)}}
+}
+
+// CheckOverride applies the override rule: every entry is one of Overrides.
+// An unknown entry is refused rather than ignored, for the reason unknown
+// keys are: the caller believes it switched a check off.
+func CheckOverride(override []string) []Problem {
+	for i, o := range override {
+		if !contains(Overrides, o) {
+			return []Problem{{fmt.Sprintf("override[%d]", i), CodeOverrideUnsupported,
+				fmt.Sprintf("override accepts only \"too_small\" and \"uefi\", got %q", o)}}
+		}
+	}
+	return nil
+}
+
+// TargetFacts is what the machine says about one path a recipe names as a
+// disk: probe.Target's verdict, in the recipe package's own terms so the
+// rules stay free of host reads.
+type TargetFacts struct {
+	// Err: the verdict could not be reached (lsblk failed).
+	Err error
+	// Device is the path with symlinks resolved.
+	Device string
+	// Loop: a whole loop device (an image for another machine).
+	Loop      bool
+	SizeBytes int64
+	MinBytes  int64
+	// NotDisk, BootDisk, ReadOnly, TooSmall are probe's excluded reasons.
+	NotDisk, BootDisk, ReadOnly, TooSmall bool
+}
+
+// CheckTarget applies the target-eligibility rules to `disk` and
+// `varDisk.disk`. The install and the full `validate` run it; it is separate
+// from Problems because it reads the machine. A manual layout (customMounts)
+// names partitions, not a disk, so only the firmware rule applies to it.
+//
+//   - not a whole-disk block device, the disk the running system (or the
+//     live medium) is on, or read-only: always an error. An install there
+//     either destroys the system that is running it or fails after the
+//     partition table is gone.
+//   - smaller than the minimum, or a machine that did not boot through
+//     UEFI: an error unless the recipe lists it in `override`. Neither
+//     applies to a loop device, which is an image for another machine.
+//
+// disk and varDisk are nil when the recipe names none, or the path does not
+// exist (Problems has reported that).
+func (r *Recipe) CheckTarget(disk, varDisk *TargetFacts, uefi bool) []Problem {
+	var ps []Problem
+	manual := len(r.CustomMounts) > 0
+	loop := false
+	if disk != nil && !manual {
+		loop = disk.Loop
+		switch {
+		case disk.Err != nil:
+			ps = append(ps, Problem{"disk", CodeDiskUnverified,
+				fmt.Sprintf("disk %s: cannot tell whether it is safe to install to: %v", r.Disk, disk.Err)})
+		case disk.NotDisk:
+			ps = append(ps, Problem{"disk", CodeDiskNotDisk,
+				fmt.Sprintf("disk %s is not a whole disk (a partition, a file or another kind of device); name the disk itself, for example /dev/sda", r.Disk)})
+		default:
+			if disk.BootDisk {
+				ps = append(ps, Problem{"disk", CodeDiskBootDisk,
+					fmt.Sprintf("disk %s holds the system that is running now (or the live medium); installing to it would destroy it", r.Disk)})
+			}
+			if disk.ReadOnly {
+				ps = append(ps, Problem{"disk", CodeDiskReadOnly,
+					fmt.Sprintf("disk %s is read-only", r.Disk)})
+			}
+			if disk.TooSmall && !r.Overridden(OverrideTooSmall) {
+				ps = append(ps, Problem{"disk", CodeDiskTooSmall,
+					fmt.Sprintf("disk %s is %d bytes; the minimum is %d (add \"too_small\" to \"override\" to install anyway)",
+						r.Disk, disk.SizeBytes, disk.MinBytes)})
+			}
+		}
+	}
+	if varDisk != nil && r.VarDisk != nil {
+		switch {
+		case varDisk.Err != nil:
+			ps = append(ps, Problem{"varDisk.disk", CodeVarDiskUnverified,
+				fmt.Sprintf("varDisk.disk %s: cannot tell whether it is safe to use: %v", r.VarDisk.Disk, varDisk.Err)})
+		case varDisk.NotDisk:
+			ps = append(ps, Problem{"varDisk.disk", CodeVarDiskNotDisk,
+				fmt.Sprintf("varDisk.disk %s is not a whole disk (a partition, a file or another kind of device)", r.VarDisk.Disk)})
+		default:
+			if disk != nil && disk.Err == nil && varDisk.Device == disk.Device && r.VarDisk.Disk != r.Disk {
+				// Two spellings of one device; Problems compares the strings.
+				ps = append(ps, Problem{"varDisk.disk", CodeVarDiskSameAsDisk,
+					"varDisk.disk must differ from the system disk"})
+			}
+			if varDisk.BootDisk {
+				ps = append(ps, Problem{"varDisk.disk", CodeVarDiskBootDisk,
+					fmt.Sprintf("varDisk.disk %s holds the system that is running now (or the live medium)", r.VarDisk.Disk)})
+			}
+			if varDisk.ReadOnly {
+				ps = append(ps, Problem{"varDisk.disk", CodeVarDiskReadOnly,
+					fmt.Sprintf("varDisk.disk %s is read-only", r.VarDisk.Disk)})
+			}
+		}
+	}
+	if !uefi && !loop && !r.Overridden(OverrideUEFI) {
+		ps = append(ps, Problem{"", CodeFirmwareNotUEFI,
+			"this machine did not boot through UEFI, and fisherman installs UEFI boot loaders only " +
+				"(add \"uefi\" to \"override\" to install anyway, for a disk that another machine will boot)"})
+	}
+	return ps
 }
 
 func isLower(r rune) bool { return r >= 'a' && r <= 'z' }

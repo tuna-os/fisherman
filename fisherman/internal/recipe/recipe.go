@@ -103,6 +103,28 @@ type Recipe struct {
 	// BrewTap is an optional Homebrew tap to add before installing OEM
 	// packages (e.g. "ublue-os/tap"). When empty, no tap is added.
 	BrewTap string `json:"brewTap,omitempty"`
+	// Override lists the target checks the caller accepts failing: the
+	// values of Overrides ("too_small", "uefi"). They are the two checks
+	// about hardware policy rather than safety; the checks that protect
+	// data (the boot disk, a read-only disk, a path that is not a whole
+	// disk) cannot be overridden. See docs/VALIDATE.md, "Target eligibility".
+	Override []string `json:"override,omitempty"`
+}
+
+// Overrides are the values Recipe.Override accepts. They are probe's own
+// identifiers: disks[].excluded_reason "too_small" and system.unmet "uefi".
+const (
+	OverrideTooSmall = "too_small"
+	OverrideUEFI     = "uefi"
+)
+
+// Overrides lists every value Recipe.Override accepts.
+var Overrides = []string{OverrideTooSmall, OverrideUEFI}
+
+// Overridden reports whether the recipe accepts check (one of Overrides)
+// failing.
+func (r *Recipe) Overridden(check string) bool {
+	return contains(r.Override, check)
 }
 
 // RootMountOptions returns the filesystem mount options that should be applied
@@ -205,8 +227,9 @@ func (r *Recipe) Validate() error {
 // the disk, the customMounts partitions and the varDisk, and returns every
 // problem found, in a stable order: the layout first, then imageType,
 // bootloader, encryption, varDisk, hostname, user, distroID, brewTap,
-// slurp, targetMount and flatpakVarPath. It does not check the TPM, which
-// needs the machine; see CheckTPM.
+// slurp, targetMount, flatpakVarPath and override. It does not check the
+// TPM or whether the disk is an eligible target, which need the machine; see
+// CheckTPM and CheckTarget.
 func (r *Recipe) Problems() []Problem {
 	var ps []Problem
 	if len(r.CustomMounts) > 0 {
@@ -299,5 +322,6 @@ func (r *Recipe) Problems() []Problem {
 	// Host paths root mounts onto or writes under; see CheckTargetMount.
 	ps = append(ps, CheckTargetMount(r.TargetMount)...)
 	ps = append(ps, CheckFlatpakVarPath(r.FlatpakVarPath)...)
+	ps = append(ps, CheckOverride(r.Override)...)
 	return ps
 }

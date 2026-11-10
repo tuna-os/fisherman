@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/recipe"
 )
 
@@ -50,7 +51,72 @@ func installProblemsWith(r *recipe.Recipe, imageErr error) []recipe.Problem {
 	if imageErr != nil {
 		ps = append(ps, recipe.Problem{Field: "image", Code: recipe.CodeImageRequired, Message: imageErr.Error()})
 	}
+	ps = append(ps, targetProblems(r)...)
 	return ps
+}
+
+// Host facts about the install target. They come from the same Prober as
+// `fisherman probe`, so the disk list a frontend shows and the verdict on the
+// recipe it then sends cannot disagree. Tests replace them.
+var (
+	hostTarget = func(path string) (probe.Target, error) { return newProber().Target(path) }
+	hostUEFI   = func() bool { return newProber().UEFI() }
+)
+
+// targetFacts asks the host about one disk path. nil means "nothing to
+// judge": the path is empty or does not exist, which recipe.Problems reports.
+func targetFacts(path string) *recipe.TargetFacts {
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	t, err := hostTarget(path)
+	if err != nil {
+		return &recipe.TargetFacts{Err: err, Device: path}
+	}
+	f := &recipe.TargetFacts{Device: t.Device, Loop: t.Loop, SizeBytes: t.SizeBytes, MinBytes: probe.MinDiskBytes}
+	for _, reason := range t.Reasons {
+		switch reason {
+		case probe.ExcludedBootDisk:
+			f.BootDisk = true
+		case probe.ExcludedReadOnly:
+			f.ReadOnly = true
+		case probe.ExcludedTooSmall:
+			f.TooSmall = true
+		default:
+			// ExcludedNotDisk, and any reason a later probe adds: not
+			// eligible, and not something a recipe may override.
+			f.NotDisk = true
+		}
+	}
+	return f
+}
+
+// targetProblems applies the target-eligibility rules (recipe.CheckTarget)
+// with this machine's answers.
+func targetProblems(r *recipe.Recipe) []recipe.Problem {
+	var disk, varDisk *recipe.TargetFacts
+	if len(r.CustomMounts) == 0 {
+		disk = targetFacts(r.Disk)
+	}
+	if r.VarDisk != nil {
+		varDisk = targetFacts(r.VarDisk.Disk)
+	}
+	return r.CheckTarget(disk, varDisk, hostUEFI())
+}
+
+// resolveTargets replaces `disk` and `varDisk.disk` with their resolved
+// device nodes, after validation has passed. disk.PartName builds partition
+// names from the path, so a /dev/disk/by-id/… symlink must not reach it.
+func resolveTargets(r *recipe.Recipe) {
+	if len(r.CustomMounts) == 0 && r.Disk != "" {
+		r.Disk = resolveDevice(r.Disk)
+	}
+	if r.VarDisk != nil && r.VarDisk.Disk != "" {
+		r.VarDisk.Disk = resolveDevice(r.VarDisk.Disk)
+	}
 }
 
 // partialProblems runs only the rules for the fields present in raw, a
@@ -112,6 +178,9 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	}
 	if has("flatpakVarPath") {
 		ps = append(ps, recipe.CheckFlatpakVarPath(r.FlatpakVarPath)...)
+	}
+	if has("override") {
+		ps = append(ps, recipe.CheckOverride(r.Override)...)
 	}
 	return ps, nil
 }
