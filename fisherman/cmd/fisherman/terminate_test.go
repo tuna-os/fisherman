@@ -909,11 +909,7 @@ func TestClosedStdoutCancelsAndTearsDown(t *testing.T) {
 		t.Errorf("cleanup marker = %q, %v; want exactly one teardown\n%s", data, err, stderr)
 	}
 	// The child was stopped, not left running.
-	deadline := time.Now().Add(5 * time.Second)
-	for processAlive(childPID) && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
-	}
-	if processAlive(childPID) {
+	if !waitProcessGone(childPID, 5*time.Second) {
 		_ = syscall.Kill(childPID, syscall.SIGKILL)
 		t.Errorf("child %d survived the cancel", childPID)
 	}
@@ -933,7 +929,76 @@ func processAlive(pid int) bool {
 	if err != nil {
 		return false
 	}
-	// "pid (comm) state …": the state follows the last ")".
-	i := strings.LastIndexByte(string(data), ')')
-	return i >= 0 && i+2 < len(data) && data[i+2] != 'Z'
+	return statIsAlive(string(data))
+}
+
+// statIsAlive reads the state field of a /proc/<pid>/stat line
+// ("pid (comm) state …": the state follows the last ")"). A process that has
+// exited is 'Z' (zombie) until its parent reaps it, and then, for an
+// instant, 'X' (dead) while the kernel releases it. Both mean it is gone.
+// Treating only 'Z' as gone made a process that was being reaped look alive
+// again.
+func statIsAlive(stat string) bool {
+	i := strings.LastIndexByte(stat, ')')
+	if i < 0 || i+2 >= len(stat) {
+		return false
+	}
+	return stat[i+2] != 'Z' && stat[i+2] != 'X'
+}
+
+// waitProcessGone polls until pid is no longer alive, or the timeout passes,
+// and returns whether it is gone. The verdict is the one read that ended the
+// wait: asking a second time, after the loop, can see a different state.
+func waitProcessGone(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if !processAlive(pid) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestStatIsAlive pins the state letters: the exit states are not alive, and
+// a comm that holds ") R" does not confuse the parse.
+func TestStatIsAlive(t *testing.T) {
+	for stat, want := range map[string]bool{
+		"6298 (sleep) S 6290 6290":  true,
+		"6298 (sleep) R 6290 6290":  true,
+		"6298 (sleep) Z 6290 6290":  false,
+		"6298 (sleep) X 0 6290":     false,
+		"6298 (a) R b) Z 6290 6290": false,
+		"6298 (a) Z b) S 6290 6290": true,
+		"":                          false,
+		"6298 (sleep)":              false,
+	} {
+		if got := statIsAlive(stat); got != want {
+			t.Errorf("statIsAlive(%q) = %v, want %v", stat, got, want)
+		}
+	}
+}
+
+// A process that has exited and is not reaped yet is gone for
+// waitProcessGone; a running one is not, within the timeout.
+func TestWaitProcessGone(t *testing.T) {
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Skip("no sleep binary")
+	}
+	pid := cmd.Process.Pid
+	if waitProcessGone(pid, 50*time.Millisecond) {
+		t.Fatal("a running process was reported gone")
+	}
+	_ = cmd.Process.Kill()
+	// Not reaped yet: a zombie. It must count as gone, with no Wait.
+	if !waitProcessGone(pid, 5*time.Second) {
+		t.Fatal("a killed process was reported alive")
+	}
+	_ = cmd.Wait()
+	if !waitProcessGone(pid, time.Second) {
+		t.Fatal("a reaped process was reported alive")
+	}
 }
