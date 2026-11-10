@@ -159,6 +159,7 @@ Things a recipe author should know today:
 - `varDisk` is not encrypted, even when the root is (#406).
 - There is no field for locale, keyboard layout or time zone (#405).
 - The host's Wi-Fi profiles and Bluetooth pairings are copied to the target only when the host booted from live media. `"copyNetworkProfiles"` and `"copyBluetoothPairings"` (`true` or `false`) override that for each kind. On an installed host the default is not to copy: the keys are the operator's.
+- `btrfsSubvolumes` puts the root in an `@` subvolume (`rootflags=subvol=@,compress=zstd:1`). It makes no `@home` and no `@snapshots`: `/home` is `/var/home` inside `@`, as on every bootc system.
 - Print services, the OEM setup unit, friendly audio names and `rhgb quiet` are applied only when the recipe's `extras` or the image catalog turns them on. See [Desktop extras](#desktop-extras).
 - fisherman builds no caches in the target. The image must carry its font, icon, schema and linker caches.
 

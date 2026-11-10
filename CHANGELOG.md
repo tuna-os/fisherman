@@ -137,6 +137,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Bug Fixes
 
+- **`btrfsSubvolumes` creates `@` only** (#416). `@home` and `@snapshots`
+  were created and never mounted by anything. The remount after the GPT
+  retag of a systemd-boot install now uses the root mount options, so on
+  btrfs it lands in `@` with compression and not in the top-level subvolume.
+
 - **`flatpaks` means what the code does** (#408): absent copies the host's
   system Flatpaks, `[]` copies nothing, and a list copies the whole
   installation too, with a log line that says it is not a filter and a

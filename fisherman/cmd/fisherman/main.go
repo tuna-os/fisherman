@@ -924,7 +924,11 @@ func main() {
 		if err := disk.WaitForPartitionNode(rootPart, disk.DefaultPartitionNodeTimeout); err != nil {
 			fatal("remounting root partition after retagging: %v", err)
 		}
-		if err := disk.MountWithRetry(rootPart, activeTargetMount, "", disk.DefaultMountAttempts, disk.DefaultMountBackoff); err != nil {
+		// With the same options as the first mount (and as the installed
+		// system's rootflags): on btrfs a bare mount is the top-level
+		// subvolume, not @, and has no compression. Every later step would
+		// then look for the deployment in the wrong tree (#416).
+		if err := disk.MountWithRetry(rootPart, activeTargetMount, r.RootMountOptions(), disk.DefaultMountAttempts, disk.DefaultMountBackoff); err != nil {
 			fatal("remounting root partition after retagging: %v", err)
 		}
 		// Remount EFI so that Plymouth/LUKS arg writes land on the real ESP

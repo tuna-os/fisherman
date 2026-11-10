@@ -119,21 +119,37 @@ func UmountRecursive(path string) error {
 	return runner.Run("umount", "-R", path)
 }
 
-// SetupBtrfsSubvolumes creates @, @home, and @snapshots subvolumes on a
-// freshly-formatted btrfs device, then remounts the target using subvol=@
-// with zstd compression.
+// BtrfsRootSubvolume is the subvolume a `btrfsSubvolumes` install puts the
+// root in, and BtrfsSubvolumeMountOptions the options that select it. The
+// recipe records the same options as the kernel's rootflags
+// (recipe.RootMountOptions); the two must not drift apart.
+const (
+	BtrfsRootSubvolume         = "@"
+	BtrfsSubvolumeMountOptions = "subvol=" + BtrfsRootSubvolume + ",compress=zstd:1"
+)
+
+// SetupBtrfsSubvolumes creates the @ subvolume on a freshly-formatted btrfs
+// device, then remounts the target using subvol=@ with zstd compression.
+//
+// It creates @ and nothing else. It used to create @home and @snapshots
+// too, and nothing ever mounted them: no fstab line, no kernel argument, no
+// unit. The installed system's /home is /var/home inside @ (bootc owns that
+// layout), so the two subvolumes sat empty at the top level of the
+// filesystem, and "btrfs with subvolumes" promised a separate home that did
+// not exist (tuna-os/fisherman#416). @ alone is what the option really
+// gives: the system in a subvolume, so the top level stays free for
+// snapshots a user or a tool makes later.
 func SetupBtrfsSubvolumes(dev, target string) error {
-	// Bare mount to create subvolumes.
+	// Bare mount to create the subvolume.
 	if err := Mount(dev, target, ""); err != nil {
 		return fmt.Errorf("initial btrfs mount: %w", err)
 	}
 
-	for _, sv := range []string{"@", "@home", "@snapshots"} {
-		progress.Info(fmt.Sprintf("Creating btrfs subvolume %s", sv))
-		if err := runner.Run("btrfs", "subvolume", "create", target+"/"+sv); err != nil {
-			_ = Umount(target)
-			return fmt.Errorf("create subvolume %s: %w", sv, err)
-		}
+	sv := BtrfsRootSubvolume
+	progress.Info(fmt.Sprintf("Creating btrfs subvolume %s", sv))
+	if err := runner.Run("btrfs", "subvolume", "create", target+"/"+sv); err != nil {
+		_ = Umount(target)
+		return fmt.Errorf("create subvolume %s: %w", sv, err)
 	}
 
 	if err := Umount(target); err != nil {
@@ -141,7 +157,7 @@ func SetupBtrfsSubvolumes(dev, target string) error {
 	}
 
 	// Remount with the @ subvolume and transparent compression.
-	return Mount(dev, target, "subvol=@,compress=zstd:1")
+	return Mount(dev, target, BtrfsSubvolumeMountOptions)
 }
 
 // FormatBoot formats a partition as ext4 for use as /boot.

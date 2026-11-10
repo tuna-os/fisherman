@@ -9,7 +9,7 @@ import (
 type Recipe struct {
 	Disk            string     `json:"disk"`            // block device, e.g. "/dev/sda" (auto-partition)
 	Filesystem      string     `json:"filesystem"`      // "xfs", "ext4", "btrfs", or "zfs"
-	BtrfsSubvolumes bool       `json:"btrfsSubvolumes"` // create @, @home, @snapshots
+	BtrfsSubvolumes bool       `json:"btrfsSubvolumes"` // put the root in an @ subvolume (rootflags=subvol=@)
 	Encryption      Encryption `json:"encryption"`
 	Image           string     `json:"image"`        // source OCI image reference
 	TargetImgref    string     `json:"targetImgref"` // update-tracking ref (optional)
