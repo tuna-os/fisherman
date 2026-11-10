@@ -285,6 +285,7 @@ func (r *Recipe) Problems() []Problem {
 					"varDisk.disk must differ from the system disk"})
 			}
 		}
+		ps = append(ps, CheckVarDiskBackend(r)...)
 	}
 	ps = append(ps, CheckHostname(r.Hostname)...)
 	// The username used to be checked only by useradd in the configure step,
