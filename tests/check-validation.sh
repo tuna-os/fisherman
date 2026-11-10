@@ -244,6 +244,196 @@ expect_exit "matrix: tests/bootcrew-matrix.yaml is valid (exit 0)" 0 \
 
 rm -f "$MATRIX_GOOD" "$MATRIX_BAD"
 
+# ── guest assertions (scripts/guest-checks.sh, used by boot-verify.sh) ─────
+#
+# boot-verify.sh reads facts from the booted guest over SSH and passes them to
+# these functions. Each fixture below is the output of a real failure mode,
+# so a check that stops catching its bug fails here, with no VM.
+
+# shellcheck source=../scripts/guest-checks.sh
+source "$(dirname "$0")/../scripts/guest-checks.sh"
+
+# expect_output NAME WANT CMD...
+#   Runs CMD and asserts its stdout equals WANT.
+expect_output() {
+  local name="$1" want="$2"
+  shift 2
+  local got
+  got=$("$@" 2>/dev/null)
+  if [ "$got" = "$want" ]; then
+    green "  PASS  $name"
+    PASS=$((PASS + 1))
+  else
+    red   "  FAIL  $name  (got '$got', want '$want')"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
+echo ""
+echo "━━━ user account: /etc/shadow field ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Test 16 – a sha512crypt hash is a usable password.
+# shellcheck disable=SC2016  # literal crypt strings
+expect_output "shadow: \$6\$ hash → ok" "ok" \
+  classify_shadow_hash '$6$saltsalt$abcdefghijklmnopqrstuvwxyz'
+
+# Test 17 – so is yescrypt, the default on current Fedora and Debian.
+# shellcheck disable=SC2016
+expect_output "shadow: \$y\$ hash → ok" "ok" \
+  classify_shadow_hash '$y$j9T$salt$hash'
+
+# Test 18 – useradd with no password set leaves the account locked.
+expect_output "shadow: '!' (useradd, no password set) → locked" "locked" \
+  classify_shadow_hash '!'
+
+# Test 19 – a locked hash cannot be used either.
+# shellcheck disable=SC2016
+expect_output "shadow: '!\$6\$...' → locked" "locked" \
+  classify_shadow_hash '!$6$saltsalt$abcdef'
+
+# Test 20 – the #396 bug: `chpasswd -e` stored the plaintext verbatim.
+expect_output "shadow: plaintext stored verbatim (#396) → plain" "plain" \
+  classify_shadow_hash 'bootcrew-user-test'
+
+# Test 21 – an empty field is a passwordless account, not a pass.
+expect_output "shadow: empty field → empty" "empty" \
+  classify_shadow_hash ''
+
+# Tests 22-24 – the host-side fallback for guests with no unix_chkpwd.
+if command -v openssl >/dev/null 2>&1; then
+  GOOD_HASH=$(openssl passwd -6 -salt bootcrewsalt 'bootcrew-user-test')
+  expect_exit "sha512crypt: the right password matches (exit 0)" 0 \
+    verify_sha512crypt "$GOOD_HASH" 'bootcrew-user-test'
+  expect_exit "sha512crypt: a wrong password is caught (exit 1)" 1 \
+    verify_sha512crypt "$GOOD_HASH" 'not-the-password'
+  # shellcheck disable=SC2016
+  expect_exit "sha512crypt: a non-\$6\$ hash is 'cannot tell', never a pass (exit 2)" 2 \
+    verify_sha512crypt '$y$j9T$salt$hash' 'bootcrew-user-test'
+else
+  red "  FAIL  sha512crypt: openssl is not installed, the fallback cannot be tested"
+  FAIL=$((FAIL + 1))
+fi
+
+echo ""
+echo "━━━ varDisk: /var mount ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Test 25 – the var disk is mounted at /var.
+expect_exit "var: own xfs disk labelled var → pass (exit 0)" 0 \
+  check_var_on_own_disk /dev/sdb xfs var /dev/sda3
+
+# Test 26 – the fstab entry was not honoured: /var is the stateroot's var
+# on the root device, which is what findmnt prints on a plain ostree boot.
+expect_exit "var: ostree bind mount from the root device → caught (exit 1)" 1 \
+  check_var_on_own_disk '/dev/sda3[/ostree/deploy/default/var]' xfs root /dev/sda3
+
+# Test 27 – composefs ignores the var disk (#252): /var comes from state/.
+expect_exit "var: composefs state dir → caught (exit 1)" 1 \
+  check_var_on_own_disk '/dev/sda2[/state/os/default/var]' ext4 root /dev/sda2
+
+# Test 28 – some other filesystem is mounted at /var.
+expect_exit "var: a different filesystem at /var → caught (exit 1)" 1 \
+  check_var_on_own_disk /dev/sdb ext4 data /dev/sda3
+
+# Test 29 – /var is not mounted at all.
+expect_exit "var: no mount source → caught (exit 1)" 1 \
+  check_var_on_own_disk "" "" "" /dev/sda3
+
+echo ""
+echo "━━━ TPM2: LUKS token ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+LUKSDUMP_ENROLLED="LUKS header information
+Version:       	2
+Keyslots:
+  0: luks2
+	Key:        512 bits
+  1: luks2
+	Key:        512 bits
+Tokens:
+  0: systemd-tpm2
+	tpm2-hash-pcrs:   7
+	Keyslot:    1
+Digests:
+  0: pbkdf2"
+
+LUKSDUMP_NOT_ENROLLED="LUKS header information
+Version:       	2
+Keyslots:
+  0: luks2
+	Key:        512 bits
+Tokens:
+Digests:
+  0: pbkdf2"
+
+# Test 30 – an enrolled header has the token.
+expect_exit "tpm2: systemd-tpm2 token present → pass (exit 0)" 0 \
+  has_tpm2_token "$LUKSDUMP_ENROLLED"
+
+# Test 31 – the #360 state: the first-boot unit never ran, one keyslot, no token.
+expect_exit "tpm2: no token (first-boot enrolment did not run, #360) → caught (exit 1)" 1 \
+  has_tpm2_token "$LUKSDUMP_NOT_ENROLLED"
+
+# ── matrix entry → recipe (scripts/matrix-recipe.sh) ───────────────────────
+#
+# `just bootcrew-ci-test` installs whatever this script prints. A field that
+# is dropped here is a shape the VM never tests, with a green run.
+
+echo ""
+echo "━━━ matrix entry → recipe ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+MATRIX_RECIPE="$(dirname "$0")/../scripts/matrix-recipe.sh"
+
+# recipe_field ENTRY_JSON JQ_FILTER [VAR_DISK]
+recipe_field() {
+  bash "$MATRIX_RECIPE" "$1" /dev/loop7 "${3:-}" | jq -c "$2"
+}
+
+if ! command -v jq >/dev/null 2>&1; then
+  red "  FAIL  matrix-recipe: jq is not installed"
+  FAIL=$((FAIL + 1))
+else
+  ENTRY_PLAIN='{"name":"centos-bootc","filesystem":"xfs","composefs_backend":false}'
+  ENTRY_LUKS_USER='{"name":"x-luks-user","ssh_image_name":"centos-bootc","filesystem":"xfs","luks":true,"luks_passphrase":"pp","user":{"username":"ciuser","password":"pw","groups":["wheel"]}}'
+  ENTRY_TPM='{"name":"x-tpm","filesystem":"xfs","luks":true,"encryption_type":"tpm2-luks","luks_passphrase":"ignored","tpm":true}'
+  ENTRY_VAR='{"name":"x-var","filesystem":"xfs","var_disk":true}'
+
+  # Test 32 – a plain entry: no encryption, no user, no varDisk, no bootloader key.
+  expect_output "recipe: plain entry has only the base fields" \
+    '[{"type":"none"},null,null,null,"ghcr.io/tuna-os/fisherman/centos-bootc:ssh-enabled"]' \
+    recipe_field "$ENTRY_PLAIN" '[.encryption, .user, .varDisk, .bootloader, .image]'
+
+  # Test 33 – luks + user reach the recipe, and the image is the base's.
+  expect_output "recipe: luks passphrase and user block are carried over" \
+    '[{"type":"luks-passphrase","passphrase":"pp"},"ciuser","pw",["wheel"],"ghcr.io/tuna-os/fisherman/centos-bootc:ssh-enabled"]' \
+    recipe_field "$ENTRY_LUKS_USER" '[.encryption, .user.username, .user.password, .user.groups, .image]'
+
+  # Test 34 – tpm2-luks carries no passphrase: fisherman generates the key.
+  expect_output "recipe: tpm2-luks has no passphrase" \
+    '{"type":"tpm2-luks"}' \
+    recipe_field "$ENTRY_TPM" '.encryption'
+
+  # Test 35 – var_disk becomes varDisk on the second device, formatted.
+  expect_output "recipe: var_disk becomes varDisk" \
+    '{"disk":"/dev/loop8","keepExisting":false}' \
+    recipe_field "$ENTRY_VAR" '.varDisk' /dev/loop8
+
+  # Test 36 – var_disk with no second device must not install a one-disk
+  # system and call it a varDisk test.
+  expect_exit "recipe: var_disk without a second device → refused (exit 1)" 1 \
+    bash "$MATRIX_RECIPE" "$ENTRY_VAR" /dev/loop7
+
+  # Test 37 – a TPM mode without luks: true would install unencrypted.
+  expect_exit "recipe: encryption_type without luks: true → refused (exit 1)" 1 \
+    bash "$MATRIX_RECIPE" '{"name":"x","encryption_type":"tpm2-luks"}' /dev/loop7
+
+  # Test 38 – a passphrase mode with no passphrase.
+  expect_exit "recipe: luks without luks_passphrase → refused (exit 1)" 1 \
+    bash "$MATRIX_RECIPE" '{"name":"x","luks":true}' /dev/loop7
+
+  # Test 39 – the name fallback for entries with no bootloader field.
+  expect_output "recipe: arch-bootc with no bootloader field → systemd" '"systemd"' \
+    recipe_field '{"name":"arch-bootc-luks","luks":true,"luks_passphrase":"pp"}' '.bootloader'
+fi
+
 # ── summary ────────────────────────────────────────────────────────────────
 
 echo ""

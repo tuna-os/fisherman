@@ -26,18 +26,23 @@ passphrase, so it never lands in a temp file or on the command line.
 
 ## One rule set
 
-The rules live in one place, `fisherman/internal/recipe/rules.go`. Three
-callers run them:
+The rules live in one place, `fisherman/internal/recipe/rules.go` and
+`Recipe.Problems()` in `recipe.go`. Three callers run them:
 
 | Caller | Runs |
 |---|---|
-| the install (`fisherman <recipe.json>`) | everything below, right after loading the recipe and before the host-tool check, the image check or any disk step |
-| `fisherman validate --json` and `fisherman validate` | the same function as the install (`installProblems`), so they accept exactly what the install accepts |
+| the install (`fisherman <recipe.json>`) | `validation.Chain` (`internal/validation/chain.go`): `Recipe.Problems()`, the TPM check and the image-source check. It runs right after the recipe loads, before the host-tool check, the image check and any disk step. It stops at the **first** problem and reports it as `invalid recipe: <message>`, with no code. |
+| `fisherman validate --json` and `fisherman validate` | `installProblems` (`cmd/fisherman/validate.go`): the same three checks, and it collects **every** problem. |
 | `fisherman validate --json --partial` | only the rules for the fields present; no disk, partition or TPM check |
 
-The plain `fisherman validate <recipe.json>` keeps its output format; it now
-applies the same rules (so it also rejects a bad hostname, a bad username and
-a TPM type on a machine without a usable TPM 2.0).
+The install and `validate` call the same rule functions through two
+different wrappers. A new rule must go into `Recipe.Problems()`, or into both
+wrappers, or one of them will not have it.
+
+The plain `fisherman validate <recipe.json>` prints a summary of a valid
+recipe, or the first problem. It applies the same rules as `--json`, so it
+also rejects a bad hostname, a bad username and a TPM type on a machine with
+no usable TPM 2.0.
 
 ## Schema (`protocol_version` 1)
 
@@ -54,10 +59,14 @@ a TPM type on a machine without a usable TPM 2.0).
 }
 ```
 
-Order: the layout (disk or customMounts, filesystem and its combinations),
-then `imageType`, `bootloader`, `encryption`, `varDisk`, `hostname`,
-`user.username`, and the TPM check last. Each field reports at most one
-problem from its own rule (the first it breaks).
+Order: the layout (`disk`, `filesystem` and its combinations; or, for a
+manual layout, each `customMounts` entry, then the no-root and encryption
+checks), then `imageType`, `bootloader`, `encryption`, `varDisk`, `hostname`,
+`user.username`, `distroID`, `brewTap`, `slurp`, `targetMount`,
+`flatpakVarPath`, then the TPM check, and the `image` check last. Each rule
+reports at most one problem for its field (the first it breaks). Two rules
+can report the same field: `varDisk.disk` can be both `var_disk_not_found`
+and `var_disk_same_as_disk`.
 
 ### Example
 
@@ -272,16 +281,19 @@ This section maps error codes to their causes and corrective actions. Each code 
 | Code | Field | Cause | Fix |
 |---|---|---|---|
 | `bootloader_unsupported` | `bootloader` | Bootloader is not empty, `grub2`, or `systemd` | Use one of: empty (auto), `grub2`, or `systemd` |
-| `slurp_unsupported` | `slurp` | User-data migration (slurp) without durable rescue storage is not supported | Specify a `slurpRescueStore` disk, or remove the `slurp` field |
+| `slurp_unsupported` | `slurp` | User-data migration is refused: fisherman has no durable store for the copied data, and the source is erased | Remove the `slurp` field. No recipe field enables it. `slurpWallpapers` is a different field and still works |
 | `brew_tap_invalid` | `brewTap` | Homebrew tap format is invalid | Use `owner/name` format, with each part containing only letters, digits, `.`, `_`, and `-` |
 
 ### Interpreting Errors in JSON
 
-When calling `fisherman validate --json`, errors are returned as:
+`fisherman validate --json` prints the object described in
+[Schema](#schema-protocol_version-1). The problems are in `errors`:
 
 ```json
 {
-  "problems": [
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
     {
       "field": "hostname",
       "code": "hostname_invalid_char",
@@ -289,6 +301,12 @@ When calling `fisherman validate --json`, errors are returned as:
     }
   ]
 }
+```
+
+To list the codes:
+
+```bash
+fisherman validate --json recipe.json | jq -r '.errors[].code'
 ```
 
 **Key points for integrators:**

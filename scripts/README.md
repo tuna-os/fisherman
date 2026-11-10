@@ -123,6 +123,25 @@ The script also reads these environment variables:
 
 - `ARTIFACTS_DIR`: Directory for QEMU serial and stdout logs (default: `/tmp/bootcrew-artifacts`)
 - `BOOTCREW_KEEP_VM`: Set to `1` to leave a failed VM and monitor socket running for local debugging
+- `VERIFY_USER`, `VERIFY_USER_PASSWORD`, `VERIFY_USER_GROUPS`: the account from the recipe's `user` block. The script fails unless the account exists, owns its home directory, is in each comma-separated group, can open a login session, and the password authenticates (`unix_chkpwd` in the guest, or an `openssl passwd -6` comparison on the host when the guest has no `unix_chkpwd`). A wrong password must be rejected.
+- `EXTRA_DISK`: a second block device, attached as the second AHCI disk
+- `VERIFY_VAR_DISK`: set to `1` to fail unless `/var` is its own xfs filesystem with the label `var` on a device other than the root (the recipe's `varDisk`)
+- `TPM_STATE_DIR`: starts `swtpm` with its state in this directory and attaches it to the guest as a TPM 2.0. Use the same directory again to boot the same machine again.
+- `VERIFY_TPM_ENROLLED`: set to `1` to fail unless the LUKS header has a `systemd-tpm2` token and `/etc/fisherman/tpm2-enroll.key` is gone
+- `VERIFY_TPM_AUTOUNLOCK`: set to `1` for a boot with no `LUKS_PASSPHRASE`. The guest then reaches SSH only if the TPM unlocks the root.
+
+### `guest-checks.sh`
+The decision logic for the assertions above, as functions with no SSH, no `sudo` and no global state. `boot-verify.sh` sources it. `tests/check-validation.sh` sources it too and runs each function on the output of a real failure, so a check that stops catching its bug fails without a VM.
+
+### `matrix-recipe.sh`
+Prints the fisherman recipe for one `tests/bootcrew-matrix.yaml` entry.
+
+**Usage:**
+```bash
+./matrix-recipe.sh IMAGE_JSON DISK [VAR_DISK] [LUKS_PASSPHRASE]
+```
+
+`just bootcrew-ci-test` installs what this script prints. `tests/check-matrix-recipes.sh` runs it on every matrix entry and passes each recipe to `fisherman validate --json --partial -`. The matrix fields that it reads (`luks`, `encryption_type`, `user`, `var_disk`, `bootloader`) are described at the top of `tests/bootcrew-matrix.yaml`.
 
 ## CI Usage
 

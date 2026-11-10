@@ -29,10 +29,12 @@ go build -o bootc-installer-tui ./cmd/bootc-installer-tui
 
 ## Recipe format
 
-The installer writes a recipe to `/tmp/bootc-installer-recipe.json` and runs:
+The installer writes the recipe to a new temporary file with a random name,
+`bootc-installer-recipe-*.json` in the system temporary directory
+(`os.CreateTemp`), and runs:
 
 ```
-fisherman /tmp/bootc-installer-recipe.json
+fisherman <that file>
 ```
 
 ---

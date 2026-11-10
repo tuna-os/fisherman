@@ -51,6 +51,12 @@ jobs:
       - name: Validation harness
         run: bash tests/check-validation.sh
 
+      # Every tests/bootcrew-matrix.yaml entry, expanded into the recipe the
+      # VM jobs install and passed to `fisherman validate`. A bad entry fails
+      # here in seconds, not at the end of a VM job (#418).
+      - name: Matrix recipes validate
+        run: bash tests/check-matrix-recipes.sh
+
       # The release version is derived from commit subjects, so a bug here
       # ships a wrong tag silently -- nothing else would catch it. Runs in
       # throwaway git repos; no network, about a second.
@@ -154,6 +160,49 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # ── arm64: build, vet and unit tests on a native runner (#418). ───────────
+  # .goreleaser.yml ships a linux/arm64 fisherman, and every other job here
+  # is x86_64, so nothing compiled that code before a release, or ran its
+  # tests. tui/ is checked too: consumers build it for arm64. ubuntu-24.04-arm is the hosted arm64 runner this
+  # organisation already uses (bootc-installer's flatpak.yml and
+  # publish-oci.yml), so the tests run natively, not only a cross-compile.
+  #
+  # Run without sudo, unlike unit-tests above: the loopback tests then skip.
+  # They test losetup, mkfs and mount, which the x86_64 job covers and which
+  # do not differ by architecture. There is no arm64 VM boot test: the
+  # hosted arm64 runners have no nested KVM.
+  #
+  # Not in required-canaries' needs, like tui-unit-tests: a failure still
+  # fails the workflow run.
+  arm64:
+    name: arm64 / build + unit tests (${{ matrix.module }})
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        module: [fisherman, tui]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: ${{ matrix.module }}/go.mod
+          cache: false
+      - name: Show architecture
+        run: |
+          uname -m
+          go env GOOS GOARCH
+          test "$(go env GOARCH)" = "arm64"
+      - name: Build
+        run: go build ./...
+        working-directory: ${{ matrix.module }}
+      - name: Vet
+        run: go vet ./...
+        working-directory: ${{ matrix.module }}
+      - name: Unit tests (race)
+        run: go test -race ./...
+        working-directory: ${{ matrix.module }}
+
   # ── Required canaries: composefs (dakota) + ostree (centos-bootc). ────────
   # Failure here fails the workflow. Treat these as the contract for what
   # fisherman must do on every PR.
@@ -188,7 +237,7 @@ jobs:
         with:
           # Same host package set as just ci-install-tools, including its
           # bootstrap dependencies; resolve/install once rather than twice.
-          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3 swtpm openssl
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
@@ -271,7 +320,7 @@ jobs:
       - name: Setup CI environment
         uses: ./.github/actions/setup-host-tools
         with:
-          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3 swtpm openssl
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman

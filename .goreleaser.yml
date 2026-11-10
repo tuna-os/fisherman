@@ -27,9 +27,10 @@ builds:
       - arm64
     ldflags:
       - -s -w
+      # main.go declares only `version`. `-X` on a variable that does not
+      # exist is ignored by the linker without a message, so main.commit and
+      # main.date, which this list used to set, never reached the binary.
       - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
 
 archives:
   - id: fisherman
@@ -38,6 +39,9 @@ archives:
       - tar.gz
     files:
       - README.md
+      # `fisherman images` looks for the catalog at data/images.json beside
+      # the binary (images.FindPaths), so the archive keeps that layout.
+      - data/images.json
 
 checksum:
   name_template: "checksums.txt"

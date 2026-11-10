@@ -1239,8 +1239,12 @@ func validSHA256Digest(digest string) bool {
 	return true
 }
 
-// CheckImage compares the remote and local (containers-storage) image digests
-// to determine whether a pull is required. It also returns the remote layer count.
+// CheckImage reports whether the install must pull the image, and how many
+// layers it has. It does NOT compare the remote and local digests: an image
+// that is present in local containers-storage is used as it is, even when the
+// registry has a newer one (NeedsPull=false). A pull is needed only when the
+// image is not in local storage. The layer count is the local image's when it
+// is present, the remote one's otherwise.
 //
 // If the remote registry is unreachable (offline), CheckImage falls back to
 // checking local containers-storage: if the image is present locally it is used
