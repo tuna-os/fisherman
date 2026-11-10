@@ -66,7 +66,7 @@ fisherman is a Go CLI that reads a JSON recipe and runs an install pipeline. The
 | Install OS | `bootc install to-filesystem --skip-finalize` through `podman run --privileged` | always |
 | Enrol TPM2 | add a single-use keyslot, stage the first-boot unit that binds the LUKS volume to the TPM, and emit the recovery key | TPM recipes |
 | Copy Flatpaks | copy the host's system Flatpak installation to the target | always; copies nothing when `flatpaks` is `[]` |
-| Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi profiles and Bluetooth pairings copied from the host (live media, or on request), and the [desktop extras](#desktop-extras) the recipe or the catalog turns on | always |
+| Configure | fstab, hostname, user account, locale, keyboard and time zone, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi profiles and Bluetooth pairings copied from the host (live media, or on request), and the [desktop extras](#desktop-extras) the recipe or the catalog turns on | always |
 | Finalize | fstrim → remount read-only → fsfreeze, then thaw | always (skipped on ZFS) |
 
 The separate ext4 `/boot` partition is required for GRUB because GRUB cannot read modern XFS features (`nrext64`, `exchange`, `rmapbt`). For composefs/systemd-boot images the EFI partition holds the kernel and initrd directly.
@@ -157,7 +157,8 @@ Things a recipe author should know today:
 - One install runs on a host at a time. A second one is refused (`install_already_running`).
 - `flatpaks` says whether the host's system Flatpaks are copied, not which. Absent: the host's whole `/var/lib/flatpak` is copied. `[]`: nothing is copied. A list: the whole installation is copied all the same, nothing is downloaded, and the log names each listed app that the host does not have.
 - `varDisk` is not encrypted, even when the root is (#406).
-- There is no field for locale, keyboard layout or time zone (#405).
+- `locale` (`"de_DE.UTF-8"`), `keyboard` (`{"layout": "de", "variant": "nodeadkeys", "model": "pc105"}`; `layout` is required when the object is present) and `timezone` (`"Europe/Berlin"`) are optional. fisherman writes them to the installed system's `/etc/locale.conf`, `/etc/vconsole.conf`, `/etc/X11/xorg.conf.d/00-keyboard.conf` and `/etc/localtime`. Without a field, the image's setting stays.
+- For an encrypted install with `keyboard`, fisherman adds `rd.vconsole.keymap=<keymap>` to the boot entries, so the passphrase prompt in the initrd uses the layout the passphrase was typed with. An image that boots a unified kernel image has no boot entry to edit; the log then says that the prompt uses the image's keymap. A graphical prompt that reads keys through libxkbcommon takes its layout from the initrd's own `vconsole.conf`, which fisherman cannot change.
 - The host's Wi-Fi profiles and Bluetooth pairings are copied to the target only when the host booted from live media. `"copyNetworkProfiles"` and `"copyBluetoothPairings"` (`true` or `false`) override that for each kind. On an installed host the default is not to copy: the keys are the operator's.
 - `"filesystem": "zfs"` is experimental and needs `"experimental": ["zfs"]` (`zfs_experimental`). No VM test installs and boots it. The pool is exported when the install ends, also when it fails.
 - `btrfsSubvolumes` puts the root in an `@` subvolume (`rootflags=subvol=@,compress=zstd:1`). It makes no `@home` and no `@snapshots`: `/home` is `/var/home` inside `@`, as on every bootc system.

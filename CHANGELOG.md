@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **Locale, keyboard layout and time zone** (#405): optional recipe fields
+  `locale`, `keyboard` (`layout`, `variant`, `model`) and `timezone`.
+  fisherman writes `/etc/locale.conf`, `/etc/vconsole.conf` (console keymap
+  from systemd's `kbd-model-map`, and the XKB keys), the X11 keyboard file
+  and `/etc/localtime` into the installed deployment. For an encrypted
+  install the keymap is added to the boot entries as `rd.vconsole.keymap=`,
+  so the passphrase prompt uses the layout the passphrase was typed with.
+  Rules with stable codes (`locale_invalid`, `keyboard_layout_required`,
+  `keyboard_layout_invalid`, `keyboard_variant_invalid`,
+  `keyboard_model_invalid`, `timezone_invalid`), also in `--partial`.
+
 - **Recipe on stdin**: `fisherman -` and `fisherman validate -` read the recipe
   JSON from stdin until EOF. A frontend pipes it through
   `pkexec`/`sudo`/`flatpak-spawn --host` instead of writing a temporary file

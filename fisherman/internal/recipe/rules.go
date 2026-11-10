@@ -90,6 +90,13 @@ const (
 	CodeVarDiskReadOnly     = "var_disk_read_only"
 	CodeOverrideUnsupported = "override_unsupported"
 
+	CodeLocaleInvalid          = "locale_invalid"
+	CodeKeyboardLayoutRequired = "keyboard_layout_required"
+	CodeKeyboardLayoutInvalid  = "keyboard_layout_invalid"
+	CodeKeyboardVariantInvalid = "keyboard_variant_invalid"
+	CodeKeyboardModelInvalid   = "keyboard_model_invalid"
+	CodeTimezoneInvalid        = "timezone_invalid"
+
 	// CodeZFSExperimental: filesystem "zfs" without "zfs" in `experimental`.
 	CodeZFSExperimental = "zfs_experimental"
 	// CodeExperimentalUnsupported: an `experimental` entry fisherman does
@@ -638,6 +645,78 @@ func CheckExperimentalFilesystem(r *Recipe) []Problem {
 				"Add \"experimental\": [\"zfs\"] to the recipe to accept that, or use xfs, ext4 or btrfs"}}
 	}
 	return nil
+}
+
+// Locale, keyboard and time zone are written as root into /etc files of the
+// installed system, and the keymap onto the kernel command line. The
+// patterns admit every real name and nothing that could add a line, a
+// second argument or a path component.
+var (
+	// A glibc locale name: language[_TERRITORY][.codeset][@modifier], or
+	// C / POSIX with an optional codeset. "de_DE.UTF-8", "sr_RS@latin",
+	// "C.UTF-8", "ca_ES.UTF-8@valencia".
+	localePattern = regexp.MustCompile(`^([a-z]{2,3}(_[A-Z]{2,3})?|C|POSIX)(\.[A-Za-z0-9][A-Za-z0-9_-]*)?(@[A-Za-z0-9]+)?$`)
+	// XKB layout list: names of letters, digits, "_" and "-", comma-separated
+	// ("us", "us,ru", "de").
+	xkbLayoutPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$`)
+	// XKB variant list: one per layout, any may be empty (",phonetic").
+	xkbVariantPattern = regexp.MustCompile(`^[A-Za-z0-9_.+-]*(,[A-Za-z0-9_.+-]*)*$`)
+	xkbModelPattern   = regexp.MustCompile(`^[A-Za-z0-9_.+-]+$`)
+	// An IANA zone: components of letters, digits, "_", "+" and "-", joined
+	// by "/". No ".", so no "..". "Europe/Berlin", "Etc/GMT+1", "UTC",
+	// "America/Argentina/Buenos_Aires".
+	timezonePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$`)
+)
+
+// CheckLocale applies the locale rule. Empty is valid (the image's locale
+// is kept). Whether the installed image has the locale is not checked: the
+// image is not on the disk yet.
+func CheckLocale(locale string) []Problem {
+	if locale == "" || (len(locale) <= 64 && localePattern.MatchString(locale)) {
+		return nil
+	}
+	return []Problem{{"locale", CodeLocaleInvalid,
+		fmt.Sprintf("locale must be a locale name such as \"en_US.UTF-8\" or \"de_DE.UTF-8\", got %q", locale)}}
+}
+
+// CheckKeyboard applies the keyboard rules. A nil keyboard is valid (the
+// image's is kept); a present one needs a layout.
+func CheckKeyboard(k *KeyboardSpec) []Problem {
+	if k == nil {
+		return nil
+	}
+	var ps []Problem
+	switch {
+	case k.Layout == "":
+		ps = append(ps, Problem{"keyboard.layout", CodeKeyboardLayoutRequired,
+			"keyboard.layout is required when keyboard is set (an XKB layout such as \"us\" or \"de\")"})
+	case len(k.Layout) > 64 || !xkbLayoutPattern.MatchString(k.Layout):
+		ps = append(ps, Problem{"keyboard.layout", CodeKeyboardLayoutInvalid,
+			fmt.Sprintf("keyboard.layout must be an XKB layout name such as \"us\" or \"de\" "+
+				"(letters, digits, \"_\" and \"-\"; several separated by \",\"), got %q", k.Layout)})
+	}
+	if len(k.Variant) > 64 || !xkbVariantPattern.MatchString(k.Variant) {
+		ps = append(ps, Problem{"keyboard.variant", CodeKeyboardVariantInvalid,
+			fmt.Sprintf("keyboard.variant must be an XKB variant name such as \"nodeadkeys\" "+
+				"(letters, digits, \"_\", \".\", \"+\" and \"-\"; one per layout, separated by \",\"), got %q", k.Variant)})
+	}
+	if k.Model != "" && (len(k.Model) > 64 || !xkbModelPattern.MatchString(k.Model)) {
+		ps = append(ps, Problem{"keyboard.model", CodeKeyboardModelInvalid,
+			fmt.Sprintf("keyboard.model must be an XKB model name such as \"pc105\" "+
+				"(letters, digits, \"_\", \".\", \"+\" and \"-\"), got %q", k.Model)})
+	}
+	return ps
+}
+
+// CheckTimezone applies the time zone rule. Empty is valid (the image's
+// zone is kept). Whether the installed image has the zone is checked after
+// the install, when its /usr/share/zoneinfo can be read.
+func CheckTimezone(tz string) []Problem {
+	if tz == "" || (len(tz) <= 64 && timezonePattern.MatchString(tz)) {
+		return nil
+	}
+	return []Problem{{"timezone", CodeTimezoneInvalid,
+		fmt.Sprintf("timezone must be an IANA time zone name such as \"Europe/Berlin\" or \"UTC\", got %q", tz)}}
 }
 
 // TargetFacts is what the machine says about one path a recipe names as a

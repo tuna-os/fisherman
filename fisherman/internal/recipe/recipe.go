@@ -138,6 +138,27 @@ type Recipe struct {
 	// values of Experimentals ("zfs"). A feature is experimental when no VM
 	// test covers it; without its name here the recipe is refused.
 	Experimental []string `json:"experimental,omitempty"`
+	// Locale is the system locale written to the installed system's
+	// /etc/locale.conf as LANG, e.g. "de_DE.UTF-8". Empty: the image's.
+	Locale string `json:"locale,omitempty"`
+	// Keyboard is the keyboard layout written to the installed system's
+	// /etc/vconsole.conf and X11 keyboard configuration. For an encrypted
+	// install its console keymap also reaches the initrd
+	// (rd.vconsole.keymap), so the passphrase prompt uses the layout the
+	// passphrase was typed with. Absent: the image's.
+	Keyboard *KeyboardSpec `json:"keyboard,omitempty"`
+	// Timezone is the IANA time zone the installed system's /etc/localtime
+	// points to, e.g. "Europe/Berlin". Empty: the image's.
+	Timezone string `json:"timezone,omitempty"`
+}
+
+// KeyboardSpec is an XKB keyboard configuration, with the names of
+// /usr/share/X11/xkb/rules/base.lst (what `localectl list-x11-keymap-*`
+// prints). Layout is required when the object is present.
+type KeyboardSpec struct {
+	Layout  string `json:"layout"`            // e.g. "de", "us", "us,ru"
+	Variant string `json:"variant,omitempty"` // e.g. "nodeadkeys"
+	Model   string `json:"model,omitempty"`   // e.g. "pc105"
 }
 
 // Experimental features (Recipe.Experimental).
@@ -425,5 +446,10 @@ func (r *Recipe) Problems() []Problem {
 	ps = append(ps, CheckAdditionalImageStores(r.AdditionalImageStores)...)
 	ps = append(ps, CheckOverride(r.Override)...)
 	ps = append(ps, CheckExperimental(r.Experimental)...)
+	// Written into /etc files and, for the keymap, onto the kernel command
+	// line: refused before any disk step (#405).
+	ps = append(ps, CheckLocale(r.Locale)...)
+	ps = append(ps, CheckKeyboard(r.Keyboard)...)
+	ps = append(ps, CheckTimezone(r.Timezone)...)
 	return ps
 }

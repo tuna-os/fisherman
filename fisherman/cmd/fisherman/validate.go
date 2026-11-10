@@ -234,6 +234,15 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	if has("experimental") {
 		ps = append(ps, recipe.CheckExperimental(r.Experimental)...)
 	}
+	if has("locale") {
+		ps = append(ps, recipe.CheckLocale(r.Locale)...)
+	}
+	if has("keyboard") {
+		ps = append(ps, recipe.CheckKeyboard(r.Keyboard)...)
+	}
+	if has("timezone") {
+		ps = append(ps, recipe.CheckTimezone(r.Timezone)...)
+	}
 	return ps, nil
 }
 

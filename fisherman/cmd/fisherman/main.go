@@ -1018,6 +1018,10 @@ func main() {
 		}
 	}
 
+	// Language, keyboard layout and time zone, when the recipe has them. For
+	// an encrypted install the keymap also goes to the initrd. Non-fatal.
+	applyLocale(activeTargetMount, r, hasEncryption && !isManual)
+
 	// rhgb and quiet in every BLS loader entry, for the graphical boot
 	// splash: only for an image that asks (extras.bootSplash). Another
 	// image keeps the kernel arguments it ships. Non-fatal.

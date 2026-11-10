@@ -13,9 +13,9 @@
       "message": "unknown recipe field \"encrypton\": this fisherman does not know it, and would ignore it"
     },
     {
-      "field": "locale",
+      "field": "newerField",
       "code": "recipe_unknown_field",
-      "message": "unknown recipe field \"locale\": this fisherman does not know it, and would ignore it"
+      "message": "unknown recipe field \"newerField\": this fisherman does not know it, and would ignore it"
     },
     {
       "field": "user.pasword",

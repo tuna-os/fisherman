@@ -10,7 +10,7 @@ import (
 // from a newer frontend used to parse clean and install unencrypted.
 func TestParseRejectsUnknownFields(t *testing.T) {
 	_, err := Parse([]byte(`{"disk":"/dev/null","filesystem":"xfs","hostname":"a","image":"x",
-		"encrypton":{"type":"luks-passphrase","passphrase":"x"},"locale":"de_DE.UTF-8"}`))
+		"encrypton":{"type":"luks-passphrase","passphrase":"x"},"newerField":true}`))
 	var p Problem
 	if !errors.As(err, &p) {
 		t.Fatalf("Parse error = %v, want a Problem", err)
@@ -93,7 +93,8 @@ func TestFrontendRecipeKeysAreKnown(t *testing.T) {
 			"slurpWallpapers":true,"targetMount":"/mnt/t","zfsPoolName":"rpool",
 			"copyNetworkProfiles":true,"copyBluetoothPairings":false,
 			"extras":{"printServices":true,"oemSetup":true,"audioNames":true,"bootSplash":true},
-			"experimental":["zfs"]}`,
+			"experimental":["zfs"],"locale":"de_DE.UTF-8","timezone":"Europe/Berlin",
+			"keyboard":{"layout":"de","variant":"nodeadkeys","model":"pc105"}}`,
 	}
 	for name, raw := range recipes {
 		if ps := UnknownFields([]byte(raw)); len(ps) > 0 {
