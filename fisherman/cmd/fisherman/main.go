@@ -116,6 +116,30 @@ func fatal(format string, args ...any) {
 	term.fail(fmt.Sprintf(format, args...))
 }
 
+// fatalProblem is fatal for a failure with a stable problem code (a recipe
+// rule or a preflight check): the error event carries the code and field
+// that `fisherman validate --json` reports for the same problem.
+func fatalProblem(prefix string, p recipe.Problem) {
+	term.failProblem(prefix+": "+p.Message, p)
+}
+
+// fatalLoad reports a recipe that could not be loaded. A strict-parse
+// problem (an unknown field) keeps its code.
+func fatalLoad(err error) {
+	var p recipe.Problem
+	if errors.As(err, &p) {
+		fatalProblem("loading recipe", p)
+		return
+	}
+	fatal("loading recipe: %v", err)
+}
+
+// teardown releases everything the install registered: the mounts, the LUKS
+// mapping and the scratch directories on cleanup. Every exit path runs it.
+func teardown() error {
+	return cleanup.Run()
+}
+
 // lookPath is exec.LookPath by default; replaced in tests.
 var lookPath = exec.LookPath
 
@@ -323,7 +347,7 @@ func main() {
 
 	r, err := loadRecipe(os.Args[1])
 	if err != nil {
-		fatal("loading recipe: %v", err)
+		fatalLoad(err)
 	}
 
 	// Resolve and verify host-owned media before live probing (bootc status),
@@ -341,9 +365,9 @@ func main() {
 		}
 	}
 
-	// Run pre-flight validation chain. Every rule `fisherman validate` enforces,
-	// including the hostname, username, and TPM checks, runs here: before any
-	// disk is touched. The ValidatorChain stops at the first error.
+	// Pre-flight: every rule `fisherman validate` enforces runs here, through
+	// the same function (installProblems), before any disk is touched. The
+	// first problem ends the install, and the error event carries its code.
 	var live probe.Live
 	if r.Image == "" && mediaInput == nil {
 		live = hostLive()
@@ -351,11 +375,12 @@ func main() {
 	if mediaInput != nil {
 		live = probe.Live{IsLive: true, LiveImage: mediaInput.Image, DetectedBy: "verified media input"}
 	}
-	chain := validation.NewChain().
-		Add(validation.NewRecipeProblemsValidator(r, tpm2Usable())).
-		Add(validation.NewImageSourceValidator(r, live))
-	if err := chain.Run(); err != nil {
-		fatal("invalid recipe: %v", errors.Unwrap(err))
+	var imageErr error
+	if r.Image == "" {
+		imageErr = r.ValidateImage(live.IsLive)
+	}
+	if ps := installProblemsWith(r, imageErr); len(ps) > 0 {
+		fatalProblem("invalid recipe", ps[0])
 	}
 
 	// Recipe-level overrides for the otherwise-shared global mount paths.
@@ -1073,7 +1098,7 @@ func main() {
 	// first means a cancel signal from here on is ignored (the install has
 	// finished), and a cancel that already started keeps the exit to itself.
 	term.claimSuccess()
-	if err := cleanup.Run(); err != nil {
+	if err := teardown(); err != nil {
 		progress.Info(fmt.Sprintf("Warning: teardown after install was incomplete: %v", err))
 	}
 

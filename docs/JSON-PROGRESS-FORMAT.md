@@ -180,6 +180,13 @@ The install failed.
 **Fields:**
 - `type` — `"error"`
 - `message` — what failed (string)
+- `code` — optional. The stable problem code, when the failure is a recipe
+  rule or a preflight check: the code `fisherman validate --json` reports for
+  the same problem ([VALIDATE.md](VALIDATE.md#error-code-reference)). Key
+  copy on this, never on `message`. Absent for every other failure.
+- `field` — optional. The recipe field the `code` is about (`hostname`,
+  `user.username`, `encrypton`). Absent when there is no `code`, or the code
+  is not about one field.
 - `timestamp`, `elapsed_ms` — as above
 
 **Example:**
@@ -199,11 +206,19 @@ The message is a short context prefix followed by the underlying error, for
 example `loading recipe: ...`, `invalid recipe: ...`,
 `missing required host tool: ...`, `LUKS format: ...` or `bootc install: ...`.
 
+A failure with a `code`:
+
+```json
+{"code":"recipe_unknown_field","elapsed_ms":2,"field":"encrypton","message":"loading recipe: unknown recipe field \"encrypton\": this fisherman does not know it, and would ignore it","timestamp":"2026-11-10T14:32:10.428842Z","type":"error"}
+```
+
 `error` can be the only event in the stream. Recipe loading, recipe
 validation and the host tool check all run before the first step. With the
 recipe on stdin (`fisherman -`), empty stdin is `loading recipe: recipe is
 empty`. An empty `image` on a host that did not boot from live media is
-`invalid recipe: image is required: …`.
+`invalid recipe: image is required: …` (`code` `image_required`). A recipe
+key fisherman does not know is `loading recipe: unknown recipe field …`
+(`code` `recipe_unknown_field`).
 
 `error` is **not** emitted when fisherman exits 2 (unknown command) or
 panics, or when it is killed with SIGKILL. See [Exit codes](#exit-codes).

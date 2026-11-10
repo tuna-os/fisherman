@@ -38,6 +38,8 @@ func TestValidateJSONGolden(t *testing.T) {
 		{"invalid", false, 1},
 		{"tpm", false, 1},
 		{"malformed", false, 1},
+		{"unknown-field", false, 1},
+		{"partial-unknown-field", true, 0},
 		{"partial-hostname", true, 1},
 		{"partial-user", true, 1},
 		{"partial-page", true, 1},

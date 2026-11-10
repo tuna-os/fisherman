@@ -27,6 +27,11 @@ var ErrEmptyRecipe = errors.New("recipe is empty")
 
 // Parse decodes a recipe from JSON. Empty or whitespace-only input is
 // ErrEmptyRecipe rather than an opaque "unexpected end of JSON input".
+//
+// Parse is strict: a key the Recipe type does not have is an error, the
+// first of UnknownFields as a Problem (errors.As finds it). Every install
+// loads its recipe through Parse, so a misspelt or too-new field stops the
+// install before anything else runs.
 func Parse(data []byte) (*Recipe, error) {
 	if len(bytes.TrimSpace(data)) == 0 {
 		return nil, ErrEmptyRecipe
@@ -34,6 +39,9 @@ func Parse(data []byte) (*Recipe, error) {
 	var r Recipe
 	if err := json.Unmarshal(data, &r); err != nil {
 		return nil, fmt.Errorf("parsing recipe: %w", err)
+	}
+	if ps := UnknownFields(data); len(ps) > 0 {
+		return nil, ps[0]
 	}
 	return &r, nil
 }

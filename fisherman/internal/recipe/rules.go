@@ -33,6 +33,9 @@ func (p Problem) Error() string { return p.Message }
 const (
 	CodeRecipeUnreadable = "recipe_unreadable"
 	CodeRecipeMalformed  = "recipe_malformed"
+	// CodeRecipeUnknownField: a key the Recipe type does not have. See
+	// UnknownFields.
+	CodeRecipeUnknownField = "recipe_unknown_field"
 
 	CodeDiskRequired = "disk_required"
 	CodeDiskNotFound = "disk_not_found"

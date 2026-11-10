@@ -19,6 +19,8 @@ passphrase, so it never lands in a temp file or on the command line.
 - Exit `1`: invalid. `errors` lists every problem found. A recipe that cannot
   be read or is not valid JSON is also exit `1`, reported as a problem with
   code `recipe_unreadable` or `recipe_malformed` and an empty `field`.
+- A key fisherman does not know is a problem, `recipe_unknown_field`, in the
+  full mode and in the install. See [Unknown keys](#unknown-keys).
 - Exit `2`: bad arguments (no recipe, more than one, an unknown flag). The
   message and usage are on stderr; stdout is empty.
 - **No root**, writes nothing. The full mode `stat`s the disk and partition
@@ -54,8 +56,8 @@ a TPM type on a machine without a usable TPM 2.0).
 }
 ```
 
-Order: the layout (disk or customMounts, filesystem and its combinations),
-then `imageType`, `bootloader`, `encryption`, `varDisk`, `hostname`,
+Order: unknown keys (sorted by path), then the layout (disk or customMounts,
+filesystem and its combinations), then `imageType`, `bootloader`, `encryption`, `varDisk`, `hostname`,
 `user.username`, and the TPM check last. Each field reports at most one
 problem from its own rule (the first it breaks).
 
@@ -83,6 +85,41 @@ $ fisherman validate --json recipe.json
 
 More, byte for byte, in
 `fisherman/cmd/fisherman/testdata/validate/*.golden` (inputs beside them).
+
+## Unknown keys
+
+Go's JSON decoder drops a key it does not know. For a recipe that fails open:
+`"encrypton": {...}` used to validate clean and install an **unencrypted**
+disk, and a field that a newer frontend sent to an older fisherman was
+ignored after the user had confirmed it.
+
+So the install and the full `validate` refuse every key the recipe schema
+does not have, at any depth:
+
+```console
+$ echo '{"disk":"/dev/sda","filesystem":"xfs","hostname":"a","image":"x",
+         "encrypton":{"type":"luks-passphrase","passphrase":"x"},
+         "user":{"username":"alice","pasword":"pw"}}' | fisherman validate --json -
+...
+    {"field": "encrypton",    "code": "recipe_unknown_field", ...},
+    {"field": "user.pasword", "code": "recipe_unknown_field", ...}
+```
+
+- `field` is the JSON path of the key: `encrypton`, `user.pasword`,
+  `customMounts[1].fs`.
+- Every unknown key is reported, sorted by path, before the other problems.
+- The install stops when it loads the recipe: its `error` event is
+  `loading recipe: unknown recipe field "encrypton": …` with
+  `"code": "recipe_unknown_field"` and `"field": "encrypton"`
+  (see [JSON-PROGRESS-FORMAT.md](JSON-PROGRESS-FORMAT.md#error)).
+- Key names match as the decoder matches them, without regard to case. A key
+  is unknown exactly when the decoder would drop it.
+- `--partial` does **not** apply this rule. A page sends a fragment, and a
+  frontend may be newer than the backend it asks.
+
+A frontend must send only keys in the schema of the fisherman commit it
+pins. There is no `recipeVersion` field yet (#293): to use a new field, bump
+the pin first.
 
 ## Validating one page: `--partial`
 
@@ -115,7 +152,8 @@ A rule runs when its key is present:
 
 Everything else (`disk`, the `customMounts` partitions, `varDisk`, the TPM)
 is ignored in partial mode: those read the machine, and the full mode checks
-them.
+them. Keys fisherman does not know are ignored too
+([Unknown keys](#unknown-keys)).
 
 Why a partial recipe rather than `--field name=value` flags: the passphrase
 rule needs the passphrase, and argv is world-readable in `/proc`. A partial
@@ -152,6 +190,7 @@ holds both fields.
 | `imageType` | `""` or `bootc` | `image_type_unsupported` |
 | `bootloader` | `""`, `grub2` or `systemd` | `bootloader_unsupported` |
 | (whole recipe) | readable, valid JSON | `recipe_unreadable`, `recipe_malformed` |
+| (any key) | a key of the recipe schema, at any depth. Full mode and the install only. | `recipe_unknown_field` |
 
 Not fisherman rules, and left to the frontend: the password itself (fisherman
 accepts an empty one, which leaves the account locked), "password and
@@ -203,6 +242,7 @@ This section maps error codes to their causes and corrective actions. Each code 
 |---|---|---|---|
 | `recipe_unreadable` | (whole recipe) | Recipe file could not be read | Verify the file path and permissions |
 | `recipe_malformed` | (whole recipe) | Recipe JSON is not valid JSON | Validate the JSON syntax |
+| `recipe_unknown_field` | the unknown key's path, for example `encrypton` or `user.pasword` | The recipe has a key this fisherman does not know: a typo, or a field from a newer schema. fisherman would ignore it, so it refuses the recipe instead | Correct the key, or update fisherman to a version that has the field |
 
 ### Disk and Partition
 
@@ -281,7 +321,9 @@ When calling `fisherman validate --json`, errors are returned as:
 
 ```json
 {
-  "problems": [
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
     {
       "field": "hostname",
       "code": "hostname_invalid_char",

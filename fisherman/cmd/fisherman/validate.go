@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -35,12 +36,19 @@ var tpm2Usable = func() bool { return newProber().TPM().Usable }
 // forms of `validate` call it, so validate accepts exactly what the install
 // accepts.
 func installProblems(r *recipe.Recipe) []recipe.Problem {
+	_, imageErr := checkImageSource(r)
+	return installProblemsWith(r, imageErr)
+}
+
+// installProblemsWith is installProblems with the image-source answer given:
+// the install has it already (verified media input counts as live media).
+func installProblemsWith(r *recipe.Recipe, imageErr error) []recipe.Problem {
 	ps := r.Problems()
 	if recipe.NeedsTPM2(r.Encryption.Type) {
 		ps = append(ps, r.CheckTPM(tpm2Usable())...)
 	}
-	if _, err := checkImageSource(r); err != nil {
-		ps = append(ps, recipe.Problem{Field: "image", Code: recipe.CodeImageRequired, Message: err.Error()})
+	if imageErr != nil {
+		ps = append(ps, recipe.Problem{Field: "image", Code: recipe.CodeImageRequired, Message: imageErr.Error()})
 	}
 	return ps
 }
@@ -143,6 +151,11 @@ func runValidate(args []string) {
 	path := fs.Arg(0)
 	r, err := loadRecipe(path)
 	if err != nil {
+		var p recipe.Problem
+		if errors.As(err, &p) {
+			fmt.Fprintf(os.Stderr, "%serror:%s invalid recipe: %v\n", "\033[31m", "\033[0m", err)
+			os.Exit(1)
+		}
 		fmt.Fprintf(os.Stderr, "%serror:%s loading %s: %v\n", "\033[31m", "\033[0m", path, err)
 		os.Exit(1)
 	}
@@ -227,7 +240,9 @@ func runValidateJSON(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	default:
 		var r recipe.Recipe
 		if err = json.Unmarshal(raw, &r); err == nil {
-			ps = installProblems(&r)
+			// Unknown keys first: the install refuses them when it loads
+			// the recipe (recipe.Parse), before any other rule runs.
+			ps = append(recipe.UnknownFields(raw), installProblems(&r)...)
 		}
 	}
 	if err != nil && ps == nil {

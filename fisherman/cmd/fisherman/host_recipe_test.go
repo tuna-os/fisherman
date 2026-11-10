@@ -199,6 +199,7 @@ func TestStdinRecipeCLI(t *testing.T) {
 		t.Fatal(err)
 	}
 	noImage, _ := json.Marshal(map[string]any{"disk": disk, "filesystem": "ext4", "hostname": "h"})
+	misspelt := `{"disk":"` + disk + `","filesystem":"xfs","hostname":"a","image":"x","encrypton":{"type":"luks-passphrase","passphrase":"x"}}`
 
 	tests := []struct {
 		name      string
@@ -206,13 +207,17 @@ func TestStdinRecipeCLI(t *testing.T) {
 		stdin     string
 		wantCode  int
 		wantError string // in the install's {"type":"error"} event, or validate's stderr
+		wantEvent string // the error event's "code", when the failure has one
 	}{
-		{"install: invalid JSON", "-", `{"disk":`, 1, "loading recipe: parsing recipe"},
-		{"install: empty stdin", "-", "", 1, "loading recipe: recipe is empty"},
-		{"install: empty image, not live", "-", string(noImage), 1, "invalid recipe: image is required"},
-		{"validate: invalid JSON", "validate -", "nope", 1, "parsing recipe"},
-		{"validate: empty stdin", "validate -", "", 1, "recipe is empty"},
-		{"validate: empty image, not live", "validate -", string(noImage), 1, "image is required"},
+		{"install: invalid JSON", "-", `{"disk":`, 1, "loading recipe: parsing recipe", ""},
+		{"install: empty stdin", "-", "", 1, "loading recipe: recipe is empty", ""},
+		{"install: empty image, not live", "-", string(noImage), 1, "invalid recipe: image is required", recipe.CodeImageRequired},
+		// tuna-os/fisherman#404: a misspelt "encryption" used to install unencrypted.
+		{"install: unknown field", "-", misspelt, 1, `loading recipe: unknown recipe field "encrypton"`, recipe.CodeRecipeUnknownField},
+		{"validate: invalid JSON", "validate -", "nope", 1, "parsing recipe", ""},
+		{"validate: empty stdin", "validate -", "", 1, "recipe is empty", ""},
+		{"validate: empty image, not live", "validate -", string(noImage), 1, "image is required", ""},
+		{"validate: unknown field", "validate -", misspelt, 1, `invalid recipe: unknown recipe field "encrypton"`, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -250,6 +255,9 @@ func TestStdinRecipeCLI(t *testing.T) {
 			}
 			if last["type"] != "error" || !strings.Contains(last["message"].(string), tt.wantError) {
 				t.Errorf("last event = %v, want error containing %q\nstdout:\n%s", last, tt.wantError, stdout.String())
+			}
+			if code, _ := last["code"].(string); code != tt.wantEvent {
+				t.Errorf("error event code = %q, want %q\nstdout:\n%s", code, tt.wantEvent, stdout.String())
 			}
 		})
 	}

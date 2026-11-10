@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tuna-os/fisherman/internal/progress"
+	"github.com/tuna-os/fisherman/internal/recipe"
 	"github.com/tuna-os/fisherman/internal/runner"
 )
 
@@ -66,6 +67,9 @@ const (
 type terminator struct {
 	mu      sync.Mutex
 	claimed bool
+	// problem is the coded problem behind a failure (failProblem), so the
+	// error event can carry its code and field.
+	problem recipe.Problem
 
 	cancelOnce sync.Once
 	cancelled  chan struct{}
@@ -82,18 +86,42 @@ type terminator struct {
 }
 
 func newTerminator() *terminator {
-	return &terminator{
+	t := &terminator{
 		cancelled:      make(chan struct{}),
 		halt:           runner.Halt,
 		stopChildren:   func() int { return runner.StopDescendants(childStopGrace) },
-		cleanup:        func() error { return cleanup.Run() },
-		emitError:      progress.Error,
+		cleanup:        teardown,
 		stderr:         os.Stderr,
 		exit:           os.Exit,
 		park:           parkForever,
 		settle:         cancelSettle,
 		cleanupTimeout: cleanupTimeout,
 	}
+	t.emitError = func(msg string) {
+		p := t.failedProblem()
+		progress.ErrorWithCode(msg, p.Code, p.Field)
+	}
+	return t
+}
+
+// failedProblem is the coded problem a failProblem call recorded, or the
+// zero Problem.
+func (t *terminator) failedProblem() recipe.Problem {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.problem
+}
+
+// failProblem is fail for a failure with a stable code: the error event
+// carries p's code and field next to the message. A cancel that wins the
+// exit reports itself, without the code.
+func (t *terminator) failProblem(msg string, p recipe.Problem) {
+	t.mu.Lock()
+	if !t.claimed {
+		t.problem = p
+	}
+	t.mu.Unlock()
+	t.fail(msg)
 }
 
 // term is the process-wide terminator used by fatal() and main().

@@ -59,6 +59,11 @@ type recoveryKeyEvent struct {
 type errorEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
+	// Code and Field are set when the failure is a recipe or preflight
+	// problem with a stable code (docs/VALIDATE.md): the same code and
+	// field `fisherman validate --json` reports for it.
+	Code  string `json:"code,omitempty"`
+	Field string `json:"field,omitempty"`
 }
 
 // Step emits a JSON step-progress line to stdout.
@@ -132,6 +137,14 @@ func RecoveryKey(key string) {
 // stderr line.
 func Error(message string) {
 	write(errorEvent{Type: "error", Message: message})
+}
+
+// ErrorWithCode is Error for a failure that has a stable problem code: a
+// recipe rule or a preflight check. code and field are the ones
+// `fisherman validate --json` gives the same problem; an empty value is
+// left out of the event.
+func ErrorWithCode(message, code, field string) {
+	write(errorEvent{Type: "error", Message: message, Code: code, Field: field})
 }
 
 func write(v any) {
