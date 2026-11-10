@@ -2,7 +2,7 @@
 # Used by bootcrew-fast.yml (PR gate, disk-ops), bootcrew-vm.yml (PR gate, VM boot),
 # and bootcrew-nightly.yml (full install).
 # Add new images here; all workflows pick them up automatically.
-# 
+#
 # vm_boot: true — include in bootcrew-vm.yml for E2E VM boot tests on every PR
 #          false (default) — skip in VM boot tests (reserved for nightly + disk-ops)
 # required: true — failure of this image fails the workflow (use for canary
@@ -19,7 +19,31 @@
 # nightly_advisory: true — bootcrew-nightly.yml still runs the full install
 #          and boot for this image, but a failure does not fail the workflow.
 #          Only for images whose upstream is shown to be broken; the entry's
-#          comment must carry that evidence and say what clears it.
+#          comment must carry that evidence and say what clears it. The same
+#          field covers an entry that fails on a defect filed in this
+#          repository: the comment names the issue, and the field goes when
+#          the issue closes.
+# nightly_vm: true — bootcrew-nightly.yml also runs this entry through the
+#          same harness as the PR workflow (`just bootcrew-ci-test`: install,
+#          then boot in QEMU and assert over SSH). The nightly's own
+#          full-install job has no LUKS unlock, no SSH and one disk, so the
+#          entries below need this job. Gating unless nightly_advisory.
+#
+# Shapes beyond "one image, one disk, no account" (#418). All are read by
+# scripts/matrix-recipe.sh and `just bootcrew-ci-test`:
+# luks: true + luks_passphrase — encryption.type luks-passphrase. The harness
+#          types the passphrase at the boot prompt (scripts/luks-unlock.py).
+# encryption_type: tpm2-luks | tpm2-luks-passphrase — with luks: true, picks a
+#          TPM mode. tpm2-luks takes no luks_passphrase: the harness reads the
+#          generated key from fisherman's recovery_key event.
+# tpm: true — the guest gets a TPM 2.0 (swtpm) and boots twice: once with the
+#          passphrase, which must enrol the TPM, and once with no passphrase,
+#          which must unlock from the TPM alone.
+# user: {username, fullname, password, groups} — copied into the recipe's
+#          `user` block. The booted guest must have the account, its home and
+#          groups, and the password must authenticate.
+# var_disk: true — a second disk becomes the recipe's `varDisk`. The booted
+#          guest must mount it at /var.
 images:
   - name: dakota
     image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
@@ -194,6 +218,98 @@ images:
     luks_passphrase: "bootcrew-luks-test"
     vm_timeout: 800
     nightly: false
+    vm_boot: true
+
+  # ── #418: the shapes users install most, which had no boot test ──────────
+  #
+  # GRUB + ostree + xfs + LUKS passphrase + a user account: the default shape
+  # of a Bluefin-family install. Every other luks entry is systemd-boot with
+  # composefs, where GPT auto-discovery can find the root; here only the
+  # rd.luks.name argument fisherman writes into the BLS entry can (#410).
+  # And no other entry has a `user` block: #396 (a plaintext password stored
+  # verbatim on composefs) was found by a consumer's E2E, not here.
+  - name: centos-bootc-luks-user
+    image: quay.io/centos-bootc/centos-bootc@sha256:9aedf2d189b85c498697f9b83112c893b084d359268da7dd6d5d848478d260de # c10s
+    ssh_image_name: centos-bootc
+    filesystem: xfs
+    composefs_backend: false
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    luks: true
+    luks_passphrase: "bootcrew-luks-test"
+    user:
+      username: ciuser
+      fullname: CI User
+      password: "bootcrew-user-test"
+      groups: [wheel]
+    vm_timeout: 800
+    nightly: false
+    nightly_vm: true
+    vm_boot: true
+
+  # The same account on the composefs backend, where user creation takes a
+  # different path (`useradd --root` on the deployment's etc, and fisherman
+  # hashes the password itself: #396). Unencrypted, so a failure here is
+  # about the account and not about the unlock.
+  - name: dakota-user
+    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    ssh_image_name: dakota
+    filesystem: ext4
+    composefs_backend: true
+    bootloader: systemd
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    user:
+      username: ciuser
+      fullname: CI User
+      password: "bootcrew-user-test"
+      groups: [wheel]
+    nightly: false
+    nightly_vm: true
+    vm_boot: true
+
+  # tpm2-luks with a software TPM. Two boots: the recovery key unlocks the
+  # first, which must enrol the TPM; the second gets no passphrase.
+  #
+  # ADVISORY: #360. fisherman stages the first-boot enrolment unit under the
+  # physical sysroot (<target>/usr/lib/systemd/system and <target>/etc), not
+  # in the deployment the system boots, so the booted system is expected not
+  # to run it: boot 1 then reports "no systemd-tpm2 token". Drop
+  # nightly_advisory when #360 closes and this entry passes.
+  - name: centos-bootc-tpm2-luks
+    image: quay.io/centos-bootc/centos-bootc@sha256:9aedf2d189b85c498697f9b83112c893b084d359268da7dd6d5d848478d260de # c10s
+    ssh_image_name: centos-bootc
+    filesystem: xfs
+    composefs_backend: false
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    luks: true
+    encryption_type: tpm2-luks
+    tpm: true
+    vm_timeout: 800
+    nightly: false
+    nightly_vm: true
+    nightly_advisory: true
+    vm_boot: true
+
+  # A separate /var disk (recipe `varDisk`). ostree backend: on composefs the
+  # var disk is known to be ignored at boot (#252). Unencrypted on purpose:
+  # with an encrypted root the var disk stays plaintext (#406), and that is
+  # not what this entry is for.
+  - name: centos-bootc-vardisk
+    image: quay.io/centos-bootc/centos-bootc@sha256:9aedf2d189b85c498697f9b83112c893b084d359268da7dd6d5d848478d260de # c10s
+    ssh_image_name: centos-bootc
+    filesystem: xfs
+    composefs_backend: false
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    var_disk: true
+    nightly: false
+    nightly_vm: true
     vm_boot: true
 
   # gentoo-bootc disabled: consistently fails with missing blob in containers-storage

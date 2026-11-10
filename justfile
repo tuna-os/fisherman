@@ -254,27 +254,37 @@ verify-bootc-offline LOOPDEV COMPOSEFS:
 # Used by: just bootcrew-ci-test '{"name":"debian-bootc","image":"...",...}'
 bootcrew-ci-test IMAGE_JSON:
   #!/bin/bash
-  set -e
+  # pipefail: the install is piped through tee to keep its event stream.
+  set -eo pipefail
   
   IMAGE_JSON='{{ IMAGE_JSON }}'
   IMAGE=$(echo "$IMAGE_JSON" | jq -r '.image')
   FILESYSTEM=$(echo "$IMAGE_JSON" | jq -r '.filesystem // "xfs"')
   COMPOSEFS=$(echo "$IMAGE_JSON" | jq -r '.composefs_backend // false')
-  UNIFIED=$(echo "$IMAGE_JSON" | jq -r '.unified_storage // false')
-  SELINUX=$(echo "$IMAGE_JSON" | jq -r '.selinux_disabled // false')
   IMAGE_NAME=$(echo "$IMAGE_JSON" | jq -r '.name')
   LUKS=$(echo "$IMAGE_JSON" | jq -r '.luks // false')
   LUKS_PASSPHRASE=$(echo "$IMAGE_JSON" | jq -r '.luks_passphrase // ""')
   SSH_NAME=$(echo "$IMAGE_JSON" | jq -r '.ssh_image_name // .name')
   VM_TIMEOUT=$(echo "$IMAGE_JSON" | jq -r '.vm_timeout // 600')
   INSTALL_MEMORY_MAX=$(echo "$IMAGE_JSON" | jq -r '.install_memory_max // ""')
+  # Optional shapes (#418). Each field is described in the header of
+  # tests/bootcrew-matrix.yaml.
+  ENCRYPTION_TYPE=$(echo "$IMAGE_JSON" | jq -r '.encryption_type // ""')
+  TPM=$(echo "$IMAGE_JSON" | jq -r '.tpm // false')
+  VAR_DISK=$(echo "$IMAGE_JSON" | jq -r '.var_disk // false')
+  VERIFY_USER=$(echo "$IMAGE_JSON" | jq -r '.user.username // ""')
+  VERIFY_USER_PASSWORD=$(echo "$IMAGE_JSON" | jq -r '.user.password // ""')
+  VERIFY_USER_GROUPS=$(echo "$IMAGE_JSON" | jq -r '(.user.groups // []) | join(",")')
   
   echo "=========================================="
   echo "Bootcrew CI Test: $IMAGE_NAME"
   echo "Image: $IMAGE"
   echo "Filesystem: $FILESYSTEM"
   echo "ComposFS Backend: $COMPOSEFS"
-  echo "LUKS: $LUKS"
+  echo "LUKS: $LUKS${ENCRYPTION_TYPE:+ ($ENCRYPTION_TYPE)}"
+  echo "TPM (swtpm): $TPM"
+  echo "Separate /var disk: $VAR_DISK"
+  echo "User: ${VERIFY_USER:-none}"
   if [ -n "$INSTALL_MEMORY_MAX" ]; then
     echo "Installer memory limit: $INSTALL_MEMORY_MAX (swap disabled)"
   fi
@@ -293,46 +303,43 @@ bootcrew-ci-test IMAGE_JSON:
   just setup-loop "$DISK_FILE"
   LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt)
   
-  # Determine bootloader from matrix entry (preferred) or fall back to name-based detection.
-  BOOTLOADER_TYPE=$(echo "$IMAGE_JSON" | jq -r '.bootloader // ""')
-  if [ -z "$BOOTLOADER_TYPE" ]; then
-    case "$IMAGE_NAME" in
-      debian-bootc*|arch-bootc*)
-        BOOTLOADER_TYPE="systemd"
-        ;;
-    esac
-  fi
-  BOOTLOADER=""
-  if [ -n "$BOOTLOADER_TYPE" ]; then
-    BOOTLOADER="\"bootloader\": \"$BOOTLOADER_TYPE\","
+  # The recipe's varDisk: a second, smaller disk that fisherman formats as
+  # xfs and mounts at /var.
+  VAR_DISK_FILE="{{ CI_ARTIFACTS }}/bootcrew-${IMAGE_NAME}-var.img"
+  VAR_LOOPDEV=""
+  if [ "$VAR_DISK" = "true" ]; then
+    truncate -s 20G "$VAR_DISK_FILE"
+    VAR_LOOPDEV=$(sudo losetup --find --show "$VAR_DISK_FILE")
+    echo "✅ /var loop device: $VAR_LOOPDEV"
   fi
   
-  # Build encryption block.
-  if [ "$LUKS" = "true" ]; then
-    ENCRYPTION="{\"type\": \"luks-passphrase\", \"passphrase\": \"$LUKS_PASSPHRASE\"}"
-  else
-    ENCRYPTION='{"type": "none"}'
-  fi
-  
-  cat > {{ CI_ARTIFACTS }}/recipe.json << EOF
-  {
-    "disk": "$LOOPDEV",
-    "filesystem": "$FILESYSTEM",
-    "composeFsBackend": $COMPOSEFS,
-    "unifiedStorage": $UNIFIED,
-    "selinuxDisabled": $SELINUX,
-    "encryption": $ENCRYPTION,
-    "image": "$SSH_IMAGE",
-    "hostname": "ci-test",
-    $BOOTLOADER
-    "flatpaks": []
-  }
-  EOF
+  # bootloader, encryption, user and varDisk all come from the matrix entry.
+  bash scripts/matrix-recipe.sh "$IMAGE_JSON" "$LOOPDEV" "$VAR_LOOPDEV" > {{ CI_ARTIFACTS }}/recipe.json
+  # The recipe holds the test passphrase and password; both are constants in
+  # tests/bootcrew-matrix.yaml and protect nothing.
+  cat {{ CI_ARTIFACTS }}/recipe.json
   
   # Install
   if [ ! -f /tmp/fisherman ]; then
     just build
   fi
+  
+  # fisherman refuses a tpm2-* recipe when the machine that runs it has no
+  # usable TPM 2.0 (encryption_tpm_unavailable). The runner has none, and it
+  # needs none: fisherman enrols the TPM on the first boot of the installed
+  # system, and that boot is the QEMU guest with swtpm attached below. So
+  # the install-time check is answered with the probe's documented override.
+  # Nothing about the guest's TPM is faked.
+  FISHERMAN_ENV=()
+  if [ "$TPM" = "true" ]; then
+    FISHERMAN_ENV+=("BOOTC_INSTALLER_FAKE_TPM=1")
+  fi
+  # The event stream: kept for the artifacts, and the only place fisherman
+  # reports the generated recovery key of a tpm2-luks install.
+  EVENTS_DIR="${ARTIFACTS_DIR:-}"
+  [ -n "$EVENTS_DIR" ] || EVENTS_DIR="{{ CI_ARTIFACTS }}"
+  mkdir -p "$EVENTS_DIR"
+  EVENTS_LOG="$EVENTS_DIR/fisherman-events-${IMAGE_NAME}.log"
   
   echo "Installing system..."
   if [ -n "$INSTALL_MEMORY_MAX" ]; then
@@ -348,13 +355,25 @@ bootcrew-ci-test IMAGE_JSON:
   exec "$REAL_PODMAN" --cgroup-manager=cgroupfs "\$@"
   EOF
     chmod 0755 "$PODMAN_WRAPPER/podman"
-    sudo env "PATH=$PODMAN_WRAPPER:$PATH" \
+    sudo env "PATH=$PODMAN_WRAPPER:$PATH" "${FISHERMAN_ENV[@]}" \
       systemd-run --scope --quiet --collect \
       --property="MemoryMax=$INSTALL_MEMORY_MAX" \
       --property="MemorySwapMax=0" \
-      /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
+      /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json | tee "$EVENTS_LOG"
   else
-    sudo /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
+    sudo env "${FISHERMAN_ENV[@]}" /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json | tee "$EVENTS_LOG"
+  fi
+  
+  # tpm2-luks has no passphrase in the recipe. fisherman generates one and
+  # reports it once, in a recovery_key event. It unlocks the first boot (the
+  # TPM is enrolled only then) and the offline checks below.
+  if [ "$ENCRYPTION_TYPE" = "tpm2-luks" ]; then
+    LUKS_PASSPHRASE=$(jq -rR 'fromjson? | select(.type == "recovery_key") | .key' "$EVENTS_LOG" | tail -1)
+    if [ -z "$LUKS_PASSPHRASE" ]; then
+      echo "❌ FAIL: the tpm2-luks install emitted no recovery_key event"
+      exit 1
+    fi
+    echo "✅ recovery_key event captured (${#LUKS_PASSPHRASE} characters)"
   fi
 
   # The registry image has password authentication disabled. Inject this
@@ -416,13 +435,36 @@ bootcrew-ci-test IMAGE_JSON:
   # Boot VM and verify bootc status (pass LUKS passphrase for unlock).
   echo ""
   echo "=== Booting VM for bootc status verification ==="
-  bash scripts/boot-verify.sh "2222" "/tmp/bootcrew-ssh/id_rsa" "$VM_TIMEOUT" "2G" "$LOOPDEV" "$IMAGE_NAME" "$LUKS_PASSPHRASE"
+  export VERIFY_USER VERIFY_USER_PASSWORD VERIFY_USER_GROUPS
+  if [ -n "$VAR_LOOPDEV" ]; then
+    export EXTRA_DISK="$VAR_LOOPDEV" VERIFY_VAR_DISK=1
+  fi
+  if [ "$TPM" = "true" ]; then
+    # Two boots of the same machine: the swtpm state directory is the TPM.
+    # Boot 1 unlocks with the passphrase (or recovery key) and must enrol the
+    # TPM. Boot 2 gets no passphrase at all, so it reaches SSH only if the
+    # TPM unlocks the root.
+    TPM_STATE_DIR=$(mktemp -d /tmp/bootcrew-tpm-XXXXXX)
+    export TPM_STATE_DIR
+    echo "--- boot 1 of 2: unlock with the passphrase, enrol the TPM ---"
+    VERIFY_TPM_ENROLLED=1 bash scripts/boot-verify.sh "2222" "/tmp/bootcrew-ssh/id_rsa" "$VM_TIMEOUT" "2G" "$LOOPDEV" "$IMAGE_NAME" "$LUKS_PASSPHRASE"
+    echo ""
+    echo "--- boot 2 of 2: no passphrase, the TPM must unlock the root ---"
+    VERIFY_TPM_AUTOUNLOCK=1 bash scripts/boot-verify.sh "2222" "/tmp/bootcrew-ssh/id_rsa" "$VM_TIMEOUT" "2G" "$LOOPDEV" "$IMAGE_NAME" ""
+    sudo rm -rf "$TPM_STATE_DIR"
+  else
+    bash scripts/boot-verify.sh "2222" "/tmp/bootcrew-ssh/id_rsa" "$VM_TIMEOUT" "2G" "$LOOPDEV" "$IMAGE_NAME" "$LUKS_PASSPHRASE"
+  fi
   
   # Cleanup
   echo ""
   echo "=== Cleanup ==="
   just cleanup-loop
   rm -f "$DISK_FILE"
+  if [ -n "$VAR_LOOPDEV" ]; then
+    sudo losetup -d "$VAR_LOOPDEV" || true
+    rm -f "$VAR_DISK_FILE"
+  fi
   
   echo "✅ Test complete: $IMAGE_NAME"
 
@@ -432,7 +474,7 @@ ci-install-tools:
   set -e
   echo "Installing tools..."
   sudo apt-get update -qq
-  sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
+  sudo apt-get install -y podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3 swtpm openssl
   echo "✅ Tools installed"
 
 # Show help

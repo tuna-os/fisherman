@@ -14,6 +14,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.read-matrix.outputs.matrix }}
+      matrix_vm: ${{ steps.read-matrix.outputs.matrix_vm }}
     steps:
       - uses: actions/checkout@v7
 
@@ -22,6 +23,9 @@ jobs:
         run: |
           MATRIX=$(yq -o json tests/bootcrew-matrix.yaml | jq -c '[.images[] | select(.nightly != false)]')
           echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
+          # nightly_vm entries go through the PR harness (vm-e2e below).
+          MATRIX_VM=$(yq -o json tests/bootcrew-matrix.yaml | jq -c '[.images[] | select(.nightly_vm == true)]')
+          echo "matrix_vm=$MATRIX_VM" >> "$GITHUB_OUTPUT"
 
       - name: Initialize job summary
         run: |
@@ -356,3 +360,72 @@ jobs:
         if: always()
         run: |
           echo "| ${{ matrix.image.name }}${{ matrix.image.nightly_advisory && ' (advisory)' || '' }} | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── nightly_vm entries: install, boot in QEMU, assert over SSH (#418). ────
+  # full-install above writes an unencrypted recipe, boots one disk and reads
+  # the serial log. It cannot unlock LUKS, attach a TPM or a second disk, or
+  # look inside the guest. The entries that need those go through the same
+  # harness as the PR workflow (`just bootcrew-ci-test`). They are gating
+  # here unless the entry is nightly_advisory, and the entry's comment in
+  # tests/bootcrew-matrix.yaml then names the issue.
+  vm-e2e:
+    name: vm / ${{ matrix.image.name }}${{ matrix.image.nightly_advisory && ' (advisory)' || '' }}
+    needs: [setup, unit-tests]
+    if: ${{ needs.setup.outputs.matrix_vm != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    continue-on-error: ${{ matrix.image.nightly_advisory == true }}
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.setup.outputs.matrix_vm) }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache,
+      # which is where setup-go installs the toolchain.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        with:
+          tool-cache: true
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: fisherman/go.mod
+          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+
+      - name: Setup CI environment
+        uses: ./.github/actions/setup-host-tools
+        with:
+          # The same package set as bootcrew-vm.yml and `just ci-install-tools`.
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3 swtpm openssl
+
+      - name: Generate SSH keys
+        run: just setup-ssh-keys
+
+      - name: Build fisherman
+        run: just build
+
+      - name: Run bootcrew test
+        env:
+          ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+        run: |
+          mkdir -p "$ARTIFACTS_DIR"
+          IMAGE_JSON='${{ toJson(matrix.image) }}'
+          just bootcrew-ci-test "$IMAGE_JSON"
+
+      - name: Upload boot artifacts (always)
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: boot-artifacts-nightly-${{ matrix.image.name }}
+          path: |
+            ${{ github.workspace }}/artifacts/**
+            /tmp/boot-*.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Report result to job summary
+        if: always()
+        run: |
+          echo "| vm: ${{ matrix.image.name }}${{ matrix.image.nightly_advisory && ' (advisory)' || '' }} | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"

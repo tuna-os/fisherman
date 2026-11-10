@@ -2,6 +2,28 @@
 # Verify system boot via SSH and query bootc status
 # Usage: ./boot-verify.sh [SSH_PORT] [SSH_KEY] [VM_TIMEOUT] [VM_MEMORY] [LOOPDEV] [IMAGE_NAME] [LUKS_PASSPHRASE]
 # Works with dynamic tool discovery for both CI and local environments
+#
+# Optional environment (each one adds an assertion or a device; all are off
+# by default, so a plain boot check behaves as before):
+#   VERIFY_USER, VERIFY_USER_PASSWORD, VERIFY_USER_GROUPS
+#       The account the recipe's `user` block asked for. Asserts that it
+#       exists, has a home directory, is in each comma-separated group, can
+#       open a login session, and that the password authenticates (and a
+#       wrong one does not).
+#   EXTRA_DISK
+#       A second block device, attached as the second AHCI disk.
+#   VERIFY_VAR_DISK=1
+#       Asserts that /var is its own xfs filesystem labelled "var" on a
+#       device other than the root (the recipe's `varDisk`).
+#   TPM_STATE_DIR
+#       Starts swtpm with its state in this directory and attaches it as a
+#       TPM 2.0. Reuse the directory to boot the same "machine" again.
+#   VERIFY_TPM_ENROLLED=1
+#       Asserts that the first boot enrolled a systemd-tpm2 token in the LUKS
+#       header and removed the transient key.
+#   VERIFY_TPM_AUTOUNLOCK=1
+#       For a boot with no LUKS_PASSPHRASE: the guest must reach SSH with no
+#       passphrase typed, so only the TPM can have unlocked the root.
 
 set -e
 
@@ -9,6 +31,8 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./find-tools.sh
 source "$SCRIPT_DIR/find-tools.sh"
+# shellcheck source=./guest-checks.sh
+source "$SCRIPT_DIR/guest-checks.sh"
 
 SSH_PORT="${1:-2222}"
 SSH_KEY="${2:-/tmp/bootcrew-ssh/id_rsa}"
@@ -151,8 +175,64 @@ cleanup_temp() {
     return
   fi
   sudo rm -f "$OVMF_VARS_TEMP" "$QEMU_MONITOR_SOCK" 2>/dev/null || true
+  # swtpm --terminate exits with QEMU; this covers a QEMU that never
+  # connected. The state directory is the caller's and is left alone.
+  if [ -n "$SWTPM_PID_FILE" ] && sudo test -f "$SWTPM_PID_FILE"; then
+    sudo kill "$(sudo cat "$SWTPM_PID_FILE")" 2>/dev/null || true
+  fi
 }
 trap cleanup_temp EXIT
+
+# Optional devices. QEMU_EXTRA_ARGS stays empty for a plain boot check.
+QEMU_EXTRA_ARGS=()
+
+if [ -n "${EXTRA_DISK:-}" ]; then
+  if [ ! -b "$EXTRA_DISK" ]; then
+    echo "❌ EXTRA_DISK=$EXTRA_DISK is not a block device"
+    exit 1
+  fi
+  echo "Extra disk: $EXTRA_DISK (second AHCI disk)"
+  QEMU_EXTRA_ARGS+=(
+    -drive "file=$EXTRA_DISK,format=raw,if=none,id=disk1"
+    -device "ide-hd,drive=disk1,bus=ahci0.1"
+  )
+fi
+
+SWTPM_PID_FILE=""
+if [ -n "${TPM_STATE_DIR:-}" ]; then
+  if ! command -v swtpm >/dev/null 2>&1; then
+    echo "❌ TPM_STATE_DIR is set but swtpm is not installed (apt: swtpm)"
+    exit 1
+  fi
+  sudo mkdir -p "$TPM_STATE_DIR"
+  TPM_SOCK="$TPM_STATE_DIR/swtpm.sock"
+  SWTPM_PID_FILE="$TPM_STATE_DIR/swtpm.pid"
+  sudo rm -f "$TPM_SOCK" "$SWTPM_PID_FILE"
+  # --terminate: swtpm exits when QEMU closes the socket. The state directory
+  # keeps the TPM's seeds, so a later boot with the same directory is the
+  # same TPM, and a key sealed on the first boot unseals on the second.
+  sudo swtpm socket --tpm2 \
+    --tpmstate "dir=$TPM_STATE_DIR" \
+    --ctrl "type=unixio,path=$TPM_SOCK" \
+    --pid "file=$SWTPM_PID_FILE" \
+    --log "file=$ARTIFACTS_DIR/swtpm-$RUN_TAG.log,level=1" \
+    --terminate --daemon
+  for _ in $(seq 1 50); do
+    sudo test -S "$TPM_SOCK" && break
+    sleep 0.1
+  done
+  if ! sudo test -S "$TPM_SOCK"; then
+    echo "❌ swtpm did not create its control socket at $TPM_SOCK"
+    sudo cat "$ARTIFACTS_DIR/swtpm-$RUN_TAG.log" 2>/dev/null || true
+    exit 1
+  fi
+  echo "swtpm: TPM 2.0 emulator running (state: $TPM_STATE_DIR)"
+  QEMU_EXTRA_ARGS+=(
+    -chardev "socket,id=chrtpm,path=$TPM_SOCK"
+    -tpmdev "emulator,id=tpm0,chardev=chrtpm"
+    -device "tpm-tis,tpmdev=tpm0"
+  )
+fi
 
 sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -machine q35 \
@@ -166,6 +246,7 @@ sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -drive if=pflash,format=raw,file="$OVMF_VARS_TEMP" \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22 \
   -device virtio-net-pci,netdev=net0 \
+  "${QEMU_EXTRA_ARGS[@]}" \
   -monitor "unix:$QEMU_MONITOR_SOCK,server=on,wait=off" \
   -serial "file:$SERIAL_LOG" \
   -display none \
@@ -341,6 +422,149 @@ else
   echo "⚠️  efibootmgr not available in guest — skipping UEFI entry assertion"
 fi
 
+# ── Optional assertions (see the header) ─────────────────────────────────
+# Each one sets CHECK_FAIL and keeps going, so one run reports every failed
+# assertion and still captures the journal below.
+CHECK_FAIL=0
+check_fail() {
+  echo "❌ FAIL: $*"
+  CHECK_FAIL=1
+}
+
+if [ -n "${VERIFY_USER:-}" ]; then
+  echo ""
+  echo "=== User account verification ($VERIFY_USER) ==="
+  PASSWD_LINE=$(ssh_root "getent passwd '$VERIFY_USER'" 2>/dev/null || true)
+  if [ -z "$PASSWD_LINE" ]; then
+    check_fail "user '$VERIFY_USER' does not exist in the booted system (getent passwd)"
+    ssh_root "tail -5 /etc/passwd" 2>/dev/null || true
+  else
+    echo "✅ account exists: $PASSWD_LINE"
+    USER_HOME=$(printf '%s' "$PASSWD_LINE" | cut -d: -f6)
+    HOME_OWNER=$(ssh_root "stat -c %U '$USER_HOME'" 2>/dev/null || true)
+    if [ "$HOME_OWNER" = "$VERIFY_USER" ]; then
+      echo "✅ home directory $USER_HOME exists and belongs to $VERIFY_USER"
+    else
+      check_fail "home directory $USER_HOME is missing or not owned by $VERIFY_USER (owner: '${HOME_OWNER:-none}')"
+    fi
+
+    USER_GROUPS=$(ssh_root "id -nG '$VERIFY_USER'" 2>/dev/null || true)
+    echo "groups: $USER_GROUPS"
+    IFS=',' read -ra WANT_GROUPS <<< "${VERIFY_USER_GROUPS:-}"
+    for g in "${WANT_GROUPS[@]}"; do
+      [ -n "$g" ] || continue
+      if printf '%s' "$USER_GROUPS" | tr ' ' '\n' | grep -qx "$g"; then
+        echo "✅ member of group $g"
+      else
+        check_fail "user '$VERIFY_USER' is not in group '$g'"
+      fi
+    done
+
+    # A login session: the shell is valid and the home is reachable.
+    SESSION_USER=$(ssh_root "runuser -l '$VERIFY_USER' -c 'id -un'" 2>/dev/null | tail -1 || true)
+    if [ "$SESSION_USER" = "$VERIFY_USER" ]; then
+      echo "✅ login session opens for $VERIFY_USER"
+    else
+      check_fail "could not open a login session for '$VERIFY_USER' (runuser -l printed '${SESSION_USER}')"
+    fi
+
+    # The password. /etc/shadow must hold a real hash, and the recipe's
+    # password must authenticate against it.
+    SHADOW_FIELD=$(ssh_root "awk -F: -v u='$VERIFY_USER' '\$1 == u { print \$2 }' /etc/shadow" 2>/dev/null || true)
+    SHADOW_STATE=$(classify_shadow_hash "$SHADOW_FIELD")
+    if [ "$SHADOW_STATE" != "ok" ]; then
+      check_fail "/etc/shadow entry for '$VERIFY_USER' is '$SHADOW_STATE', not a password hash — nobody can sign in with the recipe's password"
+    else
+      echo "✅ /etc/shadow holds a password hash (scheme ${SHADOW_FIELD:0:3})"
+      # unix_chkpwd is pam_unix's own helper: the same code path a login
+      # takes, against the guest's libcrypt. It reads a NUL-terminated
+      # password on stdin and refuses a terminal, which SSH without -t is not.
+      CHKPWD=$(ssh_root "command -v unix_chkpwd || ls /usr/sbin/unix_chkpwd /sbin/unix_chkpwd 2>/dev/null | head -1" 2>/dev/null | head -1 || true)
+      if [ -n "$CHKPWD" ]; then
+        if printf '%s\0' "$VERIFY_USER_PASSWORD" | ssh_root "'$CHKPWD' '$VERIFY_USER' nullok" 2>/dev/null; then
+          echo "✅ the recipe's password authenticates (pam_unix unix_chkpwd)"
+        else
+          check_fail "the recipe's password does not authenticate for '$VERIFY_USER' (unix_chkpwd)"
+        fi
+        if printf '%s\0' "not-${VERIFY_USER_PASSWORD}" | ssh_root "'$CHKPWD' '$VERIFY_USER' nullok" 2>/dev/null; then
+          check_fail "a wrong password authenticates for '$VERIFY_USER' — the password check proves nothing"
+        else
+          echo "✅ a wrong password is rejected"
+        fi
+      else
+        # No pam_unix helper in the guest: recompute the hash on this host.
+        HASH_RC=0
+        verify_sha512crypt "$SHADOW_FIELD" "$VERIFY_USER_PASSWORD" || HASH_RC=$?
+        case "$HASH_RC" in
+          0) echo "✅ the recipe's password produces the stored hash (openssl, sha512crypt)" ;;
+          1) check_fail "the recipe's password does not produce the hash stored for '$VERIFY_USER'" ;;
+          *) check_fail "cannot verify the password for '$VERIFY_USER': no unix_chkpwd in the guest and the hash is not default-rounds sha512crypt" ;;
+        esac
+      fi
+    fi
+  fi
+fi
+
+if [ "${VERIFY_VAR_DISK:-0}" = "1" ]; then
+  echo ""
+  echo "=== /var disk verification ==="
+  ssh_root "lsblk -o NAME,SIZE,TYPE,FSTYPE,LABEL,MOUNTPOINTS; echo; findmnt /var; echo; cat /etc/fstab" 2>/dev/null || true
+  VAR_SRC=$(ssh_root "findmnt -n -o SOURCE --target /var" 2>/dev/null | tail -1 || true)
+  VAR_FSTYPE=$(ssh_root "findmnt -n -o FSTYPE --target /var" 2>/dev/null | tail -1 || true)
+  VAR_LABEL=$(ssh_root "findmnt -n -o LABEL --target /var" 2>/dev/null | tail -1 || true)
+  ROOT_SRC=$(ssh_root "findmnt -n -o SOURCE /sysroot 2>/dev/null || findmnt -n -o SOURCE /" 2>/dev/null | tail -1 || true)
+  if VAR_REASON=$(check_var_on_own_disk "$VAR_SRC" "$VAR_FSTYPE" "$VAR_LABEL" "$ROOT_SRC" 2>&1); then
+    echo "✅ /var is $VAR_SRC ($VAR_FSTYPE, label $VAR_LABEL); root is $ROOT_SRC"
+  else
+    check_fail "the var disk is not mounted at /var: $VAR_REASON"
+  fi
+fi
+
+if [ "${VERIFY_TPM_ENROLLED:-0}" = "1" ] || [ "${VERIFY_TPM_AUTOUNLOCK:-0}" = "1" ]; then
+  echo ""
+  echo "=== TPM2 verification ==="
+  if ! ssh_root "test -e /dev/tpmrm0" 2>/dev/null; then
+    check_fail "the guest has no /dev/tpmrm0 — the harness did not attach a TPM (TPM_STATE_DIR='${TPM_STATE_DIR:-}')"
+  fi
+  LUKS_DEV=$(ssh_root "blkid -t TYPE=crypto_LUKS -o device | head -1" 2>/dev/null || true)
+  if [ -z "$LUKS_DEV" ]; then
+    check_fail "no crypto_LUKS device in the guest"
+  else
+    # The first-boot oneshot is ordered after basic.target and may still be
+    # running when sshd first answers.
+    TOKEN_OK=0
+    for _ in $(seq 1 30); do
+      LUKS_DUMP=$(ssh_root "cryptsetup luksDump '$LUKS_DEV'" 2>/dev/null || true)
+      if has_tpm2_token "$LUKS_DUMP"; then
+        TOKEN_OK=1
+        break
+      fi
+      sleep 4
+    done
+    if [ "$TOKEN_OK" -eq 1 ]; then
+      echo "✅ systemd-tpm2 token enrolled on $LUKS_DEV"
+    else
+      check_fail "no systemd-tpm2 token on $LUKS_DEV after 120s — first-boot TPM2 enrolment did not run"
+      echo "--- luksDump (tokens and keyslots) ---"
+      printf '%s\n' "$LUKS_DUMP" | sed -n '/^Keyslots:/,$p' | grep -vE '^\s+(Salt|Digest|AF |Area|PBKDF|Time|Memory|Threads|Iterations)' | head -40
+      echo "--- fisherman-tpm2-enroll.service ---"
+      ssh_root "systemctl status fisherman-tpm2-enroll.service --no-pager; ls -la /etc/fisherman /usr/lib/systemd/system/fisherman-tpm2-enroll.service" 2>&1 || true
+    fi
+    if ssh_root "test -e /etc/fisherman/tpm2-enroll.key" 2>/dev/null; then
+      check_fail "/etc/fisherman/tpm2-enroll.key still exists — the transient unlock key was not removed"
+    else
+      echo "✅ no transient unlock key at /etc/fisherman/tpm2-enroll.key"
+    fi
+  fi
+  if [ "${VERIFY_TPM_AUTOUNLOCK:-0}" = "1" ]; then
+    if [ -n "$LUKS_PASSPHRASE" ]; then
+      check_fail "VERIFY_TPM_AUTOUNLOCK=1 with a LUKS_PASSPHRASE proves nothing: the injector may have unlocked the disk"
+    else
+      echo "✅ the guest reached SSH with no passphrase typed: the TPM unlocked the root"
+    fi
+  fi
+fi
+
 echo ""
 echo "=== journalctl -b (last boot) ==="
 # Capture into artifacts always (cheap; ~1-2 MB) but only echo the tail to
@@ -366,6 +590,11 @@ ssh_root "shutdown -h now" 2>/dev/null || true
 sleep 5
 kill $QEMU_PID 2>/dev/null || true
 wait $QEMU_PID 2>/dev/null || true
+
+if [ "$CHECK_FAIL" -ne 0 ]; then
+  echo "❌ FAIL: one or more guest assertions failed (see ❌ lines above)"
+  exit 1
+fi
 
 if [ "${EFIBOOT_FAIL:-0}" = "1" ]; then
   echo "❌ FAIL: UEFI boot entry assertion failed (see efibootmgr output above)"
