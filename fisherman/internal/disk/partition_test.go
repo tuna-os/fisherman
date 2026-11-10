@@ -22,6 +22,11 @@ type execCall struct {
 type recorder struct {
 	calls []execCall
 	err   error
+	// host answers the read-only queries (lsblk, pvs, dmsetup ls, …) that go
+	// through runner.Output. See partition_identity_test.go.
+	host *fakeHost
+	// fail, when set, decides the result of each command (rec.err wins).
+	fail func(c execCall) error
 }
 
 func (r *recorder) run(stdin io.Reader, name string, args ...string) error {
@@ -30,13 +35,21 @@ func (r *recorder) run(stdin io.Reader, name string, args ...string) error {
 		b, _ := io.ReadAll(stdin)
 		s = string(b)
 	}
-	r.calls = append(r.calls, execCall{name: name, args: args, stdin: s})
-	return r.err
+	c := execCall{name: name, args: args, stdin: s}
+	r.calls = append(r.calls, c)
+	err := r.err
+	if err == nil && r.fail != nil {
+		err = r.fail(c)
+	}
+	if r.host != nil {
+		r.host.observe(c, err)
+	}
+	return err
 }
 
 func setupRecorder(t *testing.T) *recorder {
 	t.Helper()
-	rec := &recorder{}
+	rec := &recorder{host: newFakeHost(t)}
 	runner.RunFn = rec.run
 	t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
 	return rec
@@ -514,6 +527,7 @@ func TestUnmountAll_NoMounts(t *testing.T) {
 type sfdiskFailOnceRecorder struct {
 	calls       []execCall
 	sfdiskCount int
+	host        *fakeHost
 }
 
 func (r *sfdiskFailOnceRecorder) run(stdin io.Reader, name string, args ...string) error {
@@ -522,14 +536,17 @@ func (r *sfdiskFailOnceRecorder) run(stdin io.Reader, name string, args ...strin
 		b, _ := io.ReadAll(stdin)
 		s = string(b)
 	}
-	r.calls = append(r.calls, execCall{name: name, args: args, stdin: s})
+	c := execCall{name: name, args: args, stdin: s}
+	r.calls = append(r.calls, c)
+	var err error
 	if name == "sfdisk" {
 		r.sfdiskCount++
 		if r.sfdiskCount == 1 {
-			return fmt.Errorf("disk is currently in use")
+			err = fmt.Errorf("disk is currently in use")
 		}
 	}
-	return nil
+	r.host.observe(c, err)
+	return err
 }
 
 // TestPartition_PartprobeAfterForceReread is a regression test for the bug
@@ -550,7 +567,11 @@ func TestPartition_PartprobeAfterForceReread(t *testing.T) {
 	disk.SetProcMountsPath(f.Name())
 	t.Cleanup(func() { disk.SetProcMountsPath("/proc/mounts") })
 
-	rec := &sfdiskFailOnceRecorder{}
+	// The kernel confirms the in-use state sfdisk reported (#365): only then
+	// is --force allowed.
+	host := newFakeHost(t)
+	host.rereadErr = errBusy
+	rec := &sfdiskFailOnceRecorder{host: host}
 	runner.RunFn = rec.run
 	t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
 
