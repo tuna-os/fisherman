@@ -18,9 +18,9 @@ var newProber = func() *probe.Prober {
 
 const probeUsage = `usage: fisherman probe --json
 
-Print the disks, TPM, RAM/CPU/UEFI, live-media and offline-store facts an
-installer frontend needs, as one JSON object on stdout. Read-only; needs no
-root. Schema: docs/PROBE.md.
+Print the disks, TPM, RAM/CPU/UEFI, live-media, offline-store and host bootc
+facts an installer frontend needs, as one JSON object on stdout. Read-only;
+needs no root. Schema: docs/PROBE.md.
 `
 
 // runProbe implements `fisherman probe --json` and returns the exit code.

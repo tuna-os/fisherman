@@ -34,6 +34,9 @@ type Result struct {
 	System          System  `json:"system"`
 	Live            Live    `json:"live"`
 	Offline         Offline `json:"offline"`
+	// Bootc was added after protocol version 1 shipped. It is an addition,
+	// so the version did not change.
+	Bootc Bootc `json:"bootc"`
 }
 
 // Runner runs a command on the host and returns its stdout. In production it
@@ -75,6 +78,7 @@ func (p *Prober) Probe() (*Result, error) {
 		System:          sys,
 		Live:            p.Live(),
 		Offline:         p.Offline(),
+		Bootc:           p.Bootc(),
 	}, nil
 }
 

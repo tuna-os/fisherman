@@ -35,6 +35,9 @@ func goldenProber(t *testing.T) *Prober {
 		"lsblk -J -b -p -o " + lsblkColumns: string(lsblk),
 		"bootc status --json":               bootcStatusLive,
 	}}
+	for call, out := range bootcCurrent {
+		host.canned[call] = out
+	}
 	return &Prober{Root: fakeRoot(t, files), Run: host.run, Getenv: noEnv}
 }
 
