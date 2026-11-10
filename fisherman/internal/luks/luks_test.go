@@ -4,9 +4,11 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/tuna-os/fisherman/internal/deploy/deploytest"
 	"github.com/tuna-os/fisherman/internal/luks"
 	"github.com/tuna-os/fisherman/internal/runner"
 )
@@ -257,19 +259,23 @@ func TestUUID_ReturnsEmptyOnError(t *testing.T) {
 	}
 }
 
-// TestStageFirstBootEnrollment_KeyIsRootOnly pins the transient key's mode,
-// including when a world-readable file already sits at the path (#221).
+// TestStageFirstBootEnrollment_KeyIsRootOnly pins the single-use key's mode,
+// including when a world-readable file already sits at the path (#221). The
+// stale content never survives, and the staged key is never the passphrase
+// that unlocked the disk (#409).
 func TestStageFirstBootEnrollment_KeyIsRootOnly(t *testing.T) {
-	target := t.TempDir()
-	keyPath := target + "/etc/fisherman/tpm2-enroll.key"
-	if err := os.MkdirAll(target+"/etc/fisherman", 0o700); err != nil {
+	fx := deploytest.Ostree(t)
+	withCryptenroll(t, fx)
+	keyPath := filepath.Join(fx.Etc, "fisherman", "tpm2-enroll.key")
+	if err := os.MkdirAll(filepath.Dir(keyPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(keyPath, []byte("stale"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	setup(t)
 
-	if err := luks.StageFirstBootEnrollment(target, "12345678-1234-1234-1234-123456789abc", "secret"); err != nil {
+	if err := luks.StageFirstBootEnrollment(resolve(t, fx), "/dev/vda3", "12345678-1234-1234-1234-123456789abc", "secret"); err != nil {
 		t.Fatalf("StageFirstBootEnrollment: %v", err)
 	}
 
@@ -281,8 +287,8 @@ func TestStageFirstBootEnrollment_KeyIsRootOnly(t *testing.T) {
 		t.Errorf("key file mode = %o, want 600", mode)
 	}
 	got, err := os.ReadFile(keyPath)
-	if err != nil || string(got) != "secret" {
-		t.Errorf("key file content = %q (%v), want %q", got, err, "secret")
+	if err != nil || string(got) == "stale" || string(got) == "secret" || len(got) != 64 {
+		t.Errorf("key file content = %q (%v), want a fresh 64-character random key", got, err)
 	}
 }
 

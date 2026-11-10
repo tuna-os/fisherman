@@ -159,19 +159,13 @@ func GenerateAudioConfig(targetRoot string) error {
 		return nil
 	}
 
-	// Resolve the correct /etc for the target layout.
-	// composefs-native: writable /etc lives under state/deploy/<hash>/etc.
-	// ostree: writable /etc lives in the ostree deployment subtree.
-	var etcBase string
-	if isComposeFsNative(targetRoot) {
-		var err error
-		etcBase, err = ComposeFsDeployEtcDirFn(targetRoot)
-		if err != nil {
-			return fmt.Errorf("finding composefs deploy etc for audio config: %w", err)
-		}
-	} else {
-		etcBase = filepath.Join(targetRoot, "etc")
+	// The deployment's /etc, for either layout. <target>/etc is the physical
+	// sysroot: on ostree no booted system reads it.
+	d, err := ResolveDeployment(targetRoot)
+	if err != nil {
+		return fmt.Errorf("audio config: %w", err)
 	}
+	etcBase := d.Etc
 
 	// Write WirePlumber config
 	confDir := filepath.Join(etcBase, "wireplumber", "wireplumber.conf.d")
