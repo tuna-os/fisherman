@@ -186,21 +186,11 @@ func InstallOEMPackages(target, distroID, brewTap string) error {
 // writeOEMBrewService creates a systemd user unit + script that runs once
 // on first login to install vendor-specific brew packages.
 func writeOEMBrewService(target string, vendor string, pkgs []string, distroID, brewTap string) error {
-	// Resolve target paths (composefs-native vs ostree).
-	var etcDir string
-	if isComposeFsNative(target) {
-		var err error
-		etcDir, err = ComposeFsDeployEtcDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding composefs deploy etc: %w", err)
-		}
-	} else {
-		deployDir, err := DeploymentDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding deployment dir: %w", err)
-		}
-		etcDir = filepath.Join(deployDir, "etc")
+	d, err := ResolveDeployment(target)
+	if err != nil {
+		return err
 	}
+	etcDir := d.Etc
 
 	// Write the install script.
 	scriptDir := filepath.Join(etcDir, distroID, "oem")
@@ -306,23 +296,13 @@ WantedBy=default.target
 
 // enableSystemService enables a systemd system service in the target.
 func enableSystemService(target string, service string) {
-	// Create a symlink in the target's multi-user.target.wants.
-	var etcDir string
-	if isComposeFsNative(target) {
-		var err error
-		etcDir, err = ComposeFsDeployEtcDirFn(target)
-		if err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not enable %s (composefs deploy etc): %v", service, err))
-			return
-		}
-	} else {
-		deployDir, err := DeploymentDirFn(target)
-		if err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not enable %s: %v", service, err))
-			return
-		}
-		etcDir = filepath.Join(deployDir, "etc")
+	// Create a symlink in the deployment's multi-user.target.wants.
+	d, err := ResolveDeployment(target)
+	if err != nil {
+		progress.Info(fmt.Sprintf("Warning: could not enable %s: %v", service, err))
+		return
 	}
+	etcDir := d.Etc
 
 	wantsDir := filepath.Join(etcDir, "systemd", "system", "multi-user.target.wants")
 	if err := os.MkdirAll(wantsDir, 0o755); err != nil {
@@ -346,20 +326,11 @@ func enableSystemService(target string, service string) {
 // writeMenuIconOverride writes a dconf override that sets the custom-command-menu
 // icon to the vendor's logo. This persists across reboots as a system dconf lock.
 func writeMenuIconOverride(target string, iconName string) error {
-	var etcDir string
-	if isComposeFsNative(target) {
-		var err error
-		etcDir, err = ComposeFsDeployEtcDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding composefs deploy etc for dconf override: %w", err)
-		}
-	} else {
-		deployDir, err := DeploymentDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding deployment dir: %w", err)
-		}
-		etcDir = filepath.Join(deployDir, "etc")
+	d, err := ResolveDeployment(target)
+	if err != nil {
+		return fmt.Errorf("dconf override: %w", err)
 	}
+	etcDir := d.Etc
 	// Write dconf local.d override (higher priority than system defaults).
 	dconfDir := filepath.Join(etcDir, "dconf", "db", "local.d")
 	if err := os.MkdirAll(dconfDir, 0o755); err != nil {

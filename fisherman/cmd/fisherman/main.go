@@ -910,6 +910,13 @@ func main() {
 		}
 	}
 
+	// From here on every step writes into the installed system through the
+	// deployment resolver (post.ResolveDeployment). A separate /var disk is
+	// what the booted system mounts at /var, so it is the resolver's Var.
+	if hasVarDisk {
+		post.SetBootedVar(filepath.Join(activeTargetMount, "var"))
+	}
+
 	// ── TPM2 enrolment ────────────────────────────────────────────────────────
 	// Both tpm2-luks and tpm2-luks-passphrase add a TPM2 auto-unlock token so
 	// the system boots without a passphrase prompt. The difference:
