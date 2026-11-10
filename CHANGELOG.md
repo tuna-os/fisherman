@@ -115,6 +115,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Bug Fixes
 
+- **Recipe secrets fail before the disk is wiped, and `$`-mimics no longer
+  lock accounts** (tuna-os/fisherman#414): `user.password` and
+  `encryption.passphrase` reject control characters (a newline in a password
+  injected a second `chpasswd` line and could set another account's password),
+  `user.fullname` rejects `:` and control characters, a leading `$` is only
+  accepted as a complete pre-hashed crypt setting with a whitelisted scheme
+  id, and validator errors no longer mangle `%` via `fmt.Errorf`.
 - **Bound offline media accepts full uncompressed images**: the aggregate unique
   blob budget now matches the existing 16 GiB per-blob ceiling instead of rejecting
   valid raw layers above 10 GiB. Layer bytes are still streamed and hashed once per

@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/recipe"
@@ -131,4 +132,26 @@ func contains(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+// A problem message containing "%" must surface verbatim: it is data, not a
+// format string (tuna-os/fisherman#414).
+func TestRecipeProblemsValidatorPreservesPercentInMessage(t *testing.T) {
+	r := &recipe.Recipe{Hostname: "a%sb"}
+	err := NewRecipeProblemsValidator(r, false).Validate()
+	if err == nil {
+		t.Fatal("Validate() = nil, want the hostname problem")
+	}
+	if strings.Contains(err.Error(), "%!") {
+		t.Errorf("Validate() error = %q; %% verb was interpreted as a format directive", err.Error())
+	}
+	verbatim := false
+	for _, p := range r.Problems() {
+		if err.Error() == p.Message {
+			verbatim = true
+		}
+	}
+	if !verbatim {
+		t.Errorf("Validate() error = %q; want one of the reported problem messages verbatim", err.Error())
+	}
 }

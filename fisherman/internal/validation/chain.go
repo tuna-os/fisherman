@@ -1,6 +1,7 @@
 package validation
 
 import (
+	"errors"
 	"fmt"
 	"os/exec"
 
@@ -169,7 +170,9 @@ func (v *RecipeProblemsValidator) Validate() error {
 		problems = append(problems, v.recipe.CheckTPM(v.tpm2Usable)...)
 	}
 	if len(problems) > 0 {
-		return fmt.Errorf(problems[0].Message)
+		// The message is data, not a format string: a hostname like
+		// "a%sb" would otherwise render as "a%!s(MISSING)b".
+		return errors.New(problems[0].Message)
 	}
 	return nil
 }

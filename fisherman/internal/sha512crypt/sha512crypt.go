@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"crypto/sha512"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -30,6 +31,20 @@ const (
 
 	alphabet = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 )
+
+// hashSetting matches a complete modular crypt(3) setting: a whitelisted
+// scheme id, a salt, and a hash ("$6$salt$hash", "$2b$rounds$salt+hash").
+// A plaintext password that merely starts with "$" (e.g. "$ecret$1") must
+// NOT match: it has no whitelisted id, so callers hash it in-process instead
+// of handing it to chpasswd -e verbatim (which would store the literal text
+// as the crypt field and lock the account).
+var hashSetting = regexp.MustCompile(`^\$(1|2|2a|2b|2x|2y|5|6|gy|y|7)\$[^$]+\$.+$`)
+
+// IsHashSetting reports whether s looks like a complete pre-hashed crypt(3)
+// setting that chpasswd -e can consume verbatim.
+func IsHashSetting(s string) bool {
+	return hashSetting.MatchString(s)
+}
 
 // Hash returns a "$6$<salt>$<hash>" string for password using DefaultRounds
 // and a 16-character salt drawn from crypto/rand.
