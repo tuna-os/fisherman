@@ -202,6 +202,9 @@ A rule runs when its key is present:
 | `customMounts` | each entry's target (not its partition) |
 | `targetMount` | targetMount |
 | `flatpakVarPath` | flatpakVarPath |
+| `zfsPoolName` | zfsPoolName |
+| `luksMapperName` | luksMapperName |
+| `additionalImageStores` | each entry's path syntax (not whether it exists) |
 | `override` | override |
 
 Everything else (`disk`, the `customMounts` partitions, `varDisk`, the TPM)
@@ -236,6 +239,10 @@ holds both fields.
 | `disk` | an eligible target: a whole disk (symlinks resolved) that does not hold the running system, is writable and is at least 50 GiB. See [Target eligibility](#target-eligibility). Full mode only. | `disk_not_disk`, `disk_boot_disk`, `disk_read_only`, `disk_too_small`, `disk_unverified` |
 | (the machine) | booted through UEFI, unless the target is a loop device. Full mode only. | `firmware_not_uefi` |
 | `override` | each entry is `too_small` or `uefi` | `override_unsupported` |
+| `zfsPoolName` | empty is valid (`rpool`). Otherwise 1–63 characters: a letter first, then letters, digits, `_`, `-` and `.`; and not a name `zpool` reserves (`mirror*`, `raidz*`, `draid*`, `spare*`, `log`, `c0`–`c9…`). It is an argument of `zpool create`, so `-f` would be read as a flag. | `zfs_pool_name_invalid` |
+| `luksMapperName` | empty is valid (`fisherman-root`). Otherwise 1–63 characters: a letter or digit first, then letters, digits, `_`, `.`, `+` and `-`; not `control`. It names `/dev/mapper/<name>`, so `../sda` would point the install at another device node. | `luks_mapper_name_invalid` |
+| `additionalImageStores[i]` | an absolute path with no `..` component, no `:` or `,` and no control character. It is mounted into the bootc container as `-v <store>:<store>:ro`. | `additional_image_store_invalid` |
+| `additionalImageStores[i]` | a directory on the host. Full mode only. `[]` is valid (no store), and an absent field means fisherman finds the stores itself. | `additional_image_store_not_found` |
 | `customMounts[i].partition` | required, and must exist unless the target is swap or empty | `custom_mount_partition_required`, `custom_mount_partition_not_found` |
 | `customMounts[i].fstype` | one of `fat32`, `ext3`, `ext4`, `xfs`, `btrfs`, `swap`, `unformatted`, `""` | `custom_mount_fstype_unsupported` |
 | `customMounts[i].target` | `""`, `swap`, or an absolute path with no `..` component. It is appended to `targetMount`, so `/../../etc` would mount the partition over the host's `/etc` and a relative `etc` would land beside the target. | `custom_mount_target_invalid` |
@@ -375,6 +382,15 @@ This section maps error codes to their causes and corrective actions. Each code 
 | `image_required` | `image` | Image is required on non-live systems but is empty | Provide a container image URL |
 | `image_type_unsupported` | `imageType` | Image type is not empty or `bootc` | Leave empty or use `bootc` |
 | `distro_id_invalid` | `distroID` | distroID contains invalid characters or format | Use 1–63 lowercase letters, digits, and `-`, starting with a lowercase letter |
+
+### Names and image stores
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `zfs_pool_name_invalid` | `zfsPoolName` | The pool name starts with a character other than a letter, has a character outside letters, digits, `_`, `-`, `.`, or is a name `zpool` reserves | Leave it empty (`rpool`), or use a name such as `tank` |
+| `luks_mapper_name_invalid` | `luksMapperName` | The mapper name has a `/`, a space or another character outside letters, digits, `_`, `.`, `+`, `-`, starts with `.` or `-`, or is `control` | Leave it empty (`fisherman-root`), or use a name such as `ci-job-7` |
+| `additional_image_store_invalid` | `additionalImageStores[i]` | The store path is relative, or has `..`, `:`, `,` or a control character | Use the absolute path of the store directory |
+| `additional_image_store_not_found` | `additionalImageStores[i]` | The store path is not a directory on the host | Correct the path, or leave the field out so fisherman finds the stores |
 
 ### Bootloader and Slurp
 

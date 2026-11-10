@@ -274,3 +274,43 @@ func TestInstallRefusesBeforeDiskWork(t *testing.T) {
 type readerFunc func([]byte) (int, error)
 
 func (f readerFunc) Read(p []byte) (int, error) { return f(p) }
+
+// tuna-os/fisherman#414: a store path that is missing failed `podman run`
+// after the partition step.
+func TestInstallProblemsImageStores(t *testing.T) {
+	stubTPM(t, false)
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := &recipe.Recipe{Disk: "/dev/null", Filesystem: "xfs", Hostname: "h", Image: "x",
+		AdditionalImageStores: []string{dir, filepath.Join(dir, "absent"), file, "relative"}}
+	want := []string{
+		"additionalImageStores[3]:additional_image_store_invalid",
+		"additionalImageStores[1]:additional_image_store_not_found",
+		"additionalImageStores[2]:additional_image_store_not_found",
+	}
+	if got := problemCodes(installProblems(r)); !reflect.DeepEqual(got, want) {
+		t.Errorf("installProblems = %v, want %v", got, want)
+	}
+
+	// []: "expose no store" is valid, and nothing is asked of the host.
+	old := hostIsDir
+	t.Cleanup(func() { hostIsDir = old })
+	hostIsDir = func(string) bool { t.Error("asked the host about a store"); return false }
+	r.AdditionalImageStores = []string{}
+	if got := installProblems(r); len(got) != 0 {
+		t.Errorf("installProblems with [] = %v", got)
+	}
+	// --partial applies the syntax rule and never asks the host.
+	ps, err := partialProblems([]byte(`{"additionalImageStores":["/absent/store","rel"],"zfsPoolName":"-f","luksMapperName":"../sda"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantPartial := []string{"zfsPoolName:zfs_pool_name_invalid", "luksMapperName:luks_mapper_name_invalid",
+		"additionalImageStores[1]:additional_image_store_invalid"}
+	if got := problemCodes(ps); !reflect.DeepEqual(got, wantPartial) {
+		t.Errorf("partialProblems = %v, want %v", got, wantPartial)
+	}
+}

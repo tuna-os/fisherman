@@ -11,6 +11,7 @@ import (
 
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/recipe"
+	"github.com/tuna-os/fisherman/internal/runner"
 )
 
 // validateProtocolVersion is the schema version of the `validate --json`
@@ -51,7 +52,42 @@ func installProblemsWith(r *recipe.Recipe, imageErr error) []recipe.Problem {
 	if imageErr != nil {
 		ps = append(ps, recipe.Problem{Field: "image", Code: recipe.CodeImageRequired, Message: imageErr.Error()})
 	}
+	ps = append(ps, storeProblems(r, ps)...)
 	ps = append(ps, targetProblems(r)...)
+	return ps
+}
+
+// hostIsDir reports whether a HOST path is a directory. validate can run in
+// a Flatpak sandbox, where the host's /usr and /etc are not visible, so there
+// the host is asked. Tests replace it.
+var hostIsDir = func(path string) bool {
+	if fi, err := os.Stat(path); err == nil {
+		return fi.IsDir()
+	}
+	if !runner.InFlatpak() {
+		return false
+	}
+	_, err := runner.Output("test", "-d", path)
+	return err == nil
+}
+
+// storeProblems checks that every store the recipe names exists on the host.
+// A store whose path already broke the syntax rule (in so far) is skipped.
+// Stores fisherman discovers itself (the field is absent) come from the
+// probe, which lists only stores that exist.
+func storeProblems(r *recipe.Recipe, soFar []recipe.Problem) []recipe.Problem {
+	var ps []recipe.Problem
+	for i, store := range r.AdditionalImageStores {
+		field := fmt.Sprintf("additionalImageStores[%d]", i)
+		reported := false
+		for _, p := range soFar {
+			reported = reported || p.Field == field
+		}
+		if !reported && !hostIsDir(store) {
+			ps = append(ps, recipe.Problem{Field: field, Code: recipe.CodeAdditionalImageStoreNotFound,
+				Message: fmt.Sprintf("additionalImageStores[%d]: %s is not a directory on the host", i, store)})
+		}
+	}
 	return ps
 }
 
@@ -178,6 +214,15 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	}
 	if has("flatpakVarPath") {
 		ps = append(ps, recipe.CheckFlatpakVarPath(r.FlatpakVarPath)...)
+	}
+	if has("zfsPoolName") {
+		ps = append(ps, recipe.CheckZFSPoolName(r.ZFSPoolName)...)
+	}
+	if has("luksMapperName") {
+		ps = append(ps, recipe.CheckLuksMapperName(r.LuksMapperName)...)
+	}
+	if has("additionalImageStores") {
+		ps = append(ps, recipe.CheckAdditionalImageStores(r.AdditionalImageStores)...)
 	}
 	if has("override") {
 		ps = append(ps, recipe.CheckOverride(r.Override)...)

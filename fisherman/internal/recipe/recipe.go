@@ -227,7 +227,8 @@ func (r *Recipe) Validate() error {
 // the disk, the customMounts partitions and the varDisk, and returns every
 // problem found, in a stable order: the layout first, then imageType,
 // bootloader, encryption, varDisk, hostname, user, distroID, brewTap,
-// slurp, targetMount, flatpakVarPath and override. It does not check the
+// slurp, targetMount, flatpakVarPath, zfsPoolName, luksMapperName,
+// additionalImageStores and override. It does not check the
 // TPM or whether the disk is an eligible target, which need the machine; see
 // CheckTPM and CheckTarget.
 func (r *Recipe) Problems() []Problem {
@@ -322,6 +323,11 @@ func (r *Recipe) Problems() []Problem {
 	// Host paths root mounts onto or writes under; see CheckTargetMount.
 	ps = append(ps, CheckTargetMount(r.TargetMount)...)
 	ps = append(ps, CheckFlatpakVarPath(r.FlatpakVarPath)...)
+	// Names and paths that reach zpool, cryptsetup and podman as arguments
+	// after the disk is partitioned (#414).
+	ps = append(ps, CheckZFSPoolName(r.ZFSPoolName)...)
+	ps = append(ps, CheckLuksMapperName(r.LuksMapperName)...)
+	ps = append(ps, CheckAdditionalImageStores(r.AdditionalImageStores)...)
 	ps = append(ps, CheckOverride(r.Override)...)
 	return ps
 }

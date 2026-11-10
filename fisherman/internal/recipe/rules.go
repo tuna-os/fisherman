@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // This file is the one place the recipe rules live. Validate(), the install
@@ -88,6 +89,11 @@ const (
 	CodeVarDiskBootDisk     = "var_disk_boot_disk"
 	CodeVarDiskReadOnly     = "var_disk_read_only"
 	CodeOverrideUnsupported = "override_unsupported"
+
+	CodeAdditionalImageStoreInvalid  = "additional_image_store_invalid"
+	CodeAdditionalImageStoreNotFound = "additional_image_store_not_found"
+	CodeZFSPoolNameInvalid           = "zfs_pool_name_invalid"
+	CodeLuksMapperNameInvalid        = "luks_mapper_name_invalid"
 
 	// Install-only: reported in the install's error event, not by validate,
 	// which needs no root.
@@ -444,6 +450,78 @@ func CheckFlatpakVarPath(p string) []Problem {
 	}
 	return []Problem{{"flatpakVarPath", CodeFlatpakVarPathInvalid,
 		fmt.Sprintf("flatpakVarPath must stay inside the installed root (no \"..\" components), got %q", p)}}
+}
+
+// CheckAdditionalImageStores applies the additionalImageStores syntax rule:
+// every entry is an absolute path with no ".." component, no ":" or ","
+// and no control character. Each store is bind-mounted into the bootc
+// container as `-v <store>:<store>:ro` and listed in a generated
+// storage.conf, so a relative path, or one with ":", fails `podman run`
+// after the disk is partitioned. Whether the directory exists is a host
+// fact: the CLI checks it (additional_image_store_not_found).
+func CheckAdditionalImageStores(stores []string) []Problem {
+	var ps []Problem
+	for i, store := range stores {
+		bad := !strings.HasPrefix(store, "/") || hasDotDot(store) || strings.ContainsAny(store, ":,")
+		for _, r := range store {
+			bad = bad || unicode.IsControl(r)
+		}
+		if bad {
+			ps = append(ps, Problem{fmt.Sprintf("additionalImageStores[%d]", i), CodeAdditionalImageStoreInvalid,
+				fmt.Sprintf("additionalImageStores[%d] must be an absolute path without \"..\", \":\", \",\" or control characters, got %q", i, store)})
+		}
+	}
+	return ps
+}
+
+// zfsPoolNamePattern is the subset of zpool(8)'s naming rule fisherman
+// accepts: a letter first, then letters, digits, "_", "-" and ".". zpool
+// also allows ":" and " ", which are left out because the name goes into a
+// kernel command line (root=zfs:<pool>/…) and dataset paths. The name is an
+// argument of `zpool create`; "-f" would be read as a flag.
+var zfsPoolNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,62}$`)
+
+// zfsReservedPoolPrefixes are names zpool refuses: vdev type keywords, and
+// "c[0-9]" (a Solaris disk name).
+var zfsReservedPoolPrefixes = []string{"mirror", "raidz", "draid", "spare"}
+
+// CheckZFSPoolName applies the zfsPoolName rule. Empty is valid (the install
+// uses "rpool").
+func CheckZFSPoolName(name string) []Problem {
+	if name == "" {
+		return nil
+	}
+	ok := zfsPoolNamePattern.MatchString(name) && name != "log"
+	for _, prefix := range zfsReservedPoolPrefixes {
+		ok = ok && !strings.HasPrefix(name, prefix)
+	}
+	if ok && len(name) >= 2 && name[0] == 'c' && isDigit(rune(name[1])) {
+		ok = false
+	}
+	if ok {
+		return nil
+	}
+	return []Problem{{"zfsPoolName", CodeZFSPoolNameInvalid,
+		fmt.Sprintf("zfsPoolName must start with a letter, contain only letters, digits, \"_\", \"-\" and \".\" (at most 63 characters), "+
+			"and not be a name zpool reserves (mirror*, raidz*, draid*, spare*, log, c0-c9…), got %q", name)}}
+}
+
+// luksMapperNamePattern bounds the device-mapper name: it becomes the node
+// /dev/mapper/<name> and the rd.luks.name=<uuid>=<name> kernel argument, so
+// it has no "/", no space and no leading "." or "-" ("../sda" would point
+// the install at another device node).
+var luksMapperNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.+-]{0,62}$`)
+
+// CheckLuksMapperName applies the luksMapperName rule. Empty is valid (the
+// install uses "fisherman-root"). "control" is the device-mapper control
+// node.
+func CheckLuksMapperName(name string) []Problem {
+	if name == "" || (luksMapperNamePattern.MatchString(name) && name != "control") {
+		return nil
+	}
+	return []Problem{{"luksMapperName", CodeLuksMapperNameInvalid,
+		fmt.Sprintf("luksMapperName must start with a letter or digit and contain only letters, digits, \"_\", \".\", \"+\" and \"-\" "+
+			"(at most 63 characters), got %q", name)}}
 }
 
 // CheckOverride applies the override rule: every entry is one of Overrides.
