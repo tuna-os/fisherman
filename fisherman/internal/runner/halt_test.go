@@ -40,6 +40,10 @@ func TestCheckHalted_RefusesPipelineAllowsTeardown(t *testing.T) {
 		{"fsfreeze"},
 		{"fsfreeze", "-uf", "/mnt"},
 		{"swapon", "/dev/sda4"},
+		// A pool must never be created or changed during teardown (#413).
+		{"zpool", "create", "-f", "rpool", "/dev/sda2"},
+		{"zpool", "set", "cachefile=none", "rpool"},
+		{"zpool"},
 	}
 	for _, c := range refused {
 		if err := checkHalted(c[0], c[1:]); !errors.Is(err, ErrHalted) {
@@ -59,6 +63,9 @@ func TestCheckHalted_RefusesPipelineAllowsTeardown(t *testing.T) {
 		{"fsfreeze", "-u", "/mnt"},
 		{"fsfreeze", "--unfreeze", "/mnt"},
 		{"swapoff", "/dev/sda4"},
+		// The export of the pool the install imported (#413).
+		{"zpool", "export", "rpool"},
+		{"zpool", "export", "-f", "rpool"},
 	}
 	for _, c := range allowed {
 		if err := checkHalted(c[0], c[1:]); err != nil {

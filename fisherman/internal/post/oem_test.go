@@ -1,6 +1,7 @@
 package post
 
 import (
+	"github.com/tuna-os/fisherman/internal/deploy/deploytest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -110,8 +111,8 @@ func TestInstallVendorIconOstree(t *testing.T) {
 	defer func() { DeploymentDirFn = origDeploy }()
 	DeploymentDirFn = func(string) (string, error) { return deployDir, nil }
 
-	if err := installVendorIcon(target, "asus"); err != nil {
-		t.Fatalf("installVendorIcon(asus): %v", err)
+	if installed, err := installVendorIcon(target, "asus"); err != nil || !installed {
+		t.Fatalf("installVendorIcon(asus) = %v, %v; want installed", installed, err)
 	}
 
 	iconPath := filepath.Join(deployDir, "usr", "share", "icons", "hicolor", "scalable", "apps", "asus-rog-symbolic.svg")
@@ -126,8 +127,8 @@ func TestInstallVendorIconOstree(t *testing.T) {
 
 func TestInstallVendorIconUnknownVendor(t *testing.T) {
 	target := t.TempDir()
-	if err := installVendorIcon(target, "not-a-vendor"); err != nil {
-		t.Fatalf("installVendorIcon(unknown) = %v, want nil (skip)", err)
+	if installed, err := installVendorIcon(target, "not-a-vendor"); err != nil || installed {
+		t.Fatalf("installVendorIcon(unknown) = %v, %v; want a skip", installed, err)
 	}
 	// Nothing should have been created.
 	entries, err := os.ReadDir(target)
@@ -282,5 +283,39 @@ func TestEnableSystemServiceOstree(t *testing.T) {
 	}
 	if dest != "/usr/lib/systemd/system/asusd.service" {
 		t.Errorf("symlink dest = %q, want /usr/lib/systemd/system/asusd.service", dest)
+	}
+}
+
+// On composefs /usr is in the object store: the icon cannot be added, and
+// nothing is written to <target>/usr, which nothing reads (#407, #412).
+func TestInstallVendorIconComposeFsWritesNothing(t *testing.T) {
+	fx := deploytest.ComposeFs(t)
+	installed, err := installVendorIcon(fx.Path, "asus")
+	if err != nil || installed {
+		t.Fatalf("installVendorIcon = %v, %v; want a skip", installed, err)
+	}
+	if s := deploytest.Strays(fx); len(s) != 0 {
+		t.Errorf("wrote %v into the physical sysroot", s)
+	}
+}
+
+// A vendor service the image does not ship is not enabled.
+func TestEnableSystemServiceSkipsAUnitTheImageLacks(t *testing.T) {
+	fx := deploytest.Ostree(t)
+	if got := enableSystemService(fx.Path, "asusd.service"); got != unitMissing {
+		t.Errorf("result = %v, want unitMissing", got)
+	}
+	link := filepath.Join(fx.Etc, "systemd", "system", "multi-user.target.wants", "asusd.service")
+	if _, err := os.Lstat(link); err == nil {
+		t.Error("enabled a unit the image does not have")
+	}
+	if err := os.WriteFile(filepath.Join(fx.Root, "usr", "lib", "systemd", "system", "asusd.service"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := enableSystemService(fx.Path, "asusd.service"); got != unitEnabled {
+		t.Errorf("result = %v, want unitEnabled", got)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Errorf("unit the image has is not enabled: %v", err)
 	}
 }

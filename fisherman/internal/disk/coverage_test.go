@@ -365,35 +365,86 @@ func TestExportZFSPool(t *testing.T) {
 	assertSingleCall(t, rec, "zpool", []string{"export", "rpool"})
 }
 
-func TestSetZFSCachefile(t *testing.T) {
-	rec := setupRecorder(t)
-	targetRoot := filepath.Join(t.TempDir(), "root")
+// fakeZpoolSet stands in for `zpool set cachefile=<path>`: it writes a cache
+// to the path, as zpool does, and records the calls.
+func fakeZpoolSet(t *testing.T, content string) *[]string {
+	t.Helper()
+	var calls []string
+	runner.RunFn = func(_ io.Reader, name string, args ...string) error {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if name == "zpool" && len(args) == 3 && args[0] == "set" {
+			if path, ok := strings.CutPrefix(args[1], "cachefile="); ok && path != "none" {
+				return os.WriteFile(path, []byte(content), 0o644)
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
+	return &calls
+}
 
-	if err := disk.SetZFSCachefile("rpool", targetRoot); err != nil {
+// SetZFSCachefile takes the /etc the booted system sees. A ZFS install is
+// composefs, so that is state/deploy/<verity>/etc, never <target>/etc
+// (tuna-os/fisherman#413).
+func TestSetZFSCachefile(t *testing.T) {
+	calls := fakeZpoolSet(t, "POOL-CACHE")
+	target := t.TempDir()
+	etcDir := filepath.Join(target, "state", "deploy", "abc", "etc")
+
+	if err := disk.SetZFSCachefile("rpool", etcDir); err != nil {
 		t.Fatalf("SetZFSCachefile: %v", err)
 	}
-	cacheFile := filepath.Join(targetRoot, "etc", "zfs", "zpool.cache")
-	assertSingleCall(t, rec, "zpool", []string{"set", "cachefile=" + cacheFile, "rpool"})
+	got, err := os.ReadFile(filepath.Join(etcDir, "zfs", "zpool.cache"))
+	if err != nil || string(got) != "POOL-CACHE" {
+		t.Errorf("cache in the deployment etc = %q, %v", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(target, "etc")); err == nil {
+		t.Error("wrote <target>/etc, which a composefs system never reads")
+	}
+	// The cache is taken through a host file, and the pool's property is
+	// reset: a property that points into the pool does not survive export.
+	if len(*calls) != 2 || !strings.HasPrefix((*calls)[0], "zpool set cachefile=") ||
+		strings.Contains((*calls)[0], target) || (*calls)[1] != "zpool set cachefile=none rpool" {
+		t.Errorf("calls = %v", *calls)
+	}
+	tmp := strings.TrimSuffix(strings.TrimPrefix((*calls)[0], "zpool set cachefile="), " rpool")
+	if _, err := os.Stat(tmp); err == nil {
+		t.Errorf("temporary cache file %s left behind", tmp)
+	}
+}
 
-	if fi, err := os.Stat(filepath.Join(targetRoot, "etc", "zfs")); err != nil || !fi.IsDir() {
-		t.Errorf("SetZFSCachefile did not create cache dir (err=%v)", err)
+// A zpool that writes nothing must not leave an empty cache in the target.
+func TestSetZFSCachefile_EmptyCacheIsAnError(t *testing.T) {
+	calls := fakeZpoolSet(t, "")
+	etcDir := filepath.Join(t.TempDir(), "etc")
+	if err := disk.SetZFSCachefile("rpool", etcDir); err == nil {
+		t.Fatal("no error for an empty cache")
+	}
+	if _, err := os.Stat(filepath.Join(etcDir, "zfs", "zpool.cache")); err == nil {
+		t.Error("an empty zpool.cache was written")
+	}
+	if last := (*calls)[len(*calls)-1]; last != "zpool set cachefile=none rpool" {
+		t.Errorf("the pool keeps pointing at a deleted file: last call %q", last)
 	}
 }
 
 func TestWriteHostID(t *testing.T) {
-	targetRoot := filepath.Join(t.TempDir(), "root")
+	target := t.TempDir()
+	etcDir := filepath.Join(target, "state", "deploy", "abc", "etc")
 
-	if err := disk.WriteHostID(targetRoot); err != nil {
+	if err := disk.WriteHostID(etcDir); err != nil {
 		t.Fatalf("WriteHostID: %v", err)
 	}
 
-	hostidFile := filepath.Join(targetRoot, "etc", "hostid")
-	data, err := os.ReadFile(hostidFile)
+	data, err := os.ReadFile(filepath.Join(etcDir, "hostid"))
 	if err != nil {
 		t.Fatalf("hostid not written: %v", err)
 	}
 	if len(data) != 4 {
 		t.Errorf("hostid = %d bytes, want 4 (zgenhostid format)", len(data))
+	}
+	if _, err := os.Stat(filepath.Join(target, "etc")); err == nil {
+		t.Error("wrote <target>/etc, which a composefs system never reads")
 	}
 }
 

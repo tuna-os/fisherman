@@ -483,11 +483,31 @@ func main() {
 	totalSteps := len(profile)
 	step := 1
 
+	// ── Desktop extras ───────────────────────────────────────────────────
+	// Print services, the OEM brew unit, friendly audio names and the boot
+	// splash suit a desktop product image. They are off unless the recipe
+	// (`extras`) or the image catalog turns them on (#412).
+	extraRefs := []string{r.TargetImgref, r.Image, live.LiveImage}
+	if mediaInput != nil {
+		extraRefs = append(extraRefs, mediaInput.TargetImgref, mediaInput.Image)
+	}
+	extras, extrasLine := resolveExtras(r, extraRefs...)
+	progress.Info(extrasLine)
+
+	// hostIsLive: the host booted from live media. Asked at most once.
+	hostIsLive := liveOnce(live)
+
 	// ── Immediate: Apply friendly audio names to live session ─────────────
-	// Detect hardware, rename ugly ALSA names, hide S/PDIF etc. Takes effect
-	// immediately via WirePlumber restart. Non-fatal.
-	if err := post.ApplyAudioConfigLive(); err != nil {
-		progress.Info(fmt.Sprintf("Live audio config skipped: %v", err))
+	// Detect hardware, rename ugly ALSA names, hide S/PDIF etc. This changes
+	// the RUNNING session (the user's WirePlumber configuration and the
+	// host's /etc/wireplumber), so it runs only on live media, where that
+	// session is the installer's own. Non-fatal.
+	if extras.AudioNames {
+		if !hostIsLive() {
+			progress.Info("Live audio config: skipped, this host is not live media and its session is not the installer's to change")
+		} else if err := post.ApplyAudioConfigLive(); err != nil {
+			progress.Info(fmt.Sprintf("Live audio config skipped: %v", err))
+		}
 	}
 
 	// ── Pre-partition: Wallpaper slurp (easter egg) ──────────────────────────
@@ -674,6 +694,9 @@ func main() {
 			if err := disk.CreateZFSPool(poolName, rootPart, targetMount); err != nil {
 				fatal("creating ZFS pool: %v", err)
 			}
+			// From here the pool is imported on this host. Teardown exports
+			// it, on success and on every failure (#413).
+			cleanup.SetZFSPool(poolName)
 			if err := disk.CreateZFSRootDataset(poolName); err != nil {
 				fatal("creating ZFS root dataset: %v", err)
 			}
@@ -924,7 +947,11 @@ func main() {
 		if err := disk.WaitForPartitionNode(rootPart, disk.DefaultPartitionNodeTimeout); err != nil {
 			fatal("remounting root partition after retagging: %v", err)
 		}
-		if err := disk.MountWithRetry(rootPart, activeTargetMount, "", disk.DefaultMountAttempts, disk.DefaultMountBackoff); err != nil {
+		// With the same options as the first mount (and as the installed
+		// system's rootflags): on btrfs a bare mount is the top-level
+		// subvolume, not @, and has no compression. Every later step would
+		// then look for the deployment in the wrong tree (#416).
+		if err := disk.MountWithRetry(rootPart, activeTargetMount, r.RootMountOptions(), disk.DefaultMountAttempts, disk.DefaultMountBackoff); err != nil {
 			fatal("remounting root partition after retagging: %v", err)
 		}
 		// Remount EFI so that Plymouth/LUKS arg writes land on the real ESP
@@ -1001,13 +1028,22 @@ func main() {
 		}
 	}
 
-	// Ensure rhgb and quiet are in every BLS loader entry so Plymouth shows
-	// the graphical boot splash. Non-fatal: the system boots fine without it.
-	n, err := post.EnsurePlymouthArgs(activeTargetMount)
-	if err != nil {
-		progress.Info(fmt.Sprintf("Warning: could not set Plymouth kernel args: %v", err))
-	} else if n > 0 {
-		progress.Info(fmt.Sprintf("Added Plymouth boot args to %d loader entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+	// Language, keyboard layout and time zone, when the recipe has them. For
+	// an encrypted install the keymap also goes to the initrd. Non-fatal.
+	applyLocale(activeTargetMount, r, hasEncryption && !isManual)
+
+	// rhgb and quiet in every BLS loader entry, for the graphical boot
+	// splash: only for an image that asks (extras.bootSplash). Another
+	// image keeps the kernel arguments it ships. Non-fatal.
+	if extras.BootSplash {
+		n, err := post.EnsurePlymouthArgs(activeTargetMount)
+		if err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not set Plymouth kernel args: %v", err))
+		} else if n > 0 {
+			progress.Info(fmt.Sprintf("Added Plymouth boot args to %d loader entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+		} else {
+			progress.Info("Plymouth boot args: already in every loader entry")
+		}
 	}
 
 	// Every BLS entry must carry rd.luks.name=<UUID>=root so the initrd
@@ -1027,18 +1063,16 @@ func main() {
 	// Wi-Fi profiles and Bluetooth pairings hold secrets (passwords, link
 	// keys). They follow the user from live media to the disk; from any
 	// other host they are copied only when the recipe asks (#411).
-	copyHostSecrets(activeTargetMount, r, func() bool {
-		if live.IsLive {
-			return true
-		}
-		return hostLive().IsLive
-	})
+	copyHostSecrets(activeTargetMount, r, hostIsLive)
 
 	// Generate friendly audio device names and hide useless outputs (S/PDIF,
-	// Pro Audio, monitor loopbacks). Writes WirePlumber rules to /etc/ so no
-	// GNOME extensions are needed. Non-fatal.
-	if err := post.GenerateAudioConfig(activeTargetMount); err != nil {
-		progress.Info(fmt.Sprintf("Warning: could not configure audio devices: %v", err))
+	// Pro Audio, monitor loopbacks). Writes WirePlumber rules to the
+	// deployment's /etc. Only for an image that asks (extras.audioNames).
+	// Non-fatal.
+	if extras.AudioNames {
+		if err := post.GenerateAudioConfig(activeTargetMount); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not configure audio devices: %v", err))
+		}
 	}
 
 	// Inject slurped Windows data into the installed system's /var (the one
@@ -1065,15 +1099,20 @@ func main() {
 	}
 
 	// Detect OEM hardware (ASUS, Framework) and queue vendor-specific packages
-	// for first-login install via brew. Also enables required system services. Non-fatal.
-	if err := post.InstallOEMPackages(activeTargetMount, r.DistroID, r.BrewTap); err != nil {
-		progress.Info(fmt.Sprintf("Warning: OEM package setup: %v", err))
+	// for first-login install via brew; enable the vendor's service when the
+	// image has it. Only for an image that asks (extras.oemSetup). Non-fatal.
+	if extras.OEMSetup {
+		if err := post.InstallOEMPackages(activeTargetMount, r.DistroID, r.BrewTap); err != nil {
+			progress.Info(fmt.Sprintf("Warning: OEM package setup: %v", err))
+		}
 	}
 
-	// Enable print auto-discovery services (cups-browsed, avahi-daemon, ipp-usb)
-	// so USB and network printers are found on first boot without configuration.
-	// Non-fatal: services are skipped if their unit files are absent from the image.
-	post.EnablePrintServices(activeTargetMount)
+	// Print auto-discovery (cups-browsed, avahi-daemon, ipp-usb): only for an
+	// image that asks (extras.printServices), and each unit only when the
+	// installed image has it.
+	if extras.PrintServices {
+		post.EnablePrintServices(activeTargetMount)
+	}
 
 	// No cache warming and no thumbnail generation here: the image's /usr is
 	// read-only (and, on ostree, hard-linked into the repository), its caches
@@ -1101,16 +1140,22 @@ func main() {
 		}
 	}
 
-	// ZFS post-install: write host ID and zpool.cache so the installed system
-	// can import the pool at boot. Must be done before unmounting.
+	// ZFS post-install: write host ID and zpool.cache into the deployment's
+	// /etc (the resolver's: ZFS installs are composefs, and <target>/etc is
+	// not what boots), so the installed system can import the pool. Must be
+	// done before unmounting. Teardown then exports the pool.
 	if r.Filesystem == "zfs" {
 		poolName := disk.PoolName(r.ZFSPoolName)
-		progress.Info("ZFS post-install: writing hostid and zpool.cache")
-		if err := disk.WriteHostID(activeTargetMount); err != nil {
-			progress.Info(fmt.Sprintf("Warning: ZFS host ID: %v", err))
-		}
-		if err := disk.SetZFSCachefile(poolName, activeTargetMount); err != nil {
-			progress.Info(fmt.Sprintf("Warning: ZFS cachefile: %v", err))
+		if d, err := post.ResolveDeployment(activeTargetMount); err != nil {
+			progress.Info(fmt.Sprintf("Warning: ZFS host ID and zpool.cache not written: %v", err))
+		} else {
+			progress.Info("ZFS post-install: writing hostid and zpool.cache")
+			if err := disk.WriteHostID(d.Etc); err != nil {
+				progress.Info(fmt.Sprintf("Warning: ZFS host ID: %v", err))
+			}
+			if err := disk.SetZFSCachefile(poolName, d.Etc); err != nil {
+				progress.Info(fmt.Sprintf("Warning: ZFS cachefile: %v", err))
+			}
 		}
 	}
 
@@ -1122,7 +1167,10 @@ func main() {
 		progress.Info(fmt.Sprintf("Warning: teardown after install was incomplete: %v", err))
 	}
 
-	// Find the EFI boot entry so the frontend can set BootNext before rebooting.
+	// Find the installed system's EFI boot entry, and make it the next boot
+	// while fisherman is root: a frontend runs as the desktop user and cannot
+	// write an EFI variable (tuna-os/bootc-installer#318). The id still goes
+	// out in the complete event.
 	// Non-fatal: on VMs or systems without efibootmgr this may return empty.
 	bootID, err := post.FindBootNextID(activeEfiPart)
 	if err != nil {
@@ -1131,6 +1179,7 @@ func main() {
 	} else if bootID != "" {
 		progress.Info(fmt.Sprintf("EFI boot entry for installed system: Boot%s", bootID))
 	}
+	progress.Info(applyBootNext(r, bootID, hostIsLive))
 
 	progress.Complete("Installation complete!", bootID)
 }

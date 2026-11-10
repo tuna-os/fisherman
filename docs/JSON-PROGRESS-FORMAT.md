@@ -172,6 +172,13 @@ LUKS. It exits 0 right after this event.
 **Usage:** Set the bar to 100% and mark the install successful. A frontend
 can use `boot_id` to set `BootNext` before rebooting.
 
+fisherman also sets `BootNext` itself, while it is root, when the host booted
+from live media or the recipe has `"setBootNext": true`. The `info` line
+before `complete` says what happened: `BootNext set to Boot0001: …`,
+`BootNext not set: …` with the reason, or `Warning: could not set BootNext
+…`. A frontend that runs as the desktop user cannot write the variable, and
+need not try when the line says it is set.
+
 ### `error`
 
 The install failed.
@@ -248,7 +255,7 @@ The steps depend on the recipe. They run in this order:
 | `Formatting data disk (/var)` | `format_var` | A separate `/var` disk is set and `keepExisting` is false. |
 | `Installing OS` | `install_os` | Always. Image pull, `bootc install to-filesystem`, bootloader. |
 | `Enrolling TPM2 auto-unlock` | `tpm2_enroll` | `tpm2-luks` or `tpm2-luks-passphrase`. Stages TPM2 enrolment for first boot. |
-| `Copying system Flatpaks` | `flatpaks` | Always. |
+| `Copying system Flatpaks` | `flatpaks` | Always. It copies nothing when the recipe's `flatpaks` is `[]`, or when the host has no system Flatpaks; an `info` line says so. |
 | `Configuring installed system` | `configure` | Always. Hostname, user, kernel arguments, network and Bluetooth copy (live media, or on request). |
 | `Finalizing installation` | `finalize` | Always. fstrim, remount read-only, fsfreeze/thaw (skipped on ZFS). |
 

@@ -65,8 +65,8 @@ fisherman is a Go CLI that reads a JSON recipe and runs an install pipeline. The
 | Format data disk | a second disk for `/var` | recipes that name one |
 | Install OS | `bootc install to-filesystem --skip-finalize` through `podman run --privileged` | always |
 | Enrol TPM2 | add a single-use keyslot, stage the first-boot unit that binds the LUKS volume to the TPM, and emit the recovery key | TPM recipes |
-| Copy Flatpaks | copy system Flatpaks from the host to the target | always |
-| Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi profiles and Bluetooth pairings copied from the host (live media, or on request), audio names, OEM extras, print services | always |
+| Copy Flatpaks | copy the host's system Flatpak installation to the target | always; copies nothing when `flatpaks` is `[]` |
+| Configure | fstab, hostname, user account, locale, keyboard and time zone, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi profiles and Bluetooth pairings copied from the host (live media, or on request), and the [desktop extras](#desktop-extras) the recipe or the catalog turns on | always |
 | Finalize | fstrim → remount read-only → fsfreeze, then thaw | always (skipped on ZFS) |
 
 The separate ext4 `/boot` partition is required for GRUB because GRUB cannot read modern XFS features (`nrext64`, `exchange`, `rmapbt`). For composefs/systemd-boot images the EFI partition holds the kernel and initrd directly.
@@ -155,12 +155,17 @@ Things a recipe author should know today:
 - A manual layout (`customMounts`) needs a `/boot/efi` entry, and a `/boot` entry for GRUB with an XFS root.
 - `unifiedStorage: true` is refused (`unified_storage_unsupported`): fisherman does not pass that flag to bootc.
 - One install runs on a host at a time. A second one is refused (`install_already_running`).
-- `flatpaks` does not filter: the host's whole `/var/lib/flatpak` is copied (#408).
+- `flatpaks` says whether the host's system Flatpaks are copied, not which. Absent: the host's whole `/var/lib/flatpak` is copied. `[]`: nothing is copied. A list: the whole installation is copied all the same, nothing is downloaded, and the log names each listed app that the host does not have.
 - `varDisk` works on unencrypted ostree targets only. With an encrypted `encryption.type` it is refused (`var_disk_encryption_unsupported`): fisherman does not encrypt the `/var` disk. With `composeFsBackend` or `filesystem: zfs` it is refused too (`var_disk_unsupported_composefs`, [#252](https://github.com/tuna-os/fisherman/issues/252)).
 - A `varDisk`, and each data or swap entry of `customMounts`, gets an fstab line on the installed system (type and UUID from `blkid`, `nofail`). A target that cannot be mounted again is refused (`custom_mount_not_persistable`). See [`docs/VALIDATE.md`](docs/VALIDATE.md#mounts-after-the-install).
 - An encrypted install fails if its boot entries do not carry `rd.luks.name` at the end. Only systemd-boot with composefs is exempt (#410).
-- There is no field for locale, keyboard layout or time zone (#405).
+- `locale` (`"de_DE.UTF-8"`), `keyboard` (`{"layout": "de", "variant": "nodeadkeys", "model": "pc105"}`; `layout` is required when the object is present) and `timezone` (`"Europe/Berlin"`) are optional. fisherman writes them to the installed system's `/etc/locale.conf`, `/etc/vconsole.conf`, `/etc/X11/xorg.conf.d/00-keyboard.conf` and `/etc/localtime`. Without a field, the image's setting stays.
+- For an encrypted install with `keyboard`, fisherman adds `rd.vconsole.keymap=<keymap>` to the boot entries, so the passphrase prompt in the initrd uses the layout the passphrase was typed with. An image that boots a unified kernel image has no boot entry to edit; the log then says that the prompt uses the image's keymap. A graphical prompt that reads keys through libxkbcommon takes its layout from the initrd's own `vconsole.conf`, which fisherman cannot change.
 - The host's Wi-Fi profiles and Bluetooth pairings are copied to the target only when the host booted from live media. `"copyNetworkProfiles"` and `"copyBluetoothPairings"` (`true` or `false`) override that for each kind. On an installed host the default is not to copy: the keys are the operator's.
+- fisherman sets the firmware's `BootNext` to the installed system's boot entry when the host booted from live media, so the next boot does not start the installer again. `"setBootNext": true` does it on any host, `false` never. A failure is a warning in the log.
+- `"filesystem": "zfs"` is experimental and needs `"experimental": ["zfs"]` (`zfs_experimental`). No VM test installs and boots it. The pool is exported when the install ends, also when it fails.
+- `btrfsSubvolumes` puts the root in an `@` subvolume (`rootflags=subvol=@,compress=zstd:1`). It makes no `@home` and no `@snapshots`: `/home` is `/var/home` inside `@`, as on every bootc system.
+- Print services, the OEM setup unit, friendly audio names and `rhgb quiet` are applied only when the recipe's `extras` or the image catalog turns them on. See [Desktop extras](#desktop-extras).
 - fisherman builds no caches in the target. The image must carry its font, icon, schema and linker caches.
 
 **Encryption types:** `none`, `luks-passphrase`, `tpm2-luks`, `tpm2-luks-passphrase`
@@ -222,6 +227,34 @@ image picker. fisherman looks for the catalog in this order:
 A frontend can ship its own catalog; bootc-installer reads
 `/etc/bootc-installer/images.json` (see its
 [customising guide](https://github.com/tuna-os/bootc-installer/blob/dev/docs/guide/customising.md)).
+
+### Desktop extras
+
+Four post-install steps suit a desktop product image and are wrong for an
+image fisherman knows nothing about. They are off unless something turns
+them on.
+
+| `extras` key | Step |
+|---|---|
+| `printServices` | Enable `cups-browsed`, `avahi-daemon` and `ipp-usb`. Each unit only when the installed image has it. |
+| `oemSetup` | Write the first-login unit that installs vendor packages with Homebrew (`ublue-os/tap`), enable the vendor's service when the image has it, and set a vendor menu icon. |
+| `audioNames` | Write WirePlumber rules with friendly device names to the installed system. On live media, also apply them to the running session. |
+| `bootSplash` | Add `rhgb quiet` to every boot entry. |
+
+The decision, in this order:
+
+1. The recipe's `extras` object. fisherman uses it exactly as given; `{}` turns all four off.
+2. With no `extras` in the recipe, the catalog entry of the image. fisherman looks up the recipe's `targetImgref` and `image` (and the live image) in `/etc/bootc-installer/images.json`, `/etc/tuna-installer/images.json` and then the paths above. A node's `extras` object applies to its children; a child's own object replaces it whole.
+3. Otherwise none. The log says `Desktop extras: none (…)`.
+
+Every entry of the shipped catalog has all four on, because every install
+did all four before the field existed. An image that is not in a catalog
+(`centos-bootc`, a server image, your own build) gets none of them unless
+its recipe asks.
+
+A frontend that builds a recipe from a catalog entry should copy that
+entry's inherited `extras` object into the recipe. Then the result does not
+depend on which catalog fisherman can find on the host.
 
 ## Building
 

@@ -9,7 +9,7 @@ import (
 type Recipe struct {
 	Disk            string     `json:"disk"`            // block device, e.g. "/dev/sda" (auto-partition)
 	Filesystem      string     `json:"filesystem"`      // "xfs", "ext4", "btrfs", or "zfs"
-	BtrfsSubvolumes bool       `json:"btrfsSubvolumes"` // create @, @home, @snapshots
+	BtrfsSubvolumes bool       `json:"btrfsSubvolumes"` // put the root in an @ subvolume (rootflags=subvol=@)
 	Encryption      Encryption `json:"encryption"`
 	Image           string     `json:"image"`        // source OCI image reference
 	TargetImgref    string     `json:"targetImgref"` // update-tracking ref (optional)
@@ -45,10 +45,16 @@ type Recipe struct {
 	// auto-detects based on whether the system is ostree or composefs-native.
 	// Override in images.json for non-standard layouts, e.g. GnomeOS/Dakota:
 	//   "flatpak_var_path": "state/os/default/var"
-	FlatpakVarPath string   `json:"flatpakVarPath,omitempty"`
-	Hostname       string   `json:"hostname"`
-	Flatpaks       []string `json:"flatpaks"` // flatpak app IDs to install; empty = fallback
-	User           UserSpec `json:"user"`     // optional user account to create
+	FlatpakVarPath string `json:"flatpakVarPath,omitempty"`
+	Hostname       string `json:"hostname"`
+	// Flatpaks decides whether the host's system Flatpaks (/var/lib/flatpak)
+	// are copied to the installed system. Absent (null): copy them. []: copy
+	// nothing. A non-empty list also copies them, all of them: it is not a
+	// filter and nothing is downloaded; fisherman only reports each listed
+	// app the host does not have. The nil/empty distinction is the
+	// contract, so keep the field a plain slice decoded by encoding/json.
+	Flatpaks []string `json:"flatpaks"`
+	User     UserSpec `json:"user"` // optional user account to create
 	// CustomMounts is set for manual partitioning. When non-empty, Disk/Filesystem/
 	// BtrfsSubvolumes and the auto-partition steps are skipped; fisherman formats and
 	// mounts the listed partitions directly.
@@ -122,6 +128,97 @@ type Recipe struct {
 	// CopyBluetoothPairings is the same choice for the host's Bluetooth
 	// pairings (/var/lib/bluetooth, which holds the link keys).
 	CopyBluetoothPairings *bool `json:"copyBluetoothPairings,omitempty"`
+	// Extras turns on the desktop and product steps of the post-install
+	// stage. Each is off unless asked for. Absent (null): fisherman looks
+	// the image up in its catalog (data/images.json, key "extras") and uses
+	// that entry's values; an image the catalog does not know gets none.
+	// An object, {} included, is used exactly as given.
+	Extras *Extras `json:"extras,omitempty"`
+	// Experimental lists the experimental features the caller accepts: the
+	// values of Experimentals ("zfs"). A feature is experimental when no VM
+	// test covers it; without its name here the recipe is refused.
+	Experimental []string `json:"experimental,omitempty"`
+	// SetBootNext says whether fisherman sets the firmware's BootNext
+	// variable to the installed system's boot entry when the install ends,
+	// so the next boot starts it whatever the boot order says. It changes
+	// the firmware of the machine fisherman runs on. Absent (null): only
+	// when that machine booted from live media. true: always. false: never.
+	SetBootNext *bool `json:"setBootNext,omitempty"`
+	// Locale is the system locale written to the installed system's
+	// /etc/locale.conf as LANG, e.g. "de_DE.UTF-8". Empty: the image's.
+	Locale string `json:"locale,omitempty"`
+	// Keyboard is the keyboard layout written to the installed system's
+	// /etc/vconsole.conf and X11 keyboard configuration. For an encrypted
+	// install its console keymap also reaches the initrd
+	// (rd.vconsole.keymap), so the passphrase prompt uses the layout the
+	// passphrase was typed with. Absent: the image's.
+	Keyboard *KeyboardSpec `json:"keyboard,omitempty"`
+	// Timezone is the IANA time zone the installed system's /etc/localtime
+	// points to, e.g. "Europe/Berlin". Empty: the image's.
+	Timezone string `json:"timezone,omitempty"`
+}
+
+// KeyboardSpec is an XKB keyboard configuration, with the names of
+// /usr/share/X11/xkb/rules/base.lst (what `localectl list-x11-keymap-*`
+// prints). Layout is required when the object is present.
+type KeyboardSpec struct {
+	Layout  string `json:"layout"`            // e.g. "de", "us", "us,ru"
+	Variant string `json:"variant,omitempty"` // e.g. "nodeadkeys"
+	Model   string `json:"model,omitempty"`   // e.g. "pc105"
+}
+
+// Experimental features (Recipe.Experimental).
+const (
+	// ExperimentalZFS: filesystem "zfs". No VM matrix entry installs and
+	// boots it (tuna-os/fisherman#413).
+	ExperimentalZFS = "zfs"
+)
+
+// Experimentals lists every value Recipe.Experimental accepts.
+var Experimentals = []string{ExperimentalZFS}
+
+// AcceptsExperimental reports whether the recipe opts in to feature (one
+// of Experimentals).
+func (r *Recipe) AcceptsExperimental(feature string) bool {
+	return contains(r.Experimental, feature)
+}
+
+// Extras are the post-install steps that suit a desktop product image and
+// are wrong for an image fisherman knows nothing about (a server image, a
+// base image). See the README, "Desktop extras".
+type Extras struct {
+	// PrintServices enables cups-browsed, avahi-daemon and ipp-usb, each
+	// only when the installed image has the unit.
+	PrintServices bool `json:"printServices,omitempty"`
+	// OEMSetup writes the first-login unit that installs vendor packages
+	// with Homebrew (ublue-os tap), enables the vendor's system service
+	// when the image has it, and sets a vendor menu icon.
+	OEMSetup bool `json:"oemSetup,omitempty"`
+	// AudioNames writes WirePlumber rules with friendly device names into
+	// the installed system, and applies them to the running session when
+	// the host is live media.
+	AudioNames bool `json:"audioNames,omitempty"`
+	// BootSplash adds `rhgb quiet` to every boot entry.
+	BootSplash bool `json:"bootSplash,omitempty"`
+}
+
+// Names lists the extras that are on, in a fixed order, for a log line.
+func (e Extras) Names() []string {
+	var on []string
+	for _, x := range []struct {
+		name string
+		on   bool
+	}{
+		{"printServices", e.PrintServices},
+		{"oemSetup", e.OEMSetup},
+		{"audioNames", e.AudioNames},
+		{"bootSplash", e.BootSplash},
+	} {
+		if x.on {
+			on = append(on, x.name)
+		}
+	}
+	return on
 }
 
 // FollowLive resolves an optional yes/no recipe field whose default follows
@@ -313,6 +410,7 @@ func (r *Recipe) Problems() []Problem {
 		}
 		ps = append(ps, CheckFilesystem(r.Filesystem)...)
 		ps = append(ps, CheckLayoutCombos(r)...)
+		ps = append(ps, CheckExperimentalFilesystem(r)...)
 	}
 	ps = append(ps, CheckUnifiedStorage(r.UnifiedStorage)...)
 	ps = append(ps, CheckImageType(r.ImageType)...)
@@ -356,5 +454,11 @@ func (r *Recipe) Problems() []Problem {
 	ps = append(ps, CheckLuksMapperName(r.LuksMapperName)...)
 	ps = append(ps, CheckAdditionalImageStores(r.AdditionalImageStores)...)
 	ps = append(ps, CheckOverride(r.Override)...)
+	ps = append(ps, CheckExperimental(r.Experimental)...)
+	// Written into /etc files and, for the keymap, onto the kernel command
+	// line: refused before any disk step (#405).
+	ps = append(ps, CheckLocale(r.Locale)...)
+	ps = append(ps, CheckKeyboard(r.Keyboard)...)
+	ps = append(ps, CheckTimezone(r.Timezone)...)
 	return ps
 }

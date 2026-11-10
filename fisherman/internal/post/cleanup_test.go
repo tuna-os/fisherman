@@ -435,3 +435,84 @@ func TestCleanup_ConcurrentRunTearsDownOnce(t *testing.T) {
 		t.Errorf("umount ran %d times, want 1", umounts)
 	}
 }
+
+// tuna-os/fisherman#413: a ZFS pool the install imported is exported by
+// teardown, on every exit path, after the unmounts (the ESP is mounted
+// inside the pool's root dataset) and before the host scratch is removed.
+func TestCleanup_ExportsTheZFSPool(t *testing.T) {
+	rec := setupRecorder(t)
+	setupRemoveAllRecorder(t, rec)
+
+	var c post.Cleanup
+	c.AddMount("/mnt/target")
+	c.AddMount("/mnt/target/boot/efi")
+	c.SetZFSPool("rpool")
+	c.AddPostRemoval("/var/fisherman-tmp")
+	if err := c.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	var seq []string
+	for _, call := range rec.calls {
+		seq = append(seq, call.name+" "+strings.Join(call.args, " "))
+	}
+	want := []string{
+		"umount -Rl /mnt/target/boot/efi",
+		"umount -Rl /mnt/target",
+		"zpool export rpool",
+		"removeAll /var/fisherman-tmp",
+	}
+	if strings.Join(seq, "\n") != strings.Join(want, "\n") {
+		t.Errorf("teardown:\n%s\nwant:\n%s", strings.Join(seq, "\n"), strings.Join(want, "\n"))
+	}
+
+	// Once: a second Run (a cancel racing the normal exit) does not export
+	// a pool that is already gone.
+	c.Run()
+	exports := 0
+	for _, call := range rec.calls {
+		if call.name == "zpool" {
+			exports++
+		}
+	}
+	if exports != 1 {
+		t.Errorf("zpool ran %d times, want 1", exports)
+	}
+}
+
+// A busy pool is forced, and a pool that cannot be exported at all is
+// reported: the caller's final message says what was left behind.
+func TestCleanup_ZFSExportFailureIsForcedThenReported(t *testing.T) {
+	var calls []string
+	runner.RunFn = func(_ io.Reader, name string, args ...string) error {
+		calls = append(calls, name+" "+strings.Join(args, " "))
+		if name == "zpool" {
+			return errors.New("pool is busy")
+		}
+		return nil
+	}
+	t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
+
+	var c post.Cleanup
+	c.SetZFSPool("tank")
+	err := c.Run()
+	if err == nil || !strings.Contains(err.Error(), "exporting ZFS pool tank") {
+		t.Errorf("err = %v, want the export failure", err)
+	}
+	if strings.Join(calls, "; ") != "zpool export tank; zpool export -f tank" {
+		t.Errorf("calls = %v", calls)
+	}
+}
+
+// No pool registered: zpool is never run (a host without ZFS has no zpool).
+func TestCleanup_NoZFSPool(t *testing.T) {
+	rec := setupRecorder(t)
+	var c post.Cleanup
+	c.AddMount("/mnt/target")
+	c.Run()
+	for _, call := range rec.calls {
+		if call.name == "zpool" {
+			t.Errorf("unexpected zpool call: %v", call)
+		}
+	}
+}

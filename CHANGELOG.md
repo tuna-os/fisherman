@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **fisherman sets `BootNext` itself** (tuna-os/bootc-installer#318): after
+  the install it points the firmware's next boot at the installed system's
+  entry, while it is root. On live media by default; elsewhere only with
+  `"setBootNext": true`; `false` never. A failure is a warning. The
+  `complete` event still carries `boot_id`.
+
+- **Locale, keyboard layout and time zone** (#405): optional recipe fields
+  `locale`, `keyboard` (`layout`, `variant`, `model`) and `timezone`.
+  fisherman writes `/etc/locale.conf`, `/etc/vconsole.conf` (console keymap
+  from systemd's `kbd-model-map`, and the XKB keys), the X11 keyboard file
+  and `/etc/localtime` into the installed deployment. For an encrypted
+  install the keymap is added to the boot entries as `rd.vconsole.keymap=`,
+  so the passphrase prompt uses the layout the passphrase was typed with.
+  Rules with stable codes (`locale_invalid`, `keyboard_layout_required`,
+  `keyboard_layout_invalid`, `keyboard_variant_invalid`,
+  `keyboard_model_invalid`, `timezone_invalid`), also in `--partial`.
+
 - **Recipe on stdin**: `fisherman -` and `fisherman validate -` read the recipe
   JSON from stdin until EOF. A frontend pipes it through
   `pkexec`/`sudo`/`flatpak-spawn --host` instead of writing a temporary file
@@ -94,6 +111,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🔒 Security
 
+- **Desktop and product steps are opt-in** (#412). `cups-browsed`,
+  `avahi-daemon` and `ipp-usb`, the Homebrew OEM unit, the WirePlumber rules
+  and `rhgb quiet` were applied to every image. They now need the recipe's
+  `extras` object or an `extras` entry in the image catalog, and are off for
+  an image fisherman does not know. A unit is enabled only when the
+  installed image has it. The running session's audio configuration is
+  changed only on live media. Every image of the shipped catalog keeps all
+  four.
+
 - **First-boot TPM2 enrolment never stages the user's passphrase** (#409,
   #360). The install adds a random key in its own LUKS keyslot (31) and
   stages only that, in the installed deployment's `/etc`. The unit retries
@@ -127,6 +153,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before (`/boot/efi`, `/mnt/altroot`, `state/os/default/var`, …) still does.
 
 ### 🐛 Bug Fixes
+
+- **ZFS: the pool is exported, and its host files go where the system
+  boots** (#413). The pool is registered for teardown and exported after the
+  unmounts, on success and on every failure; it stayed imported on the
+  installer host before. `hostid` and `zpool.cache` go to the deployment's
+  `/etc` through the resolver, not to `<target>/etc`. `filesystem: zfs` is
+  experimental: `validate` and the install refuse it (`zfs_experimental`)
+  unless the recipe has `"experimental": ["zfs"]`.
+
+- **`btrfsSubvolumes` creates `@` only** (#416). `@home` and `@snapshots`
+  were created and never mounted by anything. The remount after the GPT
+  retag of a systemd-boot install now uses the root mount options, so on
+  btrfs it lands in `@` with compression and not in the top-level subvolume.
+
+- **`flatpaks` means what the code does** (#408): absent copies the host's
+  system Flatpaks, `[]` copies nothing, and a list copies the whole
+  installation too, with a log line that says it is not a filter and a
+  warning for each listed app the host lacks. The lines "Installing N
+  per-image flatpak apps" and "using 3 fallback apps" are gone: nothing was
+  ever installed or downloaded. fisherman no longer runs
+  `flatpak install --system` on the installer host.
+- **The Flatpak copy cannot hang** (#358): when `tar x` exits early (a full
+  target), the read end of the pipe is closed, `tar c` is killed and both are
+  reaped. A producer that cannot start no longer leaves the extractor
+  behind.
 
 - **`varDisk` with an encrypted root is refused** (#406): fisherman has no
   LUKS step for the `/var` disk, so `/var` and `/var/home` stayed plain text
