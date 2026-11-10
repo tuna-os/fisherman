@@ -56,9 +56,17 @@ images** and a **trusted caller**.
 - **Data on a disk that has been installed over.** A failed install may
   already have repartitioned or formatted the target disk; cleanup releases
   mounts and mappings, it does not restore the previous contents.
-- **Parallel installs with default paths.** The target mount and LUKS mapper
-  name are shared defaults. Two installs on the same host must set
-  `targetMount` and `luksMapperName` in their recipes to avoid colliding.
+- **Parallel installs on one host.** They are refused, not isolated. An
+  install takes a host-wide lock (`flock` on
+  `/run/lock/fisherman-install.lock`) before it reads its recipe, and a
+  second install ends with the code `install_already_running`. The kernel
+  releases the lock when the process ends, however it ends. Setting
+  `targetMount` and `luksMapperName` in the recipes is **not** enough to run
+  two installs side by side: both still use the scratch directory
+  `/var/fisherman-tmp` and bind it over the host's `/var/tmp`, and each
+  teardown removes that directory. The two fields remain for a host where
+  the default paths are taken. The lock does not stop another program, or a
+  second host that shares the disk, from touching the target.
 
 ## Security-Relevant Invariants
 

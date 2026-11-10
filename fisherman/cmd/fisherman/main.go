@@ -16,6 +16,7 @@ import (
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
+	"github.com/tuna-os/fisherman/internal/runner"
 	"github.com/tuna-os/fisherman/internal/slurp"
 	"github.com/tuna-os/fisherman/internal/validation"
 )
@@ -116,6 +117,39 @@ func fatal(format string, args ...any) {
 	term.fail(fmt.Sprintf(format, args...))
 }
 
+// fatalProblem is fatal for a failure with a stable problem code (a recipe
+// rule or a preflight check): the error event carries the code and field
+// that `fisherman validate --json` reports for the same problem.
+func fatalProblem(prefix string, p recipe.Problem) {
+	term.failProblem(prefix+": "+p.Message, p)
+}
+
+// fatalLoad reports a recipe that could not be loaded. A strict-parse
+// problem (an unknown field) keeps its code.
+func fatalLoad(err error) {
+	var p recipe.Problem
+	if errors.As(err, &p) {
+		fatalProblem("loading recipe", p)
+		return
+	}
+	fatal("loading recipe: %v", err)
+}
+
+// teardown releases everything the install registered: a filesystem the
+// finalize step froze, the swap a manual layout activated, then the mounts,
+// the LUKS mapping and the scratch directories on cleanup. Every exit path
+// runs it.
+func teardown() error {
+	// The thaw comes first: a frozen filesystem cannot be unmounted cleanly,
+	// and its LUKS mapping cannot be closed.
+	thawErr := freezes.ThawAll()
+	swapErr := swaps.Off()
+	return errors.Join(thawErr, swapErr, cleanup.Run())
+}
+
+// geteuid is os.Geteuid by default; replaced in tests.
+var geteuid = os.Geteuid
+
 // lookPath is exec.LookPath by default; replaced in tests.
 var lookPath = exec.LookPath
 
@@ -181,38 +215,17 @@ func expandPath() {
 	os.Setenv("PATH", prefix)
 }
 
-// checkRequiredTools verifies that every host binary needed by this recipe
-// is reachable on PATH before we touch any disks, and returns a clear error
-// naming the missing tool and the package that provides it.
+// checkRequiredTools verifies that every host program this recipe's install
+// runs (validation.RequiredTools) is on the host before any disk is touched.
+// It returns the first missing one, which names the tool and its package.
 func checkRequiredTools(r *recipe.Recipe) error {
-	type requirement struct {
-		tool string
-		pkg  string
-		when bool
+	look := validation.HostLookPath
+	if !runner.InFlatpak() {
+		// Natively the host's PATH is this process's (after expandPath).
+		look = func(tool string) error { _, err := lookPath(tool); return err }
 	}
-	reqs := []requirement{
-		{"sfdisk", "util-linux", true},
-		{"mkfs.fat", "dosfstools", true},
-		{"mkfs.ext4", "e2fsprogs", true},
-		{"mkfs.xfs", "xfsprogs", r.Filesystem == "xfs"},
-		{"mkfs.btrfs", "btrfs-progs", r.Filesystem == "btrfs"},
-		{"zpool", "zfsutils-linux", r.Filesystem == "zfs"},
-		{"zfs", "zfsutils-linux", r.Filesystem == "zfs"},
-		{"cryptsetup", "cryptsetup", r.Encryption.Type != "" && r.Encryption.Type != "none"},
-		// systemd-cryptenroll is required for TPM2 auto-unlock enrolment.
-		// Check before touching any disks — a missing tool at step 9 (after
-		// partitioning and OS install) would leave the disk partially modified.
-		{"systemd-cryptenroll", "systemd", r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"},
-		{"skopeo", "skopeo", true},
-		{"podman", "podman", true},
-	}
-	for _, req := range reqs {
-		if !req.when {
-			continue
-		}
-		if _, err := lookPath(req.tool); err != nil {
-			return fmt.Errorf("%q not found in PATH — install the %q package on the host", req.tool, req.pkg)
-		}
+	if missing := validation.MissingTools(r, look); len(missing) > 0 {
+		return missing[0]
 	}
 	return nil
 }
@@ -321,9 +334,28 @@ func main() {
 	term.watchSignals()
 	term.armParentDeathCancel()
 
+	// An install partitions, formats and mounts: it needs root for its first
+	// disk step, and before that step it already changes the host (the live
+	// audio configuration, mount points, scratch space). Refuse here, before
+	// the recipe is even read, rather than fail half-way.
+	if geteuid() != 0 {
+		fatalProblem("cannot install", recipe.Problem{Code: recipe.CodeNotRoot,
+			Message: "fisherman must run as root to install (run it through pkexec or sudo); " +
+				"`fisherman validate` and `fisherman probe` need no root"})
+	}
+
+	// One install per host at a time; see acquireInstallLock.
+	if err := acquireInstallLock(); err != nil {
+		if errors.Is(err, errInstallRunning) {
+			fatalProblem("cannot install", recipe.Problem{Code: recipe.CodeInstallAlreadyRunning,
+				Message: err.Error() + "; wait for it to finish, or cancel it, then start this install again"})
+		}
+		fatal("cannot take the install lock %s: %v", installLockPath, err)
+	}
+
 	r, err := loadRecipe(os.Args[1])
 	if err != nil {
-		fatal("loading recipe: %v", err)
+		fatalLoad(err)
 	}
 
 	// Resolve and verify host-owned media before live probing (bootc status),
@@ -341,9 +373,9 @@ func main() {
 		}
 	}
 
-	// Run pre-flight validation chain. Every rule `fisherman validate` enforces,
-	// including the hostname, username, and TPM checks, runs here: before any
-	// disk is touched. The ValidatorChain stops at the first error.
+	// Pre-flight: every rule `fisherman validate` enforces runs here, through
+	// the same function (installProblems), before any disk is touched. The
+	// first problem ends the install, and the error event carries its code.
 	var live probe.Live
 	if r.Image == "" && mediaInput == nil {
 		live = hostLive()
@@ -351,12 +383,14 @@ func main() {
 	if mediaInput != nil {
 		live = probe.Live{IsLive: true, LiveImage: mediaInput.Image, DetectedBy: "verified media input"}
 	}
-	chain := validation.NewChain().
-		Add(validation.NewRecipeProblemsValidator(r, tpm2Usable())).
-		Add(validation.NewImageSourceValidator(r, live))
-	if err := chain.Run(); err != nil {
-		fatal("invalid recipe: %v", errors.Unwrap(err))
+	var imageErr error
+	if r.Image == "" {
+		imageErr = r.ValidateImage(live.IsLive)
 	}
+	if ps := installProblemsWith(r, imageErr); len(ps) > 0 {
+		fatalProblem("invalid recipe", ps[0])
+	}
+	resolveTargets(r)
 
 	// Recipe-level overrides for the otherwise-shared global mount paths.
 	// Keeps two parallel installs on the same host from colliding.
@@ -378,10 +412,8 @@ func main() {
 
 	// Pre-flight: verify that every host tool required for this recipe is
 	// present before we touch any disks.
-	toolChain := validation.NewChain().
-		Add(validation.NewRecipeDependentToolValidator(r))
-	if err := toolChain.Run(); err != nil {
-		fatal("missing required host tool: %v", errors.Unwrap(err))
+	if err := checkRequiredTools(r); err != nil {
+		fatalProblem("missing required host tool", recipe.Problem{Code: recipe.CodeHostToolMissing, Message: err.Error()})
 	}
 
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
@@ -518,14 +550,15 @@ func main() {
 			})
 		}
 
-		var mountedPaths []string
+		// Each mount and the swap are registered for teardown the moment
+		// they are acquired, not when ApplyCustomLayout returns: it can fail
+		// on the second or third partition, or be cancelled half-way, with
+		// the root already mounted (#362).
 		var applyErr error
-		activeTargetMount, activeEfiPart, mountedPaths, applyErr = disk.ApplyCustomLayout(specs, targetMount)
+		activeTargetMount, activeEfiPart, _, applyErr = disk.ApplyCustomLayoutWith(specs, targetMount,
+			disk.LayoutHooks{Mounted: cleanup.AddMount, SwapOn: swaps.Add})
 		if applyErr != nil {
 			fatal("manual disk layout: %v", applyErr)
-		}
-		for _, p := range mountedPaths {
-			cleanup.AddMount(p)
 		}
 	} else {
 		// ── Step 1: Partition disk ────────────────────────────────────────────
@@ -1051,7 +1084,7 @@ func main() {
 	// ZFS handles this internally; fstrim/remount-ro/fsfreeze do not apply.
 	progress.Step(step, totalSteps, "Finalizing installation", profile[pi].cumulativePct, profile[pi].weightPct)
 	if r.Filesystem != "zfs" {
-		if err := disk.FinalizeFilesystem(activeTargetMount); err != nil {
+		if err := disk.FinalizeFilesystemWith(activeTargetMount, freezes.Hooks()); err != nil {
 			fatal("finalizing target filesystem: %v", err)
 		}
 	}
@@ -1073,7 +1106,7 @@ func main() {
 	// first means a cancel signal from here on is ignored (the install has
 	// finished), and a cancel that already started keeps the exit to itself.
 	term.claimSuccess()
-	if err := cleanup.Run(); err != nil {
+	if err := teardown(); err != nil {
 		progress.Info(fmt.Sprintf("Warning: teardown after install was incomplete: %v", err))
 	}
 

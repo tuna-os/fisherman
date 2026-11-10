@@ -2,9 +2,11 @@ package progress
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -59,6 +61,11 @@ type recoveryKeyEvent struct {
 type errorEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
+	// Code and Field are set when the failure is a recipe or preflight
+	// problem with a stable code (docs/VALIDATE.md): the same code and
+	// field `fisherman validate --json` reports for it.
+	Code  string `json:"code,omitempty"`
+	Field string `json:"field,omitempty"`
 }
 
 // Step emits a JSON step-progress line to stdout.
@@ -134,6 +141,14 @@ func Error(message string) {
 	write(errorEvent{Type: "error", Message: message})
 }
 
+// ErrorWithCode is Error for a failure that has a stable problem code: a
+// recipe rule or a preflight check. code and field are the ones
+// `fisherman validate --json` gives the same problem; an empty value is
+// left out of the event.
+func ErrorWithCode(message, code, field string) {
+	write(errorEvent{Type: "error", Message: message, Code: code, Field: field})
+}
+
 func write(v any) {
 	mu.Lock()
 	defer mu.Unlock()
@@ -161,5 +176,42 @@ func writeLocked(v any) {
 		fmt.Fprintf(os.Stderr, "progress: marshal error: %v\n", err)
 		return
 	}
-	fmt.Fprintf(os.Stdout, "%s\n", data)
+	if _, err := fmt.Fprintf(os.Stdout, "%s\n", data); err != nil && errors.Is(err, syscall.EPIPE) {
+		reportBrokenPipe()
+	}
+}
+
+// Broken-pipe handling. The reader of the event stream can go away while
+// fisherman is still running: the frontend crashes, or `fisherman … | tee
+// log` loses its tee. Every later event write then fails with EPIPE. The
+// installer cannot report anything any more, so going on would be an
+// unattended install; the handler set here cancels it instead.
+var (
+	brokenPipeMu      sync.Mutex
+	brokenPipeHandler func()
+	brokenPipeSeen    bool
+)
+
+// OnBrokenPipe sets the function called, once and on its own goroutine, the
+// first time an event cannot be written because the reader of stdout has
+// gone (EPIPE). The process must have SIGPIPE handled (signal.Notify), or Go
+// ends it on that write before any handler can run.
+func OnBrokenPipe(handler func()) {
+	brokenPipeMu.Lock()
+	defer brokenPipeMu.Unlock()
+	brokenPipeHandler = handler
+	brokenPipeSeen = false
+}
+
+func reportBrokenPipe() {
+	brokenPipeMu.Lock()
+	handler := brokenPipeHandler
+	first := !brokenPipeSeen
+	brokenPipeSeen = true
+	brokenPipeMu.Unlock()
+	if handler != nil && first {
+		// Not on this goroutine: the caller holds mu, and the handler
+		// emits an event of its own.
+		go handler()
+	}
 }

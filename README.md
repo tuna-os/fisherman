@@ -150,8 +150,11 @@ is the reference until #320 lands.
 
 Things a recipe author should know today:
 
-- Unknown keys are ignored, so a misspelt field is dropped without an error (#404).
-- `unifiedStorage` is accepted and does nothing (#366).
+- An unknown key is an error (`recipe_unknown_field`), in the install and in `fisherman validate`. A misspelt field is not dropped.
+- `disk` must be a whole disk that the running system is not on. fisherman refuses the boot disk, a partition, a read-only disk, a disk under 50 GiB and a BIOS host before it touches anything; `"override": ["too_small", "uefi"]` accepts the last two. See [`docs/VALIDATE.md`](docs/VALIDATE.md#target-eligibility).
+- A manual layout (`customMounts`) needs a `/boot/efi` entry, and a `/boot` entry for GRUB with an XFS root.
+- `unifiedStorage: true` is refused (`unified_storage_unsupported`): fisherman does not pass that flag to bootc.
+- One install runs on a host at a time. A second one is refused (`install_already_running`).
 - `flatpaks` does not filter: the host's whole `/var/lib/flatpak` is copied (#408).
 - `varDisk` is not encrypted, even when the root is (#406).
 - There is no field for locale, keyboard layout or time zone (#405).

@@ -1,0 +1,11 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "unifiedStorage",
+      "code": "unified_storage_unsupported",
+      "message": "unifiedStorage is not supported: fisherman does not pass bootc's --experimental-unified-storage, so the install would complete without it; set it to false or leave it out"
+    }
+  ]
+}

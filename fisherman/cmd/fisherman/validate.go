@@ -2,13 +2,16 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/recipe"
+	"github.com/tuna-os/fisherman/internal/runner"
 )
 
 // validateProtocolVersion is the schema version of the `validate --json`
@@ -35,14 +38,121 @@ var tpm2Usable = func() bool { return newProber().TPM().Usable }
 // forms of `validate` call it, so validate accepts exactly what the install
 // accepts.
 func installProblems(r *recipe.Recipe) []recipe.Problem {
+	_, imageErr := checkImageSource(r)
+	return installProblemsWith(r, imageErr)
+}
+
+// installProblemsWith is installProblems with the image-source answer given:
+// the install has it already (verified media input counts as live media).
+func installProblemsWith(r *recipe.Recipe, imageErr error) []recipe.Problem {
 	ps := r.Problems()
 	if recipe.NeedsTPM2(r.Encryption.Type) {
 		ps = append(ps, r.CheckTPM(tpm2Usable())...)
 	}
-	if _, err := checkImageSource(r); err != nil {
-		ps = append(ps, recipe.Problem{Field: "image", Code: recipe.CodeImageRequired, Message: err.Error()})
+	if imageErr != nil {
+		ps = append(ps, recipe.Problem{Field: "image", Code: recipe.CodeImageRequired, Message: imageErr.Error()})
+	}
+	ps = append(ps, storeProblems(r, ps)...)
+	ps = append(ps, targetProblems(r)...)
+	return ps
+}
+
+// hostIsDir reports whether a HOST path is a directory. validate can run in
+// a Flatpak sandbox, where the host's /usr and /etc are not visible, so there
+// the host is asked. Tests replace it.
+var hostIsDir = func(path string) bool {
+	if fi, err := os.Stat(path); err == nil {
+		return fi.IsDir()
+	}
+	if !runner.InFlatpak() {
+		return false
+	}
+	_, err := runner.Output("test", "-d", path)
+	return err == nil
+}
+
+// storeProblems checks that every store the recipe names exists on the host.
+// A store whose path already broke the syntax rule (in so far) is skipped.
+// Stores fisherman discovers itself (the field is absent) come from the
+// probe, which lists only stores that exist.
+func storeProblems(r *recipe.Recipe, soFar []recipe.Problem) []recipe.Problem {
+	var ps []recipe.Problem
+	for i, store := range r.AdditionalImageStores {
+		field := fmt.Sprintf("additionalImageStores[%d]", i)
+		reported := false
+		for _, p := range soFar {
+			reported = reported || p.Field == field
+		}
+		if !reported && !hostIsDir(store) {
+			ps = append(ps, recipe.Problem{Field: field, Code: recipe.CodeAdditionalImageStoreNotFound,
+				Message: fmt.Sprintf("additionalImageStores[%d]: %s is not a directory on the host", i, store)})
+		}
 	}
 	return ps
+}
+
+// Host facts about the install target. They come from the same Prober as
+// `fisherman probe`, so the disk list a frontend shows and the verdict on the
+// recipe it then sends cannot disagree. Tests replace them.
+var (
+	hostTarget = func(path string) (probe.Target, error) { return newProber().Target(path) }
+	hostUEFI   = func() bool { return newProber().UEFI() }
+)
+
+// targetFacts asks the host about one disk path. nil means "nothing to
+// judge": the path is empty or does not exist, which recipe.Problems reports.
+func targetFacts(path string) *recipe.TargetFacts {
+	if path == "" {
+		return nil
+	}
+	if _, err := os.Stat(path); err != nil {
+		return nil
+	}
+	t, err := hostTarget(path)
+	if err != nil {
+		return &recipe.TargetFacts{Err: err, Device: path}
+	}
+	f := &recipe.TargetFacts{Device: t.Device, Loop: t.Loop, SizeBytes: t.SizeBytes, MinBytes: probe.MinDiskBytes}
+	for _, reason := range t.Reasons {
+		switch reason {
+		case probe.ExcludedBootDisk:
+			f.BootDisk = true
+		case probe.ExcludedReadOnly:
+			f.ReadOnly = true
+		case probe.ExcludedTooSmall:
+			f.TooSmall = true
+		default:
+			// ExcludedNotDisk, and any reason a later probe adds: not
+			// eligible, and not something a recipe may override.
+			f.NotDisk = true
+		}
+	}
+	return f
+}
+
+// targetProblems applies the target-eligibility rules (recipe.CheckTarget)
+// with this machine's answers.
+func targetProblems(r *recipe.Recipe) []recipe.Problem {
+	var disk, varDisk *recipe.TargetFacts
+	if len(r.CustomMounts) == 0 {
+		disk = targetFacts(r.Disk)
+	}
+	if r.VarDisk != nil {
+		varDisk = targetFacts(r.VarDisk.Disk)
+	}
+	return r.CheckTarget(disk, varDisk, hostUEFI())
+}
+
+// resolveTargets replaces `disk` and `varDisk.disk` with their resolved
+// device nodes, after validation has passed. disk.PartName builds partition
+// names from the path, so a /dev/disk/by-id/… symlink must not reach it.
+func resolveTargets(r *recipe.Recipe) {
+	if len(r.CustomMounts) == 0 && r.Disk != "" {
+		r.Disk = resolveDevice(r.Disk)
+	}
+	if r.VarDisk != nil && r.VarDisk.Disk != "" {
+		r.VarDisk.Disk = resolveDevice(r.VarDisk.Disk)
+	}
 }
 
 // partialProblems runs only the rules for the fields present in raw, a
@@ -64,6 +174,9 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	if has("filesystem") {
 		ps = append(ps, recipe.CheckFilesystem(r.Filesystem)...)
 		ps = append(ps, recipe.CheckLayoutCombos(&r)...)
+	}
+	if has("unifiedStorage") {
+		ps = append(ps, recipe.CheckUnifiedStorage(r.UnifiedStorage)...)
 	}
 	if has("imageType") {
 		ps = append(ps, recipe.CheckImageType(r.ImageType)...)
@@ -105,6 +218,18 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	if has("flatpakVarPath") {
 		ps = append(ps, recipe.CheckFlatpakVarPath(r.FlatpakVarPath)...)
 	}
+	if has("zfsPoolName") {
+		ps = append(ps, recipe.CheckZFSPoolName(r.ZFSPoolName)...)
+	}
+	if has("luksMapperName") {
+		ps = append(ps, recipe.CheckLuksMapperName(r.LuksMapperName)...)
+	}
+	if has("additionalImageStores") {
+		ps = append(ps, recipe.CheckAdditionalImageStores(r.AdditionalImageStores)...)
+	}
+	if has("override") {
+		ps = append(ps, recipe.CheckOverride(r.Override)...)
+	}
 	return ps, nil
 }
 
@@ -143,6 +268,11 @@ func runValidate(args []string) {
 	path := fs.Arg(0)
 	r, err := loadRecipe(path)
 	if err != nil {
+		var p recipe.Problem
+		if errors.As(err, &p) {
+			fmt.Fprintf(os.Stderr, "%serror:%s invalid recipe: %v\n", "\033[31m", "\033[0m", err)
+			os.Exit(1)
+		}
 		fmt.Fprintf(os.Stderr, "%serror:%s loading %s: %v\n", "\033[31m", "\033[0m", path, err)
 		os.Exit(1)
 	}
@@ -227,7 +357,9 @@ func runValidateJSON(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 	default:
 		var r recipe.Recipe
 		if err = json.Unmarshal(raw, &r); err == nil {
-			ps = installProblems(&r)
+			// Unknown keys first: the install refuses them when it loads
+			// the recipe (recipe.Parse), before any other rule runs.
+			ps = append(recipe.UnknownFields(raw), installProblems(&r)...)
 		}
 	}
 	if err != nil && ps == nil {

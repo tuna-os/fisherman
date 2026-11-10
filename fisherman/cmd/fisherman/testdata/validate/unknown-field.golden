@@ -1,0 +1,26 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "customMount",
+      "code": "recipe_unknown_field",
+      "message": "unknown recipe field \"customMount\": this fisherman does not know it, and would ignore it"
+    },
+    {
+      "field": "encrypton",
+      "code": "recipe_unknown_field",
+      "message": "unknown recipe field \"encrypton\": this fisherman does not know it, and would ignore it"
+    },
+    {
+      "field": "locale",
+      "code": "recipe_unknown_field",
+      "message": "unknown recipe field \"locale\": this fisherman does not know it, and would ignore it"
+    },
+    {
+      "field": "user.pasword",
+      "code": "recipe_unknown_field",
+      "message": "unknown recipe field \"user.pasword\": this fisherman does not know it, and would ignore it"
+    }
+  ]
+}

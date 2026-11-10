@@ -14,7 +14,7 @@ type Recipe struct {
 	Image           string     `json:"image"`        // source OCI image reference
 	TargetImgref    string     `json:"targetImgref"` // update-tracking ref (optional)
 	SelinuxDisabled bool       `json:"selinuxDisabled"`
-	UnifiedStorage  bool       `json:"unifiedStorage"` // pass --experimental-unified-storage
+	UnifiedStorage  bool       `json:"unifiedStorage"` // true is refused (CheckUnifiedStorage): the flag is not passed
 	// ComposeFsBackend passes --composefs-backend to bootc install to-filesystem.
 	// Required for composefs-native images (e.g. ghcr.io/bootcrew/*).
 	// Independent of UnifiedStorage — these are different bootc features.
@@ -86,14 +86,17 @@ type Recipe struct {
 	Slurp *SlurpSpec `json:"slurp,omitempty"`
 	// TargetMount overrides the host path where fisherman assembles the
 	// target filesystem hierarchy. Defaults to "/mnt/fisherman-target".
-	// Use this to run multiple installs in parallel on the same host
-	// (e.g. CI matrix on a single runner) without colliding mount points.
+	// Use it when the default path is taken on the host. It does not make
+	// two installs safe side by side: they share the scratch directory, and
+	// a second install on one host is refused by the install lock
+	// (cmd/fisherman/lock.go).
 	TargetMount string `json:"targetMount,omitempty"`
 	// LuksMapperName overrides the cryptsetup mapper name used for the
-	// LUKS root device. Defaults to "fisherman-root". Like TargetMount,
-	// this is intended primarily for parallel test runs — production
-	// installs should leave it at the default since the same name is
-	// hard-coded into installed system kernel cmdlines (rd.luks.name).
+	// LUKS root device. Defaults to "fisherman-root". Like TargetMount, it
+	// is for a host where the default name is taken, not for parallel
+	// installs. Production installs should leave it at the default since
+	// the same name is hard-coded into installed system kernel cmdlines
+	// (rd.luks.name).
 	LuksMapperName string `json:"luksMapperName,omitempty"`
 	// DistroID is a short lowercase identifier for the distribution, used
 	// to name OEM setup paths and service files written to the target
@@ -103,6 +106,28 @@ type Recipe struct {
 	// BrewTap is an optional Homebrew tap to add before installing OEM
 	// packages (e.g. "ublue-os/tap"). When empty, no tap is added.
 	BrewTap string `json:"brewTap,omitempty"`
+	// Override lists the target checks the caller accepts failing: the
+	// values of Overrides ("too_small", "uefi"). They are the two checks
+	// about hardware policy rather than safety; the checks that protect
+	// data (the boot disk, a read-only disk, a path that is not a whole
+	// disk) cannot be overridden. See docs/VALIDATE.md, "Target eligibility".
+	Override []string `json:"override,omitempty"`
+}
+
+// Overrides are the values Recipe.Override accepts. They are probe's own
+// identifiers: disks[].excluded_reason "too_small" and system.unmet "uefi".
+const (
+	OverrideTooSmall = "too_small"
+	OverrideUEFI     = "uefi"
+)
+
+// Overrides lists every value Recipe.Override accepts.
+var Overrides = []string{OverrideTooSmall, OverrideUEFI}
+
+// Overridden reports whether the recipe accepts check (one of Overrides)
+// failing.
+func (r *Recipe) Overridden(check string) bool {
+	return contains(r.Override, check)
 }
 
 // RootMountOptions returns the filesystem mount options that should be applied
@@ -205,8 +230,10 @@ func (r *Recipe) Validate() error {
 // the disk, the customMounts partitions and the varDisk, and returns every
 // problem found, in a stable order: the layout first, then imageType,
 // bootloader, encryption, varDisk, hostname, user, distroID, brewTap,
-// slurp, targetMount and flatpakVarPath. It does not check the TPM, which
-// needs the machine; see CheckTPM.
+// slurp, targetMount, flatpakVarPath, zfsPoolName, luksMapperName,
+// additionalImageStores and override. It does not check the
+// TPM or whether the disk is an eligible target, which need the machine; see
+// CheckTPM and CheckTarget.
 func (r *Recipe) Problems() []Problem {
 	var ps []Problem
 	if len(r.CustomMounts) > 0 {
@@ -244,6 +271,7 @@ func (r *Recipe) Problems() []Problem {
 			ps = append(ps, Problem{"customMounts", CodeCustomMountsNoRoot,
 				"customMounts: no root (/) partition specified"})
 		}
+		ps = append(ps, CheckCustomMountsLayout(r)...)
 		// Encryption is NOT applied on the manual path: luksFormat/luksOpen run
 		// only in the auto-partition branch below, and TPM enrolment needs an
 		// activeRootPart that manual mode leaves empty. Accepting an encrypted
@@ -266,6 +294,7 @@ func (r *Recipe) Problems() []Problem {
 		ps = append(ps, CheckFilesystem(r.Filesystem)...)
 		ps = append(ps, CheckLayoutCombos(r)...)
 	}
+	ps = append(ps, CheckUnifiedStorage(r.UnifiedStorage)...)
 	ps = append(ps, CheckImageType(r.ImageType)...)
 	ps = append(ps, CheckBootloader(r.Bootloader)...)
 	ps = append(ps, CheckEncryption(r.Encryption)...)
@@ -299,5 +328,11 @@ func (r *Recipe) Problems() []Problem {
 	// Host paths root mounts onto or writes under; see CheckTargetMount.
 	ps = append(ps, CheckTargetMount(r.TargetMount)...)
 	ps = append(ps, CheckFlatpakVarPath(r.FlatpakVarPath)...)
+	// Names and paths that reach zpool, cryptsetup and podman as arguments
+	// after the disk is partitioned (#414).
+	ps = append(ps, CheckZFSPoolName(r.ZFSPoolName)...)
+	ps = append(ps, CheckLuksMapperName(r.LuksMapperName)...)
+	ps = append(ps, CheckAdditionalImageStores(r.AdditionalImageStores)...)
+	ps = append(ps, CheckOverride(r.Override)...)
 	return ps
 }

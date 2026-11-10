@@ -6,6 +6,7 @@ import (
 
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/recipe"
+	"github.com/tuna-os/fisherman/internal/runner"
 )
 
 // Validator performs a single validation check and returns an error if validation fails.
@@ -177,6 +178,8 @@ func (v *RecipeProblemsValidator) Validate() error {
 // RecipeDependentToolValidator checks for tools required by a specific recipe.
 type RecipeDependentToolValidator struct {
 	recipe *recipe.Recipe
+	// Look finds a tool on the host; nil means HostLookPath.
+	Look func(tool string) error
 }
 
 // NewRecipeDependentToolValidator creates a validator for recipe-specific tools.
@@ -194,44 +197,134 @@ func (v *RecipeDependentToolValidator) Validate() error {
 	if v.recipe == nil {
 		return fmt.Errorf("recipe is nil")
 	}
-	tools := v.requiredToolsForRecipe(v.recipe)
-	var missing []string
-	for _, tool := range tools {
-		if _, err := exec.LookPath(tool); err != nil {
-			missing = append(missing, fmt.Sprintf("%q not found in PATH", tool))
-		}
+	look := v.Look
+	if look == nil {
+		look = HostLookPath
 	}
-	if len(missing) > 0 {
-		return fmt.Errorf("%s", missing[0])
+	if missing := MissingTools(v.recipe, look); len(missing) > 0 {
+		return missing[0]
 	}
 	return nil
 }
 
-// requiredToolsForRecipe returns the list of tools needed for a specific recipe.
-func (v *RecipeDependentToolValidator) requiredToolsForRecipe(r *recipe.Recipe) []string {
-	type requirement struct {
-		tool string
-		when bool
-	}
-	reqs := []requirement{
-		{"sfdisk", true},
-		{"mkfs.fat", true},
-		{"mkfs.ext4", true},
-		{"mkfs.xfs", r.Filesystem == "xfs"},
-		{"mkfs.btrfs", r.Filesystem == "btrfs"},
-		{"zpool", r.Filesystem == "zfs"},
-		{"zfs", r.Filesystem == "zfs"},
-		{"cryptsetup", r.Encryption.Type != "" && r.Encryption.Type != "none"},
-		{"systemd-cryptenroll", r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"},
-		{"skopeo", true},
-		{"podman", true},
-	}
+// ToolRequirement is one host program an install of a given recipe runs,
+// and the package that usually ships it.
+type ToolRequirement struct {
+	Tool    string
+	Package string
+}
 
-	var tools []string
-	for _, req := range reqs {
-		if req.when {
-			tools = append(tools, req.tool)
+// Error makes a missing ToolRequirement usable as an error.
+func (t ToolRequirement) Error() string {
+	return fmt.Sprintf("%q not found on the host; install the %q package", t.Tool, t.Package)
+}
+
+// RequiredTools lists the host programs the install of r runs before bootc
+// takes over, in the order the install reaches them. It is the one list:
+// a tool missing from it is found only when its step runs, after earlier
+// steps have already partitioned or formatted.
+//
+// The auto layout partitions the disk (sfdisk) and formats an ESP, an ext4
+// /boot (GRUB layouts) and the root. A manual layout (customMounts) does
+// not partition, and formats exactly what its entries say: the list comes
+// from customMounts[].fstype, not from `filesystem`, which is empty there.
+func RequiredTools(r *recipe.Recipe) []ToolRequirement {
+	var tools []ToolRequirement
+	seen := map[string]bool{}
+	need := func(tool, pkg string) {
+		if !seen[tool] {
+			seen[tool] = true
+			tools = append(tools, ToolRequirement{tool, pkg})
 		}
 	}
+
+	if len(r.CustomMounts) > 0 {
+		for _, cm := range r.CustomMounts {
+			if cm.Target == "swap" {
+				// disk.ApplyCustomLayout formats and activates swap only
+				// for target "swap" with fstype "swap"; teardown turns it
+				// off again.
+				if cm.Fstype == "swap" {
+					need("mkswap", "util-linux")
+					need("swapon", "util-linux")
+					need("swapoff", "util-linux")
+				}
+				continue
+			}
+			if cm.Target == "" {
+				continue // not mounted, not formatted
+			}
+			switch cm.Fstype {
+			case "fat32":
+				need("mkfs.fat", "dosfstools")
+			case "ext4":
+				need("mkfs.ext4", "e2fsprogs")
+			case "ext3":
+				need("mkfs.ext3", "e2fsprogs")
+			case "xfs":
+				need("mkfs.xfs", "xfsprogs")
+			case "btrfs":
+				need("mkfs.btrfs", "btrfs-progs")
+			}
+		}
+	} else {
+		need("sfdisk", "util-linux")
+		need("mkfs.fat", "dosfstools")
+		need("mkfs.ext4", "e2fsprogs")
+		switch r.Filesystem {
+		case "xfs":
+			need("mkfs.xfs", "xfsprogs")
+		case "btrfs":
+			need("mkfs.btrfs", "btrfs-progs")
+		case "zfs":
+			need("zpool", "zfsutils-linux")
+			need("zfs", "zfsutils-linux")
+		}
+		if recipe.IsEncrypted(r.Encryption.Type) {
+			need("cryptsetup", "cryptsetup")
+		}
+		// systemd-cryptenroll runs after the OS is installed; a missing
+		// tool there would leave an installed disk with no TPM2 unlock.
+		if recipe.NeedsTPM2(r.Encryption.Type) {
+			need("systemd-cryptenroll", "systemd")
+		}
+	}
+	// A /var disk that is not kept is formatted XFS (disk.FormatVar).
+	if r.VarDisk != nil && !r.VarDisk.KeepExisting {
+		need("mkfs.xfs", "xfsprogs")
+	}
+	need("skopeo", "skopeo")
+	need("podman", "podman")
 	return tools
 }
+
+// MissingTools returns the RequiredTools of r that look does not find.
+func MissingTools(r *recipe.Recipe, look func(tool string) error) []ToolRequirement {
+	var missing []ToolRequirement
+	for _, t := range RequiredTools(r) {
+		if err := look(t.Tool); err != nil {
+			missing = append(missing, t)
+		}
+	}
+	return missing
+}
+
+// HostLookPath finds tool where the install will run it: on the host.
+// Every install command goes through internal/runner, which wraps it in
+// `flatpak-spawn --host` inside a Flatpak sandbox, so a lookup in the
+// sandbox's own PATH would test the wrong filesystem: it passes for a tool
+// the runtime ships and the host lacks, and fails for the reverse.
+func HostLookPath(tool string) error {
+	if !inFlatpak() {
+		_, err := exec.LookPath(tool)
+		return err
+	}
+	_, err := hostOutput("sh", "-c", `command -v -- "$1"`, "sh", tool)
+	return err
+}
+
+// Seams for tests.
+var (
+	inFlatpak  = runner.InFlatpak
+	hostOutput = runner.Output
+)

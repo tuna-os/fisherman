@@ -1,0 +1,5 @@
+{"disk": "/dev/null", "image": "ghcr.io/example/os:stable", "filesystem": "xfs", "hostname": "a",
+ "encrypton": {"type": "luks-passphrase", "passphrase": "x"},
+ "locale": "de_DE.UTF-8",
+ "user": {"username": "alice", "pasword": "pw"},
+ "customMount": [{"partition": "/dev/null"}]}

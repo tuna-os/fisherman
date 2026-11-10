@@ -343,9 +343,16 @@ func manualRecipe(t *testing.T, fstype string, enc string) *recipe.Recipe {
 		t.Fatal(err)
 	}
 	r := &recipe.Recipe{
-		Image:        "example.invalid/img:latest",
-		Hostname:     "validate-test",
-		CustomMounts: []recipe.CustomMount{{Partition: root, Target: "/", Fstype: fstype}},
+		Image:    "example.invalid/img:latest",
+		Hostname: "validate-test",
+		// A bootable manual layout: the root under test, an ESP, and the
+		// ext4 /boot GRUB needs beside an XFS root (#415). The root stays
+		// entry 0; tests append theirs as entry 3.
+		CustomMounts: []recipe.CustomMount{
+			{Partition: root, Target: "/", Fstype: fstype},
+			{Partition: root, Target: "/boot/efi", Fstype: "unformatted"},
+			{Partition: root, Target: "/boot", Fstype: "ext4"},
+		},
 	}
 	r.Encryption.Type = enc
 	return r
@@ -421,7 +428,7 @@ func TestProblemsRejectEscapingCustomMountTargets(t *testing.T) {
 	for _, target := range []string{"/../../etc", "/boot/../../etc", "/..", "../etc", "etc", "boot/efi"} {
 		r := manualRecipe(t, "xfs", "none")
 		r.CustomMounts = append(r.CustomMounts, recipe.CustomMount{Partition: r.CustomMounts[0].Partition, Target: target, Fstype: "ext4"})
-		if !hasCode(r.Problems(), "customMounts[1].target", recipe.CodeCustomMountTargetInvalid) {
+		if !hasCode(r.Problems(), "customMounts[3].target", recipe.CodeCustomMountTargetInvalid) {
 			t.Errorf("target %q must be rejected with %s", target, recipe.CodeCustomMountTargetInvalid)
 		}
 	}

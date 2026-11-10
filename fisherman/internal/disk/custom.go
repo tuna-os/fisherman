@@ -26,6 +26,24 @@ type MountSpec struct {
 //   - efiPart:     block device mounted at /boot/efi (needed for EFI BootNext lookup)
 //   - mounted:     all paths that were successfully mounted (register with Cleanup)
 func ApplyCustomLayout(specs []MountSpec, targetBase string) (targetMount, efiPart string, mounted []string, err error) {
+	return ApplyCustomLayoutWith(specs, targetBase, LayoutHooks{})
+}
+
+// LayoutHooks lets the caller take ownership of each resource
+// ApplyCustomLayoutWith acquires at the moment it is acquired, so a failure
+// on a later partition, or a cancel signal that arrives half-way, still
+// finds everything registered for teardown. Both are optional.
+type LayoutHooks struct {
+	// Mounted is called with the host path right after each successful
+	// mount, in mount order (root first).
+	Mounted func(path string)
+	// SwapOn is called with the device before mkswap/swapon run on it.
+	// Swap setup is non-fatal, so the device may never become active.
+	SwapOn func(dev string)
+}
+
+// ApplyCustomLayoutWith is ApplyCustomLayout with ownership hooks.
+func ApplyCustomLayoutWith(specs []MountSpec, targetBase string, hooks LayoutHooks) (targetMount, efiPart string, mounted []string, err error) {
 	if len(specs) == 0 {
 		return "", "", nil, fmt.Errorf("no mount specs provided")
 	}
@@ -62,6 +80,9 @@ func ApplyCustomLayout(specs []MountSpec, targetBase string) (targetMount, efiPa
 		if s.Target == "swap" || s.Target == "" {
 			if s.Target == "swap" && s.Fstype == "swap" {
 				progress.Info(fmt.Sprintf("Activating swap: %s", s.Partition))
+				if hooks.SwapOn != nil {
+					hooks.SwapOn(s.Partition)
+				}
 				if err2 := formatAndActivateSwap(s.Partition); err2 != nil {
 					progress.Info(fmt.Sprintf("Warning: swap setup failed: %v", err2))
 				}
@@ -100,6 +121,9 @@ func ApplyCustomLayout(specs []MountSpec, targetBase string) (targetMount, efiPa
 			return "", "", mounted, fmt.Errorf("mount %s at %s: %w", s.Partition, hostTarget, mountErr)
 		}
 		mounted = append(mounted, hostTarget)
+		if hooks.Mounted != nil {
+			hooks.Mounted(hostTarget)
+		}
 
 		if s.Target == "/boot/efi" {
 			efiPart = s.Partition

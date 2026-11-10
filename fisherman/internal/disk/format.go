@@ -166,6 +166,34 @@ func MountBoot(rootMount, bootPart string) error {
 //  2. remount ro — flushes writeback and locks the deployment read-only
 //  3. fsfreeze/thaw — flushes the journal so the first boot is clean
 func FinalizeFilesystem(path string) error {
+	return FinalizeFilesystemWith(path, FreezeHooks{})
+}
+
+// FreezeHooks lets the caller own the freeze FinalizeFilesystemWith takes.
+// A frozen filesystem stays frozen when the fsfreeze process has exited: the
+// kernel holds the superblock until someone thaws it, and a frozen
+// filesystem cannot be unmounted cleanly or have its LUKS mapping closed. So
+// the freeze is a resource like a mount, and whoever tears the install down
+// on a cancel or a failure must be able to release it. All are optional.
+type FreezeHooks struct {
+	// WillFreeze is called before `fsfreeze -f` starts. From here on the
+	// filesystem may be frozen, whatever happens to that process.
+	WillFreeze func(path string)
+	// Froze is called when `fsfreeze -f` has returned success.
+	Froze func(path string)
+	// Thaw replaces the `fsfreeze -u` call, so the owner can make the thaw
+	// idempotent across this function and its own teardown.
+	Thaw func(path string) error
+}
+
+// Thaw runs `fsfreeze -u`: the one fsfreeze call that may still start after
+// runner.Halt.
+func Thaw(path string) error {
+	return runner.Run("fsfreeze", "-u", path)
+}
+
+// FinalizeFilesystemWith is FinalizeFilesystem with ownership hooks.
+func FinalizeFilesystemWith(path string, hooks FreezeHooks) error {
 	progress.Info(fmt.Sprintf("fstrim %s", path))
 	if err := runner.Run("fstrim", "--quiet-unsupported", "-v", path); err != nil {
 		return fmt.Errorf("fstrim: %w", err)
@@ -175,10 +203,20 @@ func FinalizeFilesystem(path string) error {
 		return fmt.Errorf("remount ro: %w", err)
 	}
 	progress.Info(fmt.Sprintf("fsfreeze %s", path))
+	if hooks.WillFreeze != nil {
+		hooks.WillFreeze(path)
+	}
 	if err := runner.Run("fsfreeze", "-f", path); err != nil {
 		return fmt.Errorf("fsfreeze: %w", err)
 	}
-	if err := runner.Run("fsfreeze", "-u", path); err != nil {
+	if hooks.Froze != nil {
+		hooks.Froze(path)
+	}
+	thaw := hooks.Thaw
+	if thaw == nil {
+		thaw = Thaw
+	}
+	if err := thaw(path); err != nil {
 		return fmt.Errorf("fsfreeze -u: %w", err)
 	}
 	return nil

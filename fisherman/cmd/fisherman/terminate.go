@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/tuna-os/fisherman/internal/progress"
+	"github.com/tuna-os/fisherman/internal/recipe"
 	"github.com/tuna-os/fisherman/internal/runner"
 )
 
@@ -19,11 +20,12 @@ const (
 	exitFailure = 1
 	// exitUsage: the command line named no recipe file and no subcommand.
 	exitUsage = 2
-	// exitCancelled: fisherman received SIGTERM, SIGINT or SIGHUP, stopped
-	// its child processes, ran the same teardown as a failure, and emitted
-	// one {"type":"error"} event saying the installation was cancelled.
-	// 130 is the shell's code for a process ended by Ctrl-C (128 + SIGINT);
-	// it is used for all three signals so a frontend needs to check one value.
+	// exitCancelled: fisherman received SIGTERM, SIGINT or SIGHUP, or the
+	// reader of its stdout went away, stopped its child processes, ran the
+	// same teardown as a failure, and emitted one {"type":"error"} event
+	// saying the installation was cancelled. 130 is the shell's code for a
+	// process ended by Ctrl-C (128 + SIGINT); it is used for every cancel so
+	// a frontend needs to check one value.
 	exitCancelled = 130
 )
 
@@ -66,6 +68,9 @@ const (
 type terminator struct {
 	mu      sync.Mutex
 	claimed bool
+	// problem is the coded problem behind a failure (failProblem), so the
+	// error event can carry its code and field.
+	problem recipe.Problem
 
 	cancelOnce sync.Once
 	cancelled  chan struct{}
@@ -76,24 +81,50 @@ type terminator struct {
 	emitError      func(string)
 	stderr         io.Writer
 	exit           func(int)
+	silenceStdout  func()
 	park           func()
 	settle         time.Duration
 	cleanupTimeout time.Duration
 }
 
 func newTerminator() *terminator {
-	return &terminator{
+	t := &terminator{
 		cancelled:      make(chan struct{}),
 		halt:           runner.Halt,
 		stopChildren:   func() int { return runner.StopDescendants(childStopGrace) },
-		cleanup:        func() error { return cleanup.Run() },
-		emitError:      progress.Error,
+		cleanup:        teardown,
 		stderr:         os.Stderr,
 		exit:           os.Exit,
+		silenceStdout:  stdoutToDevNull,
 		park:           parkForever,
 		settle:         cancelSettle,
 		cleanupTimeout: cleanupTimeout,
 	}
+	t.emitError = func(msg string) {
+		p := t.failedProblem()
+		progress.ErrorWithCode(msg, p.Code, p.Field)
+	}
+	return t
+}
+
+// failedProblem is the coded problem a failProblem call recorded, or the
+// zero Problem.
+func (t *terminator) failedProblem() recipe.Problem {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.problem
+}
+
+// failProblem is fail for a failure with a stable code: the error event
+// carries p's code and field next to the message. A cancel that wins the
+// exit reports itself, without the code.
+func (t *terminator) failProblem(msg string, p recipe.Problem) {
+	t.mu.Lock()
+	if !t.claimed {
+		t.problem = p
+	}
+	t.mu.Unlock()
+	t.fail(msg)
 }
 
 // term is the process-wide terminator used by fatal() and main().
@@ -124,6 +155,20 @@ func (t *terminator) claim() bool {
 // the process's life. Every signal is handled — the first starts the cancel,
 // later ones are logged — so none of them falls back to Go's default of
 // killing the process mid-teardown.
+//
+// It also takes SIGPIPE away from Go's default, which ends the process on a
+// broken-pipe write to stdout or stderr: no error event, no teardown, the
+// target left mounted and the LUKS mapping open. That happens when the
+// reader goes away while fisherman's parent lives on (the frontend crashes
+// behind its wrapper shell, or `sudo fisherman r.json | tee log` loses its
+// tee), so the parent-death signal does not fire either. With SIGPIPE
+// handled, the write fails with EPIPE instead. SIGPIPE itself is not the
+// cancel: the kernel also sends it for a write to any child's closed stdin.
+// The cancel is an event that cannot be written (progress.OnBrokenPipe).
+//
+// The signal is handled, not ignored: an ignored signal stays ignored in
+// every child, and bootc or podman writing into a closed pipe must still
+// stop.
 func (t *terminator) watchSignals() {
 	ch := make(chan os.Signal, 4)
 	signal.Notify(ch, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
@@ -132,25 +177,63 @@ func (t *terminator) watchSignals() {
 			go t.onSignal(sig)
 		}
 	}()
+
+	pipe := make(chan os.Signal, 1)
+	signal.Notify(pipe, syscall.SIGPIPE)
+	go func() {
+		for range pipe {
+		}
+	}()
+	progress.OnBrokenPipe(t.onOutputClosed)
+}
+
+// onOutputClosed cancels the install because the reader of stdout is gone:
+// nobody can see its progress or its result any more. It is the same cancel
+// as a signal, with one step first: stdout is pointed at /dev/null, so the
+// teardown commands (which inherit it) and the final event do not write
+// into the closed pipe again.
+func (t *terminator) onOutputClosed() {
+	t.cancel("the reader of stdout went away (broken pipe)", "stdout closed", t.silenceStdout)
+}
+
+// stdoutToDevNull replaces file descriptor 1 with /dev/null.
+func stdoutToDevNull() {
+	null, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		return
+	}
+	defer null.Close()
+	_ = syscall.Dup3(int(null.Fd()), int(os.Stdout.Fd()), 0)
 }
 
 // onSignal handles one cancel signal.
 func (t *terminator) onSignal(sig os.Signal) {
+	t.cancel("received "+signalName(sig), signalName(sig), nil)
+}
+
+// cancel runs the cancel path. what says what happened, for stderr
+// ("received SIGTERM"); cause goes into the error event ("SIGTERM", "stdout
+// closed"). before, if set, runs once the cancel has claimed the exit and
+// before the teardown.
+func (t *terminator) cancel(what, cause string, before func()) {
 	first := false
 	t.cancelOnce.Do(func() {
 		first = true
 		close(t.cancelled)
 	})
 	if !first {
-		fmt.Fprintf(t.stderr, "fisherman: received %s again; teardown is already running and will not be interrupted\n", signalName(sig))
+		fmt.Fprintf(t.stderr, "fisherman: %s again; teardown is already running and will not be interrupted\n", what)
 		return
 	}
 	if !t.claim() {
-		fmt.Fprintf(t.stderr, "fisherman: received %s while already exiting; letting that exit finish\n", signalName(sig))
+		fmt.Fprintf(t.stderr, "fisherman: %s while already exiting; letting that exit finish\n", what)
 		return
 	}
-	fmt.Fprintf(t.stderr, "fisherman: received %s, cancelling installation\n", signalName(sig))
-	t.finish(fmt.Sprintf("installation cancelled (%s)", signalName(sig)), exitCancelled, "cancelled")
+	fmt.Fprintf(t.stderr, "fisherman: %s, cancelling installation\n", what)
+	if before != nil {
+		before()
+	}
+	t.finish(fmt.Sprintf("installation cancelled (%s)", cause), exitCancelled, "cancelled")
 }
 
 // fail ends the install with exitFailure, unless a cancel signal arrives

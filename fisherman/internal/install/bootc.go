@@ -120,7 +120,9 @@ type Options struct {
 	// SelinuxDisabled passes --disable-selinux when true.
 	SelinuxDisabled bool
 	// UnifiedStorage is retained in the schema for forwards compatibility but
-	// is NOT emitted as a flag. --experimental-unified-storage requires bootc
+	// is NOT emitted as a flag, and a recipe that sets it true is refused
+	// before any disk step (recipe.CheckUnifiedStorage), so it is never true
+	// here in an install. --experimental-unified-storage requires bootc
 	// to run on bare metal; fisherman always runs bootc inside `podman run
 	// --privileged`, where bootc builds its internal storage using
 	// overlay@/run/bootc/storage+/proc/self/fd/3. The fd is not inherited by

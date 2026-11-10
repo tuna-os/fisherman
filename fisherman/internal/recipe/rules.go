@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 )
 
 // This file is the one place the recipe rules live. Validate(), the install
@@ -33,6 +34,9 @@ func (p Problem) Error() string { return p.Message }
 const (
 	CodeRecipeUnreadable = "recipe_unreadable"
 	CodeRecipeMalformed  = "recipe_malformed"
+	// CodeRecipeUnknownField: a key the Recipe type does not have. See
+	// UnknownFields.
+	CodeRecipeUnknownField = "recipe_unknown_field"
 
 	CodeDiskRequired = "disk_required"
 	CodeDiskNotFound = "disk_not_found"
@@ -71,6 +75,36 @@ const (
 	CodeCustomMountTargetInvalid      = "custom_mount_target_invalid"
 	CodeTargetMountInvalid            = "target_mount_invalid"
 	CodeFlatpakVarPathInvalid         = "flatpak_var_path_invalid"
+
+	// Target eligibility (CheckTarget). The reason part is probe's
+	// excluded_reason / unmet identifier.
+	CodeDiskUnverified      = "disk_unverified"
+	CodeDiskNotDisk         = "disk_not_disk"
+	CodeDiskBootDisk        = "disk_boot_disk"
+	CodeDiskReadOnly        = "disk_read_only"
+	CodeDiskTooSmall        = "disk_too_small"
+	CodeFirmwareNotUEFI     = "firmware_not_uefi"
+	CodeVarDiskUnverified   = "var_disk_unverified"
+	CodeVarDiskNotDisk      = "var_disk_not_disk"
+	CodeVarDiskBootDisk     = "var_disk_boot_disk"
+	CodeVarDiskReadOnly     = "var_disk_read_only"
+	CodeOverrideUnsupported = "override_unsupported"
+
+	CodeAdditionalImageStoreInvalid  = "additional_image_store_invalid"
+	CodeAdditionalImageStoreNotFound = "additional_image_store_not_found"
+	CodeZFSPoolNameInvalid           = "zfs_pool_name_invalid"
+	CodeLuksMapperNameInvalid        = "luks_mapper_name_invalid"
+
+	CodeUnifiedStorageUnsupported = "unified_storage_unsupported"
+
+	CodeCustomMountsNoESP  = "custom_mounts_no_esp"
+	CodeCustomMountsNoBoot = "custom_mounts_no_boot"
+
+	// Install-only: reported in the install's error event, not by validate,
+	// which needs no root and does not look for host tools.
+	CodeNotRoot               = "not_root"
+	CodeHostToolMissing       = "host_tool_missing"
+	CodeInstallAlreadyRunning = "install_already_running"
 )
 
 // Filesystems is the set of root filesystems the auto-partition path can
@@ -311,6 +345,26 @@ func CheckLayoutCombos(r *Recipe) []Problem {
 	return ps
 }
 
+// CheckUnifiedStorage applies the unifiedStorage rule: an explicit true is
+// refused. The field asks for bootc's --experimental-unified-storage, which
+// fisherman does not pass: it runs bootc inside `podman run --privileged`,
+// where bootc's unified storage does not resolve (install.Options has the
+// detail). A recipe that set true used to install without what it asked
+// for, and report success. false and absent are unchanged.
+//
+// It is not composeFsBackend, and it is not additionalImageStores; those
+// are separate features and are supported. Do not turn this rule off
+// because a bootc version or its help text changed: the flag needs a tested
+// storage profile first.
+func CheckUnifiedStorage(unified bool) []Problem {
+	if !unified {
+		return nil
+	}
+	return []Problem{{"unifiedStorage", CodeUnifiedStorageUnsupported,
+		"unifiedStorage is not supported: fisherman does not pass bootc's --experimental-unified-storage, " +
+			"so the install would complete without it; set it to false or leave it out"}}
+}
+
 // CheckImageType applies the imageType rule.
 func CheckImageType(t string) []Problem {
 	switch t {
@@ -400,6 +454,50 @@ func CheckCustomMountTarget(i int, target string) []Problem {
 		fmt.Sprintf("customMounts[%d]: target must be \"swap\" or an absolute path without \"..\" components, got %q", i, target)}}
 }
 
+// CheckCustomMountsLayout applies the rules a manual layout must meet as a
+// whole, beyond "one entry targets /" (which Problems reports itself):
+//
+//   - An entry targets /boot/efi. fisherman installs UEFI boot loaders only;
+//     bootc writes the loader to the ESP mounted there, and the install
+//     reads that entry to find the EFI boot entry afterwards. Without it
+//     bootc fails after the root is formatted, or installs a disk that
+//     cannot boot.
+//   - For GRUB (bootloader "" or "grub2") with an XFS root, an entry targets
+//     /boot and is not XFS itself. GRUB cannot read modern XFS features
+//     (nrext64, exchange, rmapbt), which is why the auto layout always
+//     makes an ext4 /boot (the AGENTS.md invariant). systemd-boot reads the
+//     kernel from the ESP and needs no /boot.
+//
+// The fstype of a partition kept as it is ("unformatted" or "") is not
+// known here, so only a declared "xfs" counts.
+func CheckCustomMountsLayout(r *Recipe) []Problem {
+	var root, boot *CustomMount
+	hasESP := false
+	for i := range r.CustomMounts {
+		switch filepath.Clean(r.CustomMounts[i].Target) {
+		case "/":
+			if r.CustomMounts[i].Target != "" {
+				root = &r.CustomMounts[i]
+			}
+		case "/boot":
+			boot = &r.CustomMounts[i]
+		case "/boot/efi":
+			hasESP = true
+		}
+	}
+	var ps []Problem
+	if !hasESP {
+		ps = append(ps, Problem{"customMounts", CodeCustomMountsNoESP,
+			"customMounts: no EFI system partition (target /boot/efi) specified"})
+	}
+	grub := r.Bootloader == "" || r.Bootloader == "grub2"
+	if grub && root != nil && root.Fstype == "xfs" && (boot == nil || boot.Fstype == "xfs") {
+		ps = append(ps, Problem{"customMounts", CodeCustomMountsNoBoot,
+			"customMounts: GRUB cannot read an XFS root; add a separate /boot partition that is not XFS (ext4), or use bootloader \"systemd\""})
+	}
+	return ps
+}
+
 // CheckTargetMount applies the targetMount rule. Empty is valid (the default,
 // /mnt/fisherman-target); otherwise an absolute path with no ".." component
 // that is not the host root.
@@ -423,6 +521,183 @@ func CheckFlatpakVarPath(p string) []Problem {
 	}
 	return []Problem{{"flatpakVarPath", CodeFlatpakVarPathInvalid,
 		fmt.Sprintf("flatpakVarPath must stay inside the installed root (no \"..\" components), got %q", p)}}
+}
+
+// CheckAdditionalImageStores applies the additionalImageStores syntax rule:
+// every entry is an absolute path with no ".." component, no ":" or ","
+// and no control character. Each store is bind-mounted into the bootc
+// container as `-v <store>:<store>:ro` and listed in a generated
+// storage.conf, so a relative path, or one with ":", fails `podman run`
+// after the disk is partitioned. Whether the directory exists is a host
+// fact: the CLI checks it (additional_image_store_not_found).
+func CheckAdditionalImageStores(stores []string) []Problem {
+	var ps []Problem
+	for i, store := range stores {
+		bad := !strings.HasPrefix(store, "/") || hasDotDot(store) || strings.ContainsAny(store, ":,")
+		for _, r := range store {
+			bad = bad || unicode.IsControl(r)
+		}
+		if bad {
+			ps = append(ps, Problem{fmt.Sprintf("additionalImageStores[%d]", i), CodeAdditionalImageStoreInvalid,
+				fmt.Sprintf("additionalImageStores[%d] must be an absolute path without \"..\", \":\", \",\" or control characters, got %q", i, store)})
+		}
+	}
+	return ps
+}
+
+// zfsPoolNamePattern is the subset of zpool(8)'s naming rule fisherman
+// accepts: a letter first, then letters, digits, "_", "-" and ".". zpool
+// also allows ":" and " ", which are left out because the name goes into a
+// kernel command line (root=zfs:<pool>/…) and dataset paths. The name is an
+// argument of `zpool create`; "-f" would be read as a flag.
+var zfsPoolNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,62}$`)
+
+// zfsReservedPoolPrefixes are names zpool refuses: vdev type keywords, and
+// "c[0-9]" (a Solaris disk name).
+var zfsReservedPoolPrefixes = []string{"mirror", "raidz", "draid", "spare"}
+
+// CheckZFSPoolName applies the zfsPoolName rule. Empty is valid (the install
+// uses "rpool").
+func CheckZFSPoolName(name string) []Problem {
+	if name == "" {
+		return nil
+	}
+	ok := zfsPoolNamePattern.MatchString(name) && name != "log"
+	for _, prefix := range zfsReservedPoolPrefixes {
+		ok = ok && !strings.HasPrefix(name, prefix)
+	}
+	if ok && len(name) >= 2 && name[0] == 'c' && isDigit(rune(name[1])) {
+		ok = false
+	}
+	if ok {
+		return nil
+	}
+	return []Problem{{"zfsPoolName", CodeZFSPoolNameInvalid,
+		fmt.Sprintf("zfsPoolName must start with a letter, contain only letters, digits, \"_\", \"-\" and \".\" (at most 63 characters), "+
+			"and not be a name zpool reserves (mirror*, raidz*, draid*, spare*, log, c0-c9…), got %q", name)}}
+}
+
+// luksMapperNamePattern bounds the device-mapper name: it becomes the node
+// /dev/mapper/<name> and the rd.luks.name=<uuid>=<name> kernel argument, so
+// it has no "/", no space and no leading "." or "-" ("../sda" would point
+// the install at another device node).
+var luksMapperNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.+-]{0,62}$`)
+
+// CheckLuksMapperName applies the luksMapperName rule. Empty is valid (the
+// install uses "fisherman-root"). "control" is the device-mapper control
+// node.
+func CheckLuksMapperName(name string) []Problem {
+	if name == "" || (luksMapperNamePattern.MatchString(name) && name != "control") {
+		return nil
+	}
+	return []Problem{{"luksMapperName", CodeLuksMapperNameInvalid,
+		fmt.Sprintf("luksMapperName must start with a letter or digit and contain only letters, digits, \"_\", \".\", \"+\" and \"-\" "+
+			"(at most 63 characters), got %q", name)}}
+}
+
+// CheckOverride applies the override rule: every entry is one of Overrides.
+// An unknown entry is refused rather than ignored, for the reason unknown
+// keys are: the caller believes it switched a check off.
+func CheckOverride(override []string) []Problem {
+	for i, o := range override {
+		if !contains(Overrides, o) {
+			return []Problem{{fmt.Sprintf("override[%d]", i), CodeOverrideUnsupported,
+				fmt.Sprintf("override accepts only \"too_small\" and \"uefi\", got %q", o)}}
+		}
+	}
+	return nil
+}
+
+// TargetFacts is what the machine says about one path a recipe names as a
+// disk: probe.Target's verdict, in the recipe package's own terms so the
+// rules stay free of host reads.
+type TargetFacts struct {
+	// Err: the verdict could not be reached (lsblk failed).
+	Err error
+	// Device is the path with symlinks resolved.
+	Device string
+	// Loop: a whole loop device (an image for another machine).
+	Loop      bool
+	SizeBytes int64
+	MinBytes  int64
+	// NotDisk, BootDisk, ReadOnly, TooSmall are probe's excluded reasons.
+	NotDisk, BootDisk, ReadOnly, TooSmall bool
+}
+
+// CheckTarget applies the target-eligibility rules to `disk` and
+// `varDisk.disk`. The install and the full `validate` run it; it is separate
+// from Problems because it reads the machine. A manual layout (customMounts)
+// names partitions, not a disk, so only the firmware rule applies to it.
+//
+//   - not a whole-disk block device, the disk the running system (or the
+//     live medium) is on, or read-only: always an error. An install there
+//     either destroys the system that is running it or fails after the
+//     partition table is gone.
+//   - smaller than the minimum, or a machine that did not boot through
+//     UEFI: an error unless the recipe lists it in `override`. Neither
+//     applies to a loop device, which is an image for another machine.
+//
+// disk and varDisk are nil when the recipe names none, or the path does not
+// exist (Problems has reported that).
+func (r *Recipe) CheckTarget(disk, varDisk *TargetFacts, uefi bool) []Problem {
+	var ps []Problem
+	manual := len(r.CustomMounts) > 0
+	loop := false
+	if disk != nil && !manual {
+		loop = disk.Loop
+		switch {
+		case disk.Err != nil:
+			ps = append(ps, Problem{"disk", CodeDiskUnverified,
+				fmt.Sprintf("disk %s: cannot tell whether it is safe to install to: %v", r.Disk, disk.Err)})
+		case disk.NotDisk:
+			ps = append(ps, Problem{"disk", CodeDiskNotDisk,
+				fmt.Sprintf("disk %s is not a whole disk (a partition, a file or another kind of device); name the disk itself, for example /dev/sda", r.Disk)})
+		default:
+			if disk.BootDisk {
+				ps = append(ps, Problem{"disk", CodeDiskBootDisk,
+					fmt.Sprintf("disk %s holds the system that is running now (or the live medium); installing to it would destroy it", r.Disk)})
+			}
+			if disk.ReadOnly {
+				ps = append(ps, Problem{"disk", CodeDiskReadOnly,
+					fmt.Sprintf("disk %s is read-only", r.Disk)})
+			}
+			if disk.TooSmall && !r.Overridden(OverrideTooSmall) {
+				ps = append(ps, Problem{"disk", CodeDiskTooSmall,
+					fmt.Sprintf("disk %s is %d bytes; the minimum is %d (add \"too_small\" to \"override\" to install anyway)",
+						r.Disk, disk.SizeBytes, disk.MinBytes)})
+			}
+		}
+	}
+	if varDisk != nil && r.VarDisk != nil {
+		switch {
+		case varDisk.Err != nil:
+			ps = append(ps, Problem{"varDisk.disk", CodeVarDiskUnverified,
+				fmt.Sprintf("varDisk.disk %s: cannot tell whether it is safe to use: %v", r.VarDisk.Disk, varDisk.Err)})
+		case varDisk.NotDisk:
+			ps = append(ps, Problem{"varDisk.disk", CodeVarDiskNotDisk,
+				fmt.Sprintf("varDisk.disk %s is not a whole disk (a partition, a file or another kind of device)", r.VarDisk.Disk)})
+		default:
+			if disk != nil && disk.Err == nil && varDisk.Device == disk.Device && r.VarDisk.Disk != r.Disk {
+				// Two spellings of one device; Problems compares the strings.
+				ps = append(ps, Problem{"varDisk.disk", CodeVarDiskSameAsDisk,
+					"varDisk.disk must differ from the system disk"})
+			}
+			if varDisk.BootDisk {
+				ps = append(ps, Problem{"varDisk.disk", CodeVarDiskBootDisk,
+					fmt.Sprintf("varDisk.disk %s holds the system that is running now (or the live medium)", r.VarDisk.Disk)})
+			}
+			if varDisk.ReadOnly {
+				ps = append(ps, Problem{"varDisk.disk", CodeVarDiskReadOnly,
+					fmt.Sprintf("varDisk.disk %s is read-only", r.VarDisk.Disk)})
+			}
+		}
+	}
+	if !uefi && !loop && !r.Overridden(OverrideUEFI) {
+		ps = append(ps, Problem{"", CodeFirmwareNotUEFI,
+			"this machine did not boot through UEFI, and fisherman installs UEFI boot loaders only " +
+				"(add \"uefi\" to \"override\" to install anyway, for a disk that another machine will boot)"})
+	}
+	return ps
 }
 
 func isLower(r rune) bool { return r >= 'a' && r <= 'z' }

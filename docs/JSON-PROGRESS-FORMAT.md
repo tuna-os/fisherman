@@ -150,7 +150,7 @@ completion screen.
 
 ### `complete`
 
-The install finished. fisherman has already unmounted the target and closed
+The install finished. fisherman has already turned off any swap it activated on the target, unmounted the target and closed
 LUKS. It exits 0 right after this event.
 
 **Fields:**
@@ -180,6 +180,13 @@ The install failed.
 **Fields:**
 - `type` — `"error"`
 - `message` — what failed (string)
+- `code` — optional. The stable problem code, when the failure is a recipe
+  rule or a preflight check: the code `fisherman validate --json` reports for
+  the same problem ([VALIDATE.md](VALIDATE.md#error-code-reference)). Key
+  copy on this, never on `message`. Absent for every other failure.
+- `field` — optional. The recipe field the `code` is about (`hostname`,
+  `user.username`, `encrypton`). Absent when there is no `code`, or the code
+  is not about one field.
 - `timestamp`, `elapsed_ms` — as above
 
 **Example:**
@@ -199,11 +206,28 @@ The message is a short context prefix followed by the underlying error, for
 example `loading recipe: ...`, `invalid recipe: ...`,
 `missing required host tool: ...`, `LUKS format: ...` or `bootc install: ...`.
 
+A failure with a `code`:
+
+```json
+{"code":"recipe_unknown_field","elapsed_ms":2,"field":"encrypton","message":"loading recipe: unknown recipe field \"encrypton\": this fisherman does not know it, and would ignore it","timestamp":"2026-11-10T14:32:10.428842Z","type":"error"}
+```
+
 `error` can be the only event in the stream. Recipe loading, recipe
 validation and the host tool check all run before the first step. With the
 recipe on stdin (`fisherman -`), empty stdin is `loading recipe: recipe is
 empty`. An empty `image` on a host that did not boot from live media is
-`invalid recipe: image is required: …`.
+`invalid recipe: image is required: …` (`code` `image_required`). A recipe
+key fisherman does not know is `loading recipe: unknown recipe field …`
+(`code` `recipe_unknown_field`). A run that is not root is `cannot install:
+fisherman must run as root …` (`code` `not_root`); it is refused before the
+recipe is read. A second install on a host where one is running is `cannot
+install: another fisherman install is running on this host (process N); …`
+(`code` `install_already_running`); it too is refused before the recipe is
+read, and it touches nothing the running install owns. A disk that is not an eligible target is `invalid recipe:
+disk … ` with one of the `disk_*` codes
+([VALIDATE.md](VALIDATE.md#target-eligibility)). A missing host program is
+`missing required host tool: "mkfs.xfs" not found on the host; install the
+"xfsprogs" package` (`code` `host_tool_missing`).
 
 `error` is **not** emitted when fisherman exits 2 (unknown command) or
 panics, or when it is killed with SIGKILL. See [Exit codes](#exit-codes).
@@ -347,6 +371,7 @@ looks like for each.
 | 1 | No arguments. Help is printed to stdout. | None. |
 | 1 | `scan` without a disk, or `scan` failed. Message on stderr. | None. |
 | 130 | Cancelled: SIGTERM, SIGINT or SIGHUP, or the parent process (the frontend's wrapper) died. Children are stopped and the target is torn down first; see [Cancelling an install](#cancelling-an-install). | Ends with `error`: `installation cancelled (SIGTERM)` (the signal name varies). |
+| 130 | Cancelled: the reader of stdout went away (a closed pipe). Children are stopped and the target is torn down first; see [A closed stdout](#a-closed-stdout). | The `error` event `installation cancelled (stdout closed)` is written, but nobody can read it. The same line is on stderr. |
 | 2 | The argument looks like a command, not a recipe path (a flag, or a bare word with no file behind it). A lone `-` is not one: it reads the recipe from stdin. Message and help on stderr and stdout. | None. |
 
 The `images` and `validate` subcommands (in `images.go` and `validate.go`)
@@ -370,6 +395,9 @@ Other ways the process can end:
 - **Signals.** SIGTERM, SIGINT and SIGHUP cancel the install and exit 130;
   see [Cancelling an install](#cancelling-an-install). SIGKILL cannot be
   handled: no `error` event, no cleanup.
+- **A closed pipe.** A closed stdout cancels the install with teardown and
+  exits 130; see [A closed stdout](#a-closed-stdout). It is no longer one of
+  the exits without cleanup. A closed stderr does not stop the install.
 - **pkexec.** Frontends run fisherman through `pkexec`. pkexec returns
   fisherman's exit code, but exits 126 when the user dismisses the
   authentication dialog and 127 when authorization fails. fisherman never
@@ -400,11 +428,41 @@ behaves the same way when sudo or its shell dies.
 On a cancel, fisherman:
 
 1. stops its children with SIGTERM, then SIGKILL after 10 seconds;
-2. unmounts the target and closes the LUKS mapping, for at most 3 minutes;
+2. thaws the target if the finalize step froze it (`fsfreeze -u`; a frozen
+   filesystem cannot be unmounted cleanly), turns off the swap a manual
+   layout activated, unmounts the target and closes the LUKS mapping, for at
+   most 3 minutes;
 3. writes one `error` event, `installation cancelled (<SIGNAL>)`, with
    `; cleanup failed, the target may still be mounted or unlocked: …` appended
    if teardown did not finish;
 4. exits 130.
+
+### A closed stdout
+
+The reader of the event stream can go away while fisherman's parent is still
+alive: the frontend crashes behind its wrapper shell, or
+`sudo fisherman recipe.json | tee log` loses its `tee`. The parent-death
+signal does not fire, because the parent did not die.
+
+fisherman used to die of SIGPIPE on its next event, with no teardown: the
+target stayed mounted, the LUKS mapping stayed open and the child processes
+kept running. Now SIGPIPE is handled. The first event that cannot be written
+(`EPIPE`) starts the same cancel as a signal:
+
+1. fisherman points its stdout at `/dev/null`, so the teardown commands do
+   not write into the closed pipe;
+2. it stops its children, thaws, turns off swap, unmounts and closes LUKS,
+   as above;
+3. it writes `fisherman: cancelled: installation cancelled (stdout closed)`
+   to stderr and exits 130.
+
+The cancel starts at the next event, not at the moment the reader goes away.
+A child that writes to the closed pipe itself (bootc, podman) gets its own
+SIGPIPE, and its failure ends the install through `fatal()` with the same
+teardown.
+
+A closed **stderr** does not cancel. fisherman's own stderr lines are lost,
+and the install goes on: the event stream on stdout is the contract.
 
 A second signal during teardown is logged and ignored, so it cannot leave
 the disk half torn down. A signal that arrives after the install has
@@ -463,7 +521,9 @@ grown over time:
   `elapsed_ms` on every event; `boot_id` on `complete`.
 - v0.3.0: the `recovery_key` event and the `error` event (#195).
 - Unreleased: `overall_pct` on `step`, `substep` and `complete`, and `step_id`
-  on `step` (#270); exit code 130 on cancel (#267).
+  on `step` (#270); exit code 130 on cancel (#267); `code` and `field` on
+  `error` (#404, #402); a closed stdout is a cancel with teardown, not a
+  death by SIGPIPE (#403).
 
 New event types and fields may appear in any release. Consumers must ignore
 event types and fields they do not know.
