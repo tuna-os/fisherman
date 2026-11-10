@@ -244,6 +244,59 @@ expect_exit "matrix: tests/bootcrew-matrix.yaml is valid (exit 0)" 0 \
 
 rm -f "$MATRIX_GOOD" "$MATRIX_BAD"
 
+# ── installation receipt checks (scripts/boot-receipt.sh, #385) ─────────
+#
+# boot-verify.sh fetches the receipt and the first-boot collection over SSH
+# and runs `fisherman verify`. Here a directory stands in for the VM and a
+# script for fisherman: an honest one, and one that says "verified" to
+# everything. The negative checks must catch the second.
+
+# shellcheck source=../scripts/boot-receipt.sh
+source "$(dirname "$0")/../scripts/boot-receipt.sh"
+
+RECEIPT_VM=$(mktemp -d)
+mkdir -p "$RECEIPT_VM/var/lib/fisherman/boot-receipt" "$RECEIPT_VM/var/tmp"
+cat >"$RECEIPT_VM/var/lib/fisherman/install-receipt.json" <<'JSON'
+{"schema":"fisherman.install-receipt","version":1,"install_id":"0123456789abcdef0123456789abcdef","deployment":{"id":"1111111111111111111111111111111111111111111111111111111111111111"},"expected":{"platform_manifest_digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111"}}
+JSON
+echo '{}' >"$RECEIPT_VM/var/lib/fisherman/boot-receipt/collection.json"
+echo '{}' >"$RECEIPT_VM/var/lib/fisherman/boot-receipt/bootc-status.json"
+
+# fake_vm_run CMD — run CMD with the VM's paths moved into RECEIPT_VM.
+fake_vm_run() {
+  sh -c "$(printf '%s' "$1" | sed "s#/var/#$RECEIPT_VM/var/#g")"
+}
+
+FAKE_FM_HONEST=$(mktemp)
+cat >"$FAKE_FM_HONEST" <<'SH'
+#!/bin/sh
+# verified only for the receipt's own identity, and only with evidence from
+# the installed system (a collection, or --live without --receipt).
+receipt="" live=0
+while [ $# -gt 0 ]; do
+  case "$1" in --receipt) receipt="$2"; shift ;; --live) live=1 ;; esac
+  shift
+done
+if [ "$live" = 1 ] && [ -n "$receipt" ]; then echo '{"outcome":"unavailable"}'; exit 1; fi
+if [ -n "$receipt" ] && grep -q eeeeeeee "$receipt"; then echo '{"outcome":"mismatch"}'; exit 1; fi
+echo '{"outcome":"verified"}'
+SH
+FAKE_FM_ALWAYS=$(mktemp)
+printf '#!/bin/sh\necho %s\n' "'{\"outcome\":\"verified\"}'" >"$FAKE_FM_ALWAYS"
+chmod +x "$FAKE_FM_HONEST" "$FAKE_FM_ALWAYS"
+RECEIPT_OUT=$(mktemp -d)
+export RECEIPT_WAIT_ITERS=1 RECEIPT_WAIT_SECONDS=0
+
+expect_exit "receipt: honest verifier, matching receipt → pass (exit 0)" 0 \
+  check_boot_receipt fake_vm_run "$RECEIPT_OUT/honest" "$FAKE_FM_HONEST"
+expect_exit "receipt: verifier that always says verified → caught (exit 1)" 1 \
+  check_boot_receipt fake_vm_run "$RECEIPT_OUT/always" "$FAKE_FM_ALWAYS"
+rm -f "$RECEIPT_VM/var/lib/fisherman/install-receipt.json"
+expect_exit "receipt: no receipt on the installed system → caught (exit 1)" 1 \
+  check_boot_receipt fake_vm_run "$RECEIPT_OUT/missing" "$FAKE_FM_HONEST"
+
+rm -rf "$RECEIPT_VM" "$RECEIPT_OUT" "$FAKE_FM_HONEST" "$FAKE_FM_ALWAYS"
+
 # ── summary ────────────────────────────────────────────────────────────────
 
 echo ""

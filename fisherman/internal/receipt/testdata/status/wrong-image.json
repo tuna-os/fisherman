@@ -1,0 +1,41 @@
+{
+  "apiVersion": "org.containers.bootc/v1",
+  "kind": "BootcHost",
+  "metadata": {
+    "name": "host"
+  },
+  "spec": {
+    "image": {
+      "image": "ghcr.io/example/os:stable",
+      "transport": "registry"
+    },
+    "bootOrder": "default"
+  },
+  "status": {
+    "staged": null,
+    "booted": {
+      "image": {
+        "image": {
+          "image": "ghcr.io/example/os:stable",
+          "transport": "registry"
+        },
+        "version": "42.20261101.0",
+        "timestamp": "2026-11-01T00:00:00Z",
+        "imageDigest": "sha256:9999999999999999999999999999999999999999999999999999999999999999",
+        "architecture": "amd64"
+      },
+      "cachedUpdate": null,
+      "incompatible": false,
+      "pinned": false,
+      "store": "ostreeContainer",
+      "ostree": {
+        "checksum": "0000000000000000000000000000000000000000000000000000000000000001",
+        "deploySerial": 0,
+        "stateroot": "default"
+      }
+    },
+    "rollback": null,
+    "rollbackQueued": false,
+    "type": "bootcHost"
+  }
+}
