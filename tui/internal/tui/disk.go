@@ -6,36 +6,54 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/huh"
+	"github.com/tuna-os/fisherman/tui/internal/backend"
 	"github.com/tuna-os/fisherman/tui/internal/config"
-	"github.com/tuna-os/fisherman/tui/internal/disks"
 )
+
+// probeDisks asks fisherman for the disks. Tests replace it.
+var probeDisks = backend.Probe
 
 type diskModel struct {
 	cfg      *config.InstallConfig
-	form     *huh.Form
+	form     *huh.Form // nil when there is no disk to choose
 	selected string
 	err      string
+	excluded []backend.Disk
+	labels   map[string]string
 }
 
+// newDiskModel lists the disks `fisherman probe --json` calls eligible: the
+// same verdict the install gives, so a disk offered here is not refused
+// later, and the live medium is never offered. When the probe fails or no
+// disk is eligible, the page says so and offers nothing. It does not invent
+// a disk (#417).
 func newDiskModel(cfg *config.InstallConfig) *diskModel {
-	m := &diskModel{cfg: cfg}
+	m := &diskModel{cfg: cfg, labels: map[string]string{}}
 
-	diskList, err := disks.List()
-	if err != nil || len(diskList) == 0 {
-		m.err = "No suitable disks found. Ensure disks are not mounted."
-		diskList = []disks.Disk{{Name: "sda", Size: 0, Model: "Unknown"}}
+	all, err := probeDisks()
+	if err != nil {
+		m.err = "Cannot list disks: " + err.Error()
+		return m
+	}
+	eligible := backend.Eligible(all)
+	for _, d := range all {
+		if !d.Eligible {
+			m.excluded = append(m.excluded, d)
+		}
+	}
+	if len(eligible) == 0 {
+		m.err = "No disk can be used as an install target."
+		return m
 	}
 
 	var opts []huh.Option[string]
-	for _, d := range diskList {
-		label := fmt.Sprintf("/dev/%s  %s  %s", d.Name, disks.HumanSize(d.Size), d.Model)
-		opts = append(opts, huh.NewOption(label, "/dev/"+d.Name))
+	for _, d := range eligible {
+		m.labels[d.Path] = d.Label()
+		opts = append(opts, huh.NewOption(d.Label(), d.Path))
 	}
-
-	if cfg.DiskDevice != "" {
+	m.selected = eligible[0].Path
+	if _, ok := m.labels[cfg.DiskDevice]; ok {
 		m.selected = cfg.DiskDevice
-	} else if len(opts) > 0 {
-		m.selected = "/dev/" + diskList[0].Name
 	}
 
 	m.form = huh.NewForm(
@@ -51,6 +69,9 @@ func newDiskModel(cfg *config.InstallConfig) *diskModel {
 }
 
 func (m *diskModel) Init() tea.Cmd {
+	if m.form == nil {
+		return nil
+	}
 	return m.form.Init()
 }
 
@@ -60,6 +81,20 @@ func (m *diskModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
+		if m.form == nil {
+			switch msg.String() {
+			case "r":
+				// Probe again: a disk may have been plugged in.
+				return m, func() tea.Msg { return stepMsg{next: stepDisk} }
+			case "b", "esc":
+				return m, func() tea.Msg { return stepMsg{next: stepImage} }
+			case "q":
+				return m, tea.Quit
+			}
+		}
+	}
+	if m.form == nil {
+		return m, nil
 	}
 	form, cmd := m.form.Update(msg)
 	if f, ok := form.(*huh.Form); ok {
@@ -67,8 +102,8 @@ func (m *diskModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.form.State == huh.StateCompleted {
 		m.cfg.DiskDevice = m.selected
-		m.cfg.DiskLabel = m.selected
-		return m, func() tea.Msg { return stepMsg{next: stepFilesystem} }
+		m.cfg.DiskLabel = m.labels[m.selected]
+		return m, func() tea.Msg { return stepMsg{next: nextStep(stepDisk, m.cfg)} }
 	}
 	return m, cmd
 }
@@ -76,11 +111,24 @@ func (m *diskModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *diskModel) View() string {
 	var sb strings.Builder
 	sb.WriteString("\n")
-	sb.WriteString(titleStyle.Render("  Step 3 of 9: Disk Selection"))
+	sb.WriteString(titleStyle.Render(stepTitle(m.cfg, stepDisk)))
 	sb.WriteString("\n\n")
 	if m.err != "" {
 		sb.WriteString(warningStyle.Render("  ⚠ " + m.err))
 		sb.WriteString("\n\n")
+	}
+	if len(m.excluded) > 0 {
+		sb.WriteString(mutedStyle.Render("  Not offered:"))
+		sb.WriteString("\n")
+		for _, d := range m.excluded {
+			sb.WriteString(mutedStyle.Render(fmt.Sprintf("    %s  (%s)", d.Label(), d.ExcludedReason)))
+			sb.WriteString("\n")
+		}
+		sb.WriteString("\n")
+	}
+	if m.form == nil {
+		sb.WriteString(helpStyle.Render("  r scan again • b back • q quit"))
+		return sb.String()
 	}
 	sb.WriteString(m.form.View())
 	sb.WriteString("\n")

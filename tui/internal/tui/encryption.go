@@ -15,6 +15,7 @@ type encryptionModel struct {
 	enabled    bool
 	passphrase string
 	confirm    string
+	err        string
 }
 
 func newEncryptionModel(cfg *config.InstallConfig) *encryptionModel {
@@ -76,14 +77,18 @@ func (m *encryptionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 	if m.form.State == huh.StateCompleted {
 		m.cfg.EncryptionEnabled = m.enabled
+		m.cfg.Passphrase = ""
 		if m.enabled {
-			m.cfg.EncryptionType = "luks-passphrase"
 			m.cfg.Passphrase = m.passphrase
-		} else {
-			m.cfg.EncryptionType = "none"
-			m.cfg.Passphrase = ""
 		}
-		return m, func() tea.Msg { return stepMsg{next: stepUser} }
+		// filesystem and composeFsBackend go along: fisherman judges the
+		// encryption type together with them.
+		if msg := checkFields(m.cfg, "encryption", "filesystem", "composeFsBackend"); msg != "" {
+			again := newEncryptionModel(m.cfg)
+			again.err = msg
+			return again, again.Init()
+		}
+		return m, func() tea.Msg { return stepMsg{next: nextStep(stepEncryption, m.cfg)} }
 	}
 	return m, cmd
 }
@@ -91,8 +96,12 @@ func (m *encryptionModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *encryptionModel) View() string {
 	var sb strings.Builder
 	sb.WriteString("\n")
-	sb.WriteString(titleStyle.Render("  Step 5 of 9: Disk Encryption"))
+	sb.WriteString(titleStyle.Render(stepTitle(m.cfg, stepEncryption)))
 	sb.WriteString("\n\n")
+	if m.err != "" {
+		sb.WriteString(errorStyle.Render("  " + m.err))
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString(m.form.View())
 	sb.WriteString("\n")
 	sb.WriteString(helpStyle.Render("  ↑/↓ navigate • Enter select/next • Ctrl+C quit"))

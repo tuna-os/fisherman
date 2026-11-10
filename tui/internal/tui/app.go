@@ -1,36 +1,137 @@
 package tui
 
 import (
+	"fmt"
+	"strings"
+
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/tuna-os/fisherman/tui/internal/backend"
+	"github.com/tuna-os/fisherman/tui/internal/catalog"
 	"github.com/tuna-os/fisherman/tui/internal/config"
 )
 
 type step int
 
+// The wizard's pages. There is no network page and no SSH key page: the
+// recipe has no field for either, so what they collected was dropped
+// (#417, #361). Do not add a page for input the backend cannot receive.
 const (
 	stepWelcome step = iota
-	stepNetwork
 	stepImage
 	stepDisk
 	stepFilesystem
 	stepEncryption
 	stepUser
-	stepSSHKeys
 	stepConfirm
 	stepProgress
+	stepRecoveryKey
 	stepDone
-	stepAbort
 )
+
+// stepNames is every page that exists, for titles and for tests.
+var stepNames = map[step]string{
+	stepWelcome:     "Welcome",
+	stepImage:       "OS Image",
+	stepDisk:        "Disk Selection",
+	stepFilesystem:  "Filesystem & Hostname",
+	stepEncryption:  "Disk Encryption",
+	stepUser:        "User Account",
+	stepConfirm:     "Confirm Installation",
+	stepProgress:    "Installing",
+	stepRecoveryKey: "Recovery Key",
+	stepDone:        "Done",
+}
+
+// nextStep is the page that follows cur for this configuration. The user
+// page is skipped for an image that creates its account at first boot, and
+// the recovery key page appears only when fisherman emitted a key.
+func nextStep(cur step, cfg *config.InstallConfig) step {
+	switch cur {
+	case stepWelcome:
+		return stepImage
+	case stepImage:
+		return stepDisk
+	case stepDisk:
+		return stepFilesystem
+	case stepFilesystem:
+		return stepEncryption
+	case stepEncryption:
+		if cfg.Image.NeedsUserCreation {
+			return stepUser
+		}
+		return stepConfirm
+	case stepUser:
+		return stepConfirm
+	case stepConfirm:
+		return stepProgress
+	case stepProgress:
+		if cfg.RecoveryKey != "" {
+			return stepRecoveryKey
+		}
+		return stepDone
+	default:
+		return stepDone
+	}
+}
+
+// prevStep is the page "Go back" on the confirm page returns to.
+func prevStep(cfg *config.InstallConfig) step {
+	if cfg.Image.NeedsUserCreation {
+		return stepUser
+	}
+	return stepEncryption
+}
+
+// wizardSteps are the numbered pages before the install, in order.
+func wizardSteps(cfg *config.InstallConfig) []step {
+	steps := []step{stepImage, stepDisk, stepFilesystem, stepEncryption}
+	if cfg.Image.NeedsUserCreation {
+		steps = append(steps, stepUser)
+	}
+	return append(steps, stepConfirm)
+}
+
+// stepTitle is the heading of a numbered page: "Step 2 of 6: Disk Selection".
+func stepTitle(cfg *config.InstallConfig, s step) string {
+	steps := wizardSteps(cfg)
+	for i, w := range steps {
+		if w == s {
+			return fmt.Sprintf("  Step %d of %d: %s", i+1, len(steps), stepNames[s])
+		}
+	}
+	return "  " + stepNames[s]
+}
+
+// validateFields asks fisherman about recipe fields. Tests replace it.
+var validateFields = backend.ValidatePartial
+
+// checkFields sends the named top-level recipe keys to
+// `fisherman validate --json --partial -` and returns "" when they are
+// valid, or the text to show on the page. No verdict is not a pass: the
+// page stays where it is.
+func checkFields(cfg *config.InstallConfig, keys ...string) string {
+	fields, err := cfg.Fields(keys...)
+	if err != nil {
+		return err.Error()
+	}
+	problems, err := validateFields(fields)
+	if err != nil {
+		return "Cannot check these settings: " + err.Error()
+	}
+	var msgs []string
+	for _, p := range problems {
+		msgs = append(msgs, p.Message)
+	}
+	return strings.Join(msgs, "\n  ")
+}
 
 // stepMsg advances to the next step.
 type stepMsg struct{ next step }
 
-// abortMsg quits the installer.
-type abortMsg struct{}
-
 // App is the top-level bubbletea model.
 type App struct {
 	cfg     *config.InstallConfig
+	catalog *catalog.Catalog
 	current step
 	models  map[step]tea.Model
 	width   int
@@ -39,32 +140,42 @@ type App struct {
 }
 
 func NewApp(dryRun bool) *App {
-	cfg := &config.InstallConfig{
-		Hostname:   "localhost",
-		Filesystem: "ext4",
-	}
 	a := &App{
-		cfg:     cfg,
+		cfg:     &config.InstallConfig{Hostname: "localhost"},
+		catalog: catalog.LoadDefault(),
 		current: stepWelcome,
 		models:  make(map[step]tea.Model),
 		dryRun:  dryRun,
 	}
-	a.initModels()
+	a.models[stepWelcome] = newWelcomeModel()
 	return a
 }
 
-func (a *App) initModels() {
-	a.models[stepWelcome] = newWelcomeModel()
-	a.models[stepNetwork] = newNetworkModel(a.cfg)
-	a.models[stepImage] = newImageModel(a.cfg)
-	a.models[stepDisk] = newDiskModel(a.cfg)
-	a.models[stepFilesystem] = newFilesystemModel(a.cfg)
-	a.models[stepEncryption] = newEncryptionModel(a.cfg)
-	a.models[stepUser] = newUserModel(a.cfg)
-	a.models[stepSSHKeys] = newSSHKeysModel(a.cfg)
-	a.models[stepConfirm] = newConfirmModel(a.cfg, a.dryRun)
-	a.models[stepProgress] = newProgressModel(a.cfg, a.dryRun)
-	a.models[stepDone] = newDoneModel(a.cfg, a.dryRun)
+// newModel builds the page for a step, from the configuration as it is now.
+func (a *App) newModel(s step) tea.Model {
+	switch s {
+	case stepWelcome:
+		return newWelcomeModel()
+	case stepImage:
+		return newImageModel(a.cfg, a.catalog)
+	case stepDisk:
+		return newDiskModel(a.cfg)
+	case stepFilesystem:
+		return newFilesystemModel(a.cfg)
+	case stepEncryption:
+		return newEncryptionModel(a.cfg)
+	case stepUser:
+		return newUserModel(a.cfg)
+	case stepConfirm:
+		return newConfirmModel(a.cfg, a.dryRun)
+	case stepProgress:
+		return newProgressModel(a.cfg, a.dryRun)
+	case stepRecoveryKey:
+		return newRecoveryKeyModel(a.cfg)
+	case stepDone:
+		return newDoneModel(a.cfg, a.dryRun)
+	}
+	return nil
 }
 
 func (a *App) Init() tea.Cmd {
@@ -79,44 +190,26 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.width = msg.Width
 		a.height = msg.Height
-		if m, ok := a.models[a.current]; ok {
-			updated, cmd := m.Update(msg)
-			a.models[a.current] = updated
-			return a, cmd
-		}
-		return a, nil
 
 	case stepMsg:
-		a.current = msg.next
-		switch msg.next {
-		case stepNetwork:
-			a.models[stepNetwork] = newNetworkModel(a.cfg)
-		case stepImage:
-			a.models[stepImage] = newImageModel(a.cfg)
-		case stepDisk:
-			a.models[stepDisk] = newDiskModel(a.cfg)
-		case stepFilesystem:
-			a.models[stepFilesystem] = newFilesystemModel(a.cfg)
-		case stepEncryption:
-			a.models[stepEncryption] = newEncryptionModel(a.cfg)
-		case stepUser:
-			a.models[stepUser] = newUserModel(a.cfg)
-		case stepSSHKeys:
-			a.models[stepSSHKeys] = newSSHKeysModel(a.cfg)
-		case stepConfirm:
-			a.models[stepConfirm] = newConfirmModel(a.cfg, a.dryRun)
-		case stepProgress:
-			a.models[stepProgress] = newProgressModel(a.cfg, a.dryRun)
-		case stepDone:
-			a.models[stepDone] = newDoneModel(a.cfg, a.dryRun)
+		next := msg.next
+		// The install never starts from a configuration that must not
+		// reach the backend, whichever page asked for it.
+		if next == stepProgress && a.cfg.Check() != nil {
+			next = stepConfirm
 		}
-		if m, ok := a.models[a.current]; ok {
-			return a, m.Init()
+		m := a.newModel(next)
+		if m == nil {
+			return a, nil
 		}
-		return a, nil
-
-	case abortMsg:
-		return a, tea.Quit
+		a.current = next
+		a.models[next] = m
+		cmds := []tea.Cmd{m.Init()}
+		if a.width > 0 {
+			size := tea.WindowSizeMsg{Width: a.width, Height: a.height}
+			cmds = append(cmds, func() tea.Msg { return size })
+		}
+		return a, tea.Batch(cmds...)
 	}
 
 	if m, ok := a.models[a.current]; ok {

@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"os"
 	"os/exec"
 	"strings"
 
@@ -23,21 +22,18 @@ func newDoneModel(cfg *config.InstallConfig, dryRun bool) *doneModel {
 	m := &doneModel{cfg: cfg, dryRun: dryRun}
 
 	if dryRun {
-		// Pre-render the recipe JSON for display; write it to a temp file too.
-		f, err := os.CreateTemp("", "bootc-installer-recipe-*.json")
-		if err == nil {
-			tmp := f.Name()
-			_ = cfg.WriteRecipe(tmp)
-			if data, err := os.ReadFile(tmp); err == nil {
-				m.recipeJSON = string(data)
-			}
-			_ = f.Close()
+		// The recipe as fisherman would get it on stdin, with the
+		// passphrase and the password masked. Nothing is written to disk.
+		recipe, err := cfg.RedactedRecipe()
+		if err != nil {
+			recipe = "No recipe: " + err.Error()
 		}
+		m.recipeJSON = recipe
 		m.form = huh.NewForm(
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title("Dry run complete").
-					Description("The recipe JSON above is what would be passed to fisherman.").
+					Description("The recipe above is what fisherman would get on stdin (secrets masked).").
 					Affirmative("Exit").
 					Negative("Exit").
 					Value(&m.reboot),

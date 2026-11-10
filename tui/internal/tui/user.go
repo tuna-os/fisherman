@@ -17,6 +17,7 @@ type userModel struct {
 	username string
 	password string
 	confirm  string
+	err      string
 }
 
 func newUserModel(cfg *config.InstallConfig) *userModel {
@@ -91,7 +92,12 @@ func (m *userModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.cfg.FullName = m.fullname
 		m.cfg.Username = m.username
 		m.cfg.Password = m.password
-		return m, func() tea.Msg { return stepMsg{next: stepSSHKeys} }
+		if msg := checkFields(m.cfg, "user"); msg != "" {
+			again := newUserModel(m.cfg)
+			again.err = msg
+			return again, again.Init()
+		}
+		return m, func() tea.Msg { return stepMsg{next: nextStep(stepUser, m.cfg)} }
 	}
 	return m, cmd
 }
@@ -99,8 +105,12 @@ func (m *userModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *userModel) View() string {
 	var sb strings.Builder
 	sb.WriteString("\n")
-	sb.WriteString(titleStyle.Render("  Step 6 of 9: User Account"))
+	sb.WriteString(titleStyle.Render(stepTitle(m.cfg, stepUser)))
 	sb.WriteString("\n\n")
+	if m.err != "" {
+		sb.WriteString(errorStyle.Render("  " + m.err))
+		sb.WriteString("\n\n")
+	}
 	sb.WriteString(m.form.View())
 	sb.WriteString("\n")
 	sb.WriteString(helpStyle.Render("  Tab/Shift+Tab navigate • Enter next • Ctrl+C quit"))
