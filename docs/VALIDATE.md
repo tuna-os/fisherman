@@ -196,7 +196,7 @@ A rule runs when its key is present:
 | `distroID` | distroID |
 | `brewTap` | brewTap |
 | `unifiedStorage` | unifiedStorage |
-| `filesystem` | filesystem, and its combinations with `btrfsSubvolumes`, `composeFsBackend` and `encryption.type` (absent ones count as false / none) |
+| `filesystem` | filesystem, its combinations with `btrfsSubvolumes`, `composeFsBackend` and `encryption.type` (absent ones count as false / none), and the `zfs` opt-in in `experimental` (absent counts as no opt-in) |
 | `encryption` | encryption type, passphrase |
 | `bootloader` | bootloader |
 | `imageType` | imageType |
@@ -207,6 +207,7 @@ A rule runs when its key is present:
 | `luksMapperName` | luksMapperName |
 | `additionalImageStores` | each entry's path syntax (not whether it exists) |
 | `override` | override |
+| `experimental` | experimental |
 
 Everything else (`disk`, the `customMounts` partitions, `varDisk`, the TPM)
 is ignored in partial mode: those read the machine, and the full mode checks
@@ -229,6 +230,8 @@ holds both fields.
 | `distroID` | empty is valid (the install uses `bootc`). Otherwise 1–63 characters: a lowercase letter first, then lowercase letters, digits and `-`. It names `/etc/<distroID>/oem/`, the `<distroID>-oem-setup.service` unit and its preset. | `distro_id_invalid` |
 | `brewTap` | empty is valid (no tap is added). Otherwise `owner/name`, each part starting with a letter or digit and containing only letters, digits, `.`, `_` and `-`. It is run as `brew tap <brewTap>` in the OEM setup script. | `brew_tap_invalid` |
 | `filesystem` (auto layout) | one of `xfs`, `ext4`, `btrfs`, `zfs` (`recipe.Filesystems`) | `filesystem_unsupported` |
+| `filesystem` (auto layout) | `zfs` needs `"experimental": ["zfs"]`. No VM test installs ZFS and boots it, so the recipe must say that it accepts that. | `zfs_experimental` |
+| `experimental` | each entry is `zfs` | `experimental_unsupported` |
 | `btrfsSubvolumes` | needs `filesystem: btrfs` | `btrfs_subvolumes_require_btrfs` |
 | `composeFsBackend` | needs fs-verity, so not XFS | `composefs_requires_fsverity` |
 | `unifiedStorage` | `false` or absent. `true` asks for bootc's `--experimental-unified-storage`, which fisherman does not pass (it runs bootc in a container, where that storage does not resolve). The install used to finish without it and report success. It is not `composeFsBackend` and not `additionalImageStores`; both are supported. | `unified_storage_unsupported` |
@@ -347,6 +350,8 @@ This section maps error codes to their causes and corrective actions. Each code 
 | Code | Field | Cause | Fix |
 |---|---|---|---|
 | `filesystem_unsupported` | `filesystem` | Filesystem is not one of `xfs`, `ext4`, `btrfs`, or `zfs` | Choose a supported filesystem |
+| `zfs_experimental` | `filesystem` | Filesystem is `zfs` and the recipe does not list `zfs` in `experimental`. ZFS is experimental: no VM test covers it | Add `"experimental": ["zfs"]` to the recipe (in `--partial` mode, to the same fragment as `filesystem`), or choose `xfs`, `ext4` or `btrfs`. A frontend should show ZFS as experimental and send the field only after the user chose it |
+| `experimental_unsupported` | `experimental[i]` | The entry is not a feature fisherman calls experimental | Use `zfs`, or remove the entry |
 | `btrfs_subvolumes_require_btrfs` | `btrfsSubvolumes` | `btrfsSubvolumes` requires `filesystem: btrfs` | Either remove `btrfsSubvolumes` or change filesystem to `btrfs` |
 | `composefs_requires_fsverity` | `composeFsBackend` | composefs backend requires fs-verity support, which XFS does not provide | Change filesystem to `ext4`, `btrfs`, or `zfs`; or disable `composeFsBackend` |
 | `custom_mount_fstype_unsupported` | `customMounts[i].fstype` | Custom mount filesystem type is not supported | Use one of: `fat32`, `ext3`, `ext4`, `xfs`, `btrfs`, `swap`, `unformatted`, or empty |

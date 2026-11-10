@@ -92,7 +92,8 @@ func TestFrontendRecipeKeysAreKnown(t *testing.T) {
 			"slurp":{"sourcePartition":"/dev/sda3","users":[{"name":"n","categories":["Documents"]}]},
 			"slurpWallpapers":true,"targetMount":"/mnt/t","zfsPoolName":"rpool",
 			"copyNetworkProfiles":true,"copyBluetoothPairings":false,
-			"extras":{"printServices":true,"oemSetup":true,"audioNames":true,"bootSplash":true}}`,
+			"extras":{"printServices":true,"oemSetup":true,"audioNames":true,"bootSplash":true},
+			"experimental":["zfs"]}`,
 	}
 	for name, raw := range recipes {
 		if ps := UnknownFields([]byte(raw)); len(ps) > 0 {

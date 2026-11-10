@@ -137,6 +137,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Bug Fixes
 
+- **ZFS: the pool is exported, and its host files go where the system
+  boots** (#413). The pool is registered for teardown and exported after the
+  unmounts, on success and on every failure; it stayed imported on the
+  installer host before. `hostid` and `zpool.cache` go to the deployment's
+  `/etc` through the resolver, not to `<target>/etc`. `filesystem: zfs` is
+  experimental: `validate` and the install refuse it (`zfs_experimental`)
+  unless the recipe has `"experimental": ["zfs"]`.
+
 - **`btrfsSubvolumes` creates `@` only** (#416). `@home` and `@snapshots`
   were created and never mounted by anything. The remount after the GPT
   retag of a systemd-boot install now uses the root mount options, so on

@@ -90,6 +90,12 @@ const (
 	CodeVarDiskReadOnly     = "var_disk_read_only"
 	CodeOverrideUnsupported = "override_unsupported"
 
+	// CodeZFSExperimental: filesystem "zfs" without "zfs" in `experimental`.
+	CodeZFSExperimental = "zfs_experimental"
+	// CodeExperimentalUnsupported: an `experimental` entry fisherman does
+	// not know.
+	CodeExperimentalUnsupported = "experimental_unsupported"
+
 	CodeAdditionalImageStoreInvalid  = "additional_image_store_invalid"
 	CodeAdditionalImageStoreNotFound = "additional_image_store_not_found"
 	CodeZFSPoolNameInvalid           = "zfs_pool_name_invalid"
@@ -604,6 +610,32 @@ func CheckOverride(override []string) []Problem {
 			return []Problem{{fmt.Sprintf("override[%d]", i), CodeOverrideUnsupported,
 				fmt.Sprintf("override accepts only \"too_small\" and \"uefi\", got %q", o)}}
 		}
+	}
+	return nil
+}
+
+// CheckExperimental applies the experimental rule: every entry is one of
+// Experimentals. An unknown entry is refused, as an unknown override is: the
+// caller believes it accepted something.
+func CheckExperimental(experimental []string) []Problem {
+	for i, e := range experimental {
+		if !contains(Experimentals, e) {
+			return []Problem{{fmt.Sprintf("experimental[%d]", i), CodeExperimentalUnsupported,
+				fmt.Sprintf("experimental accepts only \"zfs\", got %q", e)}}
+		}
+	}
+	return nil
+}
+
+// CheckExperimentalFilesystem refuses filesystem "zfs" unless the recipe
+// opts in with "experimental": ["zfs"]. The ZFS path has no VM test: no
+// matrix entry installs it and boots the result (tuna-os/fisherman#413).
+// The opt-in is the caller's statement that it knows.
+func CheckExperimentalFilesystem(r *Recipe) []Problem {
+	if r.Filesystem == "zfs" && !r.AcceptsExperimental(ExperimentalZFS) {
+		return []Problem{{"filesystem", CodeZFSExperimental,
+			"filesystem \"zfs\" is experimental: no VM test installs and boots it. " +
+				"Add \"experimental\": [\"zfs\"] to the recipe to accept that, or use xfs, ext4 or btrfs"}}
 	}
 	return nil
 }

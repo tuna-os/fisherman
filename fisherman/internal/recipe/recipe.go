@@ -134,6 +134,26 @@ type Recipe struct {
 	// that entry's values; an image the catalog does not know gets none.
 	// An object, {} included, is used exactly as given.
 	Extras *Extras `json:"extras,omitempty"`
+	// Experimental lists the experimental features the caller accepts: the
+	// values of Experimentals ("zfs"). A feature is experimental when no VM
+	// test covers it; without its name here the recipe is refused.
+	Experimental []string `json:"experimental,omitempty"`
+}
+
+// Experimental features (Recipe.Experimental).
+const (
+	// ExperimentalZFS: filesystem "zfs". No VM matrix entry installs and
+	// boots it (tuna-os/fisherman#413).
+	ExperimentalZFS = "zfs"
+)
+
+// Experimentals lists every value Recipe.Experimental accepts.
+var Experimentals = []string{ExperimentalZFS}
+
+// AcceptsExperimental reports whether the recipe opts in to feature (one
+// of Experimentals).
+func (r *Recipe) AcceptsExperimental(feature string) bool {
+	return contains(r.Experimental, feature)
 }
 
 // Extras are the post-install steps that suit a desktop product image and
@@ -362,6 +382,7 @@ func (r *Recipe) Problems() []Problem {
 		}
 		ps = append(ps, CheckFilesystem(r.Filesystem)...)
 		ps = append(ps, CheckLayoutCombos(r)...)
+		ps = append(ps, CheckExperimentalFilesystem(r)...)
 	}
 	ps = append(ps, CheckUnifiedStorage(r.UnifiedStorage)...)
 	ps = append(ps, CheckImageType(r.ImageType)...)
@@ -403,5 +424,6 @@ func (r *Recipe) Problems() []Problem {
 	ps = append(ps, CheckLuksMapperName(r.LuksMapperName)...)
 	ps = append(ps, CheckAdditionalImageStores(r.AdditionalImageStores)...)
 	ps = append(ps, CheckOverride(r.Override)...)
+	ps = append(ps, CheckExperimental(r.Experimental)...)
 	return ps
 }

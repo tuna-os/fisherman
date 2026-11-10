@@ -86,6 +86,7 @@ type Cleanup struct {
 	targetScratch []string
 	postRemovals  []string
 	luksMapper    string
+	zfsPool       string
 	done          bool
 	err           error
 }
@@ -100,6 +101,31 @@ func (c *Cleanup) SetLUKS(name string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.luksMapper = name
+}
+
+// SetZFSPool registers a ZFS pool the install created and imported. Run
+// exports it after the unmounts: an imported pool stays imported on the
+// installer host when the process ends, a retry then fails with "pool
+// already exists" or "device busy", and a pool that was never exported
+// needs a forced import on the installed system's first boot (#413).
+func (c *Cleanup) SetZFSPool(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.zfsPool = name
+}
+
+// ExportZFSPoolFn exports a pool. Tests replace it.
+var ExportZFSPoolFn = func(pool string) error {
+	err := runner.Run("zpool", "export", pool)
+	if err == nil {
+		return nil
+	}
+	// A dataset still busy after the lazy unmounts: force it. The install
+	// is over either way, and an imported pool is the worse outcome.
+	if ferr := runner.Run("zpool", "export", "-f", pool); ferr != nil {
+		return fmt.Errorf("%w (forced: %w)", err, ferr)
+	}
+	return nil
 }
 
 // AddPostRemoval registers a HOST path to be removed after all unmounts and
@@ -166,8 +192,8 @@ func (c *Cleanup) removeTargetScratchLocked() error {
 }
 
 // Run removes target-resident scratch, unmounts all registered mount points
-// in reverse order, then closes any open LUKS device, then deletes any
-// registered host post-removal paths. It is idempotent: only the first call
+// in reverse order, exports a registered ZFS pool, then closes any open LUKS
+// device, then deletes any registered host post-removal paths. It is idempotent: only the first call
 // does any work, and every call returns the first call's result.
 //
 // Every step is attempted even when an earlier one fails. Failures are
@@ -196,6 +222,14 @@ func (c *Cleanup) Run() error {
 		if err := runner.Run("umount", "-Rl", mp); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: unmounting %s: %v\n", mp, err)
 			errs = append(errs, fmt.Errorf("unmounting %s: %w", mp, err))
+		}
+	}
+	if c.zfsPool != "" {
+		// After the unmounts (the ESP is mounted inside the pool's root
+		// dataset), before the LUKS close.
+		if err := ExportZFSPoolFn(c.zfsPool); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: exporting ZFS pool %s: %v\n", c.zfsPool, err)
+			errs = append(errs, fmt.Errorf("exporting ZFS pool %s: %w", c.zfsPool, err))
 		}
 	}
 	if c.luksMapper != "" {

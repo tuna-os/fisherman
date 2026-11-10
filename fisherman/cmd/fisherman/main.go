@@ -688,6 +688,9 @@ func main() {
 			if err := disk.CreateZFSPool(poolName, rootPart, targetMount); err != nil {
 				fatal("creating ZFS pool: %v", err)
 			}
+			// From here the pool is imported on this host. Teardown exports
+			// it, on success and on every failure (#413).
+			cleanup.SetZFSPool(poolName)
 			if err := disk.CreateZFSRootDataset(poolName); err != nil {
 				fatal("creating ZFS root dataset: %v", err)
 			}
@@ -1122,16 +1125,22 @@ func main() {
 		}
 	}
 
-	// ZFS post-install: write host ID and zpool.cache so the installed system
-	// can import the pool at boot. Must be done before unmounting.
+	// ZFS post-install: write host ID and zpool.cache into the deployment's
+	// /etc (the resolver's: ZFS installs are composefs, and <target>/etc is
+	// not what boots), so the installed system can import the pool. Must be
+	// done before unmounting. Teardown then exports the pool.
 	if r.Filesystem == "zfs" {
 		poolName := disk.PoolName(r.ZFSPoolName)
-		progress.Info("ZFS post-install: writing hostid and zpool.cache")
-		if err := disk.WriteHostID(activeTargetMount); err != nil {
-			progress.Info(fmt.Sprintf("Warning: ZFS host ID: %v", err))
-		}
-		if err := disk.SetZFSCachefile(poolName, activeTargetMount); err != nil {
-			progress.Info(fmt.Sprintf("Warning: ZFS cachefile: %v", err))
+		if d, err := post.ResolveDeployment(activeTargetMount); err != nil {
+			progress.Info(fmt.Sprintf("Warning: ZFS host ID and zpool.cache not written: %v", err))
+		} else {
+			progress.Info("ZFS post-install: writing hostid and zpool.cache")
+			if err := disk.WriteHostID(d.Etc); err != nil {
+				progress.Info(fmt.Sprintf("Warning: ZFS host ID: %v", err))
+			}
+			if err := disk.SetZFSCachefile(poolName, d.Etc); err != nil {
+				progress.Info(fmt.Sprintf("Warning: ZFS cachefile: %v", err))
+			}
 		}
 	}
 

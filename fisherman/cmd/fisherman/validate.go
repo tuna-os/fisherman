@@ -174,6 +174,7 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	if has("filesystem") {
 		ps = append(ps, recipe.CheckFilesystem(r.Filesystem)...)
 		ps = append(ps, recipe.CheckLayoutCombos(&r)...)
+		ps = append(ps, recipe.CheckExperimentalFilesystem(&r)...)
 	}
 	if has("unifiedStorage") {
 		ps = append(ps, recipe.CheckUnifiedStorage(r.UnifiedStorage)...)
@@ -229,6 +230,9 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	}
 	if has("override") {
 		ps = append(ps, recipe.CheckOverride(r.Override)...)
+	}
+	if has("experimental") {
+		ps = append(ps, recipe.CheckExperimental(r.Experimental)...)
 	}
 	return ps, nil
 }
