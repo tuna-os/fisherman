@@ -95,9 +95,13 @@ const (
 	CodeZFSPoolNameInvalid           = "zfs_pool_name_invalid"
 	CodeLuksMapperNameInvalid        = "luks_mapper_name_invalid"
 
+	CodeCustomMountsNoESP  = "custom_mounts_no_esp"
+	CodeCustomMountsNoBoot = "custom_mounts_no_boot"
+
 	// Install-only: reported in the install's error event, not by validate,
-	// which needs no root.
-	CodeNotRoot = "not_root"
+	// which needs no root and does not look for host tools.
+	CodeNotRoot         = "not_root"
+	CodeHostToolMissing = "host_tool_missing"
 )
 
 // Filesystems is the set of root filesystems the auto-partition path can
@@ -425,6 +429,50 @@ func CheckCustomMountTarget(i int, target string) []Problem {
 	}
 	return []Problem{{fmt.Sprintf("customMounts[%d].target", i), CodeCustomMountTargetInvalid,
 		fmt.Sprintf("customMounts[%d]: target must be \"swap\" or an absolute path without \"..\" components, got %q", i, target)}}
+}
+
+// CheckCustomMountsLayout applies the rules a manual layout must meet as a
+// whole, beyond "one entry targets /" (which Problems reports itself):
+//
+//   - An entry targets /boot/efi. fisherman installs UEFI boot loaders only;
+//     bootc writes the loader to the ESP mounted there, and the install
+//     reads that entry to find the EFI boot entry afterwards. Without it
+//     bootc fails after the root is formatted, or installs a disk that
+//     cannot boot.
+//   - For GRUB (bootloader "" or "grub2") with an XFS root, an entry targets
+//     /boot and is not XFS itself. GRUB cannot read modern XFS features
+//     (nrext64, exchange, rmapbt), which is why the auto layout always
+//     makes an ext4 /boot (the AGENTS.md invariant). systemd-boot reads the
+//     kernel from the ESP and needs no /boot.
+//
+// The fstype of a partition kept as it is ("unformatted" or "") is not
+// known here, so only a declared "xfs" counts.
+func CheckCustomMountsLayout(r *Recipe) []Problem {
+	var root, boot *CustomMount
+	hasESP := false
+	for i := range r.CustomMounts {
+		switch filepath.Clean(r.CustomMounts[i].Target) {
+		case "/":
+			if r.CustomMounts[i].Target != "" {
+				root = &r.CustomMounts[i]
+			}
+		case "/boot":
+			boot = &r.CustomMounts[i]
+		case "/boot/efi":
+			hasESP = true
+		}
+	}
+	var ps []Problem
+	if !hasESP {
+		ps = append(ps, Problem{"customMounts", CodeCustomMountsNoESP,
+			"customMounts: no EFI system partition (target /boot/efi) specified"})
+	}
+	grub := r.Bootloader == "" || r.Bootloader == "grub2"
+	if grub && root != nil && root.Fstype == "xfs" && (boot == nil || boot.Fstype == "xfs") {
+		ps = append(ps, Problem{"customMounts", CodeCustomMountsNoBoot,
+			"customMounts: GRUB cannot read an XFS root; add a separate /boot partition that is not XFS (ext4), or use bootloader \"systemd\""})
+	}
+	return ps
 }
 
 // CheckTargetMount applies the targetMount rule. Empty is valid (the default,

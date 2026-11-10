@@ -75,3 +75,46 @@ func TestProblemsRejectsIssue414Names(t *testing.T) {
 		t.Errorf("Problems() did not report %v", want)
 	}
 }
+
+// tuna-os/fisherman#415: a manual layout needed only a root entry.
+func TestCheckCustomMountsLayout(t *testing.T) {
+	root := func(fs string) CustomMount { return CustomMount{Partition: "/dev/sda3", Target: "/", Fstype: fs} }
+	esp := CustomMount{Partition: "/dev/sda1", Target: "/boot/efi", Fstype: "unformatted"}
+	boot := func(fs string) CustomMount { return CustomMount{Partition: "/dev/sda2", Target: "/boot", Fstype: fs} }
+	tests := []struct {
+		name       string
+		bootloader string
+		mounts     []CustomMount
+		want       []string
+	}{
+		{"xfs root, esp, ext4 /boot", "", []CustomMount{root("xfs"), esp, boot("ext4")}, nil},
+		{"xfs root, esp, kept /boot", "grub2", []CustomMount{root("xfs"), esp, boot("unformatted")}, nil},
+		{"ext4 root needs no /boot", "", []CustomMount{root("ext4"), esp}, nil},
+		{"btrfs root needs no /boot", "grub2", []CustomMount{root("btrfs"), esp}, nil},
+		{"kept root: fstype unknown, not judged", "", []CustomMount{root("unformatted"), esp}, nil},
+		{"systemd-boot reads the ESP", "systemd", []CustomMount{root("xfs"), esp}, nil},
+		{"trailing slash on the ESP target", "systemd", []CustomMount{root("xfs"), {Partition: "/dev/sda1", Target: "/boot/efi/", Fstype: "fat32"}}, nil},
+		{"no esp", "", []CustomMount{root("ext4")}, []string{"customMounts:custom_mounts_no_esp"}},
+		{"/efi is not where the install looks", "systemd", []CustomMount{root("ext4"), {Partition: "/dev/sda1", Target: "/efi", Fstype: "fat32"}},
+			[]string{"customMounts:custom_mounts_no_esp"}},
+		{"grub2, xfs root, no /boot", "grub2", []CustomMount{root("xfs"), esp}, []string{"customMounts:custom_mounts_no_boot"}},
+		{"default bootloader is grub2", "", []CustomMount{root("xfs"), esp}, []string{"customMounts:custom_mounts_no_boot"}},
+		{"an xfs /boot does not help", "", []CustomMount{root("xfs"), esp, boot("xfs")}, []string{"customMounts:custom_mounts_no_boot"}},
+		{"neither", "", []CustomMount{root("xfs")}, []string{"customMounts:custom_mounts_no_esp", "customMounts:custom_mounts_no_boot"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := &Recipe{Bootloader: tt.bootloader, CustomMounts: tt.mounts}
+			if got := codes(CheckCustomMountsLayout(r)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("CheckCustomMountsLayout = %v, want %v", got, tt.want)
+			}
+		})
+	}
+	// Problems runs it.
+	r := &Recipe{Hostname: "h", CustomMounts: []CustomMount{{Partition: "/dev/null", Target: "/", Fstype: "xfs"}}}
+	got := codes(r.Problems())
+	want := []string{"customMounts:custom_mounts_no_esp", "customMounts:custom_mounts_no_boot"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Problems() = %v, want %v", got, want)
+	}
+}

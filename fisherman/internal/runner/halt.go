@@ -21,11 +21,12 @@ var ErrHalted = errors.New("installation is shutting down; subprocess not starte
 var halted atomic.Bool
 
 // teardownCommands may still run after Halt: they are what post.Cleanup and
-// the disk unmount helpers use to release mounts and LUKS mappings, so
+// the disk unmount helpers use to release mounts, swap and LUKS mappings, so
 // refusing them would leave the disk in the state Halt exists to avoid.
 // cryptsetup is allowed only for closing a mapping, never for creating one.
 var teardownCommands = map[string]bool{
 	"umount":   true,
+	"swapoff":  true,
 	"fuser":    true,
 	"blockdev": true,
 	"udevadm":  true,

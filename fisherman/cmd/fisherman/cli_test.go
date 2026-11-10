@@ -63,7 +63,8 @@ func writeValidRecipe(t *testing.T) string {
 	// for them (no block devices in CI).
 	rootPart := filepath.Join(t.TempDir(), "root")
 	efiPart := filepath.Join(t.TempDir(), "efi")
-	for _, p := range []string{rootPart, efiPart} {
+	bootPart := filepath.Join(t.TempDir(), "boot")
+	for _, p := range []string{rootPart, efiPart, bootPart} {
 		if err := os.WriteFile(p, nil, 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -72,6 +73,9 @@ func writeValidRecipe(t *testing.T) string {
 		CustomMounts: []recipe.CustomMount{
 			{Partition: rootPart, Target: "/", Fstype: "xfs"},
 			{Partition: efiPart, Target: "/boot/efi", Fstype: "fat32"},
+			// GRUB (the default) cannot read an XFS root: a manual layout
+			// needs the same ext4 /boot the auto layout makes (#415).
+			{Partition: bootPart, Target: "/boot", Fstype: "ext4"},
 		},
 		Image:    "ghcr.io/example/os:stable",
 		Hostname: "testhost",

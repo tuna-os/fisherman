@@ -150,7 +150,7 @@ completion screen.
 
 ### `complete`
 
-The install finished. fisherman has already unmounted the target and closed
+The install finished. fisherman has already turned off any swap it activated on the target, unmounted the target and closed
 LUKS. It exits 0 right after this event.
 
 **Fields:**
@@ -222,7 +222,9 @@ key fisherman does not know is `loading recipe: unknown recipe field …`
 fisherman must run as root …` (`code` `not_root`); it is refused before the
 recipe is read. A disk that is not an eligible target is `invalid recipe:
 disk … ` with one of the `disk_*` codes
-([VALIDATE.md](VALIDATE.md#target-eligibility)).
+([VALIDATE.md](VALIDATE.md#target-eligibility)). A missing host program is
+`missing required host tool: "mkfs.xfs" not found on the host; install the
+"xfsprogs" package` (`code` `host_tool_missing`).
 
 `error` is **not** emitted when fisherman exits 2 (unknown command) or
 panics, or when it is killed with SIGKILL. See [Exit codes](#exit-codes).
@@ -419,7 +421,8 @@ behaves the same way when sudo or its shell dies.
 On a cancel, fisherman:
 
 1. stops its children with SIGTERM, then SIGKILL after 10 seconds;
-2. unmounts the target and closes the LUKS mapping, for at most 3 minutes;
+2. turns off the swap a manual layout activated, unmounts the target and
+   closes the LUKS mapping, for at most 3 minutes;
 3. writes one `error` event, `installation cancelled (<SIGNAL>)`, with
    `; cleanup failed, the target may still be mounted or unlocked: …` appended
    if teardown did not finish;

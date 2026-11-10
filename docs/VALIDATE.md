@@ -247,6 +247,8 @@ holds both fields.
 | `customMounts[i].fstype` | one of `fat32`, `ext3`, `ext4`, `xfs`, `btrfs`, `swap`, `unformatted`, `""` | `custom_mount_fstype_unsupported` |
 | `customMounts[i].target` | `""`, `swap`, or an absolute path with no `..` component. It is appended to `targetMount`, so `/../../etc` would mount the partition over the host's `/etc` and a relative `etc` would land beside the target. | `custom_mount_target_invalid` |
 | `customMounts` | one entry targets `/` | `custom_mounts_no_root` |
+| `customMounts` | one entry targets `/boot/efi` (the EFI system partition). bootc writes the boot loader there, and the install reads that entry to find the EFI boot entry. | `custom_mounts_no_esp` |
+| `customMounts` | for GRUB (`bootloader` `""` or `grub2`) with a root of fstype `xfs`: one entry targets `/boot`, and its fstype is not `xfs`. GRUB cannot read modern XFS features; the auto layout always makes an ext4 `/boot` for the same reason. A root kept as it is (`unformatted`) is not judged. | `custom_mounts_no_boot` |
 | `targetMount` | empty is valid (`/mnt/fisherman-target`). Otherwise an absolute path with no `..` component that is not `/`: the root filesystem is mounted there and every post-install write goes under it. | `target_mount_invalid` |
 | `flatpakVarPath` | empty is valid (auto-detect). Otherwise no `..` component: it is joined under the installed root for the flatpak copy. | `flatpak_var_path_invalid` |
 | `varDisk.disk` | required, exists, differs from `disk` (also when the two paths are different names for one device) | `var_disk_required`, `var_disk_not_found`, `var_disk_same_as_disk` |
@@ -332,6 +334,8 @@ This section maps error codes to their causes and corrective actions. Each code 
 | `custom_mount_partition_required` | `customMounts[i].partition` | Partition path is missing in custom mount | Specify a partition path |
 | `custom_mount_partition_not_found` | `customMounts[i].partition` | The partition path does not exist | Check the partition path |
 | `custom_mounts_no_root` | `customMounts` | No custom mount targets `/` (root filesystem) | Add an entry with `"target": "/"` |
+| `custom_mounts_no_esp` | `customMounts` | No custom mount targets `/boot/efi` | Add the EFI system partition: `{"partition": "/dev/sdX1", "target": "/boot/efi", "fstype": "unformatted"}` keeps an existing ESP; `fat32` formats it |
+| `custom_mounts_no_boot` | `customMounts` | The boot loader is GRUB, the root is XFS, and there is no `/boot` entry, or `/boot` is XFS too | Add an ext4 `/boot` partition, choose another root filesystem, or use `"bootloader": "systemd"` |
 | `custom_mount_target_invalid` | `customMounts[i].target` | The target is relative or has a `..` component, so it would resolve outside the install target | Use `swap` or an absolute mountpoint such as `/boot/efi` or `/home` |
 | `target_mount_invalid` | `targetMount` | The target mount is `/`, relative, or has a `..` component | Leave it empty, or use an absolute path such as `/mnt/altroot` |
 | `flatpak_var_path_invalid` | `flatpakVarPath` | The path has a `..` component, so it would leave the installed root | Leave it empty, or use a path inside the root such as `state/os/default/var` |
@@ -409,6 +413,17 @@ does: it needs no root.
 | Code | Field | Cause | Fix |
 |---|---|---|---|
 | `not_root` | (none) | The install did not run as root | Run fisherman through `pkexec` or `sudo` |
+| `host_tool_missing` | (none) | A program the install of this recipe runs is not on the host. The message names it and its package | Install the package on the host |
+
+The host-tool list comes from the recipe. The auto layout needs `sfdisk`,
+`mkfs.fat`, `mkfs.ext4`, the `mkfs` of `filesystem` (or `zpool` and `zfs`),
+`cryptsetup` for an encrypted root and `systemd-cryptenroll` for a `tpm2-*`
+type. A manual layout needs no `sfdisk`: it needs the `mkfs` of each
+`customMounts[].fstype` it formats (`mkfs.fat`, `mkfs.ext3`, `mkfs.ext4`,
+`mkfs.xfs`, `mkfs.btrfs`), and `mkswap`, `swapon` and `swapoff` for a swap
+entry. A `varDisk` that is not kept needs `mkfs.xfs`. Every install needs
+`skopeo` and `podman`. fisherman looks for them where they run: on the host,
+through `flatpak-spawn --host` inside a Flatpak sandbox.
 
 ### Interpreting Errors in JSON
 

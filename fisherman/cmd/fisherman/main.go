@@ -16,6 +16,7 @@ import (
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
+	"github.com/tuna-os/fisherman/internal/runner"
 	"github.com/tuna-os/fisherman/internal/slurp"
 	"github.com/tuna-os/fisherman/internal/validation"
 )
@@ -134,10 +135,12 @@ func fatalLoad(err error) {
 	fatal("loading recipe: %v", err)
 }
 
-// teardown releases everything the install registered: the mounts, the LUKS
-// mapping and the scratch directories on cleanup. Every exit path runs it.
+// teardown releases everything the install registered: the swap a manual
+// layout activated, then the mounts, the LUKS mapping and the scratch
+// directories on cleanup. Every exit path runs it.
 func teardown() error {
-	return cleanup.Run()
+	swapErr := swaps.Off()
+	return errors.Join(swapErr, cleanup.Run())
 }
 
 // geteuid is os.Geteuid by default; replaced in tests.
@@ -208,38 +211,17 @@ func expandPath() {
 	os.Setenv("PATH", prefix)
 }
 
-// checkRequiredTools verifies that every host binary needed by this recipe
-// is reachable on PATH before we touch any disks, and returns a clear error
-// naming the missing tool and the package that provides it.
+// checkRequiredTools verifies that every host program this recipe's install
+// runs (validation.RequiredTools) is on the host before any disk is touched.
+// It returns the first missing one, which names the tool and its package.
 func checkRequiredTools(r *recipe.Recipe) error {
-	type requirement struct {
-		tool string
-		pkg  string
-		when bool
+	look := validation.HostLookPath
+	if !runner.InFlatpak() {
+		// Natively the host's PATH is this process's (after expandPath).
+		look = func(tool string) error { _, err := lookPath(tool); return err }
 	}
-	reqs := []requirement{
-		{"sfdisk", "util-linux", true},
-		{"mkfs.fat", "dosfstools", true},
-		{"mkfs.ext4", "e2fsprogs", true},
-		{"mkfs.xfs", "xfsprogs", r.Filesystem == "xfs"},
-		{"mkfs.btrfs", "btrfs-progs", r.Filesystem == "btrfs"},
-		{"zpool", "zfsutils-linux", r.Filesystem == "zfs"},
-		{"zfs", "zfsutils-linux", r.Filesystem == "zfs"},
-		{"cryptsetup", "cryptsetup", r.Encryption.Type != "" && r.Encryption.Type != "none"},
-		// systemd-cryptenroll is required for TPM2 auto-unlock enrolment.
-		// Check before touching any disks — a missing tool at step 9 (after
-		// partitioning and OS install) would leave the disk partially modified.
-		{"systemd-cryptenroll", "systemd", r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"},
-		{"skopeo", "skopeo", true},
-		{"podman", "podman", true},
-	}
-	for _, req := range reqs {
-		if !req.when {
-			continue
-		}
-		if _, err := lookPath(req.tool); err != nil {
-			return fmt.Errorf("%q not found in PATH — install the %q package on the host", req.tool, req.pkg)
-		}
+	if missing := validation.MissingTools(r, look); len(missing) > 0 {
+		return missing[0]
 	}
 	return nil
 }
@@ -417,10 +399,8 @@ func main() {
 
 	// Pre-flight: verify that every host tool required for this recipe is
 	// present before we touch any disks.
-	toolChain := validation.NewChain().
-		Add(validation.NewRecipeDependentToolValidator(r))
-	if err := toolChain.Run(); err != nil {
-		fatal("missing required host tool: %v", errors.Unwrap(err))
+	if err := checkRequiredTools(r); err != nil {
+		fatalProblem("missing required host tool", recipe.Problem{Code: recipe.CodeHostToolMissing, Message: err.Error()})
 	}
 
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
@@ -557,14 +537,15 @@ func main() {
 			})
 		}
 
-		var mountedPaths []string
+		// Each mount and the swap are registered for teardown the moment
+		// they are acquired, not when ApplyCustomLayout returns: it can fail
+		// on the second or third partition, or be cancelled half-way, with
+		// the root already mounted (#362).
 		var applyErr error
-		activeTargetMount, activeEfiPart, mountedPaths, applyErr = disk.ApplyCustomLayout(specs, targetMount)
+		activeTargetMount, activeEfiPart, _, applyErr = disk.ApplyCustomLayoutWith(specs, targetMount,
+			disk.LayoutHooks{Mounted: cleanup.AddMount, SwapOn: swaps.Add})
 		if applyErr != nil {
 			fatal("manual disk layout: %v", applyErr)
-		}
-		for _, p := range mountedPaths {
-			cleanup.AddMount(p)
 		}
 	} else {
 		// ── Step 1: Partition disk ────────────────────────────────────────────
