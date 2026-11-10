@@ -32,6 +32,14 @@ func TestCheckHalted_RefusesPipelineAllowsTeardown(t *testing.T) {
 		{"bootc", "install"},
 		{"cryptsetup", "luksFormat", "/dev/sda3"},
 		{"cryptsetup", "open", "/dev/sda3", "root"},
+		// A freeze must never start during teardown (#368).
+		{"fsfreeze", "-f", "/mnt"},
+		{"fsfreeze", "--freeze", "/mnt"},
+		{"fsfreeze", "-u", "-f", "/mnt"},
+		{"fsfreeze", "/mnt"},
+		{"fsfreeze"},
+		{"fsfreeze", "-uf", "/mnt"},
+		{"swapon", "/dev/sda4"},
 	}
 	for _, c := range refused {
 		if err := checkHalted(c[0], c[1:]); !errors.Is(err, ErrHalted) {
@@ -46,6 +54,11 @@ func TestCheckHalted_RefusesPipelineAllowsTeardown(t *testing.T) {
 		{"udevadm", "settle"},
 		{"cryptsetup", "luksClose", "x"},
 		{"cryptsetup", "close", "x"},
+		// The thaw of a filesystem frozen in the finalize step (#368), and
+		// the swapoff of swap a manual layout activated (#415).
+		{"fsfreeze", "-u", "/mnt"},
+		{"fsfreeze", "--unfreeze", "/mnt"},
+		{"swapoff", "/dev/sda4"},
 	}
 	for _, c := range allowed {
 		if err := checkHalted(c[0], c[1:]); err != nil {
@@ -169,4 +182,30 @@ func waitGone(t *testing.T, e procEntry) {
 	}
 	_ = syscall.Kill(e.pid, syscall.SIGKILL)
 	t.Fatalf("process %d still alive", e.pid)
+}
+
+// The thaw allowlist must hold for an argv that is already wrapped for the
+// host (WrappedCommand checks the unwrapped form), with or without --env.
+func TestCheckHalted_ThawOnlyThroughHostWrapping(t *testing.T) {
+	t.Cleanup(resetHaltForTest)
+	Halt()
+	allowed := [][]string{
+		{"flatpak-spawn", "--host", "fsfreeze", "-u", "/mnt"},
+		{"flatpak-spawn", "--host", "--env=LANG=C", "fsfreeze", "--unfreeze", "/mnt"},
+	}
+	for _, c := range allowed {
+		if err := checkHalted(unwrapHostArgs(c[0], c[1:])); err != nil {
+			t.Errorf("%v after Halt: thaw refused: %v", c, err)
+		}
+	}
+	refused := [][]string{
+		{"flatpak-spawn", "--host", "fsfreeze", "-f", "/mnt"},
+		{"flatpak-spawn", "--host", "--env=LANG=C", "fsfreeze", "--freeze", "/mnt"},
+		{"flatpak-spawn", "--host", "fsfreeze", "-u", "--freeze", "/mnt"},
+	}
+	for _, c := range refused {
+		if err := checkHalted(unwrapHostArgs(c[0], c[1:])); !errors.Is(err, ErrHalted) {
+			t.Errorf("%v after Halt: got %v, want ErrHalted", c, err)
+		}
+	}
 }

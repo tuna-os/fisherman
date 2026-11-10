@@ -135,12 +135,16 @@ func fatalLoad(err error) {
 	fatal("loading recipe: %v", err)
 }
 
-// teardown releases everything the install registered: the swap a manual
-// layout activated, then the mounts, the LUKS mapping and the scratch
-// directories on cleanup. Every exit path runs it.
+// teardown releases everything the install registered: a filesystem the
+// finalize step froze, the swap a manual layout activated, then the mounts,
+// the LUKS mapping and the scratch directories on cleanup. Every exit path
+// runs it.
 func teardown() error {
+	// The thaw comes first: a frozen filesystem cannot be unmounted cleanly,
+	// and its LUKS mapping cannot be closed.
+	thawErr := freezes.ThawAll()
 	swapErr := swaps.Off()
-	return errors.Join(swapErr, cleanup.Run())
+	return errors.Join(thawErr, swapErr, cleanup.Run())
 }
 
 // geteuid is os.Geteuid by default; replaced in tests.
@@ -1071,7 +1075,7 @@ func main() {
 	// ZFS handles this internally; fstrim/remount-ro/fsfreeze do not apply.
 	progress.Step(step, totalSteps, "Finalizing installation", profile[pi].cumulativePct, profile[pi].weightPct)
 	if r.Filesystem != "zfs" {
-		if err := disk.FinalizeFilesystem(activeTargetMount); err != nil {
+		if err := disk.FinalizeFilesystemWith(activeTargetMount, freezes.Hooks()); err != nil {
 			fatal("finalizing target filesystem: %v", err)
 		}
 	}

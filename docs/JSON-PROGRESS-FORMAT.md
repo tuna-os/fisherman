@@ -425,8 +425,10 @@ behaves the same way when sudo or its shell dies.
 On a cancel, fisherman:
 
 1. stops its children with SIGTERM, then SIGKILL after 10 seconds;
-2. turns off the swap a manual layout activated, unmounts the target and
-   closes the LUKS mapping, for at most 3 minutes;
+2. thaws the target if the finalize step froze it (`fsfreeze -u`; a frozen
+   filesystem cannot be unmounted cleanly), turns off the swap a manual
+   layout activated, unmounts the target and closes the LUKS mapping, for at
+   most 3 minutes;
 3. writes one `error` event, `installation cancelled (<SIGNAL>)`, with
    `; cleanup failed, the target may still be mounted or unlocked: …` appended
    if teardown did not finish;
