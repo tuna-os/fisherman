@@ -1030,33 +1030,27 @@ func main() {
 		progress.Info(fmt.Sprintf("Warning: could not configure audio devices: %v", err))
 	}
 
-	// Inject slurped Windows data into the installed system. Non-fatal.
-	if dataResult != nil && dataResult.Found {
-		composefs := post.IsComposeFsNativeExported(activeTargetMount)
-		if err := slurp.InjectData(activeTargetMount, dataResult, composefs); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not inject user data: %v", err))
-		}
-	}
-	if wallpaperResult != nil && wallpaperResult.Found {
-		composefs := post.IsComposeFsNativeExported(activeTargetMount)
-		if err := slurp.InjectWallpapers(activeTargetMount, wallpaperResult, composefs); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not inject wallpapers: %v", err))
+	// Inject slurped Windows data into the installed system's /var (the one
+	// the booted system mounts, from the deployment resolver). Non-fatal.
+	if (dataResult != nil && dataResult.Found) || (wallpaperResult != nil && wallpaperResult.Found) {
+		if d, err := post.ResolveDeployment(activeTargetMount); err != nil {
+			progress.Info(fmt.Sprintf("Warning: could not inject migrated data: %v", err))
+		} else {
+			if dataResult != nil && dataResult.Found {
+				if err := slurp.InjectData(d.Var, dataResult); err != nil {
+					progress.Info(fmt.Sprintf("Warning: could not inject user data: %v", err))
+				}
+			}
+			if wallpaperResult != nil && wallpaperResult.Found {
+				if err := slurp.InjectWallpapers(d.Var, wallpaperResult); err != nil {
+					progress.Info(fmt.Sprintf("Warning: could not inject wallpapers: %v", err))
+				}
+			}
 		}
 	}
 	// Cleanup scratch space (both data and wallpaper slurps use /run/fisherman-slurp)
 	if dataResult != nil || wallpaperResult != nil {
 		slurp.CleanupScratch()
-	}
-
-	// Pre-generate thumbnails for ALL wallpapers (system + user-injected) so
-	// the GNOME wallpaper capplet opens instantly on first boot. Non-fatal.
-	{
-		composefs := post.IsComposeFsNativeExported(activeTargetMount)
-		progress.Substep("Pre-generating wallpaper thumbnails")
-		n := slurp.GenerateSystemThumbnails(activeTargetMount, composefs)
-		if n > 0 {
-			progress.Info(fmt.Sprintf("Pre-generated %d wallpaper thumbnail(s)", n))
-		}
 	}
 
 	// Detect OEM hardware (ASUS, Framework) and queue vendor-specific packages
@@ -1070,10 +1064,10 @@ func main() {
 	// Non-fatal: services are skipped if their unit files are absent from the image.
 	post.EnablePrintServices(activeTargetMount)
 
-	// Warm all system caches (fonts, icons, schemas, pixbuf, ldconfig, man-db,
-	// flatpak appstream) so first boot is instant. Non-fatal.
-	progress.Substep("Pre-warming system caches for first boot")
-	post.WarmCaches(activeTargetMount)
+	// No cache warming and no thumbnail generation here: the image's /usr is
+	// read-only (and, on ostree, hard-linked into the repository), its caches
+	// are built with the image, and the host's tools would write the host's
+	// answers (#407).
 
 	// Target-resident scratch (live media) goes now, while the target is
 	// still mounted read-write: finalize makes it read-only, and after the

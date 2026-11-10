@@ -86,7 +86,6 @@ Messages you will see include:
 - `Exporting image to OCI layout for composefs install`, `OCI export complete`
 - `Deploying image`, `Initializing ostree layout`, `Installing bootloader`, `bootc installation complete` (classified from bootc's own output by `ClassifyLine` in `internal/install/bootc.go`)
 - `Copying Flatpak data: 45%`
-- `Pre-generating wallpaper thumbnails`, `Pre-warming system caches for first boot`
 
 `Pulling image: layer N/M` is the one that matters for the bar: the pull is
 most of a cold install.
@@ -250,7 +249,7 @@ The steps depend on the recipe. They run in this order:
 | `Installing OS` | `install_os` | Always. Image pull, `bootc install to-filesystem`, bootloader. |
 | `Enrolling TPM2 auto-unlock` | `tpm2_enroll` | `tpm2-luks` or `tpm2-luks-passphrase`. Stages TPM2 enrolment for first boot. |
 | `Copying system Flatpaks` | `flatpaks` | Always. |
-| `Configuring installed system` | `configure` | Always. Hostname, user, kernel arguments, network and Bluetooth copy, caches. |
+| `Configuring installed system` | `configure` | Always. Hostname, user, kernel arguments, network and Bluetooth copy (live media, or on request). |
 | `Finalizing installation` | `finalize` | Always. fstrim, remount read-only, fsfreeze/thaw (skipped on ZFS). |
 
 Step numbers are assigned in order to the steps that run, so `step` has no

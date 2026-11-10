@@ -128,6 +128,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Bug Fixes
 
+- **One deployment resolver** (`internal/deploy`) says where the booted
+  system's root, `/etc` and `/var` are on the mounted target, for ostree and
+  composefs. Bluetooth pairings and migrated wallpapers went to
+  `<target>/var`, and audio configuration to `<target>/etc`, on ostree: the
+  physical sysroot, which is never mounted there (#407).
+- **No cache warming, no thumbnails** (#407). The warmers looked for
+  `<target>/usr`, which exists on neither layout, did nothing, and logged
+  "Pre-warmed 8/8 system caches". Pointed at the real deployment they would
+  write the host's caches into a tree that is hard-linked into the ostree
+  repository. They are removed; an image carries its own caches.
+- **Target-resident scratch is deleted while the target is mounted** (#307):
+  before finalize on success, first thing in teardown otherwise. It was
+  deleted after the unmount, which removed an empty mountpoint on the host
+  and left the image cache on the installed disk. A scratch bind mount that
+  fails leaves no directory behind (#291).
+
 - **Bound offline media accepts full uncompressed images**: the aggregate unique
   blob budget now matches the existing 16 GiB per-blob ceiling instead of rejecting
   valid raw layers above 10 GiB. Layer bytes are still streamed and hashed once per

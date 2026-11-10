@@ -158,7 +158,8 @@ Things a recipe author should know today:
 - `flatpaks` does not filter: the host's whole `/var/lib/flatpak` is copied (#408).
 - `varDisk` is not encrypted, even when the root is (#406).
 - There is no field for locale, keyboard layout or time zone (#405).
-- Wi-Fi profiles and Bluetooth pairings are copied from the host to the target on every install (#411).
+- The host's Wi-Fi profiles and Bluetooth pairings are copied to the target only when the host booted from live media. `"copyNetworkProfiles"` and `"copyBluetoothPairings"` (`true` or `false`) override that for each kind. On an installed host the default is not to copy: the keys are the operator's.
+- fisherman builds no caches in the target. The image must carry its font, icon, schema and linker caches.
 
 **Encryption types:** `none`, `luks-passphrase`, `tpm2-luks`, `tpm2-luks-passphrase`
 

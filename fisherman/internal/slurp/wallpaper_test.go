@@ -138,7 +138,7 @@ func TestCopyFile_AvoidOverwrite(t *testing.T) {
 }
 
 func TestInjectWallpapers_NilResult(t *testing.T) {
-	err := InjectWallpapers("/tmp/fake-target", nil, false)
+	err := InjectWallpapers("/tmp/fake-target", nil)
 	if err != nil {
 		t.Errorf("expected nil error for nil result, got: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestInjectWallpapers_NilResult(t *testing.T) {
 
 func TestInjectWallpapers_NotFound(t *testing.T) {
 	result := &WallpaperResult{Found: false}
-	err := InjectWallpapers("/tmp/fake-target", result, false)
+	err := InjectWallpapers("/tmp/fake-target", result)
 	if err != nil {
 		t.Errorf("expected nil error for not-found result, got: %v", err)
 	}
