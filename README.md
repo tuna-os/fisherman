@@ -8,38 +8,66 @@
 > [tuna-os/fisherman#59](https://github.com/tuna-os/fisherman/pull/59)); pick
 > whichever home matches your distro's tooling.
 
-A universal bootc installer backend, designed to be driven by a frontend. The GNOME, KDE, COSMIC, Niri and XFCE frontends live in [tuna-os/bootc-installer](https://github.com/tuna-os/bootc-installer), which pins this repository as a submodule.
+fisherman is the part of a [bootc](https://bootc-dev.github.io/bootc/) installer that changes the disk.
+It reads one JSON recipe, then partitions and encrypts the disk, installs the
+image with `bootc install to-filesystem`, and prepares the first boot. It
+reports progress as JSON lines, so a program can drive it.
 
-fisherman handles disk partitioning, formatting, LUKS encryption, and `bootc install to-filesystem` image installation. It works with any bootc-compatible image regardless of distro.
+It has no wizard of its own. The GNOME, KDE, COSMIC, Niri and XFCE wizards live
+in [tuna-os/bootc-installer](https://github.com/tuna-os/bootc-installer), which
+pins this repository as a submodule. [wootc](https://github.com/tuna-os/wootc)
+uses it to install from Windows.
 
-<!-- hive-contribute-plea: donated-compute appeal, keep in sync across repos -->
-## Contribute compute — no code needed
+## Why you need it
 
-**[Donate time with your AI CLI](https://hub.tunaos.org/#contribute).**
+`bootc install to-filesystem` writes an image to a root filesystem that
+already exists and is already mounted. Everything around that call is left to
+the caller, and that is where installers go wrong:
 
-Your machine runs one task at a time using your signed-in AI coding CLI.
-The relay alternates between eligible **School** (OS) and **Reef** (apps)
-hives after each task. If one hive has no work, the other can continue.
+- choosing a partition layout that the image's bootloader can boot;
+- LUKS2, TPM2 enrolment and a recovery key;
+- the kernel arguments that unlock the disk at boot;
+- a user account, a hostname and the system Flatpaks;
+- installing with no network, from an image on the install media;
+- telling a user why a recipe is wrong before a disk is erased;
+- unmounting, closing and cleaning up when a step fails or the user cancels.
 
-The guide covers prerequisites, verified `just` setup, credentials, provider
-costs, and how to stop with Ctrl+C. Your subscription quota or API charges apply.
-Never post account credentials or API keys in issues or pull requests.
+fisherman does that work once, behind one recipe format, and tests it by
+installing real images in VMs every night. A frontend only has to collect
+choices and draw a progress bar.
+
+| You are | Use fisherman to |
+|---|---|
+| Writing an installer UI | Skip the disk work. Ask `fisherman probe --json` what the machine has, check fields with `fisherman validate --json --partial`, pipe a recipe to `fisherman -`, and read progress. |
+| Building a bootc image | Get an install path for your image without a distro-specific installer. Any image that `bootc install to-filesystem` accepts works; the nightly matrix covers CentOS, Ubuntu, Debian, Arch and openSUSE bases, among others. |
+| Automating installs | Run unattended from a recipe file, with machine-readable validation errors and progress. |
+
+> [!WARNING]
+> **An install erases the disk named in the recipe.** There is no confirmation
+> prompt: fisherman is built to be driven by a frontend that has already asked.
+> Before you run it by hand, check `disk` twice, back up anything you need, and
+> run `fisherman validate` first. It needs root, a UEFI machine, and `podman`,
+> `cryptsetup`, `sfdisk` and the `mkfs` tools on the host; a bootc live ISO has
+> them.
 
 ## Architecture
 
-fisherman is a Go CLI that reads a JSON recipe and executes a 9-step install pipeline:
+fisherman is a Go CLI that reads a JSON recipe and runs an install pipeline. The stages below always run in this order. The number of progress steps a run reports depends on the recipe (encryption, a second disk and TPM enrolment each add one), so read `cumulative_pct` from the progress stream rather than counting steps ([`docs/JSON-PROGRESS-FORMAT.md`](docs/JSON-PROGRESS-FORMAT.md)).
 
-| Step | Action |
-|------|--------|
-| 1 | Partition disk — layout depends on bootloader (see below) |
-| 2 | Format EFI (`mkfs.fat -F32`) and `/boot` (`mkfs.ext4`) |
-| 3 | Set up LUKS (optional: `cryptsetup luksFormat` + open) |
-| 4 | Format root filesystem (`mkfs.xfs` or `mkfs.btrfs`) |
-| 5 | Mount everything at `/mnt/fisherman-target` |
-| 6 | `bootc install to-filesystem` via `podman run --privileged` |
-| 7 | Copy system Flatpaks from host to target |
-| 8 | Write `/etc/hostname` into the deployment |
-| 9 | Inject `rd.luks.uuid` + Plymouth args into BLS boot entries, then finalize (fstrim → remount ro → fsfreeze) |
+| Stage | What it does | When |
+|---|---|---|
+| Prepare disk | unmount and release whatever holds the target disk | always |
+| Partition | write the GPT; the layout depends on the bootloader (see below) | always |
+| Format EFI | `mkfs.fat -F32`, and `mkfs.ext4` for `/boot` on GRUB layouts | always |
+| Encrypt | `cryptsetup luksFormat` and open | encrypted recipes |
+| Format root | `mkfs.xfs`, `mkfs.btrfs`, `mkfs.ext4` or a ZFS pool | always |
+| Mount | mount everything at `/mnt/fisherman-target` | always |
+| Format data disk | a second disk for `/var` | recipes that name one |
+| Install OS | `bootc install to-filesystem --skip-finalize` through `podman run --privileged` | always |
+| Enrol TPM2 | bind the LUKS volume to the TPM and emit the recovery key | TPM recipes |
+| Copy Flatpaks | copy system Flatpaks from the host to the target | always |
+| Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi and Bluetooth copied from the host, audio names, OEM extras, print services, caches | always |
+| Finalize | fstrim → remount read-only → fsfreeze, then thaw | always (skipped on ZFS) |
 
 The separate ext4 `/boot` partition is required for GRUB because GRUB cannot read modern XFS features (`nrext64`, `exchange`, `rmapbt`). For composefs/systemd-boot images the EFI partition holds the kernel and initrd directly.
 
@@ -49,15 +77,24 @@ The separate ext4 `/boot` partition is required for GRUB because GRUB cannot rea
 |---|---|---|---|---|
 | `grub2` (bluefin) | 3-partition GPT | **2 GiB** FAT32 | **2 GiB** ext4 | GRUB reads kernel from ext4 /boot |
 | `systemd` (dakota) | 2-partition GPT | **2 GiB** FAT32 | — | systemd-boot reads kernel directly from FAT32 ESP |
+| `filesystem: zfs` | 2-partition GPT | **1 GiB** FAT32 | — | ESP plus a ZFS pool; not covered by the VM matrix (#413) |
 
-All fleet images use a **2 GiB ESP** for consistency. Each kernel+initrd pair is 200–400 MiB; 2 GiB accommodates the booted entry, rollback, and a staged upgrade without running out of space.
+GRUB and systemd-boot layouts use a **2 GiB ESP** for consistency. Each kernel+initrd pair is 200–400 MiB; 2 GiB accommodates the booted entry, rollback, and a staged upgrade without running out of space.
 
-When running inside a Flatpak sandbox, fisherman automatically wraps host subprocess calls via `flatpak-spawn --host`.
+When running inside a Flatpak sandbox, fisherman wraps most host subprocess calls via `flatpak-spawn --host`. The frontends do not rely on this: they start fisherman itself on the host, and an install from live media refuses to run inside a sandbox.
 
 ## Usage
 
+Validate first. This changes nothing and needs no root:
+
 ```bash
-sudo fisherman <recipe.json>
+fisherman validate recipe.json
+```
+
+Then install. **This erases `disk`.**
+
+```bash
+sudo fisherman recipe.json
 # or, with the recipe on stdin (no temporary file):
 generate-recipe | sudo fisherman -
 ```
@@ -105,6 +142,21 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 }
 ```
 
+The example shows the common fields. A recipe can also carry `user`,
+`bootloader`, `targetImgref`, `btrfsSubvolumes`, `varDisk`, `customMounts`
+and more; the struct in
+[`fisherman/internal/recipe/recipe.go`](fisherman/internal/recipe/recipe.go)
+is the reference until #320 lands.
+
+Things a recipe author should know today:
+
+- Unknown keys are ignored, so a misspelt field is dropped without an error (#404).
+- `unifiedStorage` is accepted and does nothing (#366).
+- `flatpaks` does not filter: the host's whole `/var/lib/flatpak` is copied (#408).
+- `varDisk` is not encrypted, even when the root is (#406).
+- There is no field for locale, keyboard layout or time zone (#405).
+- Wi-Fi profiles and Bluetooth pairings are copied from the host to the target on every install (#411).
+
 **Encryption types:** `none`, `luks-passphrase`, `tpm2-luks`, `tpm2-luks-passphrase`
 
 For `luks-passphrase` and `tpm2-luks-passphrase`, add `"passphrase": "hunter2"` inside the `encryption` object.
@@ -140,13 +192,6 @@ Without the marker, Fisherman uses legacy `CheckImage` for unrelated explicit
 requests, whether they name a network image or a standalone OCI layout.
 This also applies when an optional receipt contains malformed data.
 
-This change reuses the exact `PreflightBoundOCIMediaInput` API from
-[`76c4c477` (PR #347)](https://github.com/tuna-os/fisherman/pull/347)
-for strict OCI validation.
-PRs #346 and #347 remain drafts.
-This reuse does not finish the stacked integration in #347 or the feature
-for Flatpak intent in #346.
-
 **Offline image stores** (`additionalImageStores`): leave the field out and
 fisherman finds the offline containers-storage roots on the host itself,
 with the discovery `fisherman probe` reports as `offline.stores`
@@ -157,12 +202,20 @@ before.
 
 ## Image catalog
 
-`data/images.json` is a recursive JSON tree of distro groups and leaf images consumed by tuna-installer's image picker. It can be overridden at runtime:
+`data/images.json` is a recursive JSON tree of distro groups and leaf images.
+`fisherman images` lists and searches it, and the frontends use it for their
+image picker. fisherman looks for the catalog in this order:
 
 | Path | Purpose |
 |------|---------|
-| `/etc/tuna-installer/images.json` | System-wide override |
-| `$XDG_CONFIG_HOME/tuna-installer/images.json` | Per-user override |
+| `$FISHERMAN_IMAGES_PATH` | explicit override |
+| `data/images.json` next to the binary | development builds |
+| `/usr/share/fisherman/data/images.json` | installed |
+| `/app/share/fisherman/data/images.json` | Flatpak |
+
+A frontend can ship its own catalog; bootc-installer reads
+`/etc/bootc-installer/images.json` (see its
+[customising guide](https://github.com/tuna-os/bootc-installer/blob/dev/docs/guide/customising.md)).
 
 ## Building
 
@@ -197,6 +250,19 @@ The nightly CI (`bootcrew-nightly.yml`) runs a full install + QEMU boot test for
 `nightly_advisory: true` runs an image without letting its failure fail the workflow; it is reserved for images whose upstream is shown to be broken, with the evidence in the matrix comment.
 
 Fast CI (PR gate) runs a subset. Add new images to `tests/bootcrew-matrix.yaml` to include them in both workflows automatically.
+
+<!-- hive-contribute-plea: donated-compute appeal, keep in sync across repos -->
+## Contribute compute — no code needed
+
+**[Donate time with your AI CLI](https://hub.tunaos.org/#contribute).**
+
+Your machine runs one task at a time using your signed-in AI coding CLI.
+The relay alternates between eligible **School** (OS) and **Reef** (apps)
+hives after each task. If one hive has no work, the other can continue.
+
+The guide covers prerequisites, verified `just` setup, credentials, provider
+costs, and how to stop with Ctrl+C. Your subscription quota or API charges apply.
+Never post account credentials or API keys in issues or pull requests.
 
 ## License
 
