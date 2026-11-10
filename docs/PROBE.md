@@ -3,8 +3,9 @@
 `fisherman probe --json` prints, as **one JSON object on stdout**, the facts an
 installer frontend needs before it shows its first page: which disks may be
 installed to, whether a TPM 2.0 is usable, whether the machine meets the
-minimum requirements, whether it booted from live media, and which offline
-image stores that media carries.
+minimum requirements, whether it booted from live media, which offline
+image stores that media carries, what the host's bootc can do, and which GPUs
+and machine model the installer runs on.
 
 - Exit `0`: stdout holds exactly one JSON object.
 - Exit `1`: the probe failed (lsblk failed, `/proc/meminfo` unreadable). The
@@ -59,8 +60,28 @@ mounts, which the boot-disk rule needs.
   offline
     stores[]        string   host paths of offline containers-storage roots that exist; [] when none
     images[]        string   image names found across those stores, de-duplicated; [] when none
+  bootc                      one bootc build; see "bootc"
+    context         string   which bootc this is: "live-host"
+    found           bool     a bootc command exists in that context
+    version         string   the version bootc reports, e.g. "1.17.1"; "" when it cannot be read
+    version_reason  string   present only when version is "": "bootc_missing", "bootc_failed" or "malformed_output"
+    capabilities             object: capability name -> answer; every known name is always present
+      <name>
+        status      string   "supported", "unsupported" or "unknown"
+        reason      string   a stable reason code; see "bootc"
+  gpus[]                     PCI display controllers of this machine, in PCI address order; [] when none
+    vendor_id       string   PCI vendor id, lower-case hex: "0x10de"
+    device_id       string   PCI device id: "0x2684"
+    class           string   24-bit PCI class code: "0x030000" VGA, "0x030200" 3D, "0x038000" other display
+  dmi                        the firmware's name for the machine model; see "Hardware facts"
+    vendor          string   DMI sys_vendor, whitespace collapsed; "" when unknown
+    product         string   DMI product_name; "" when unknown
 }
 ```
+
+`bootc`, `gpus` and `dmi` were added after `protocol_version` 1 shipped. They
+are additions, so the version did not change; a fisherman that predates them
+simply omits the keys.
 
 Arrays are always arrays, never `null`.
 
@@ -167,6 +188,83 @@ All of these are **host** paths. Inside a Flatpak, `/etc` and `/usr` are the
 runtime's, so the host's are read under `/run/host/etc` and `/run/host/usr`
 (as bootc-installer's `recipe.py` does), and any other host path the sandbox
 cannot see is asked of the host (`flatpak-spawn --host test -d` / `cat`).
+
+### bootc
+
+`bootc` reports the bootc of **one context**, named in `context`. The only
+context today is `live-host`: the bootc command of the machine that runs the
+installer. That is not the bootc that performs the install. fisherman runs
+the selected image's own bootc, which can be older or newer, so:
+
+- do not read a `live-host` answer as a fact about the image the user picked;
+- do not compare `version` with a number to decide what to offer. `version`
+  is for display and for bug reports. Branch on `capabilities` only;
+- treat `unknown` as "do not offer it", never as "probably fine";
+- ignore capability names and reason codes you do not know, and treat an
+  unknown `status` as `unknown`.
+
+Other contexts (the selected source image, the installed target) will be
+added as further values of `context`, or as further objects; they are not
+probed yet (tuna-os/fisherman#383).
+
+| Capability | What it is | How `live-host` answers |
+|---|---|---|
+| `container_inspect` | `bootc container inspect`, bootc's own image inspection | `bootc container inspect --help` |
+| `install_print_configuration` | `bootc install print-configuration`, the merged install defaults | `bootc install print-configuration --help` |
+| `install_finalize` | `bootc install finalize` | `bootc install finalize --help` |
+| `deployment_mount` | bootc mounts the new deployment itself after the install (the "deployment mounting" of #383) | not established |
+| `unified_storage` | one image store shared by bootc and podman | not established |
+| `bootc_image_storage` | bootc's own image store on the target | not established |
+
+| `status` | `reason` | Meaning |
+|---|---|---|
+| `supported` | `command_present` | the subcommand's `--help` exited 0. The command exists; this does not say that an install profile that uses it is qualified |
+| `unsupported` | `command_absent` | bootc ran and rejected the subcommand (exit status 2) |
+| `unsupported` | `bootc_missing` | no bootc command in this context. `found` is false |
+| `unknown` | `bootc_failed` | bootc exists but `bootc --version` failed |
+| `unknown` | `check_failed` | the check for this one capability failed for an unrelated reason |
+| `unknown` | `not_established` | nothing the probe may run in this context answers it; it depends on the selected image |
+
+A reason code is never renamed or reused. New codes and new capability names
+can be added.
+
+The probe runs `bootc --version` and the three `--help` calls above, and only
+those: no image is pulled or inspected, no store is opened, nothing is
+mounted. Only a string of the form `bootc <version>` is copied into
+`version`; any other output gives `""` with `version_reason:
+"malformed_output"`. bootc's own output and error text never reach the JSON.
+A host without bootc is an ordinary answer, not a probe failure.
+
+Fixtures: `fisherman/internal/probe/testdata/golden/bootc-*.json` pin the
+object for a current bootc, an older one, a missing command, malformed
+version output, a bootc that fails, and a single failed check.
+
+### Hardware facts
+
+`gpus` and `dmi` are **facts only**. The probe does not decide which image
+fits them, and nothing in fisherman changes an image, a kernel argument or a
+driver because of them. Rules that map hardware to images are separate,
+versioned data (tuna-os/fisherman#373) and must match PCI ids, not brand
+names: for example, "NVIDIA" alone does not say whether the open kernel
+modules support the card.
+
+They describe **the machine that runs the installer**. The disk can be moved
+to another machine after the install, so present anything derived from them
+as advice that the user can override.
+
+`gpus` comes from `/sys/bus/pci/devices/*/{class,vendor,device}`: every
+device whose PCI base class is `0x03` (display controller). A device with a
+missing or malformed attribute is left out. A machine without a PCI bus has
+`[]`.
+
+`dmi` comes from `/sys/class/dmi/id/sys_vendor` and `product_name`. Both are
+the same for every unit of a model. Control characters are removed,
+whitespace is collapsed, and a value is cut at 128 characters. No DMI, an
+unreadable file or an empty value gives `""`. On some vendors' machines
+`product_name` is a model code, not a marketing name.
+
+The probe never reads the serial numbers, asset tags or the machine UUID that
+sit in the same directory, and a test checks that.
 
 ## Example
 
@@ -384,6 +482,53 @@ The output for a laptop booted from a live USB, pinned by
       "ghcr.io/example/os:beta",
       "localhost/os:beta"
     ]
+  },
+  "bootc": {
+    "context": "live-host",
+    "found": true,
+    "version": "1.17.1",
+    "capabilities": {
+      "bootc_image_storage": {
+        "status": "unknown",
+        "reason": "not_established"
+      },
+      "container_inspect": {
+        "status": "supported",
+        "reason": "command_present"
+      },
+      "deployment_mount": {
+        "status": "unknown",
+        "reason": "not_established"
+      },
+      "install_finalize": {
+        "status": "supported",
+        "reason": "command_present"
+      },
+      "install_print_configuration": {
+        "status": "supported",
+        "reason": "command_present"
+      },
+      "unified_storage": {
+        "status": "unknown",
+        "reason": "not_established"
+      }
+    }
+  },
+  "gpus": [
+    {
+      "vendor_id": "0x8086",
+      "device_id": "0xa7a0",
+      "class": "0x030000"
+    },
+    {
+      "vendor_id": "0x10de",
+      "device_id": "0x28a0",
+      "class": "0x030200"
+    }
+  ],
+  "dmi": {
+    "vendor": "LENOVO",
+    "product": "21HMCTO1WW"
   }
 }
 ```

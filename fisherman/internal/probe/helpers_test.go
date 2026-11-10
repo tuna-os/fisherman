@@ -37,7 +37,9 @@ func fakeRoot(t *testing.T, files map[string]string) string {
 type fakeHost struct {
 	root   string
 	canned map[string]string
-	calls  []string
+	// fail maps a whole command line to the error it returns.
+	fail  map[string]error
+	calls []string
 }
 
 func (h *fakeHost) run(name string, args ...string) ([]byte, error) {
@@ -58,6 +60,9 @@ func (h *fakeHost) run(name string, args ...string) ([]byte, error) {
 			return nil, errors.New("exit status 1")
 		}
 		return os.ReadFile(filepath.Join(h.root, args[0]))
+	}
+	if err, ok := h.fail[call]; ok {
+		return nil, err
 	}
 	if out, ok := h.canned[call]; ok {
 		return []byte(out), nil

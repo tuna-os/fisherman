@@ -26,7 +26,15 @@ func goldenProber(t *testing.T) *Prober {
 		"sys/firmware/efi/":                    "",
 		"sys/class/tpm/tpm0/tpm_version_major": "2\n",
 		"usr/share/tuna-installer/oci-store/overlay-images/images.json": storeIndex,
+		"sys/class/dmi/id/sys_vendor":                                   "LENOVO\n",
+		"sys/class/dmi/id/product_name":                                 "21HMCTO1WW\n",
+		// The identifiers next to them must never reach the output.
+		"sys/class/dmi/id/product_serial": "PF-SERIAL-0001\n",
+		"sys/class/dmi/id/product_uuid":   "4c4c4544-0000-1000-8000-aabbccddeeff\n",
 	}
+	pciDevice(files, "0000:00:02.0", "0x030000", "0x8086", "0xa7a0") // Intel iGPU
+	pciDevice(files, "0000:00:14.0", "0x0c0330", "0x8086", "0x51ed") // USB controller: not a GPU
+	pciDevice(files, "0000:01:00.0", "0x030200", "0x10de", "0x28a0") // NVIDIA dGPU (3D controller)
 	cpuTopology(files, "0-7", [][2]string{
 		{"0", "0"}, {"0", "1"}, {"0", "2"}, {"0", "3"},
 		{"0", "0"}, {"0", "1"}, {"0", "2"}, {"0", "3"},
@@ -35,6 +43,9 @@ func goldenProber(t *testing.T) *Prober {
 		"lsblk -J -b -p -o " + lsblkColumns: string(lsblk),
 		"bootc status --json":               bootcStatusLive,
 	}}
+	for call, out := range bootcCurrent {
+		host.canned[call] = out
+	}
 	return &Prober{Root: fakeRoot(t, files), Run: host.run, Getenv: noEnv}
 }
 
@@ -78,7 +89,7 @@ func TestProbeEmptyArraysNotNull(t *testing.T) {
 		t.Fatal(err)
 	}
 	b, _ := json.Marshal(res)
-	for _, frag := range []string{`"disks":[]`, `"stores":[]`, `"images":[]`} {
+	for _, frag := range []string{`"disks":[]`, `"stores":[]`, `"images":[]`, `"gpus":[]`} {
 		if !bytes.Contains(b, []byte(frag)) {
 			t.Errorf("%s missing from %s", frag, b)
 		}

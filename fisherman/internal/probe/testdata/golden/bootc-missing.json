@@ -1,0 +1,32 @@
+{
+  "context": "live-host",
+  "found": false,
+  "version": "",
+  "version_reason": "bootc_missing",
+  "capabilities": {
+    "bootc_image_storage": {
+      "status": "unknown",
+      "reason": "not_established"
+    },
+    "container_inspect": {
+      "status": "unsupported",
+      "reason": "bootc_missing"
+    },
+    "deployment_mount": {
+      "status": "unknown",
+      "reason": "not_established"
+    },
+    "install_finalize": {
+      "status": "unsupported",
+      "reason": "bootc_missing"
+    },
+    "install_print_configuration": {
+      "status": "unsupported",
+      "reason": "bootc_missing"
+    },
+    "unified_storage": {
+      "status": "unknown",
+      "reason": "not_established"
+    }
+  }
+}
