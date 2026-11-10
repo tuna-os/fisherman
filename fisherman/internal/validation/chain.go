@@ -288,9 +288,29 @@ func RequiredTools(r *recipe.Recipe) []ToolRequirement {
 		// install looks for it there once the image is on the disk
 		// (luks.StageFirstBootEnrollment); the host needs cryptsetup only.
 	}
-	// A /var disk that is not kept is formatted XFS (disk.FormatVar).
+	// A /var disk that is not kept is wiped and formatted XFS
+	// (disk.PrepareVarDisk).
 	if r.VarDisk != nil && !r.VarDisk.KeepExisting {
+		need("wipefs", "util-linux")
 		need("mkfs.xfs", "xfsprogs")
+	}
+	// blkid gives the UUID and the filesystem type of every fstab line the
+	// install writes (a /var disk, a data or swap entry of a manual
+	// layout), and checks a device that is kept as it is.
+	needBlkid := r.VarDisk != nil
+	for _, cm := range r.CustomMounts {
+		switch recipe.ClassifyCustomMount(cm.Target) {
+		case recipe.MountIgnored:
+		case recipe.MountData:
+			needBlkid = true
+		case recipe.MountSwap:
+			needBlkid = needBlkid || cm.Fstype == "swap"
+		case recipe.MountBootStack:
+			needBlkid = needBlkid || cm.Fstype == "" || cm.Fstype == "unformatted"
+		}
+	}
+	if needBlkid {
+		need("blkid", "util-linux")
 	}
 	need("skopeo", "skopeo")
 	need("podman", "podman")

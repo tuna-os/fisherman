@@ -51,6 +51,7 @@ const (
 	CodeVarDiskRequired               = "var_disk_required"
 	CodeVarDiskNotFound               = "var_disk_not_found"
 	CodeVarDiskSameAsDisk             = "var_disk_same_as_disk"
+	CodeVarDiskUnsupportedComposeFs   = "var_disk_unsupported_composefs"
 	CodeImageRequired                 = "image_required"
 	CodeImageTypeUnsupported          = "image_type_unsupported"
 	CodeBootloaderUnsupported         = "bootloader_unsupported"
@@ -112,6 +113,15 @@ const (
 
 	CodeCustomMountsNoESP  = "custom_mounts_no_esp"
 	CodeCustomMountsNoBoot = "custom_mounts_no_boot"
+
+	// A separate /var disk is not encrypted, and a data mount of a manual
+	// layout must be one the installed system can mount again (#406, #372).
+	CodeVarDiskEncryptionUnsupported  = "var_disk_encryption_unsupported"
+	CodeCustomMountTargetDuplicate    = "custom_mount_target_duplicate"
+	CodeCustomMountPartitionDuplicate = "custom_mount_partition_duplicate"
+	CodeCustomMountNotPersistable     = "custom_mount_not_persistable"
+	// CodeKeptFilesystemUnusable is install-only: it needs blkid, so root.
+	CodeKeptFilesystemUnusable = "kept_filesystem_unusable"
 
 	// Install-only: reported in the install's error event, not by validate,
 	// which needs no root and does not look for host tools.
@@ -376,6 +386,37 @@ func CheckUnifiedStorage(unified bool) []Problem {
 	return []Problem{{"unifiedStorage", CodeUnifiedStorageUnsupported,
 		"unifiedStorage is not supported: fisherman does not pass bootc's --experimental-unified-storage, " +
 			"so the install would complete without it; set it to false or leave it out"}}
+}
+
+// CheckVarDiskBackend applies the varDisk backend rule: a separate /var disk
+// is refused on a composefs-native target, which is composeFsBackend or
+// filesystem=zfs (the install forces composefs for zfs). On those targets
+// the initramfs (composefs-setup-root) bind-mounts the deployment's
+// state/os/default/var over /var, so the fstab /var entry never takes effect
+// and the disk is formatted but unused. Refusing here stops the install
+// before it partitions or formats either disk (#252).
+func CheckVarDiskBackend(r *Recipe) []Problem {
+	if r.VarDisk == nil || (!r.ComposeFsBackend && r.Filesystem != "zfs") {
+		return nil
+	}
+	return []Problem{{"varDisk", CodeVarDiskUnsupportedComposeFs,
+		"varDisk is not supported on composefs-native targets (composeFsBackend or filesystem=zfs): " +
+			"the initramfs mounts the deployment's own /var, so the separate disk would not be used " +
+			"(see https://github.com/tuna-os/fisherman/issues/252)"}}
+}
+
+// CheckVarDiskEncryption applies the varDisk encryption rule: fisherman has
+// no LUKS step for the /var disk, so with an encrypted root it would stay
+// plain text. On bootc /var holds /var/home: every user file would be
+// readable from the disk while the recipe asked for encryption. Fail closed,
+// like encryption_unsupported_on_manual_layout (#406).
+func CheckVarDiskEncryption(r *Recipe) []Problem {
+	if r.VarDisk == nil || !IsEncrypted(r.Encryption.Type) {
+		return nil
+	}
+	return []Problem{{"varDisk", CodeVarDiskEncryptionUnsupported,
+		fmt.Sprintf("varDisk is not supported with encryption %q: fisherman does not encrypt the /var disk, "+
+			"so /var (and /var/home on it) would be stored in plain text beside an encrypted root", r.Encryption.Type)}}
 }
 
 // CheckImageType applies the imageType rule.

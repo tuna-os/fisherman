@@ -212,6 +212,13 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 		for i, cm := range r.CustomMounts {
 			ps = append(ps, recipe.CheckCustomMountTarget(i, cm.Target)...)
 		}
+		ps = append(ps, recipe.CheckCustomMountsPersistence(&r)...)
+	}
+	if has("varDisk") {
+		// Both read other fields of the same object: a page that sends
+		// varDisk with encryption or composeFsBackend gets the verdict.
+		ps = append(ps, recipe.CheckVarDiskEncryption(&r)...)
+		ps = append(ps, recipe.CheckVarDiskBackend(&r)...)
 	}
 	if has("targetMount") {
 		ps = append(ps, recipe.CheckTargetMount(r.TargetMount)...)

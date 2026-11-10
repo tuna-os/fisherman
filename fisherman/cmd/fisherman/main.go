@@ -420,6 +420,12 @@ func main() {
 		fatalProblem("missing required host tool", recipe.Problem{Code: recipe.CodeHostToolMissing, Message: err.Error()})
 	}
 
+	// A device the recipe keeps as it is must hold a mountable filesystem.
+	// blkid says so now; the mount would say so after the disk is wiped.
+	if ps := keptFilesystemProblems(r); len(ps) > 0 {
+		fatalProblem("cannot keep the existing filesystem", ps[0])
+	}
+
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
 	isManual := len(r.CustomMounts) > 0
@@ -762,7 +768,9 @@ func main() {
 			progress.Step(step, totalSteps, "Formatting data disk (/var)", profile[pi].cumulativePct, profile[pi].weightPct)
 			pi++
 			step++
-			if err := disk.FormatVar(r.VarDisk.Disk); err != nil {
+			// Release the disk (mounts, swap, LVM, old signatures), then
+			// format it: see disk.PrepareVarDisk (#406).
+			if err := disk.PrepareVarDisk(r.VarDisk.Disk); err != nil {
 				fatal("formatting /var disk: %v", err)
 			}
 		} else {
@@ -836,6 +844,18 @@ func main() {
 	}
 
 	opts := buildBootcInstallOptions(r, sourceImgref, targetImgref, activeTargetMount, scratchDir, imageStores, imageCheck.NeedsPull, imageCheck.LayerCount)
+	if hasEncryption && !isManual {
+		// Without the UUID no loader entry can name the LUKS container.
+		// Stop before the image is deployed, not after "complete" (#410).
+		if activeLuksUUID == "" {
+			fatal("LUKS: could not read the UUID of the encrypted root partition %s", activeRootPart)
+		}
+		// Where nothing else finds the root, bootc writes the argument
+		// into the entries it creates, the way rootflags gets there.
+		if luksNeedsKarg(isSystemdBoot, r.ComposeFsBackend) {
+			opts.KernelArguments = append(opts.KernelArguments, post.LuksKarg(activeLuksUUID))
+		}
+	}
 	if err := bootcInstall(opts); err != nil {
 		fatal("bootc install: %v", err)
 	}
@@ -941,11 +961,15 @@ func main() {
 		}
 	}
 
+	// ── Persistent mounts (varDisk, customMounts data and swap) ──────────────
 	// From here on every step writes into the installed system through the
-	// deployment resolver (post.ResolveDeployment). A separate /var disk is
-	// what the booted system mounts at /var, so it is the resolver's Var.
-	if hasVarDisk {
-		post.SetBootedVar(filepath.Join(activeTargetMount, "var"))
+	// deployment resolver (post.ResolveDeployment). persistMounts tells it
+	// that a separate /var (a varDisk, or a manual /var partition) is what
+	// the booted system mounts at /var, mounts the other /var devices where
+	// those steps write, and writes the fstab lines. See mounts.go (#406,
+	// #372).
+	if err := persistMounts(r, activeTargetMount, cleanup.AddMount); err != nil {
+		fatal("persistent mounts: %v", err)
 	}
 
 	// ── TPM2 enrolment ────────────────────────────────────────────────────────
@@ -991,20 +1015,6 @@ func main() {
 		fatal("writing hostname: %v", err)
 	}
 
-	// Write /var fstab entry if a separate /var disk was used.
-	if hasVarDisk {
-		varUUID := disk.UUID(r.VarDisk.Disk)
-		if varUUID == "" {
-			progress.Info(fmt.Sprintf("Warning: could not determine UUID for /var disk %s — skipping fstab entry", r.VarDisk.Disk))
-		} else {
-			if err := post.AppendFstabEntry(activeTargetMount, varUUID, "/var", "xfs", "defaults"); err != nil {
-				progress.Info(fmt.Sprintf("Warning: could not write /var fstab entry: %v", err))
-			} else {
-				progress.Info(fmt.Sprintf("Added /var fstab entry (UUID=%s)", varUUID))
-			}
-		}
-	}
-
 	// Create a user account if the recipe requests one (e.g. Bazzite has no OOBE).
 	if r.User.Username != "" {
 		progress.Info(fmt.Sprintf("Creating user: %s", r.User.Username))
@@ -1036,17 +1046,18 @@ func main() {
 		}
 	}
 
-	// Inject rd.luks.name=<UUID>=root into every BLS entry so the initrd
+	// Every BLS entry must carry rd.luks.name=<UUID>=root so the initrd
 	// unlocks the LUKS container and maps it to /dev/mapper/root before
 	// mounting the root filesystem. bootc install to-filesystem only sees the
-	// open mapper device and never writes LUKS parameters itself.
+	// open mapper device and never writes LUKS parameters itself; the --karg
+	// above asks it to, and this checks every entry and patches what is
+	// missing. Fatal unless GPT auto-discovery finds the root (#410).
 	if activeLuksUUID != "" {
-		n, err := post.EnsureLuksArgs(activeTargetMount, activeLuksUUID)
+		msg, err := ensureLuksBoot(activeTargetMount, activeLuksUUID, luksNeedsKarg(isSystemdBoot, r.ComposeFsBackend))
 		if err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not inject LUKS boot args: %v", err))
-		} else if n > 0 {
-			progress.Info(fmt.Sprintf("Injected rd.luks.name into %d boot entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
+			fatal("LUKS boot arguments: %v", err)
 		}
+		progress.Info(msg)
 	}
 
 	// Wi-Fi profiles and Bluetooth pairings hold secrets (passwords, link
