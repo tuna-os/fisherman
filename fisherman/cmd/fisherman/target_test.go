@@ -157,7 +157,10 @@ func TestInstallProblemsTargetEligibility(t *testing.T) {
 	t.Run("--partial reads no machine", func(t *testing.T) {
 		oldTarget, oldUEFI := hostTarget, hostUEFI
 		t.Cleanup(func() { hostTarget, hostUEFI = oldTarget, oldUEFI })
-		hostTarget = func(string) (probe.Target, error) { t.Error("--partial asked for a target verdict"); return probe.Target{}, nil }
+		hostTarget = func(string) (probe.Target, error) {
+			t.Error("--partial asked for a target verdict")
+			return probe.Target{}, nil
+		}
 		hostUEFI = func() bool { t.Error("--partial asked for the firmware"); return false }
 		ps, err := partialProblems([]byte(`{"disk":"` + live + `","override":["boot_disk"]}`))
 		if err != nil {
