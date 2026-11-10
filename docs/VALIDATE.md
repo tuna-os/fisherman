@@ -148,6 +148,7 @@ holds both fields.
 | `targetMount` | empty is valid (`/mnt/fisherman-target`). Otherwise an absolute path with no `..` component that is not `/`: the root filesystem is mounted there and every post-install write goes under it. | `target_mount_invalid` |
 | `flatpakVarPath` | empty is valid (auto-detect). Otherwise no `..` component: it is joined under the installed root for the flatpak copy. | `flatpak_var_path_invalid` |
 | `varDisk.disk` | required, exists, differs from `disk` | `var_disk_required`, `var_disk_not_found`, `var_disk_same_as_disk` |
+| `varDisk` | not set on a composefs-native target (`composeFsBackend`, or `filesystem: zfs`, which forces composefs). The initramfs mounts the deployment's own `/var` there, so the separate disk would not be used ([#252](https://github.com/tuna-os/fisherman/issues/252)). Full mode only. | `var_disk_unsupported_composefs` |
 | `image` | non-empty unless this host booted from live media (probe's `live.is_live`), where empty means "install the running live image". Full mode only. | `image_required` |
 | `imageType` | `""` or `bootc` | `image_type_unsupported` |
 | `bootloader` | `""`, `grub2` or `systemd` | `bootloader_unsupported` |
@@ -213,6 +214,7 @@ This section maps error codes to their causes and corrective actions. Each code 
 | `var_disk_required` | `varDisk.disk` | No `/var` disk specified when `varDisk` is used | Add `"varDisk": {"disk": "/dev/sdY"}` |
 | `var_disk_not_found` | `varDisk.disk` | The `/var` disk path does not exist | Check the disk path |
 | `var_disk_same_as_disk` | `varDisk.disk` | The `/var` disk is the same as the root disk | Use a different disk for `/var` |
+| `var_disk_unsupported_composefs` | `varDisk` | `varDisk` is set with `composeFsBackend` or `filesystem: zfs`. The disk would not be used at boot (#252) | Remove `varDisk`, or use an ostree target (no `composeFsBackend`, not `zfs`) |
 | `custom_mount_partition_required` | `customMounts[i].partition` | Partition path is missing in custom mount | Specify a partition path |
 | `custom_mount_partition_not_found` | `customMounts[i].partition` | The partition path does not exist | Check the partition path |
 | `custom_mounts_no_root` | `customMounts` | No custom mount targets `/` (root filesystem) | Add an entry with `"target": "/"` |

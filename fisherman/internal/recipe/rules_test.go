@@ -154,6 +154,52 @@ func TestCheckLayoutCombos(t *testing.T) {
 	}
 }
 
+// TestValidateVarDiskBackend: a separate /var disk is refused before any
+// disk work on a composefs-native target (composeFsBackend or zfs), because
+// the initramfs bind-mounts the deployment's /var over it (#252). An
+// ostree-backed varDisk recipe still validates.
+func TestValidateVarDiskBackend(t *testing.T) {
+	dir := t.TempDir()
+	disk := filepath.Join(dir, "disk")
+	varDisk := filepath.Join(dir, "var-disk")
+	for _, p := range []string{disk, varDisk} {
+		if err := os.WriteFile(p, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		name string
+		r    recipe.Recipe
+		want string
+	}{
+		{"ostree xfs", recipe.Recipe{Filesystem: "xfs"}, ""},
+		{"ostree btrfs", recipe.Recipe{Filesystem: "btrfs"}, ""},
+		{"composefs ext4", recipe.Recipe{Filesystem: "ext4", ComposeFsBackend: true}, recipe.CodeVarDiskUnsupportedComposeFs},
+		{"zfs", recipe.Recipe{Filesystem: "zfs"}, recipe.CodeVarDiskUnsupportedComposeFs},
+	}
+	for _, c := range cases {
+		r := c.r
+		r.Disk, r.Hostname = disk, "h"
+		r.VarDisk = &recipe.VarDiskSpec{Disk: varDisk}
+		err := r.Validate()
+		if c.want == "" {
+			if err != nil {
+				t.Errorf("%s: Validate() = %v, want nil", c.name, err)
+			}
+			continue
+		}
+		p, ok := err.(recipe.Problem)
+		if !ok || p.Field != "varDisk" || p.Code != c.want || !strings.Contains(p.Message, "/issues/252") {
+			t.Errorf("%s: Validate() = %#v, want varDisk:%s", c.name, err, c.want)
+		}
+		// Without varDisk the same target is fine.
+		r.VarDisk = nil
+		if err := r.Validate(); err != nil {
+			t.Errorf("%s without varDisk: Validate() = %v, want nil", c.name, err)
+		}
+	}
+}
+
 func TestCheckEncryption(t *testing.T) {
 	cases := []struct {
 		e         recipe.Encryption

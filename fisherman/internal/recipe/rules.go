@@ -47,6 +47,7 @@ const (
 	CodeVarDiskRequired               = "var_disk_required"
 	CodeVarDiskNotFound               = "var_disk_not_found"
 	CodeVarDiskSameAsDisk             = "var_disk_same_as_disk"
+	CodeVarDiskUnsupportedComposeFs   = "var_disk_unsupported_composefs"
 	CodeImageRequired                 = "image_required"
 	CodeImageTypeUnsupported          = "image_type_unsupported"
 	CodeBootloaderUnsupported         = "bootloader_unsupported"
@@ -309,6 +310,23 @@ func CheckLayoutCombos(r *Recipe) []Problem {
 			"ZFS filesystem does not support LUKS encryption in this version"})
 	}
 	return ps
+}
+
+// CheckVarDiskBackend applies the varDisk backend rule: a separate /var disk
+// is refused on a composefs-native target, which is composeFsBackend or
+// filesystem=zfs (the install forces composefs for zfs). On those targets
+// the initramfs (composefs-setup-root) bind-mounts the deployment's
+// state/os/default/var over /var, so the fstab /var entry never takes effect
+// and the disk is formatted but unused. Refusing here stops the install
+// before it partitions or formats either disk (#252).
+func CheckVarDiskBackend(r *Recipe) []Problem {
+	if r.VarDisk == nil || (!r.ComposeFsBackend && r.Filesystem != "zfs") {
+		return nil
+	}
+	return []Problem{{"varDisk", CodeVarDiskUnsupportedComposeFs,
+		"varDisk is not supported on composefs-native targets (composeFsBackend or filesystem=zfs): " +
+			"the initramfs mounts the deployment's own /var, so the separate disk would not be used " +
+			"(see https://github.com/tuna-os/fisherman/issues/252)"}}
 }
 
 // CheckImageType applies the imageType rule.

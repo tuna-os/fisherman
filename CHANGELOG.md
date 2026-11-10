@@ -126,6 +126,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fisherman now hashes it in-process to a SHA-512 crypt (`$6$`) string and
   passes it with `chpasswd -e`. Pre-hashed passwords and ostree installs are
   unchanged.
+- **`varDisk` is refused on composefs-native targets** (#252): with
+  `composeFsBackend` or `filesystem: zfs`, the initramfs mounts the
+  deployment's own `/var`, so the separate disk was formatted but never used.
+  Validation now fails with `var_disk_unsupported_composefs` before any disk
+  is partitioned or formatted. ostree-backed `varDisk` installs are unchanged.
 
 - **Offline OCI imports use target-disk scratch** (#345): Podman's image store,
   runtime state, and host-side blob staging no longer fill the RAM-backed live

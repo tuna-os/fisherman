@@ -109,6 +109,14 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 
 For `luks-passphrase` and `tpm2-luks-passphrase`, add `"passphrase": "hunter2"` inside the `encryption` object.
 
+**Separate `/var` disk** (`"varDisk": {"disk": "/dev/sdb"}`, optional
+`"keepExisting": true`): fisherman formats the disk as XFS (or keeps it) and
+mounts it at `/var`. It works only on ostree targets. A recipe with
+`composeFsBackend` or `filesystem: zfs` and `varDisk` fails validation
+(`var_disk_unsupported_composefs`) before any disk is touched, because the
+composefs initramfs mounts its own `/var` over it
+([#252](https://github.com/tuna-os/fisherman/issues/252)).
+
 **Empty `image`** means "install the image this live system is running"
 (bootc installs the booted container). It is accepted only on live media, by
 the same detection `fisherman probe` reports as `live.is_live`
