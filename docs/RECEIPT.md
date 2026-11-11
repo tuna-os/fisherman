@@ -241,6 +241,8 @@ GRUB). It copies the receipt and the collection off the VM, and checks:
 3. a copy of the receipt for another image is a `mismatch`;
 4. `fisherman verify --live` on the CI host is not `verified`.
 
-The checks are advisory: a failure goes to the job summary and fails the job
-only with `BOOTCREW_RECEIPT_REQUIRED=1`. The harness boots the installed
-disk image directly, with no install medium attached.
+A failure goes to the job summary. It fails the job only with
+`BOOTCREW_RECEIPT_REQUIRED=1`. The required canaries (`required / dakota`,
+`required / centos-bootc`) set it, so a receipt failure there fails the
+pull request. The advisory images keep the checks advisory. The harness
+boots the installed disk image directly, with no install medium attached.

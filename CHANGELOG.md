@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🧪 Testing
+
+- **The installation receipt checks are required on the required canaries**
+  (#385): `required / dakota` (composefs, systemd-boot) and
+  `required / centos-bootc` (ostree, GRUB) now run `scripts/boot-verify.sh`
+  with `BOOTCREW_RECEIPT_REQUIRED=1`. In #438's run, both canaries got
+  `verified` from the first-boot collection and from `verify --live` on the
+  installed system. A receipt for another image gave `mismatch`, and the CI
+  host's own status gave `unavailable`. The advisory images keep the checks
+  advisory.
+
 ### ✨ Features
 
 - **Installed-system identity receipt and `fisherman verify --json`**

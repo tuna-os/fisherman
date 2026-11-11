@@ -357,10 +357,11 @@ ssh_root "bootc status --json-pretty" 2>/dev/null || echo "⚠️  json output n
 
 # Installation receipt (#385): the installed system says which image it
 # booted, and a receipt for another image or a status from this host does
-# not verify it. Advisory until BOOTCREW_RECEIPT_REQUIRED=1. Before the
+# not verify it. Fatal with BOOTCREW_RECEIPT_REQUIRED=1 (the required
+# canaries set it), advisory otherwise. Before the
 # upgrade check below, which can leave a cached update in bootc status.
 echo ""
-echo "=== Installation receipt (advisory) ==="
+echo "=== Installation receipt ($([ "${BOOTCREW_RECEIPT_REQUIRED:-0}" = "1" ] && echo required || echo advisory)) ==="
 # shellcheck source=./boot-receipt.sh
 source "$SCRIPT_DIR/boot-receipt.sh"
 RECEIPT_FAIL=0
