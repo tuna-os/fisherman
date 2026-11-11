@@ -131,13 +131,25 @@ type bootcDeployment struct {
 	image  string
 	digest string
 	arch   string
+	// transport is .image.image.transport ("registry",
+	// "containers-storage", ...); the source reuse (#384) needs it to name
+	// the image to bootc.
+	transport string
+	// backend is "ostree" or "composefs" for this entry.
+	backend string
+	// The ostree deployment: commit checksum, stateroot and serial, from
+	// .ostree. Empty/-1 when the entry is not an ostree deployment.
+	checksum  string
+	stateroot string
+	serial    int
 }
 
 // statusEntry is the part of a bootc BootEntry fisherman reads.
 type statusEntry struct {
 	Image *struct {
 		Image struct {
-			Image string `json:"image"`
+			Image     string `json:"image"`
+			Transport string `json:"transport"`
 		} `json:"image"`
 		ImageDigest  string `json:"imageDigest"`
 		Architecture string `json:"architecture"`
@@ -178,7 +190,26 @@ func parseBootcStatus(out []byte, err error) bootcHostStatus {
 	st.ok = true
 	add := func(role string, e *statusEntry) {
 		if e != nil && e.Image != nil && len(st.deployments) < maxDeployments {
-			st.deployments = append(st.deployments, bootcDeployment{role, e.Image.Image.Image, e.Image.ImageDigest, e.Image.Architecture})
+			d := bootcDeployment{role: role, image: e.Image.Image.Image, digest: e.Image.ImageDigest,
+				arch: e.Image.Architecture, transport: e.Image.Image.Transport, serial: -1}
+			switch {
+			case present(e.Composefs):
+				d.backend = BackendComposefs
+			case present(e.Ostree):
+				d.backend = BackendOstree
+				var o struct {
+					Checksum     string `json:"checksum"`
+					DeploySerial *int   `json:"deploySerial"`
+					Stateroot    string `json:"stateroot"`
+				}
+				if json.Unmarshal(e.Ostree, &o) == nil {
+					d.checksum, d.stateroot = o.Checksum, o.Stateroot
+					if o.DeploySerial != nil {
+						d.serial = *o.DeploySerial
+					}
+				}
+			}
+			st.deployments = append(st.deployments, d)
 		}
 	}
 	add(RoleBooted, status.Status.Booted)

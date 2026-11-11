@@ -20,6 +20,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **Install from the live host's bootc store: `sourceReuse`** (#384,
+  phase 2): an explicit, experimental recipe field (`"experimental":
+  ["bootc_store_reuse"]`) that names an image the host's bootc keeps by its
+  manifest digest and platform. On an installed, bootc-booted ostree host
+  the install checks that the image's ostree ref still points at the
+  deployment, estimates scratch and disk and refuses when they will not fit,
+  runs `bootc image copy-to-storage --source <ref> --target
+  localhost/fisherman-reuse:<tag>` with `/var/tmp` on its own scratch,
+  verifies the copy (source unmoved, deployment unchanged, sha256 digest,
+  platform), installs from it with the recipe's `targetImgref` as the update
+  reference, checks the installed digest against the copy, and removes the
+  copy, the bind and the scratch on success, failure and cancel. Every
+  command passes a strict allowlist: no `set-unified`, pull, `image cmd`,
+  GC or credentials. Never part of probe, validate or a recipe without the
+  field. 26 stable `source_reuse_*` codes (docs/VALIDATE.md), the
+  `source_reuse` progress event (docs/JSON-PROGRESS-FORMAT.md), and an
+  advisory offline VM profile in `bootcrew-vm.yml` that installs a VM from
+  its own store onto a second disk with no registry reachable, boots the
+  result and checks its identity. docs/SOURCE-REUSE.md.
+
 - **Installed-system identity receipt and `fisherman verify --json`**
   (#385): the install writes a non-secret receipt to the installed
   system's `/var/lib/fisherman/install-receipt.json` (through the

@@ -552,20 +552,16 @@ replaced by `""` with `credentials_redacted`; one that does not match the
 hex>` and architectures a short token. The list is capped at 1024 entries,
 the inventory at 256 items and the boot entries at 16.
 
-#### Reuse is not implemented
+#### Reuse
 
-Phase 2 of #384 (install from bootc-owned storage through `bootc image
-copy-to-storage`, behind an explicit recipe opt-in) is not in this release,
-and no recipe field asks for it. A fake-command test cannot qualify it:
-
-- `copy-to-storage` re-exports the image from ostree. Whether the export
-  has the manifest digest of the original image is unmeasured, so the
-  identity check after the transfer has no known-good answer yet.
-- It needs root on the live host, refuses a read-only sysroot (live media),
-  and writes to the host's default containers-storage, which on live media
-  is RAM. The scratch and disk cost against the current path is unmeasured.
-
-Both need the disposable offline VM profile the issue names.
+Phase 2 of #384, installing from bootc-owned storage through `bootc image
+copy-to-storage`, is the recipe's explicit, experimental `sourceReuse`
+([SOURCE-REUSE.md](SOURCE-REUSE.md)). The probe still never runs it, and
+nothing here changes: an item a recipe can name is one with `storage`
+`"ostree"`, `availability` `"deployed"` and `matches_machine` `true`, on a
+host whose `bootc_store.available` is true and which is not live media.
+`bootc_image_storage` stays `unknown`/`not_qualified`: it is about the
+target's store, and the reuse is qualified only by an advisory VM profile.
 
 Fixtures: `fisherman/internal/probe/testdata/golden/store-*.json` pin the
 object for non-bootc live media, a host without bootc, a failed and a

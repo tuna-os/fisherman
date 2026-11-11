@@ -516,3 +516,32 @@ func TestCleanup_NoZFSPool(t *testing.T) {
 		}
 	}
 }
+
+// TestCleanup_ReleasesRunAfterLUKSBeforePostRemovals: a host release (the
+// source reuse copy, #384) runs on every teardown, after the target is
+// unmounted and closed and before the host scratch is removed, and its
+// failure is reported without stopping the rest.
+func TestCleanup_ReleasesRunAfterLUKSBeforePostRemovals(t *testing.T) {
+	rec := setupRecorder(t)
+	setupRemoveAllRecorder(t, rec)
+	var c post.Cleanup
+	c.AddMount("/mnt/target")
+	c.SetLUKS("fisherman-root")
+	c.AddPostRemoval("/var/fisherman-tmp")
+	c.AddRelease(func() error {
+		rec.calls = append(rec.calls, execCall{name: "release"})
+		return errors.New("rmi failed")
+	})
+	err := c.Run()
+	if err == nil || !strings.Contains(err.Error(), "rmi failed") {
+		t.Errorf("Run error %v, want the release failure", err)
+	}
+	var names []string
+	for _, call := range rec.calls {
+		names = append(names, call.name)
+	}
+	got := strings.Join(names, ",")
+	if !strings.HasSuffix(got, "cryptsetup,release,removeAll") {
+		t.Errorf("order %s: want ... cryptsetup, release, removeAll", got)
+	}
+}

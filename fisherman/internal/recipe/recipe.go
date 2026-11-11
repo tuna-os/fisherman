@@ -12,9 +12,13 @@ type Recipe struct {
 	BtrfsSubvolumes bool       `json:"btrfsSubvolumes"` // put the root in an @ subvolume (rootflags=subvol=@)
 	Encryption      Encryption `json:"encryption"`
 	Image           string     `json:"image"`        // source OCI image reference
-	TargetImgref    string     `json:"targetImgref"` // update-tracking ref (optional)
-	SelinuxDisabled bool       `json:"selinuxDisabled"`
-	UnifiedStorage  bool       `json:"unifiedStorage"` // true is refused (CheckUnifiedStorage): the flag is not passed
+	TargetImgref    string     `json:"targetImgref"` // update-tracking ref (optional; required with sourceReuse)
+	// SourceReuse takes the source from an image the live host's bootc
+	// already keeps (#384); see SourceReuse in reuse.go. Absent: the
+	// ordinary source paths. Never a default.
+	SourceReuse     *SourceReuse `json:"sourceReuse,omitempty"`
+	SelinuxDisabled bool         `json:"selinuxDisabled"`
+	UnifiedStorage  bool         `json:"unifiedStorage"` // true is refused (CheckUnifiedStorage): the flag is not passed
 	// ComposeFsBackend passes --composefs-backend to bootc install to-filesystem.
 	// Required for composefs-native images (e.g. ghcr.io/bootcrew/*).
 	// Independent of UnifiedStorage — these are different bootc features.
@@ -175,7 +179,8 @@ const (
 )
 
 // Experimentals lists every value Recipe.Experimental accepts.
-var Experimentals = []string{ExperimentalZFS}
+// ExperimentalBootcStoreReuse is in reuse.go.
+var Experimentals = []string{ExperimentalZFS, ExperimentalBootcStoreReuse}
 
 // AcceptsExperimental reports whether the recipe opts in to feature (one
 // of Experimentals).
@@ -344,7 +349,7 @@ func (r *Recipe) Validate() error {
 
 // Problems runs every recipe rule (rules.go) plus the existence checks for
 // the disk, the customMounts partitions and the varDisk, and returns every
-// problem found, in a stable order: the layout first, then imageType,
+// problem found, in a stable order: the layout first, then sourceReuse, imageType,
 // bootloader, encryption, varDisk, hostname, user, distroID, brewTap,
 // slurp, targetMount, flatpakVarPath, zfsPoolName, luksMapperName,
 // additionalImageStores and override. It does not check the
@@ -413,6 +418,7 @@ func (r *Recipe) Problems() []Problem {
 		ps = append(ps, CheckExperimentalFilesystem(r)...)
 	}
 	ps = append(ps, CheckUnifiedStorage(r.UnifiedStorage)...)
+	ps = append(ps, CheckSourceReuse(r)...)
 	ps = append(ps, CheckImageType(r.ImageType)...)
 	ps = append(ps, CheckBootloader(r.Bootloader)...)
 	ps = append(ps, CheckEncryption(r.Encryption)...)

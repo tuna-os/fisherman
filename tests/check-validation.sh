@@ -297,6 +297,63 @@ expect_exit "receipt: no receipt on the installed system → caught (exit 1)" 1 
 
 rm -rf "$RECEIPT_VM" "$RECEIPT_OUT" "$FAKE_FM_HONEST" "$FAKE_FM_ALWAYS"
 
+# ── bootc store reuse identity (scripts/store-reuse-lib.sh, #384) ────────
+#
+# The offline VM profile judges the disk installed from a reused bootc store
+# by the install's source_reuse events, the receipt and the installed
+# system's own bootc status. Each way that judgement can be wrong must fail.
+
+# shellcheck source=../scripts/store-reuse-lib.sh
+source "$(dirname "$0")/../scripts/store-reuse-lib.sh"
+
+SR=$(mktemp -d)
+SR_SRC="sha256:$(printf '1%.0s' $(seq 1 64))"
+SR_COPY="sha256:$(printf 'c%.0s' $(seq 1 64))"
+SR_REF="ghcr.io/example/os:stable"
+sr_events() { # sr_events FILE SOURCE_DIGEST COPY_DIGEST
+  {
+    echo '+ bootc image copy-to-storage --source docker://x --target localhost/fisherman-reuse:x'
+    echo "{\"type\":\"source_reuse\",\"phase\":\"planned\",\"digest\":\"$2\",\"estimate\":{\"scratch_bytes\":5}}"
+    echo "{\"type\":\"source_reuse\",\"phase\":\"verified\",\"digest\":\"$2\",\"destination_digest\":\"$3\",\"measured\":{\"copy_ms\":1200}}"
+    echo '{"type":"complete","message":"Installation complete!","elapsed_ms":9000}'
+  } >"$1"
+}
+sr_status() { # sr_status FILE DIGEST IMAGE ARCH
+  printf '{"status":{"booted":{"image":{"image":{"image":"%s","transport":"registry"},"imageDigest":"%s","architecture":"%s"}}}}\n' \
+    "$3" "$2" "$4" >"$1"
+}
+sr_receipt() { printf '{"expected":{"platform_manifest_digest":"%s"}}\n' "$2" >"$1"; }
+
+sr_events "$SR/ev" "$SR_SRC" "$SR_COPY"
+sr_receipt "$SR/receipt" "$SR_COPY"
+sr_status "$SR/status" "$SR_COPY" "$SR_REF" x86_64
+expect_exit "store reuse: booted the verified copy → pass (exit 0)" 0 \
+  store_reuse_identity "$SR/ev" "$SR/receipt" "$SR/status" "$SR_REF" x86_64 "$SR_SRC"
+sr_status "$SR/status-orig" "$SR_SRC" "$SR_REF" x86_64
+expect_exit "store reuse: booted another digest than the copy → caught (exit 1)" 1 \
+  store_reuse_identity "$SR/ev" "$SR/receipt" "$SR/status-orig" "$SR_REF" x86_64 "$SR_SRC"
+sr_status "$SR/status-ref" "$SR_COPY" "localhost/fisherman-reuse:x" x86_64
+expect_exit "store reuse: follows the local copy's name → caught (exit 1)" 1 \
+  store_reuse_identity "$SR/ev" "$SR/receipt" "$SR/status-ref" "$SR_REF" x86_64 "$SR_SRC"
+sr_status "$SR/status-arch" "$SR_COPY" "$SR_REF" aarch64
+expect_exit "store reuse: another platform → caught (exit 1)" 1 \
+  store_reuse_identity "$SR/ev" "$SR/receipt" "$SR/status-arch" "$SR_REF" x86_64 "$SR_SRC"
+sr_receipt "$SR/receipt-other" "$SR_SRC"
+expect_exit "store reuse: receipt expects another digest → caught (exit 1)" 1 \
+  store_reuse_identity "$SR/ev" "$SR/receipt-other" "$SR/status" "$SR_REF" x86_64 "$SR_SRC"
+sr_events "$SR/ev-other" "sha256:$(printf '2%.0s' $(seq 1 64))" "$SR_COPY"
+expect_exit "store reuse: the copy verified another item → caught (exit 1)" 1 \
+  store_reuse_identity "$SR/ev-other" "$SR/receipt" "$SR/status" "$SR_REF" x86_64 "$SR_SRC"
+grep -v verified "$SR/ev" >"$SR/ev-unverified"
+expect_exit "store reuse: no verified event → caught (exit 1)" 1 \
+  store_reuse_identity "$SR/ev-unverified" "$SR/receipt" "$SR/status" "$SR_REF" x86_64 "$SR_SRC"
+echo 'not json' >"$SR/status-bad"
+expect_exit "store reuse: malformed status → caught (exit 1)" 1 \
+  store_reuse_identity "$SR/ev" "$SR/receipt" "$SR/status-bad" "$SR_REF" x86_64 "$SR_SRC"
+expect_exit "store reuse: event fields are read (copy_ms)" 0 \
+  test "$(reuse_field "$SR/ev" verified measured.copy_ms)" = 1200
+rm -rf "$SR"
+
 # ── summary ────────────────────────────────────────────────────────────────
 
 echo ""

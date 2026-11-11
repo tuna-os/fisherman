@@ -35,6 +35,29 @@ Boots a QEMU VM with the installed disk and verifies system state via SSH.
 ./boot-verify.sh 2222 /tmp/id_rsa 600 2G /dev/loop0 dakota hunter2
 ```
 
+### `store-reuse-vm.sh` and `store-reuse-lib.sh`
+The advisory offline VM profile for the bootc store reuse (#384 phase 2,
+[`docs/SOURCE-REUSE.md`](../docs/SOURCE-REUSE.md)), run by the
+`store-reuse-advisory` job of `bootcrew-vm.yml` for each `store_reuse`
+entry of `tests/bootcrew-matrix.yaml`.
+
+**Usage:**
+```bash
+ARTIFACTS_DIR=/tmp/artifacts ./store-reuse-vm.sh '{"name":"centos-bootc-store-reuse","ssh_image_name":"centos-bootc"}'
+```
+
+**What it does:** installs the ssh-enabled image from the registry onto
+disk A (the baseline), boots disk A with a blank disk B and no network but
+the SSH forward, checks that no registry is reachable, then inside the VM:
+validates a `sourceReuse` recipe for the booted digest, checks a missing
+digest is refused with disk B untouched, cancels an install during the copy
+and checks nothing is left behind, and installs from the VM's own bootc
+store onto disk B. Disk B then boots through `boot-verify.sh` (receipt
+checks required) and `store_reuse_identity` (`store-reuse-lib.sh`, tested by
+`tests/check-validation.sh`) checks it booted the verified copy. The job
+summary compares time, scratch and disk with the baseline. Needs sudo, KVM,
+QEMU, OVMF, jq and python3.
+
 ### `prepare-ssh-image.sh`
 Takes a container image and adds sshd + SSH public key authentication.
 

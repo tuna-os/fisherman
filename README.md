@@ -212,6 +212,15 @@ read-only. A list, including `[]`, is used exactly as given; `[]` turns
 discovery off. `/var/lib/superiso-store` is exposed whenever it exists, as
 before.
 
+**Installing from the host's own bootc store** (`sourceReuse`,
+experimental): a recipe with `"sourceReuse": {"store": "bootc", "digest":
+"sha256:…", "platform": "x86_64"}`, an empty `image`, an explicit
+`targetImgref` and `"experimental": ["bootc_store_reuse"]` installs the
+image the installed (not live) ostree host's bootc keeps under that digest:
+fisherman copies it with `bootc image copy-to-storage` to a name of its own,
+verifies it, installs from it and removes it. Never a default; see
+[`docs/SOURCE-REUSE.md`](docs/SOURCE-REUSE.md).
+
 ## Image catalog
 
 `data/images.json` is a recursive JSON tree of distro groups and leaf images.

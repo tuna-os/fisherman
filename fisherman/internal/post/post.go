@@ -85,6 +85,7 @@ type Cleanup struct {
 	mounts        []string
 	targetScratch []string
 	postRemovals  []string
+	releases      []func() error
 	luksMapper    string
 	zfsPool       string
 	done          bool
@@ -142,6 +143,17 @@ func (c *Cleanup) AddPostRemoval(path string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.postRemovals = append(c.postRemovals, path)
+}
+
+// AddRelease registers a function that releases a HOST resource the
+// install created outside the target (the source reuse copy and its
+// /var/tmp bind, #384). Run calls it after the LUKS close and before the
+// post-removals, on success and on every failure or cancel. It must be
+// safe to call when there is nothing to release.
+func (c *Cleanup) AddRelease(fn func() error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.releases = append(c.releases, fn)
 }
 
 // AddTargetScratch registers a scratch directory that lives ON the target
@@ -251,6 +263,12 @@ func (c *Cleanup) Run() error {
 		if err := luks.Close(c.luksMapper); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: closing LUKS device %s: %v\n", c.luksMapper, err)
 			errs = append(errs, fmt.Errorf("closing LUKS device %s: %w", c.luksMapper, err))
+		}
+	}
+	for i := len(c.releases) - 1; i >= 0; i-- {
+		if err := c.releases[i](); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: releasing a host resource: %v\n", err)
+			errs = append(errs, err)
 		}
 	}
 	// Host post-removals run last: nothing reads them any more.

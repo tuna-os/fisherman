@@ -368,9 +368,14 @@ func main() {
 
 	// Resolve and verify host-owned media before live probing (bootc status),
 	// store discovery or CheckImage can inspect a stale cache or the registry.
-	mediaInput, err := resolveMediaInput(r)
-	if err != nil {
-		fatal("required local source is absent or unreadable; refusing installation: %v", err)
+	// A sourceReuse recipe names its source itself, and is refused on live
+	// media (reuseProblems), so no media input is bound for it.
+	var mediaInput *install.MediaInput
+	if r.SourceReuse == nil {
+		mediaInput, err = resolveMediaInput(r)
+		if err != nil {
+			fatal("required local source is absent or unreadable; refusing installation: %v", err)
+		}
 	}
 	sourceImgref := r.Image
 	if mediaInput != nil {
@@ -385,7 +390,7 @@ func main() {
 	// the same function (installProblems), before any disk is touched. The
 	// first problem ends the install, and the error event carries its code.
 	var live probe.Live
-	if r.Image == "" && mediaInput == nil {
+	if r.Image == "" && mediaInput == nil && r.SourceReuse == nil {
 		live = hostLive()
 	}
 	if mediaInput != nil {
@@ -430,12 +435,25 @@ func main() {
 		fatalProblem("cannot keep the existing filesystem", ps[0])
 	}
 
+	// ── Source reuse (explicit opt-in, #384) ─────────────────────────────
+	// Copy the image the recipe names by digest out of this host's bootc
+	// storage, verify it, and install from the copy. Before any disk step:
+	// a refusal or a failed copy leaves the target untouched. Absent
+	// sourceReuse, nothing here runs.
+	reused, reuseErr := acquireSourceReuse(r, cleanup.AddRelease)
+	if reuseErr != nil {
+		fatalProblem("source reuse", *reuseErr)
+	}
+	if reused != nil {
+		sourceImgref = reused.SourceImgref
+	}
+
 	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
 	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
 	isManual := len(r.CustomMounts) > 0
 	isSystemdBoot := r.Bootloader == "systemd" || r.Filesystem == "zfs"
 
-	if r.Image == "" {
+	if r.Image == "" && reused == nil {
 		// Only reachable on live media (checkImageSource).
 		msg := fmt.Sprintf("Live media (%s): installing the running image", live.DetectedBy)
 		if live.LiveImage != "" {
@@ -448,7 +466,7 @@ func main() {
 	// Preserve explicitly supplied stores without probing unrelated caches.
 	imageStores := r.AdditionalImageStores
 	var discoveredStores bool
-	if mediaInput == nil {
+	if mediaInput == nil && reused == nil {
 		imageStores, discoveredStores = resolveImageStores(r)
 	}
 	if discoveredStores && len(imageStores) > 0 {
@@ -460,6 +478,13 @@ func main() {
 	if mediaInput != nil {
 		imageCheck.Offline = true
 		progress.Info("Offline: using embedded media image " + mediaInput.OCILayoutPath)
+	} else if reused != nil {
+		// The verified copy, read locally; never a registry.
+		imageCheck = install.CheckImage(sourceImgref)
+		if imageCheck.NeedsPull {
+			fatalProblem("source reuse", reuseProblem(recipe.CodeSourceReuseVerifyFailed,
+				"the verified copy "+reused.Destination+" is no longer readable in containers-storage"))
+		}
 	} else if r.Image != "" {
 		progress.Info("Checking image cache...")
 		imageCheck = install.CheckImage(r.Image)
@@ -862,6 +887,13 @@ func main() {
 	}
 	if err := bootcInstall(opts); err != nil {
 		fatal("bootc install: %v", err)
+	}
+	if reused != nil {
+		msg, p := checkReusedInstall(activeTargetMount, reused)
+		if p != nil {
+			fatalProblem("source reuse", *p)
+		}
+		progress.Info(msg)
 	}
 
 	// Ensure BOOTX64.EFI is on the ESP before anything touches the mount stack.

@@ -250,3 +250,19 @@ images:
   #   composefs_backend: false
   #   unified_storage: false
   #   selinux_disabled: false
+
+# bootc store reuse (#384 phase 2): the disposable offline VM profile. A VM
+# booted from the installed ssh_image_name, with no registry reachable,
+# installs itself onto a second disk from its own bootc store
+# (recipe sourceReuse), then that disk boots and must be the verified copy.
+# Run by bootcrew-vm.yml's store-reuse-advisory job, which is ADVISORY
+# (continue-on-error, not a required canary) and never part of the image
+# lists above. ostree + GRUB only: the reuse refuses composefs.
+# scripts/store-reuse-vm.sh, docs/SOURCE-REUSE.md.
+store_reuse:
+  - name: centos-bootc-store-reuse
+    ssh_image_name: centos-bootc
+    filesystem: xfs
+    composefs_backend: false
+    vm_memory: 4G
+    vm_timeout: 3000
