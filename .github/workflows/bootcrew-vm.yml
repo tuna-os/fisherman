@@ -197,6 +197,10 @@ jobs:
       - name: Run bootcrew test
         env:
           ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+          # The receipt checks (#385) fail the required canaries. They passed
+          # on both (composefs + systemd-boot, ostree + GRUB) in #438's run.
+          # The advisory images keep them advisory.
+          BOOTCREW_RECEIPT_REQUIRED: "1"
         run: |
           mkdir -p "$ARTIFACTS_DIR"
           IMAGE_JSON='${{ toJson(matrix.image) }}'
