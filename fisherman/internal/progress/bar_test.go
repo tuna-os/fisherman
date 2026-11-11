@@ -4,7 +4,7 @@ package progress
 //
 // testdata/fraction-cases.json and testdata/dry-run-transcript.ndjson are
 // copied verbatim from tuna-os/bootc-installer, shared/progress/ on dev
-// (bootc-installer commit 7cb536cf), where generate-fraction-cases.py writes
+// (bootc-installer commit 1aeef69a), where generate-fraction-cases.py writes
 // the cases from the canonical parser, progress_parser.py. Keep them
 // byte-identical with that repository: refresh with
 //
