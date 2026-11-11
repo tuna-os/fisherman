@@ -1,0 +1,6 @@
+{"elapsed_ms":512000,"first_boot_check":true,"install_id":"0123456789abcdef0123456789abcdef","path":"/var/lib/fisherman/install-receipt.json","timestamp":"1970-01-01T00:00:00Z","type":"receipt","version":1,"written":true}
+{"elapsed_ms":512000,"first_boot_check":false,"install_id":"0123456789abcdef0123456789abcdef","path":"/var/lib/fisherman/install-receipt.json","reason":"transient_etc","timestamp":"1970-01-01T00:00:00Z","type":"receipt","version":1,"written":true}
+{"elapsed_ms":512000,"first_boot_check":false,"install_id":"0123456789abcdef0123456789abcdef","path":"/var/lib/fisherman/install-receipt.json","reason":"collector_failed","timestamp":"1970-01-01T00:00:00Z","type":"receipt","version":1,"written":true}
+{"elapsed_ms":512000,"first_boot_check":false,"reason":"resolve_failed","timestamp":"1970-01-01T00:00:00Z","type":"receipt","version":1,"written":false}
+{"elapsed_ms":512000,"first_boot_check":false,"reason":"build_failed","timestamp":"1970-01-01T00:00:00Z","type":"receipt","version":1,"written":false}
+{"elapsed_ms":512000,"first_boot_check":false,"reason":"write_failed","timestamp":"1970-01-01T00:00:00Z","type":"receipt","version":1,"written":false}

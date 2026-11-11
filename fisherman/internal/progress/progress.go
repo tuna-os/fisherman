@@ -58,6 +58,51 @@ type recoveryKeyEvent struct {
 	Key  string `json:"key"`
 }
 
+// ReceiptEventVersion is the version of the `receipt` event. Fields and
+// reason codes are only ever added; a new version means a field changed
+// meaning.
+const ReceiptEventVersion = 1
+
+// Reason codes of the `receipt` event (docs/RECEIPT.md). A code is never
+// renamed or reused.
+const (
+	// ReceiptResolveFailed: the installed deployment was not found, so
+	// nothing was written.
+	ReceiptResolveFailed = "resolve_failed"
+	// ReceiptBuildFailed: the receipt could not be built (no install id),
+	// so nothing was written.
+	ReceiptBuildFailed = "build_failed"
+	// ReceiptWriteFailed: the receipt file could not be written.
+	ReceiptWriteFailed = "write_failed"
+	// ReceiptTransientEtc: the receipt is written, but the image's /etc is
+	// transient, so the first-boot collector is not staged.
+	ReceiptTransientEtc = "transient_etc"
+	// ReceiptCollectorFailed: the receipt is written, but staging the
+	// first-boot collector in /etc failed.
+	ReceiptCollectorFailed = "collector_failed"
+)
+
+// ReceiptStatus is what the install did with the installation receipt
+// (docs/RECEIPT.md). It holds nothing the receipt does not hold.
+type ReceiptStatus struct {
+	// Written is true when the receipt file is on the installed system.
+	Written bool `json:"written"`
+	// InstallID and Path are set only when Written.
+	InstallID string `json:"install_id,omitempty"`
+	Path      string `json:"path,omitempty"`
+	// FirstBootCheck is true when the first-boot collector is staged.
+	FirstBootCheck bool `json:"first_boot_check"`
+	// Reason is one of the Receipt* codes; empty when the receipt is
+	// written and the collector staged.
+	Reason string `json:"reason,omitempty"`
+}
+
+type receiptEvent struct {
+	Type    string `json:"type"`
+	Version int    `json:"version"`
+	ReceiptStatus
+}
+
 type errorEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
@@ -130,6 +175,13 @@ func Complete(message, bootID string) {
 // Only emit when a random (non-user-chosen) passphrase is the sole fallback.
 func RecoveryKey(key string) {
 	write(recoveryKeyEvent{Type: "recovery_key", Key: key})
+}
+
+// Receipt emits the `receipt` event: whether the installation receipt was
+// written, and whether the first-boot check is staged. It is informational;
+// the install goes on whatever it says.
+func Receipt(st ReceiptStatus) {
+	write(receiptEvent{Type: "receipt", Version: ReceiptEventVersion, ReceiptStatus: st})
 }
 
 // Error emits a JSON terminal-failure event to stdout. Callers still write a

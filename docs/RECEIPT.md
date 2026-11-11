@@ -45,6 +45,39 @@ verify.
 A failure to write the receipt is a warning in the install log. It never
 fails the install: the receipt is evidence, not part of a bootable system.
 
+## The `receipt` progress event
+
+The install reports what it did in the progress stream
+([JSON-PROGRESS-FORMAT.md](JSON-PROGRESS-FORMAT.md#receipt)): an `info`
+line in English, then one `receipt` event, inside the `Configuring
+installed system` step.
+
+```json
+{"type":"receipt","version":1,"written":true,"install_id":"0123456789abcdef0123456789abcdef","path":"/var/lib/fisherman/install-receipt.json","first_boot_check":true,"timestamp":"…","elapsed_ms":498120}
+```
+
+| `written` | `first_boot_check` | `reason` | Meaning |
+|---|---|---|---|
+| `true` | `true` | (absent) | the receipt is written and the first-boot collector staged |
+| `true` | `false` | `transient_etc` | the receipt is written; the image's `/etc` is transient, so the collector is not staged. Verify with `fisherman verify --json --live` on the installed system. |
+| `true` | `false` | `collector_failed` | the receipt is written; staging the collector in `/etc` failed (a warning in the log). Verify as for `transient_etc`. |
+| `false` | `false` | `resolve_failed` | the installed deployment was not found; nothing was written |
+| `false` | `false` | `build_failed` | the receipt could not be built (no install id); nothing was written |
+| `false` | `false` | `write_failed` | the receipt file could not be written |
+
+`install_id` and `path` are present only when `written` is true; they are
+the receipt's own `install_id` and this document's receipt path. The event
+holds nothing else: nothing the receipt does not hold, and no secret. A
+code is never renamed or reused; a new code is an addition and does not bump
+`version`. A frontend that meets an unknown code treats the receipt by
+`written` and `first_boot_check` alone.
+
+`written` is "installed, not yet verified", never "boot verified". The
+event does not fail the install, whatever it says, and the install's exit
+code does not depend on it. One line per row of the table is in
+`fisherman/internal/progress/testdata/receipt-events.ndjson`, which the
+progress tests replay through the emitter.
+
 The unit runs once. Its condition `!…/collection.json` stops it after the
 first collection. It runs the image's own bootc, as root, after
 `basic.target`. To stop it, remove the unit file and its link.

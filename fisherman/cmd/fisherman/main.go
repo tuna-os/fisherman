@@ -1121,8 +1121,11 @@ func main() {
 	// The installation receipt and its first-boot collector (#385). The
 	// install says "installed, reboot required"; only the installed system,
 	// after it boots, can say which image it booted.
-	progress.Info(stageReceipt(activeTargetMount, sourceImgref,
-		receiptUpdateRef(sourceImgref, targetImgref, live.LiveImage), mediaInput))
+	// The log line, then the `receipt` event a frontend keys on.
+	receiptStatus, receiptMsg := stageReceipt(activeTargetMount, sourceImgref,
+		receiptUpdateRef(sourceImgref, targetImgref, live.LiveImage), mediaInput)
+	progress.Info(receiptMsg)
+	progress.Receipt(receiptStatus)
 
 	// No cache warming and no thumbnail generation here: the image's /usr is
 	// read-only (and, on ostree, hard-linked into the repository), its caches

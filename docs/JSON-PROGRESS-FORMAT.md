@@ -147,6 +147,46 @@ fisherman does not pause after this event. The install keeps running, so the
 frontend must hold the key and present it itself, for example on the
 completion screen.
 
+### `receipt`
+
+What the install did with the installation receipt
+([RECEIPT.md](RECEIPT.md#the-receipt-progress-event)). Informational: the
+install goes on whatever it says.
+
+**Fields:**
+- `type` — `"receipt"`
+- `version` — `1` (integer). Fields and reason codes are only added; a new
+  version means a field changed meaning.
+- `written` — the receipt file is on the installed system (boolean)
+- `install_id` — the receipt's install id, 32 hex characters (string).
+  Present only when `written`.
+- `path` — `/var/lib/fisherman/install-receipt.json`, as the installed
+  system sees it (string). Present only when `written`.
+- `first_boot_check` — the first-boot collector is staged (boolean)
+- `reason` — a stable code, present unless the receipt is written and the
+  collector staged: `resolve_failed`, `build_failed`, `write_failed`
+  (`written` false), `transient_etc`, `collector_failed` (`written` true,
+  `first_boot_check` false). See
+  [RECEIPT.md](RECEIPT.md#the-receipt-progress-event).
+- `timestamp`, `elapsed_ms` — as above
+
+**Example:**
+```json
+{"elapsed_ms":498120,"first_boot_check":true,"install_id":"0123456789abcdef0123456789abcdef","path":"/var/lib/fisherman/install-receipt.json","timestamp":"2026-11-11T19:13:46.130120Z","type":"receipt","version":1,"written":true}
+{"elapsed_ms":498120,"first_boot_check":false,"reason":"write_failed","timestamp":"2026-11-11T19:13:46.130120Z","type":"receipt","version":1,"written":false}
+```
+
+**Where it appears:** once, inside the `Configuring installed system` step,
+right after the `info` line that says the same in English, and before the
+`Finalizing installation` step. A failed install that ends before that step
+has none, and a fisherman older than this event never sends it.
+
+**Usage:** Key the done page's copy on `written`, `first_boot_check` and
+`reason`, never on the `info` message. `written` means "installed, not yet
+verified": it is no claim that the target booted. That is `fisherman verify
+--json`, run on the installed system. One case per outcome is in
+`fisherman/internal/progress/testdata/receipt-events.ndjson`.
+
 ### `complete`
 
 The install finished. fisherman has already turned off any swap it activated on the target, unmounted the target and closed
@@ -501,6 +541,8 @@ for line in sys.stdin:
         print(f"{event['overall_pct']}%  {event.get('step_id', event['step_name'])}")
     elif kind == "recovery_key":
         recovery_key = event["key"]  # keep it; show it before reboot
+    elif kind == "receipt":
+        receipt = event  # written, install_id, first_boot_check, reason
     elif kind == "error":
         print(f"failed: {event['message']}")
     elif kind == "complete":
@@ -529,7 +571,7 @@ grown over time:
 - Unreleased: `overall_pct` on `step`, `substep` and `complete`, and `step_id`
   on `step` (#270); exit code 130 on cancel (#267); `code` and `field` on
   `error` (#404, #402); a closed stdout is a cancel with teardown, not a
-  death by SIGPIPE (#403).
+  death by SIGPIPE (#403); the `receipt` event (#439).
 
 New event types and fields may appear in any release. Consumers must ignore
 event types and fields they do not know.
