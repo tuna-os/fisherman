@@ -46,7 +46,8 @@ func goldenProber(t *testing.T) *Prober {
 	for call, out := range bootcCurrent {
 		host.canned[call] = out
 	}
-	return &Prober{Root: fakeRoot(t, files), Run: host.run, Getenv: noEnv}
+	// Arch is pinned so the golden does not depend on the test machine.
+	return &Prober{Root: fakeRoot(t, files), Run: host.run, Getenv: noEnv, Arch: "x86_64"}
 }
 
 // TestProbeGolden pins the whole JSON document. docs/PROBE.md quotes the

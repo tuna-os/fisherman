@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "context": "live-host",
+  "available": true,
+  "reason": "observed",
+  "machine_platform": "x86_64",
+  "sources": {
+    "bootc_status": "observed",
+    "store_index": "absent",
+    "image_list": "needs_root"
+  },
+  "ignored_entries": 0,
+  "items": [
+    {
+      "ref": "ghcr.io/example/os:stable",
+      "owner": "bootc",
+      "context": "live-host",
+      "storage": "ostree",
+      "roles": [
+        "booted"
+      ],
+      "availability": "deployed",
+      "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+      "digest_from": "bootc_status",
+      "platform": "x86_64",
+      "matches_machine": true
+    },
+    {
+      "ref": "ghcr.io/example/os:stable",
+      "owner": "bootc",
+      "context": "live-host",
+      "storage": "ostree",
+      "roles": [
+        "staged"
+      ],
+      "availability": "deployed",
+      "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "digest_from": "bootc_status",
+      "platform": "x86_64",
+      "matches_machine": true
+    },
+    {
+      "ref": "ghcr.io/example/os:old",
+      "owner": "bootc",
+      "context": "live-host",
+      "storage": "ostree",
+      "roles": [
+        "rollback"
+      ],
+      "availability": "deployed",
+      "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "digest_from": "bootc_status",
+      "platform": "x86_64",
+      "matches_machine": true
+    }
+  ]
+}

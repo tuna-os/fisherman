@@ -114,7 +114,7 @@ func TestRunProbeHelp(t *testing.T) {
 
 func TestDefaultProberIsTheHost(t *testing.T) {
 	p := newProber()
-	if p.Root != "/" || p.Run == nil || p.Getenv == nil || p.Sandboxed == nil {
+	if p.Root != "/" || p.Run == nil || p.Getenv == nil || p.Sandboxed == nil || p.Euid == nil || p.ListBootcImages {
 		t.Errorf("default prober = %+v", p)
 	}
 }
@@ -229,5 +229,43 @@ func TestProbeRunIsBounded(t *testing.T) {
 	}
 	if _, err := probeRun("sh", "-c", "exit 0"); err != nil {
 		t.Errorf("probeRun: %v", err)
+	}
+}
+
+// --bootc-image-list is the only way to make the probe run `bootc image
+// list`; the flag reaches the Prober, and a host without bootc still gets an
+// explicit, unavailable bootc_store.
+func TestRunProbeBootcImageList(t *testing.T) {
+	for _, tt := range []struct {
+		args []string
+		want bool
+	}{
+		{[]string{"--json"}, false},
+		{[]string{"--json", "--bootc-image-list"}, true},
+	} {
+		var calls []string
+		p := selectionProber(t, &calls)
+		withProber(t, p)
+		var out, errOut bytes.Buffer
+		if code := runProbe(tt.args, &out, &errOut); code != 0 {
+			t.Fatalf("%v: exit %d (%s)", tt.args, code, errOut.String())
+		}
+		if p.ListBootcImages != tt.want {
+			t.Errorf("%v: ListBootcImages %v", tt.args, p.ListBootcImages)
+		}
+		var res probe.Result
+		if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		s := res.BootcStore
+		if s.Version != probe.BootcStoreVersion || s.Available || s.Reason == "" || s.Items == nil ||
+			s.Sources.ImageList != probe.SourceNotApplicable {
+			t.Errorf("%v: bootc_store = %+v", tt.args, s)
+		}
+		for _, call := range calls {
+			if strings.HasPrefix(call, "bootc image") {
+				t.Errorf("%v: ran %q on a host without bootc", tt.args, call)
+			}
+		}
 	}
 }

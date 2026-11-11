@@ -42,6 +42,9 @@ type Result struct {
 	// Capabilities is the versioned, source-scoped bootc report
 	// (tuna-os/fisherman#383). It has its own version field.
 	Capabilities Capabilities `json:"capabilities"`
+	// BootcStore is the versioned inventory of the live host's bootc-owned
+	// image storage (tuna-os/fisherman#384). It has its own version field.
+	BootcStore BootcStore `json:"bootc_store"`
 }
 
 // Runner runs a command on the host and returns its stdout. In production it
@@ -65,6 +68,15 @@ type Prober struct {
 	// Selection names the source the frontend selected. The zero value
 	// selects nothing; see Capabilities.
 	Selection Selection
+	// ListBootcImages asks BootcStore to run `bootc image list`. It is off
+	// in the default probe: bootc needs root for it and opens its own store
+	// to answer, so it is not read-only (docs/PROBE.md).
+	ListBootcImages bool
+	// Euid is the probe's effective user id; os.Geteuid when nil.
+	Euid func() int
+	// Arch is the machine architecture in bootc's spelling ("x86_64");
+	// derived from runtime.GOARCH when empty.
+	Arch string
 
 	// status caches the host's `bootc status --json` for one probe.
 	status *bootcHostStatus
@@ -83,6 +95,7 @@ func (p *Prober) Probe() (*Result, error) {
 		return nil, fmt.Errorf("system: %w", err)
 	}
 	live, offline, bootc := p.Live(), p.Offline(), p.Bootc()
+	caps := p.Capabilities(live, offline, bootc)
 	return &Result{
 		ProtocolVersion: ProtocolVersion,
 		Disks:           disks,
@@ -93,7 +106,8 @@ func (p *Prober) Probe() (*Result, error) {
 		Bootc:           bootc,
 		GPUs:            p.GPUs(),
 		DMI:             p.DMI(),
-		Capabilities:    p.Capabilities(live, offline, bootc),
+		Capabilities:    caps,
+		BootcStore:      p.BootcStore(caps, live),
 	}, nil
 }
 

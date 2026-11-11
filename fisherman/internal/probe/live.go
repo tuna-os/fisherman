@@ -107,6 +107,8 @@ type bootcHostStatus struct {
 	ok bool
 	// missing: there is no bootc command on the host.
 	missing bool
+	// failed: bootc exists, but `bootc status --json` failed.
+	failed bool
 	// booted: the object names a booted deployment with an image.
 	booted bool
 	image  string
@@ -116,6 +118,32 @@ type bootcHostStatus struct {
 	arch string
 	// backend is "ostree" or "composefs" when the booted entry says which.
 	backend string
+	// deployments are the boot entries that carry an image, in the order
+	// booted, staged, rollback, otherDeployments (the bootc store
+	// inventory, tuna-os/fisherman#384).
+	deployments []bootcDeployment
+}
+
+// bootcDeployment is one boot entry's image as `bootc status --json`
+// reports it. Values are raw; the inventory validates them.
+type bootcDeployment struct {
+	role   string
+	image  string
+	digest string
+	arch   string
+}
+
+// statusEntry is the part of a bootc BootEntry fisherman reads.
+type statusEntry struct {
+	Image *struct {
+		Image struct {
+			Image string `json:"image"`
+		} `json:"image"`
+		ImageDigest  string `json:"imageDigest"`
+		Architecture string `json:"architecture"`
+	} `json:"image"`
+	Ostree    json.RawMessage `json:"ostree"`
+	Composefs json.RawMessage `json:"composefs"`
 }
 
 // hostStatus runs `bootc status --json` once per Prober and keeps the answer:
@@ -133,27 +161,32 @@ func parseBootcStatus(out []byte, err error) bootcHostStatus {
 	var st bootcHostStatus
 	if err != nil {
 		st.missing = commandMissing(err)
+		st.failed = !st.missing
 		return st
 	}
 	var status struct {
 		Status struct {
-			Booted *struct {
-				Image *struct {
-					Image struct {
-						Image string `json:"image"`
-					} `json:"image"`
-					ImageDigest  string `json:"imageDigest"`
-					Architecture string `json:"architecture"`
-				} `json:"image"`
-				Ostree    json.RawMessage `json:"ostree"`
-				Composefs json.RawMessage `json:"composefs"`
-			} `json:"booted"`
+			Booted           *statusEntry  `json:"booted"`
+			Staged           *statusEntry  `json:"staged"`
+			Rollback         *statusEntry  `json:"rollback"`
+			OtherDeployments []statusEntry `json:"otherDeployments"`
 		} `json:"status"`
 	}
 	if json.Unmarshal(out, &status) != nil {
 		return st
 	}
 	st.ok = true
+	add := func(role string, e *statusEntry) {
+		if e != nil && e.Image != nil && len(st.deployments) < maxDeployments {
+			st.deployments = append(st.deployments, bootcDeployment{role, e.Image.Image.Image, e.Image.ImageDigest, e.Image.Architecture})
+		}
+	}
+	add(RoleBooted, status.Status.Booted)
+	add(RoleStaged, status.Status.Staged)
+	add(RoleRollback, status.Status.Rollback)
+	for i := range status.Status.OtherDeployments {
+		add(RoleOtherDeployment, &status.Status.OtherDeployments[i])
+	}
 	b := status.Status.Booted
 	if b == nil || b.Image == nil {
 		return st
