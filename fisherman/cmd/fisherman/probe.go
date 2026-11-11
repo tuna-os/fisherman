@@ -15,7 +15,7 @@ import (
 // newProber is the production Prober; tests replace it with one pointed at a
 // fixture root and canned command output.
 var newProber = func() *probe.Prober {
-	return &probe.Prober{Root: "/", Run: probeRun, Getenv: os.Getenv, Sandboxed: runner.InFlatpak}
+	return &probe.Prober{Root: "/", Run: probeRun, Getenv: os.Getenv, Sandboxed: runner.InFlatpak, Euid: os.Geteuid}
 }
 
 // Limits on every command the probe runs. A probe answers in seconds or
@@ -29,7 +29,7 @@ func probeRun(name string, args ...string) ([]byte, error) {
 	return runner.BoundedOutput(probeCommandTimeout, probeMaxOutput, name, args...)
 }
 
-const probeUsage = `usage: fisherman probe --json [--source <ref> | --live-root] [--target-imgref <ref>]
+const probeUsage = `usage: fisherman probe --json [--source <ref> | --live-root] [--target-imgref <ref>] [--bootc-image-list]
 
 Print the disks, TPM, RAM/CPU/UEFI, live-media, offline-store, host bootc,
 GPU and machine-model facts an installer frontend needs, as one JSON object
@@ -38,14 +38,19 @@ on stdout. Read-only; needs no root. Schema: docs/PROBE.md.
   --source <ref>         the recipe's image; scopes "capabilities" to it
   --live-root            the recipe omits image (the live root is the source)
   --target-imgref <ref>  the recipe's targetImgref, the update reference
+  --bootc-image-list     also run 'bootc image list' for "bootc_store"; only
+                         as root, on an installed ostree host. Not read-only:
+                         bootc opens its own store to answer (docs/PROBE.md)
 
 The probe never pulls, mounts, starts a container or contacts a registry.
+Without --bootc-image-list it writes nothing.
 `
 
 // runProbe implements `fisherman probe --json` and returns the exit code.
 func runProbe(args []string, stdout, stderr io.Writer) int {
 	jsonOut := false
 	var sel probe.Selection
+	listImages := false
 	for i := 0; i < len(args); i++ {
 		a := args[i]
 		flag, value, hasValue := strings.Cut(a, "=")
@@ -76,6 +81,8 @@ func runProbe(args []string, stdout, stderr io.Writer) int {
 			jsonOut = true
 		case "--live-root":
 			sel.LiveRoot = true
+		case "--bootc-image-list":
+			listImages = true
 		case "-h", "--help", "help":
 			fmt.Fprint(stdout, probeUsage)
 			return 0
@@ -95,6 +102,7 @@ func runProbe(args []string, stdout, stderr io.Writer) int {
 
 	p := newProber()
 	p.Selection = sel
+	p.ListBootcImages = listImages
 	res, err := p.Probe()
 	if err != nil {
 		fmt.Fprintf(stderr, "probe: %v\n", err)

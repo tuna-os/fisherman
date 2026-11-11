@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **bootc store inventory in `fisherman probe --json`** (#384, phase 1):
+  a new `bootc_store` object with its own `version` (1), present only when
+  the capability report found a bootc-booted host; otherwise `available` is
+  `false` with a reason (`not_bootc_booted`, `bootc_missing`,
+  `check_failed`, `malformed_output`). Each item names its owner (`bootc`),
+  context (`live-host`), storage (`ostree`, `composefs`,
+  `bootc-containers-storage`), roles, availability (`deployed`, `stored`,
+  `listed`), manifest digest and platform, each with a reason when unknown,
+  and `matches_machine`. The default probe reads only the `bootc status
+  --json` it already ran and bootc's store index as a file: no extra
+  command, no write, no network. `bootc image list --type host --format
+  json` runs only with `--bootc-image-list`, as root, on an installed
+  ostree host, because bootc 1.17.1 needs root for it and opens its store
+  to answer (on composefs it mounts the ESP read-write). References with
+  credentials are redacted. Reuse through `copy-to-storage` (phase 2) is
+  not implemented: it needs a VM to qualify. Golden fixtures in
+  `internal/probe/testdata/golden/store-*.json`; contract in docs/PROBE.md.
+
 - **Source-scoped bootc capabilities in `fisherman probe --json`** (#383):
   a new `capabilities` object with its own `version` (1). `--source <ref>`,
   `--live-root` and `--target-imgref <ref>` select the source; the live

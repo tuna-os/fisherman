@@ -13,18 +13,22 @@ and machine model the installer runs on.
 - Exit `2`: bad arguments. `--json` is required; it is the only output format.
   An invalid `--source` or `--target-imgref` is refused without echoing it.
 - **No root.** Run it as the desktop user.
-- **Read-only.** It writes nothing: no files, no mounts, no lock files.
+- **Read-only.** It writes nothing: no files, no mounts, no lock files. The
+  one exception is the opt-in `--bootc-image-list`; see
+  [bootc store inventory](#bootc-store-inventory).
 
 Each frontend used to compute these facts itself, and the copies drifted
 (see "Why" below). The logic now lives here; a frontend only renders it.
 
 ```text
-fisherman probe --json [--source <ref> | --live-root] [--target-imgref <ref>]
+fisherman probe --json [--source <ref> | --live-root] [--target-imgref <ref>] [--bootc-image-list]
 ```
 
 `--source`, `--live-root` and `--target-imgref` scope the `capabilities`
 object to the source the user selected; see [Capabilities](#capabilities).
-Every other section is the same with or without them.
+Every other section is the same with or without them. `--bootc-image-list`
+adds `bootc image list` to the `bootc_store` inventory, under the conditions
+in [bootc store inventory](#bootc-store-inventory).
 
 ## Running it from a frontend
 
@@ -86,10 +90,11 @@ mounts, which the boot-disk rule needs.
     vendor          string   DMI sys_vendor, whitespace collapsed; "" when unknown
     product         string   DMI product_name; "" when unknown
   capabilities               the selected source's bootc capabilities; see "Capabilities"
+  bootc_store                the live host's bootc-owned image storage; see "bootc store inventory"
 }
 ```
 
-`bootc`, `gpus`, `dmi` and `capabilities` were added after `protocol_version`
+`bootc`, `gpus`, `dmi`, `capabilities` and `bootc_store` were added after `protocol_version`
 1 shipped. They are additions, so the version did not change; a fisherman
 that predates them simply omits the keys.
 
@@ -424,7 +429,9 @@ resets `PATH`; on an image-based host both resolve to `/usr/bin/bootc`.
 `not_qualified` in every case, and `finalization` never becomes `supported`:
 nothing read-only can show they work with fisherman's install profile. A VM
 install of the source on the matrix in `tests/bootcrew-matrix.yaml` is the
-proof; until a qualified profile exists for a source, they stay `unknown`.
+proof; until a qualified profile exists for a source, they stay `unknown`. The
+`bootc_store` inventory does not change this: it lists what the live host
+stores, not what the source's bootc can do.
 
 Fixtures: `fisherman/internal/probe/testdata/golden/caps-*.json` pin the
 object for no source, a matching OSTree root with a current bootc, a
@@ -433,6 +440,143 @@ conflicting configuration, a registry source, a digest-pinned reference, a
 host without bootc, malformed output, unknown fields, wrongly typed fields, a
 failed check, a local OCI layout, a source not found locally, ambiguous
 local copies, and `--live-root`.
+
+### bootc store inventory
+
+`bootc_store` is the inventory of tuna-os/fisherman#384, phase 1, for
+tuna-os/bootc-installer#267. It lists the images that the **live host's**
+bootc keeps in its own storage, with the identity of each. It has its own
+`version`. It describes the machine that runs the installer, never the
+selected source or the installed target: `context` is always `live-host`.
+
+The inventory exists only when the capability report found a bootc-booted
+host (`capabilities.live_host.identity_reason` is not `not_bootc_booted`).
+Otherwise `available` is `false`, `reason` says why, and `items` is `[]`.
+
+#### Schema (`bootc_store.version` 1)
+
+```text
+bootc_store
+  version           int      1; bumped only when a field is removed, renamed or changes meaning
+  context           string   "live-host"
+  available         bool     the host is bootc-booted and the items describe its storage
+  reason            string   "observed", "not_bootc_booted", "bootc_missing", "check_failed" or "malformed_output"
+  machine_platform  string   this machine's architecture in bootc's spelling ("x86_64", "aarch64")
+  sources                    one status per input; see the table below
+    bootc_status    string   the same value as reason
+    store_index     string   bootc's own containers-storage index, read as a file
+    image_list      string   `bootc image list --type host --format json`
+  ignored_entries   int      image list entries that are not host inventory (logically bound images, unknown types)
+  items[]                    [] when none
+    ref             string   the reference without a transport; "" when ref_reason is set
+    ref_reason      string   present only when ref is "": "credentials_redacted" or "invalid_reference"
+    owner           string   "bootc": the storage belongs to the host's bootc, not to podman
+    context         string   "live-host"
+    storage         string   "ostree", "composefs", "bootc-containers-storage" or "unknown"
+    roles[]         string   "booted", "staged", "rollback", "other_deployment", "stored", "listed_host", "listed_unified"
+    availability    string   "deployed", "stored" or "listed"; see below
+    digest          string   the manifest digest, "sha256:<64 hex>": the immutable identity; "" when unknown
+    digest_from     string   present only with a digest: "bootc_status" or "bootc_store_index"
+    digest_reason   string   present only without one: "digest_missing", "malformed", "ambiguous" or "not_reported"
+    platform        string   the architecture bootc reports ("x86_64"); "" when unknown
+    platform_reason string   present only without one: "not_reported" or "malformed"
+    matches_machine bool     ref, digest and platform are known, and platform is machine_platform
+    mismatch_reason string   present only when false: "ref_unavailable", "identity_unknown", "platform_unknown" or "platform_mismatch"
+}
+```
+
+| `availability` | Source | Meaning |
+|---|---|---|
+| `deployed` | `bootc status --json` (booted, staged, rollback, otherDeployments) | a boot entry uses the image; its content is in the host's ostree or composefs repository |
+| `stored` | `/sysroot/ostree/bootc/storage/overlay-images/images.json` | bootc's own containers-storage holds the image: a logically bound image, or a host image with unified storage |
+| `listed` | `bootc image list` only | bootc named the image. Nothing confirms its identity: bootc 1.17.1 prints names only |
+
+`matches_machine` is a fact about identity. It does not mean that fisherman
+can install from the item: no install path reads bootc-owned storage yet
+(see [Reuse is not implemented](#reuse-is-not-implemented)). An item is
+merged with another only when both come from the same store: a `unified`
+list entry joins the store-index entry of the same name. A name that a boot
+entry shares with a listed host image is not proof of the same image (the
+ostree ref can move after a deployment), so they stay separate items.
+
+| Source status | Meaning |
+|---|---|
+| `observed` | read |
+| `not_applicable` | the host is not bootc-booted; the source was not consulted |
+| `absent` | the store does not exist |
+| `inaccessible` | the store exists, but the probe cannot read its index. It belongs to root, and the probe runs as the desktop user, so this is the usual answer |
+| `not_requested` | `--bootc-image-list` was not given (the default) |
+| `live_media` | asked for on live media: bootc refuses `image list` on a read-only sysroot, and the live store is not the target's |
+| `backend_not_qualified` | asked for on a host whose backend is not ostree; see below |
+| `needs_root` | asked for, but the probe is not root: bootc refuses `image list` without root, so fisherman does not run it |
+| `command_absent` | bootc rejected the subcommand or a flag (exit 2): an older bootc |
+| `check_failed` | the command failed for another reason (a timeout) |
+| `malformed_output` | the output is not the JSON the adapter reads; nothing of it is used |
+
+#### Why `bootc image list` is opt-in
+
+The default probe makes no writes and no network access. It reads the
+`bootc status --json` that the capability report already ran, and it reads
+the store index as a file. It runs no extra command.
+
+`bootc image list` is not read-only in bootc 1.17.1
+([`image.rs`](https://github.com/bootc-dev/bootc/blob/v1.17.1/crates/lib/src/image.rs),
+[`cli.rs`](https://github.com/bootc-dev/bootc/blob/v1.17.1/crates/lib/src/cli.rs)).
+On a booted host, every `--type` calls `get_storage()`, which:
+
+- requires root and `CAP_SYS_ADMIN`, and enters a private mount namespace;
+- on composefs, mounts the ESP read-write and checks the boot entries
+  (`prepend_custom_prefix`, which can rewrite them);
+- when bootc's store exists, creates `/run/bootc/storage` and runs
+  `podman images` against the store, which takes the store's locks.
+
+So fisherman runs it only with `--bootc-image-list`, only as root, only on
+an installed (not live) host whose booted backend is `ostree`, and only as
+`bootc image list --type host --format json`. A frontend runs the probe as
+the desktop user and gets `needs_root`; that is the expected answer. Even
+when it runs, the list adds names only, never an identity.
+
+`bootc image set-unified`, `pull-from-default-storage`, `image cmd` and
+`copy-to-storage` are never run by the probe.
+
+#### Adapters and secrets
+
+The adapters copy `image_type` and `image` from the list, `names` and
+`digest` from the store index, and `image.image.image`, `imageDigest` and
+`architecture` from each boot entry. Other keys, signatures, ostree remotes
+and store metadata are ignored. A reference loses its ostree-ext scheme
+(`ostree-unverified-registry:` and the like) and its transport. A reference
+with user information in the registry part (`user:token@registry/...`) is
+replaced by `""` with `credentials_redacted`; one that does not match the
+`--source` pattern gets `invalid_reference`. Digests must be `sha256:<64
+hex>` and architectures a short token. The list is capped at 1024 entries,
+the inventory at 256 items and the boot entries at 16.
+
+#### Reuse is not implemented
+
+Phase 2 of #384 (install from bootc-owned storage through `bootc image
+copy-to-storage`, behind an explicit recipe opt-in) is not in this release,
+and no recipe field asks for it. A fake-command test cannot qualify it:
+
+- `copy-to-storage` re-exports the image from ostree. Whether the export
+  has the manifest digest of the original image is unmeasured, so the
+  identity check after the transfer has no known-good answer yet.
+- It needs root on the live host, refuses a read-only sysroot (live media),
+  and writes to the host's default containers-storage, which on live media
+  is RAM. The scratch and disk cost against the current path is unmeasured.
+
+Both need the disposable offline VM profile the issue names.
+
+Fixtures: `fisherman/internal/probe/testdata/golden/store-*.json` pin the
+object for non-bootc live media, a host without bootc, a failed and a
+malformed `bootc status`, an installed ostree host with and without the
+list, a list of logically bound images only, an inaccessible store, an
+older bootc, a failed list, malformed list and index output, wrong
+architectures (of an entry, and of the machine), missing and corrupt
+identities, a composefs host, a probe that is not root, bootc live media,
+and references with credentials. `TestBootcStoreDefaultProbeIsReadOnly`
+checks that the default probe of a bootc host leaves its root unchanged and
+runs no command beyond the read-only set.
 
 ### Hardware facts
 
@@ -800,6 +944,35 @@ The output for a laptop booted from a live USB, pinned by
       "kernel_version": "",
       "kernel_unified": false
     }
+  },
+  "bootc_store": {
+    "version": 1,
+    "context": "live-host",
+    "available": true,
+    "reason": "observed",
+    "machine_platform": "x86_64",
+    "sources": {
+      "bootc_status": "observed",
+      "store_index": "absent",
+      "image_list": "not_requested"
+    },
+    "ignored_entries": 0,
+    "items": [
+      {
+        "ref": "ghcr.io/example/os:stable",
+        "owner": "bootc",
+        "context": "live-host",
+        "storage": "ostree",
+        "roles": [
+          "booted"
+        ],
+        "availability": "deployed",
+        "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        "digest_from": "bootc_status",
+        "platform": "x86_64",
+        "matches_machine": true
+      }
+    ]
   }
 }
 ```
@@ -810,6 +983,10 @@ The output for a laptop booted from a live USB, pinned by
 changes. Adding a field, an `excluded_reason` value or an `unmet` value does
 not change it, so a frontend must ignore fields it does not know and treat
 an unknown `excluded_reason` as "not eligible".
+
+`capabilities.version` and `bootc_store.version` follow the same rule for
+their own objects. A new reason code, role or source status is an addition:
+treat an unknown one as "not established".
 
 ## Why
 
