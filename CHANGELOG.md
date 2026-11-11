@@ -20,6 +20,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **`receipt` progress event** (#439): after it writes the installation
+  receipt, the install emits `{"type":"receipt","version":1,"written":…,
+  "install_id":…,"path":…,"first_boot_check":…}`, with a stable `reason`
+  (`resolve_failed`, `build_failed`, `write_failed`, `transient_etc`,
+  `collector_failed`) when the receipt or the first-boot collector is
+  missing, so a frontend's done page can show the install id and key its
+  copy on the outcome instead of on the English log line, which stays.
+  It never fails the install and holds nothing the receipt does not hold.
+  A collector that fails to stage after the receipt was written is now
+  reported as written (it was logged as "not written"). Fixtures:
+  `internal/progress/testdata/receipt-events.ndjson`.
 - **Installed-system identity receipt and `fisherman verify --json`**
   (#385): the install writes a non-secret receipt to the installed
   system's `/var/lib/fisherman/install-receipt.json` (through the

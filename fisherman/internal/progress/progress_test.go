@@ -153,3 +153,89 @@ func TestOutputIsNewlineTerminated(t *testing.T) {
 		})
 	}
 }
+
+// testdata/receipt-events.ndjson holds one `receipt` event for each outcome
+// (docs/RECEIPT.md). Each line is what Receipt writes for it, apart from
+// timestamp and elapsed_ms, so a frontend's parser can be tested against
+// the file.
+func TestReceiptEvents(t *testing.T) {
+	data, err := os.ReadFile("testdata/receipt-events.ndjson")
+	if err != nil {
+		t.Fatal(err)
+	}
+	codes := map[string]bool{
+		progress.ReceiptResolveFailed: false, progress.ReceiptBuildFailed: false,
+		progress.ReceiptWriteFailed: false, progress.ReceiptTransientEtc: false,
+		progress.ReceiptCollectorFailed: false,
+	}
+	allowed := map[string]bool{
+		"type": true, "version": true, "written": true, "install_id": true, "path": true,
+		"first_boot_check": true, "reason": true, "timestamp": true, "elapsed_ms": true,
+	}
+	sawOK := false
+	for i, line := range bytes.Split(bytes.TrimSpace(data), []byte("\n")) {
+		var want map[string]any
+		if err := json.Unmarshal(line, &want); err != nil {
+			t.Fatalf("line %d: %v", i+1, err)
+		}
+		var st progress.ReceiptStatus
+		if err := json.Unmarshal(line, &st); err != nil {
+			t.Fatalf("line %d: %v", i+1, err)
+		}
+		out := captureStdout(t, func() { progress.Receipt(st) })
+		var got map[string]any
+		if err := json.Unmarshal([]byte(out), &got); err != nil {
+			t.Fatalf("line %d: invalid JSON %q: %v", i+1, out, err)
+		}
+		for _, m := range []map[string]any{want, got} {
+			delete(m, "timestamp")
+			delete(m, "elapsed_ms")
+		}
+		if g, w := mustJSON(t, got), mustJSON(t, want); g != w {
+			t.Errorf("line %d:\n got %s\nwant %s", i+1, g, w)
+		}
+		for k := range got {
+			if !allowed[k] {
+				t.Errorf("line %d: field %q is not in the documented event", i+1, k)
+			}
+		}
+		if got["type"] != "receipt" || got["version"] != float64(progress.ReceiptEventVersion) {
+			t.Errorf("line %d: type/version %v/%v", i+1, got["type"], got["version"])
+		}
+		switch st.Reason {
+		case "":
+			if !st.Written || !st.FirstBootCheck {
+				t.Errorf("line %d: no reason, but %+v", i+1, st)
+			}
+			sawOK = true
+		default:
+			if _, ok := codes[st.Reason]; !ok {
+				t.Errorf("line %d: unknown reason %q", i+1, st.Reason)
+			}
+			codes[st.Reason] = true
+			if st.FirstBootCheck {
+				t.Errorf("line %d: first_boot_check with reason %q", i+1, st.Reason)
+			}
+		}
+		if st.Written != (st.InstallID != "" && st.Path != "") {
+			t.Errorf("line %d: install_id and path go with written: %+v", i+1, st)
+		}
+	}
+	if !sawOK {
+		t.Error("no line for a written receipt")
+	}
+	for code, seen := range codes {
+		if !seen {
+			t.Errorf("no line for reason %q", code)
+		}
+	}
+}
+
+func mustJSON(t *testing.T, v any) string {
+	t.Helper()
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}

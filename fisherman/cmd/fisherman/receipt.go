@@ -9,6 +9,7 @@ import (
 
 	"github.com/tuna-os/fisherman/internal/install"
 	"github.com/tuna-os/fisherman/internal/post"
+	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/receipt"
 	"github.com/tuna-os/fisherman/internal/runner"
 )
@@ -19,6 +20,9 @@ var receiptOutput = runner.Output
 
 // receiptNow is the clock; tests fix it.
 var receiptNow = time.Now
+
+// receiptNewID makes the install id; tests replace it.
+var receiptNewID = receipt.NewInstallID
 
 // receiptUpdateRef is the reference bootc records for updates: the target
 // reference when the install passed one, else the source, without its
@@ -48,16 +52,21 @@ func bareRef(image string) string {
 }
 
 // stageReceipt writes the installation receipt and stages the first-boot
-// collector in the installed system at target (docs/RECEIPT.md), and
-// returns the line to log. It never fails the install: the receipt is
-// evidence for later, not part of a bootable system.
-func stageReceipt(target, sourceImgref, updateRef string, media *install.MediaInput) string {
+// collector in the installed system at target (docs/RECEIPT.md). It returns
+// what happened, for the `receipt` progress event, and the line to log. It
+// never fails the install: the receipt is evidence for later, not part of a
+// bootable system.
+func stageReceipt(target, sourceImgref, updateRef string, media *install.MediaInput) (progress.ReceiptStatus, string) {
+	notWritten := func(reason string, err error) (progress.ReceiptStatus, string) {
+		return progress.ReceiptStatus{Reason: reason},
+			fmt.Sprintf("Warning: installation receipt not written: %v", err)
+	}
 	d, err := post.ResolveDeployment(target)
 	if err != nil {
-		return fmt.Sprintf("Warning: installation receipt not written: %v", err)
+		return notWritten(progress.ReceiptResolveFailed, err)
 	}
 	f := receipt.Facts{
-		InstallID:        receipt.NewInstallID(),
+		InstallID:        receiptNewID(),
 		InstalledAt:      receiptNow(),
 		FishermanVersion: version,
 		Deployment:       d,
@@ -73,13 +82,19 @@ func stageReceipt(target, sourceImgref, updateRef string, media *install.MediaIn
 	}
 	rc, err := receipt.New(f)
 	if err != nil {
-		return fmt.Sprintf("Warning: installation receipt not written: %v", err)
+		return notWritten(progress.ReceiptBuildFailed, err)
 	}
+	written := progress.ReceiptStatus{Written: true, InstallID: rc.InstallID, Path: receipt.ReceiptPath}
 	switch err := receipt.Write(d, rc); {
 	case errors.Is(err, receipt.ErrTransientEtc):
-		return fmt.Sprintf("Installation receipt written to %s; %v (run `fisherman verify --json` on the installed system)", receipt.ReceiptPath, err)
+		written.Reason = progress.ReceiptTransientEtc
+		return written, fmt.Sprintf("Installation receipt written to %s; %v (run `fisherman verify --json` on the installed system)", receipt.ReceiptPath, err)
+	case errors.Is(err, receipt.ErrCollector):
+		written.Reason = progress.ReceiptCollectorFailed
+		return written, fmt.Sprintf("Warning: installation receipt written to %s, but %v (run `fisherman verify --json` on the installed system)", receipt.ReceiptPath, err)
 	case err != nil:
-		return fmt.Sprintf("Warning: installation receipt not written: %v", err)
+		return notWritten(progress.ReceiptWriteFailed, err)
 	}
-	return fmt.Sprintf("Installation receipt written to %s; the first boot records the booted image (boot not verified yet)", receipt.ReceiptPath)
+	written.FirstBootCheck = true
+	return written, fmt.Sprintf("Installation receipt written to %s; the first boot records the booted image (boot not verified yet)", receipt.ReceiptPath)
 }

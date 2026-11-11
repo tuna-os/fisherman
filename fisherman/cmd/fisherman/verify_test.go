@@ -199,9 +199,12 @@ func TestStageReceiptInBootedDeployment(t *testing.T) {
 			}
 			t.Cleanup(func() { receiptOutput = oldOut })
 
-			msg := stageReceipt(fx.Path, "containers-storage:ghcr.io/x/os:1", "ghcr.io/x/os:1", nil)
+			st, msg := stageReceipt(fx.Path, "containers-storage:ghcr.io/x/os:1", "ghcr.io/x/os:1", nil)
 			if !strings.Contains(msg, "boot not verified yet") {
 				t.Fatalf("message %q", msg)
+			}
+			if !st.Written || !st.FirstBootCheck || st.Reason != "" || st.Path != receipt.ReceiptPath || len(st.InstallID) != 32 {
+				t.Errorf("status %+v", st)
 			}
 			b, err := os.ReadFile(filepath.Join(fx.Var, "lib", "fisherman", "install-receipt.json"))
 			if err != nil {
@@ -210,6 +213,9 @@ func TestStageReceiptInBootedDeployment(t *testing.T) {
 			var rc receipt.Receipt
 			if err := json.Unmarshal(b, &rc); err != nil {
 				t.Fatal(err)
+			}
+			if rc.InstallID != st.InstallID {
+				t.Errorf("event install id %q, receipt %q", st.InstallID, rc.InstallID)
 			}
 			if rc.Backend != name || rc.UpdateRef != "ghcr.io/x/os:1" {
 				t.Errorf("receipt %+v", rc)
