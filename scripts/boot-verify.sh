@@ -355,6 +355,26 @@ echo ""
 echo "=== bootc status (JSON) ==="
 ssh_root "bootc status --json-pretty" 2>/dev/null || echo "⚠️  json output not available"
 
+# Installation receipt (#385): the installed system says which image it
+# booted, and a receipt for another image or a status from this host does
+# not verify it. Advisory until BOOTCREW_RECEIPT_REQUIRED=1. Before the
+# upgrade check below, which can leave a cached update in bootc status.
+echo ""
+echo "=== Installation receipt (advisory) ==="
+# shellcheck source=./boot-receipt.sh
+source "$SCRIPT_DIR/boot-receipt.sh"
+RECEIPT_FAIL=0
+if [ -x "${FISHERMAN_BIN:-/tmp/fisherman}" ]; then
+  check_boot_receipt ssh_root "$ARTIFACTS_DIR/receipt-$RUN_TAG" "${FISHERMAN_BIN:-/tmp/fisherman}" \
+    || RECEIPT_FAIL=1
+else
+  echo "⚠️  ${FISHERMAN_BIN:-/tmp/fisherman} not found; receipt checks skipped"
+fi
+if [ "$RECEIPT_FAIL" = "1" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  echo "- ⚠️ ${IMAGE_NAME:-vm}: installation receipt checks failed (advisory, see receipt-$RUN_TAG in the artifacts)" \
+    >>"$GITHUB_STEP_SUMMARY" || true
+fi
+
 echo ""
 echo "=== Checking for upgrade availability ==="
 ssh_root "bootc upgrade --check" 2>/dev/null || echo "⚠️  upgrade check not available"
@@ -366,6 +386,11 @@ ssh_root "shutdown -h now" 2>/dev/null || true
 sleep 5
 kill $QEMU_PID 2>/dev/null || true
 wait $QEMU_PID 2>/dev/null || true
+
+if [ "$RECEIPT_FAIL" = "1" ] && [ "${BOOTCREW_RECEIPT_REQUIRED:-0}" = "1" ]; then
+  echo "❌ FAIL: installation receipt checks failed (BOOTCREW_RECEIPT_REQUIRED=1)"
+  exit 1
+fi
 
 if [ "${EFIBOOT_FAIL:-0}" = "1" ]; then
   echo "❌ FAIL: UEFI boot entry assertion failed (see efibootmgr output above)"

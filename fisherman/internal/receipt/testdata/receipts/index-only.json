@@ -1,0 +1,25 @@
+{
+  "schema": "fisherman.install-receipt",
+  "version": 1,
+  "install_id": "0123456789abcdef0123456789abcdef",
+  "installed_at": "2026-11-10T12:00:00Z",
+  "fisherman_version": "v0.3.0-test",
+  "backend": "composefs",
+  "deployment": {
+    "stateroot": "default",
+    "id": ""
+  },
+  "source": {
+    "ref": "containers-storage:ghcr.io/example/os:stable",
+    "transport": "containers-storage",
+    "reference_digest": ""
+  },
+  "expected": {
+    "platform_manifest_digest": "",
+    "digest_from": "",
+    "index_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "platform": "linux/amd64",
+    "digest_reason": "platform_digest_not_recorded"
+  },
+  "update_ref": "ghcr.io/example/os:stable"
+}

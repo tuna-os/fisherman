@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **Installed-system identity receipt and `fisherman verify --json`**
+  (#385): the install writes a non-secret receipt to the installed
+  system's `/var/lib/fisherman/install-receipt.json` (through the
+  deployment resolver): install id and time, fisherman version, backend,
+  deployment id (ostree commit or composefs verity), the expected platform
+  manifest digest (from the installed ostree commit or verified media,
+  never from a pinned reference, which can name an index), platform and
+  update reference. No passphrase, password, user name, hostname,
+  machine-id or registry credential. A oneshot unit in the deployment's
+  `/etc` runs once at the first boot, stores the image's own `bootc status
+  --format json --format-version 1` next to the receipt, and changes
+  nothing else. `fisherman verify --json` compares the two and answers
+  `verified`, `mismatch`, `unsupported`, `unavailable` or `not-yet-run`
+  with a stable reason; a staged, cached or rollback image is never the
+  booted one, and a missing or unreadable status is never success. The
+  install itself still says only "installed". `scripts/boot-verify.sh`
+  checks the receipt in every VM boot (advisory), with a wrong-target and a
+  wrong-context negative. Schemas, codes and fixtures: docs/RECEIPT.md,
+  `internal/receipt/testdata/`.
 - **bootc store inventory in `fisherman probe --json`** (#384, phase 1):
   a new `bootc_store` object with its own `version` (1), present only when
   the capability report found a bootc-booted host; otherwise `available` is

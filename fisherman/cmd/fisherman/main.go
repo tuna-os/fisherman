@@ -248,6 +248,8 @@ Usage:
   fisherman images [<query>]       list or search the image catalog
   fisherman scan <disk>            scan disk for Windows data available to migrate
   fisherman probe --json           print disks, TPM, RAM/CPU/UEFI, live and offline facts
+  fisherman verify --json          on the installed system: compare the installation
+                                   receipt with the booted image (docs/RECEIPT.md)
   fisherman version                print version information
   fisherman help                   show this help
 
@@ -310,6 +312,8 @@ func main() {
 		return
 	case "probe":
 		os.Exit(runProbe(os.Args[2:], os.Stdout, os.Stderr))
+	case "verify":
+		os.Exit(runVerify(os.Args[2:], os.Stdout, os.Stderr))
 	case "scan":
 		if len(os.Args) < 3 {
 			fmt.Fprintf(os.Stderr, "Usage: fisherman scan <disk>\n")
@@ -1113,6 +1117,12 @@ func main() {
 	if extras.PrintServices {
 		post.EnablePrintServices(activeTargetMount)
 	}
+
+	// The installation receipt and its first-boot collector (#385). The
+	// install says "installed, reboot required"; only the installed system,
+	// after it boots, can say which image it booted.
+	progress.Info(stageReceipt(activeTargetMount, sourceImgref,
+		receiptUpdateRef(sourceImgref, targetImgref, live.LiveImage), mediaInput))
 
 	// No cache warming and no thumbnail generation here: the image's /usr is
 	// read-only (and, on ostree, hard-linked into the repository), its caches

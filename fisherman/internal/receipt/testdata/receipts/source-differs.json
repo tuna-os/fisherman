@@ -1,0 +1,24 @@
+{
+  "schema": "fisherman.install-receipt",
+  "version": 1,
+  "install_id": "0123456789abcdef0123456789abcdef",
+  "installed_at": "2026-11-10T12:00:00Z",
+  "fisherman_version": "v0.3.0-test",
+  "backend": "ostree",
+  "deployment": {
+    "stateroot": "default",
+    "id": "8f3c1d7a2b6e4f90a1c5d3e7b9f20468ace13579bdf02468ace13579bdf02468"
+  },
+  "source": {
+    "ref": "oci:/run/media/os",
+    "transport": "registry",
+    "reference_digest": ""
+  },
+  "expected": {
+    "platform_manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "digest_from": "installed_deployment",
+    "index_digest": "",
+    "platform": "linux/amd64"
+  },
+  "update_ref": "registry:ghcr.io/example/os:stable"
+}

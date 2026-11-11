@@ -1,0 +1,21 @@
+{
+  "apiVersion": "org.containers.bootc/v1",
+  "kind": "BootcHost",
+  "metadata": {
+    "name": "host"
+  },
+  "spec": {
+    "image": {
+      "image": "ghcr.io/example/os:stable",
+      "transport": "registry"
+    },
+    "bootOrder": "default"
+  },
+  "status": {
+    "staged": null,
+    "booted": null,
+    "rollback": null,
+    "rollbackQueued": false,
+    "type": "bootcHost"
+  }
+}
