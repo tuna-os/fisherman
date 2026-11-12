@@ -60,6 +60,12 @@ jobs:
       - name: Reconcile direction
         run: bash tests/test-reconcile-direction.sh
 
+      # promote.yml's decision table and its workflow/job names against the
+      # workflow files: a path filter, a rename or a gated schedule-only
+      # workflow would block or misjudge every release (#272). No network.
+      - name: Promote gate
+        run: python3 tests/test-promote-gate.py
+
       # workflow_dispatch inputs must reach scripts through env, never as
       # pasted expressions, and release-cut.yml must refuse a malformed
       # version (#337). Parses the workflows; no network.
