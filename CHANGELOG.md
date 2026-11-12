@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- **`bootc_store` matched no real image on amd64** (#384): bootc status
+  spells the architecture as OCI does (`amd64`, `arm64`); the probe compared
+  it with this machine's kernel spelling (`x86_64`, `aarch64`), so every
+  item read `platform_differs` and `matches_machine` was never true outside
+  fixtures. The probe now reports every architecture in the kernel's
+  spelling (`probe.NormalizeArch`), and `sourceReuse.platform` accepts
+  either. Found by the first run of the store-reuse VM profile.
+
 ### 🧪 Testing
 
 - **The installation receipt checks are required on the required canaries**

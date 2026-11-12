@@ -291,7 +291,7 @@ capabilities
     image           string   the ref the host booted ("" when it booted no bootc image)
     digest          string   the manifest digest the host booted, "sha256:<64 hex>"; "" when unknown
     identity_reason string   present only when digest is "": "not_bootc_booted" or "digest_missing"
-    platform        string   the architecture bootc status reports ("x86_64"); "" when unknown
+    platform        string   the architecture bootc status reports, in the kernel's spelling ("x86_64": bootc says "amd64"); "" when unknown
     backend         string   "ostree", "composefs", or "" when bootc does not say
     bootc_version   string   the same as bootc.version
   source                     the selected installation source
@@ -478,7 +478,7 @@ bootc_store
     digest          string   the manifest digest, "sha256:<64 hex>": the immutable identity; "" when unknown
     digest_from     string   present only with a digest: "bootc_status" or "bootc_store_index"
     digest_reason   string   present only without one: "digest_missing", "malformed", "ambiguous" or "not_reported"
-    platform        string   the architecture bootc reports ("x86_64"); "" when unknown
+    platform        string   the architecture bootc reports, in the kernel's spelling ("x86_64": bootc says "amd64"); "" when unknown
     platform_reason string   present only without one: "not_reported" or "malformed"
     matches_machine bool     ref, digest and platform are known, and platform is machine_platform
     mismatch_reason string   present only when false: "ref_unavailable", "identity_unknown", "platform_unknown" or "platform_mismatch"

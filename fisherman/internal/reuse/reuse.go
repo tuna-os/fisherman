@@ -212,7 +212,7 @@ func New(env Env, digest, platform, scratch string) *Session {
 	if env.Emit == nil {
 		env.Emit = func(progress.SourceReuseEvent) {}
 	}
-	return &Session{env: env, digest: digest, platform: platform, scratch: scratch}
+	return &Session{env: env, digest: digest, platform: probe.NormalizeArch(platform), scratch: scratch}
 }
 
 func (s *Session) host(path string) string {

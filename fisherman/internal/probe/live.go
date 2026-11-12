@@ -191,7 +191,7 @@ func parseBootcStatus(out []byte, err error) bootcHostStatus {
 	add := func(role string, e *statusEntry) {
 		if e != nil && e.Image != nil && len(st.deployments) < maxDeployments {
 			d := bootcDeployment{role: role, image: e.Image.Image.Image, digest: e.Image.ImageDigest,
-				arch: e.Image.Architecture, transport: e.Image.Image.Transport, serial: -1}
+				arch: NormalizeArch(e.Image.Architecture), transport: e.Image.Image.Transport, serial: -1}
 			switch {
 			case present(e.Composefs):
 				d.backend = BackendComposefs
@@ -228,7 +228,7 @@ func parseBootcStatus(out []byte, err error) bootcHostStatus {
 		st.digest = b.Image.ImageDigest
 	}
 	if tokenRe.MatchString(b.Image.Architecture) {
-		st.arch = b.Image.Architecture
+		st.arch = NormalizeArch(b.Image.Architecture)
 	}
 	switch {
 	case present(b.Composefs):

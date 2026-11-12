@@ -45,6 +45,17 @@ func reuseCases(t *testing.T) []reuseCase {
 	return []reuseCase{
 		{name: "bootc host", status: hostStatusJSON(booted, "", ""),
 			want: ReuseSource{Eligible: true, Reason: ReuseEligible, Candidates: []ReuseCandidate{cand}}},
+		// bootc status spells the architecture as OCI does ("amd64"), as
+		// the store-reuse VM profile showed; it is the same machine.
+		{name: "bootc spells it amd64", status: hostStatusJSON(
+			reuseDeployment(os1, "registry", digestHost, "amd64", reuseChecksumA, 0), "", ""),
+			want: ReuseSource{Eligible: true, Reason: ReuseEligible, Candidates: []ReuseCandidate{cand}}},
+		{name: "recipe spells it amd64", status: hostStatusJSON(
+			reuseDeployment(os1, "registry", digestHost, "amd64", reuseChecksumA, 0), "", ""), platform: "amd64",
+			want: ReuseSource{Eligible: true, Reason: ReuseEligible, Candidates: []ReuseCandidate{cand}}},
+		{name: "arm64 item on this x86_64 machine", status: hostStatusJSON(booted, "",
+			reuseDeployment("ghcr.io/example/os:arm", "registry", digestOther, "arm64", reuseChecksumB, 0)),
+			digest: digestOther, platform: "aarch64", want: ReuseSource{Reason: ReusePlatformMismatch, Candidates: none}},
 		{name: "staged and booted share the digest", status: hostStatusJSON(booted,
 			reuseDeployment(os1, "registry", digestHost, "x86_64", reuseChecksumB, 1), ""),
 			want: ReuseSource{Eligible: true, Reason: ReuseEligible, Candidates: []ReuseCandidate{cand, staged}}},
@@ -129,6 +140,15 @@ func TestReuseSource(t *testing.T) {
 				t.Errorf("the resolution changed the filesystem:\nbefore %v\nafter  %v", before, after)
 			}
 		})
+	}
+}
+
+func TestNormalizeArch(t *testing.T) {
+	for in, want := range map[string]string{"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64",
+		"aarch64": "aarch64", "powerpc64le": "ppc64le", "s390x": "s390x", "": ""} {
+		if got := NormalizeArch(in); got != want {
+			t.Errorf("NormalizeArch(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

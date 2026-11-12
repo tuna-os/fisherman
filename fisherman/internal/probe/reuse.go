@@ -107,6 +107,7 @@ var reuseTransports = map[string]string{
 // live media, on the ostree backend, with an ostree deployment of the
 // digest whose platform is platform and this machine's.
 func (p *Prober) ReuseSource(digest, platform string) ReuseSource {
+	platform = NormalizeArch(platform)
 	r := ReuseSource{Candidates: []ReuseCandidate{}}
 	live := p.Live()
 	store := p.BootcStore(Capabilities{}, live)

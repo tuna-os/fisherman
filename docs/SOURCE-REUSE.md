@@ -35,7 +35,7 @@ context), not live media. The reuse is refused on live media.
 |---|---|
 | `sourceReuse.store` | `"bootc"`: the live host's bootc-owned ostree storage. Nothing else is accepted. |
 | `sourceReuse.digest` | The item's manifest digest, its immutable identity: `bootc_store.items[].digest` from `fisherman probe --json`. Never a name: a tag on the host can move to another image, and two images can share a name. |
-| `sourceReuse.platform` | The item's architecture as bootc spells it (`x86_64`, `aarch64`): `bootc_store.items[].platform`. The item, this machine and the copy must all be this platform. |
+| `sourceReuse.platform` | The item's architecture, `bootc_store.items[].platform` (`x86_64`, `aarch64`). The OCI spelling bootc status uses (`amd64`, `arm64`) is accepted and means the same. The item, this machine and the copy must all be this platform. |
 | `image` | Must be empty. The source is the reused item. |
 | `targetImgref` | Required, and a registry reference (no `containers-storage:`, `oci:`, `localhost/` or credentials). It is what the installed system follows for updates. fisherman never derives it from the copy, whose name means nothing after the install. |
 | `experimental` | Must contain `"bootc_store_reuse"`. Only an advisory VM profile installs this way. |
