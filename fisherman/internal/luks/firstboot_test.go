@@ -2,6 +2,7 @@ package luks_test
 
 import (
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/tuna-os/fisherman/internal/deploy"
 	"github.com/tuna-os/fisherman/internal/deploy/deploytest"
 	"github.com/tuna-os/fisherman/internal/luks"
+	"github.com/tuna-os/fisherman/internal/runner"
 )
 
 const (
@@ -106,15 +108,22 @@ func assertStagedIn(t *testing.T, fx deploytest.Sysroot, rec *recorder) {
 		t.Errorf("wants symlink -> %q, want the unit in /etc/systemd/system (not the sealed /usr)", dest)
 	}
 
-	// One command: cryptsetup luksAddKey, existing passphrase on stdin, the
-	// new key from the staged file, in the pinned slot.
-	if len(rec.calls) != 1 {
-		t.Fatalf("calls = %+v, want one luksAddKey", rec.calls)
+	// Two commands: cryptsetup luksAddKey (existing passphrase on stdin, the
+	// new key from the staged file, in the pinned slot, with a cheap KDF),
+	// then the slot is made "preferred" so a lookup by its key matches it
+	// before the user slot's memory-hard KDF runs (#421).
+	if len(rec.calls) != 2 {
+		t.Fatalf("calls = %+v, want luksAddKey then config --priority prefer", rec.calls)
 	}
 	c := rec.calls[0]
-	want := []string{"luksAddKey", "--batch-mode", "--key-file=-", "--key-slot", "31", fbPart, keyPath}
+	want := []string{"luksAddKey", "--batch-mode", "--key-file=-", "--key-slot", "31",
+		"--pbkdf", "pbkdf2", "--pbkdf-force-iterations", "1000", fbPart, keyPath}
 	if c.name != "cryptsetup" || !equalSlice(c.args, want) {
 		t.Errorf("command = %s %v\nwant cryptsetup %v", c.name, c.args, want)
+	}
+	prefer := []string{"config", fbPart, "--key-slot", "31", "--priority", "prefer"}
+	if rec.calls[1].name != "cryptsetup" || !equalSlice(rec.calls[1].args, prefer) || rec.calls[1].stdin != "" {
+		t.Errorf("second command = %+v, want cryptsetup %v", rec.calls[1], prefer)
 	}
 	if c.stdin != fbPassphrase {
 		t.Errorf("stdin = %q, want the unlocking passphrase", c.stdin)
@@ -228,9 +237,9 @@ func TestStageFirstBootEnrollment_UnitWriteFailsRemovesSlot(t *testing.T) {
 		t.Fatal("no error although the unit could not be enabled")
 	}
 	keyPath := filepath.Join(fx.Etc, "fisherman", "tpm2-enroll.key")
-	if len(rec.calls) != 2 || rec.calls[1].name != "cryptsetup" ||
-		!equalSlice(rec.calls[1].args, []string{"luksRemoveKey", fbPart, keyPath}) {
-		t.Errorf("calls = %+v, want luksAddKey then luksRemoveKey of the single-use key", rec.calls)
+	if len(rec.calls) != 3 || rec.calls[2].name != "cryptsetup" ||
+		!equalSlice(rec.calls[2].args, []string{"luksRemoveKey", fbPart, keyPath}) {
+		t.Errorf("calls = %+v, want luksAddKey, config, then luksRemoveKey of the single-use key", rec.calls)
 	}
 	if _, err := os.Stat(filepath.Join(fx.Etc, "fisherman")); err == nil {
 		t.Error("key left behind")
@@ -290,16 +299,18 @@ func TestEnrollUnit(t *testing.T) {
 	if len(stopPost) != 2 {
 		t.Fatalf("ExecStopPost lines = %v", stopPost)
 	}
-	// Slot first, by its number: luksKillSlot -q needs no key and runs no
-	// KDF, so it cannot outlive the stop timeout on a VM with little
-	// memory (luksRemoveKey did, and the file stayed). Each removal is
-	// bounded, so the file removal after it always runs.
-	if !strings.Contains(stopPost[0], "timeout 60 cryptsetup -q luksKillSlot "+dev+" 31") ||
-		!strings.Contains(stopPost[0], "timeout 60 systemd-cryptenroll --unlock-key-file=/etc/fisherman/tpm2-enroll.key --wipe-slot=31 "+dev) {
-		t.Errorf("first ExecStopPost must remove the keyslot by number, bounded: %s", stopPost[0])
-	}
-	if strings.Contains(stopPost[0], "luksRemoveKey") {
-		t.Errorf("luksRemoveKey looks the key up through the KDFs and can outlive the stop timeout: %s", stopPost[0])
+	// Slot first: by its key (cheap and preferred, AddKeyFile), then by
+	// its number, then with systemd-cryptenroll. stdin is /dev/null, so no
+	// step waits on it. Each removal is bounded, so the file removal after
+	// it always runs (#421).
+	for _, want := range []string{
+		"timeout 60 cryptsetup luksRemoveKey " + dev + " /etc/fisherman/tpm2-enroll.key </dev/null || ",
+		"timeout 60 cryptsetup -q luksKillSlot " + dev + " 31 </dev/null || ",
+		"timeout 60 systemd-cryptenroll --unlock-key-file=/etc/fisherman/tpm2-enroll.key --wipe-slot=31 " + dev,
+	} {
+		if !strings.Contains(stopPost[0], want) {
+			t.Errorf("first ExecStopPost missing %q: %s", want, stopPost[0])
+		}
 	}
 	if !strings.Contains(u, "\nTimeoutStopSec=180\n") {
 		t.Error("TimeoutStopSec must leave room for both bounded removals (2 × 60 s)")
@@ -334,7 +345,32 @@ func TestAddAndRemoveKeyFile(t *testing.T) {
 	if err := luks.RemoveKeyFile("/dev/sda3", "/t/key"); err != nil {
 		t.Fatal(err)
 	}
-	if !equalSlice(rec.calls[1].args, []string{"luksRemoveKey", "/dev/sda3", "/t/key"}) || rec.calls[1].stdin != "" {
-		t.Errorf("RemoveKeyFile = %+v", rec.calls[1])
+	if !equalSlice(rec.calls[1].args, []string{"config", "/dev/sda3", "--key-slot", "31", "--priority", "prefer"}) {
+		t.Errorf("AddKeyFile does not prefer the slot: %+v", rec.calls[1])
+	}
+	if !equalSlice(rec.calls[2].args, []string{"luksRemoveKey", "/dev/sda3", "/t/key"}) || rec.calls[2].stdin != "" {
+		t.Errorf("RemoveKeyFile = %+v", rec.calls[2])
+	}
+}
+
+// A slot that cannot be made preferred is removed again: the caller asked
+// for one it can remove without the user slot's memory-hard KDF (#421).
+func TestAddKeyFile_PreferFailsRemovesSlot(t *testing.T) {
+	calls := 0
+	var seen [][]string
+	runner.RunFn = func(stdin io.Reader, name string, args ...string) error {
+		calls++
+		seen = append(seen, append([]string{name}, args...))
+		if calls == 2 {
+			return errors.New("config failed")
+		}
+		return nil
+	}
+	t.Cleanup(func() { runner.RunFn = runner.DefaultRun })
+	if err := luks.AddKeyFile("/dev/sda3", "pw", "/t/key", 31); err == nil {
+		t.Fatal("no error although the slot could not be made preferred")
+	}
+	if len(seen) != 3 || !equalSlice(seen[2], []string{"cryptsetup", "luksRemoveKey", "/dev/sda3", "/t/key"}) {
+		t.Errorf("calls = %v, want luksAddKey, config, luksRemoveKey", seen)
 	}
 }

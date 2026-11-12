@@ -63,11 +63,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   single-use key up through the keyslots, ran the user slot's memory-hard
   KDF, outlived the 90 s stop timeout and drew the OOM killer. systemd
   killed the step, so keyslot 31 and `/etc/fisherman/tpm2-enroll.key`
-  stayed (advisory `dakota-tpm2-luks`, run 43198929211). The unit now
-  removes the slot by its number (`cryptsetup -q luksKillSlot`, no key and
-  no KDF), bounds each removal with `timeout 60` and sets
+  stayed (advisory `dakota-tpm2-luks`, run 43198929211). Slot 31 now uses
+  PBKDF2 with 1000 iterations (its key is 256 random bits) and the
+  `preferred` priority, so the enrolment and the removal match it first
+  (0.03 s against 1.5 s on a scratch image with a 1 GiB argon2 slot 0).
+  `cryptsetup -q luksKillSlot` by number alone left the slot on Dakota
+  (it read a passphrase from the unit's empty stdin), so it is only a
+  fallback. Each removal is bounded by `timeout 60` and
   `TimeoutStopSec=180`, so the file removal always runs.
-
 - **Release gate: a refusal fails, and only gated push runs count** (#272):
   `promote.yml` reported every refusal as a green run (137 of 138 runs),
   judged every check run on the commit, scheduled and advisory ones
