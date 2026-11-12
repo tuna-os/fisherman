@@ -182,8 +182,9 @@ func TestPlanBindingReadsTheImageOnlyWhenTheConfirmedPlanDid(t *testing.T) {
 	}
 }
 
-// A manual layout binds its partitions: one that changed size is
-// plan_stale.
+// A manual layout binds its partitions and the disks they are on: a
+// partition that changed size, or a disk that reports another identity or
+// size, is plan_stale.
 func TestPlanBindingManualLayout(t *testing.T) {
 	dir := planDisks(t)
 	guardCommands(t)
@@ -198,14 +199,56 @@ func TestPlanBindingManualLayout(t *testing.T) {
 	bound := bindRecipe(t, in, first.Plan.Binding)
 	agreeOnStale(t, bound, false, false)
 
-	old := planFixturePartitions["sda3"]
-	planFixturePartitions["sda3"] = 50 << 30
-	t.Cleanup(func() { planFixturePartitions["sda3"] = old })
-	agreeOnStale(t, bound, false, true)
+	t.Run("partition size", func(t *testing.T) {
+		old := planFixturePartitions["sda3"]
+		planFixturePartitions["sda3"] = 50 << 30
+		t.Cleanup(func() { planFixturePartitions["sda3"] = old })
+		agreeOnStale(t, bound, false, true)
+	})
+	// The partitions keep their paths and sizes, but the disk they are on
+	// is another one: another serial and WWN, or the same disk grown.
+	for _, c := range []struct {
+		name string
+		now  probe.Target
+	}{
+		{"another disk under the same partitions", probe.Target{SizeBytes: 500107862016, Serial: "OTHER-SERIAL", WWN: "0x5000c500deadbeef", Model: "Fixture Disk"}},
+		{"the disk size changed", probe.Target{SizeBytes: 1 << 40, Serial: "FIXTURE-SDA-SERIAL", WWN: "0x5000c500a1b2c3d4", Model: "Fixture Disk"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			hostTarget = planHost(map[string]probe.Target{"sda": c.now})
+			t.Cleanup(func() { hostTarget = planHost(nil) })
+			agreeOnStale(t, bound, false, true)
+		})
+	}
+	t.Run("by-id links only", func(t *testing.T) {
+		hostTarget = planHost(map[string]probe.Target{"sda": {SizeBytes: 500107862016, Serial: "FIXTURE-SDA-SERIAL",
+			WWN: "0x5000c500a1b2c3d4", Model: "Fixture Disk"}})
+		t.Cleanup(func() { hostTarget = planHost(nil) })
+		agreeOnStale(t, bound, false, false)
+	})
 }
 
 // planDigestPattern reports whether s has the form of plan.binding.digest,
 // which recipe.CheckPlanBinding accepts.
 func planDigestPattern(s string) bool {
 	return len(recipe.CheckPlanBinding(&recipe.Recipe{PlanBinding: &recipe.PlanBinding{Digest: s}})) == 0
+}
+
+// The /var disk's size is in the basis: a /var disk that is now another
+// size (another disk on the same node) is plan_stale.
+func TestPlanBindingVarDiskSize(t *testing.T) {
+	dir := planDisks(t)
+	guardCommands(t)
+	in := `{"disk":"` + dir + `/sda","filesystem":"xfs","varDisk":{"disk":"` + dir + `/sdb"},` +
+		`"image":"ghcr.io/example/os:stable","hostname":"fixture","encryption":{"type":"none"}}`
+	first, code := planFor(t, in, false)
+	if code != 0 || first.Plan.VarDisk == nil || first.Plan.VarDisk.SizeBytes != planFixtureTargets["sdb"].SizeBytes {
+		t.Fatalf("exit %d, var_disk %+v", code, first.Plan.VarDisk)
+	}
+	bound := bindRecipe(t, in, first.Plan.Binding)
+	agreeOnStale(t, bound, false, false)
+
+	hostTarget = planHost(map[string]probe.Target{"sdb": {SizeBytes: 1 << 40, Serial: "FIXTURE-SDB-SERIAL", Model: "Fixture USB"}})
+	t.Cleanup(func() { hostTarget = planHost(nil) })
+	agreeOnStale(t, bound, false, true)
 }

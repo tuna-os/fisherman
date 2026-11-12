@@ -166,14 +166,14 @@ func TestTargetIdentity(t *testing.T) {
 }
 
 // Block finds a manual layout's partition anywhere in the lsblk tree and
-// reports its size; anything lsblk does not report is an error.
+// reports its size and the whole disk it is on; anything lsblk does not report is an error.
 func TestBlock(t *testing.T) {
 	p := targetProber(t)
 	for path, want := range map[string]Block{
-		"/dev/sda1":                      {Path: "/dev/sda1", Device: "/dev/sda1", Type: "part", SizeBytes: 500106813440},
-		"/dev/disk/by-id/usb-live-part1": {Path: "/dev/disk/by-id/usb-live-part1", Device: "/dev/sdb1", Type: "part", SizeBytes: 15930490880},
-		"/dev/nvme1n1p3":                 {Path: "/dev/nvme1n1p3", Device: "/dev/nvme1n1p3", Type: "part", SizeBytes: 1998251442176},
-		"/dev/sdc":                       {Path: "/dev/sdc", Device: "/dev/sdc", Type: "disk", SizeBytes: 1000204886016},
+		"/dev/sda1":                      {Path: "/dev/sda1", Device: "/dev/sda1", Type: "part", SizeBytes: 500106813440, Disk: "/dev/sda"},
+		"/dev/disk/by-id/usb-live-part1": {Path: "/dev/disk/by-id/usb-live-part1", Device: "/dev/sdb1", Type: "part", SizeBytes: 15930490880, Disk: "/dev/sdb"},
+		"/dev/nvme1n1p3":                 {Path: "/dev/nvme1n1p3", Device: "/dev/nvme1n1p3", Type: "part", SizeBytes: 1998251442176, Disk: "/dev/nvme1n1"},
+		"/dev/sdc":                       {Path: "/dev/sdc", Device: "/dev/sdc", Type: "disk", SizeBytes: 1000204886016, Disk: "/dev/sdc"},
 	} {
 		got, err := p.Block(path)
 		if err != nil || got != want {

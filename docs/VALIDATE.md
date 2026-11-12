@@ -252,6 +252,11 @@ hold another copy of the image, or none, and give other sizes. A binding
 is not a permission: the install runs every other check as well.
 `--partial` checks only the shape (`plan_binding_invalid`).
 
+The install checks the binding a second time right before its first disk
+step (the partition table, or a manual layout's first format): a machine
+that changed after the pre-flight ends it there with `plan_stale`, before
+anything is written ([PLAN.md](PLAN.md#binding-the-install-to-the-confirmed-plan)).
+
 ## Validating one page: `--partial`
 
 A frontend validates a page while it is filled in, before a whole recipe

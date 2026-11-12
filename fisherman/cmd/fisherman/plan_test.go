@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -281,7 +283,9 @@ func planBlocks(path string) (probe.Block, error) {
 	if !ok {
 		return probe.Block{Path: path, Device: path}, errors.New("fixture: lsblk reports no block device " + path)
 	}
-	return probe.Block{Path: path, Device: path, Type: "part", SizeBytes: n}, nil
+	// sda1 → sda: the fixture partitions are all on the fixture disk sda.
+	return probe.Block{Path: path, Device: path, Type: "part", SizeBytes: n,
+		Disk: strings.TrimRight(path, "0123456789")}, nil
 }
 
 // planFixtureFreeBytes is the free space of the stand-in host's /var: 20 GiB.
@@ -308,6 +312,8 @@ func planDisks(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
+	planOCILayout(t, filepath.Join(dir, "oci-annotated"), []int64{2 << 30, 1 << 30}, []int64{5 << 30, 2 << 30})
+	planOCILayout(t, filepath.Join(dir, "oci-plain"), []int64{2 << 30, 1 << 30}, nil)
 	return dir
 }
 
@@ -372,6 +378,8 @@ var planCases = []struct {
 	{"read-image-registry-annotated", 0, false, false, true},
 	{"read-image-cached", 0, false, false, true},
 	{"read-image-local", 0, false, false, true},
+	{"read-image-oci", 0, false, false, true},
+	{"read-image-oci-estimate", 0, false, false, true},
 	{"read-image-too-big", 0, false, false, true},
 	{"read-image-offline", 0, false, false, true},
 	{"read-image-manual", 0, false, false, true},
@@ -973,5 +981,166 @@ func TestPlanCapacityReadsAreReadOnly(t *testing.T) {
 	}
 	if res.Plan.Capacity == nil || res.Plan.Capacity.ImageFit != planUnknownValue {
 		t.Errorf("capacity %+v", res.Plan.Capacity)
+	}
+}
+
+// plan.var_disk.size_bytes is the size the probe reports for the /var
+// disk; when the probe cannot read it, it is left out with a reason.
+func TestPlanVarDiskSize(t *testing.T) {
+	dir := planDisks(t)
+	guardCommands(t)
+	in := `{"disk":"` + dir + `/sda","filesystem":"xfs","varDisk":{"disk":"` + dir + `/sdb","keepExisting":true},` +
+		`"image":"ghcr.io/example/os:stable","hostname":"fixture","encryption":{"type":"none"}}`
+	res, code := planFor(t, in, false)
+	if code != 0 || res.Plan.VarDisk == nil || res.Plan.VarDisk.SizeBytes != 256060514304 {
+		t.Fatalf("exit %d, var_disk %+v", code, res.Plan.VarDisk)
+	}
+	if hasUnknown(res.Plan, "var_disk.size_bytes") {
+		t.Error("a /var disk the probe read has an unknown size")
+	}
+
+	// Validate reads the /var disk with the same probe; a probe that
+	// answers validate but not plan's second read leaves the size out.
+	calls := 0
+	hostTarget = func(path string) (probe.Target, error) {
+		if filepath.Base(path) == "sdb" {
+			calls++
+			if calls > 1 {
+				return probe.Target{}, errors.New("fixture: lsblk failed")
+			}
+		}
+		return planHost(nil)(path)
+	}
+	t.Cleanup(func() { hostTarget = planHost(nil) })
+	res, code = planFor(t, in, false)
+	if code != 0 || res.Plan.VarDisk == nil || res.Plan.VarDisk.SizeBytes != 0 || !hasUnknown(res.Plan, "var_disk.size_bytes") {
+		t.Fatalf("exit %d, var_disk %+v, unknown %+v", code, res.Plan.VarDisk, res.Plan.Unknown)
+	}
+}
+
+// hasUnknown reports whether p has a plan.unknown entry for field.
+func hasUnknown(p *installPlan, field string) bool {
+	for _, u := range p.Unknown {
+		if u.Field == field {
+			return true
+		}
+	}
+	return false
+}
+
+// A manual layout reports the whole disk under each partition and what
+// that disk reports about itself; a partition lsblk does not report has no
+// disk, and a disk the probe cannot read has an unknown identity.
+func TestPlanManualDisks(t *testing.T) {
+	dir := planDisks(t)
+	guardCommands(t)
+	in := `{"customMounts":[{"partition":"` + dir + `/sda3","target":"/","fstype":"xfs"},` +
+		`{"partition":"` + dir + `/sda4","target":"swap","fstype":"swap"},{"partition":"` + dir + `/sda2","target":"/boot","fstype":"ext4"},` +
+		`{"partition":"` + dir + `/sda1","target":"/boot/efi","fstype":"unformatted"}],` +
+		`"image":"ghcr.io/example/os:stable","hostname":"fixture","encryption":{"type":"none"}}`
+	res, code := planFor(t, in, false)
+	if code != 0 {
+		t.Fatalf("exit %d: %+v", code, res.Errors)
+	}
+	ds := res.Plan.Target.Disks
+	if len(ds) != 1 || ds[0].Device != dir+"/sda" || ds[0].StableID != "0x5000c500a1b2c3d4" ||
+		ds[0].SizeBytes != 500107862016 || ds[0].Identity == nil || ds[0].Identity.Serial != "FIXTURE-SDA-SERIAL" ||
+		ds[0].Identity.Bound || !reflect.DeepEqual(ds[0].Partitions, []string{dir + "/sda3", dir + "/sda2", dir + "/sda1"}) {
+		t.Fatalf("target.disks = %+v", ds)
+	}
+	for i, pp := range res.Plan.Partitions {
+		want := dir + "/sda"
+		if pp.Device == dir+"/sda4" {
+			want = "" // lsblk does not report the fixture swap partition
+			if !hasUnknown(res.Plan, fmt.Sprintf("partitions[%d].disk", i)) {
+				t.Errorf("no unknown entry for the swap partition's disk: %+v", res.Plan.Unknown)
+			}
+		}
+		if pp.Disk != want {
+			t.Errorf("partition %s is on %q, want %q", pp.Device, pp.Disk, want)
+		}
+	}
+
+	hostTarget = func(path string) (probe.Target, error) { return probe.Target{}, errors.New("fixture: lsblk failed") }
+	t.Cleanup(func() { hostTarget = planHost(nil) })
+	res, code = planFor(t, in, false)
+	if code != 0 || len(res.Plan.Target.Disks) != 1 {
+		t.Fatalf("exit %d, disks %+v", code, res.Plan.Target.Disks)
+	}
+	d := res.Plan.Target.Disks[0]
+	if d.SizeBytes != 0 || d.StableID != planUnknownValue || d.Identity.Serial != planUnknownValue {
+		t.Errorf("an unreadable disk: %+v", d)
+	}
+	for _, f := range []string{"target.disks[0].size_bytes", "target.disks[0].identity.serial", "target.disks[0].stable_id"} {
+		if !hasUnknown(res.Plan, f) {
+			t.Errorf("no unknown entry for %s", f)
+		}
+	}
+}
+
+// planOCILayout writes an OCI layout at dir for the --read-image fixtures:
+// oci-layout, index.json, one manifest whose layer descriptors have the
+// given compressed sizes and, for each entry of unpacked, the
+// uncompressed-size annotation, and the configuration (linux/amd64). It
+// writes no layer blob: plan never opens one. The content is fixed, so the
+// manifest digest in the goldens is too.
+func planOCILayout(t *testing.T, dir string, sizes, unpacked []int64) {
+	t.Helper()
+	blob := func(content []byte) string {
+		sum := sha256.Sum256(content)
+		hexsum := hex.EncodeToString(sum[:])
+		path := filepath.Join(dir, "blobs", "sha256", hexsum)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return "sha256:" + hexsum
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := []byte(`{"architecture":"amd64","os":"linux","config":{"Labels":{"containers.bootc":"1"}}}`)
+	var layers []string
+	for i, n := range sizes {
+		ann := ""
+		if i < len(unpacked) {
+			ann = fmt.Sprintf(`,"annotations":{%q:"%d"}`, install.UncompressedSizeAnnotation, unpacked[i])
+		}
+		layers = append(layers, fmt.Sprintf(`{"mediaType":"application/vnd.oci.image.layer.v1.tar+zstd","digest":"sha256:%d%s","size":%d%s}`,
+			i, fixtureLayerDigestHex[1:], n, ann))
+	}
+	manifest := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json",`+
+		`"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":%q,"size":%d},"layers":[%s]}`,
+		blob(config), len(config), strings.Join(layers, ",")))
+	index := fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":%q,"size":%d}]}`,
+		blob(manifest), len(manifest))
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), []byte(index), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --read-image reads an OCI layout from its files: no skopeo, no podman,
+// no registry.
+func TestPlanReadImageOCIRunsNoCommand(t *testing.T) {
+	dir := planDisks(t)
+	g := guardCommands(t)
+	images := stubImages(t, g)
+	for _, name := range []string{"read-image-oci", "read-image-oci-estimate"} {
+		if _, code := runPlanFixture(t, dir, name, "--read-image"); code != 0 {
+			t.Fatalf("%s: exit %d", name, code)
+		}
+	}
+	for _, line := range g.seen {
+		if strings.HasPrefix(line, "skopeo") || strings.HasPrefix(line, "podman") {
+			t.Errorf("plan ran %q for an OCI layout", line)
+		}
+	}
+	if len(images.registry) != 0 {
+		t.Errorf("plan asked a registry: %v", images.registry)
 	}
 }

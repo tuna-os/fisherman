@@ -29,13 +29,16 @@ const (
 // phaseRecorder records the disk phase. fail makes the operation whose log
 // line starts with the given prefix return an error.
 type phaseRecorder struct {
-	log   []string
-	fail  string
-	stale bool // the LUKS mapper of a previous run is still open
+	log     []string
+	fail    string
+	stale   bool // the LUKS mapper of a previous run is still open
+	stepLog []string
 	// identity is what recheckDisk returns: the diskIdentity problems of
 	// the device as it is now.
 	identity []recipe.Problem
-	stepLog  []string
+	// planStale is what recheckPlan returns: the plan_stale problem of a
+	// machine that changed since the plan, or nil.
+	planStale []recipe.Problem
 }
 
 func (p *phaseRecorder) rec(format string, args ...any) error {
@@ -49,6 +52,10 @@ func (p *phaseRecorder) rec(format string, args ...any) error {
 
 func (p *phaseRecorder) ops() diskOps {
 	return diskOps{
+		recheckPlan: func(*recipe.Recipe) []recipe.Problem {
+			p.log = append(p.log, "recheckPlan")
+			return p.planStale
+		},
 		applyCustomLayout: func(specs []disk.MountSpec, target string, hooks disk.LayoutHooks) (string, string, []string, error) {
 			var desc []string
 			for _, s := range specs {
@@ -682,5 +689,111 @@ func TestLiveDiskOpsBindsTeardown(t *testing.T) {
 	want := []string{"umount -Rl " + target + "/boot", "umount -Rl " + target, "cryptsetup luksClose fisherman-root"}
 	if got := fake.only("umount", "cryptsetup"); !reflect.DeepEqual(got, want) {
 		t.Errorf("teardown ran %v, want %v", got, want)
+	}
+}
+
+// staleProblem is the problem planBindingProblems reports for a machine
+// that no longer gives the confirmed plan.
+var staleProblem = recipe.Problem{Field: "planBinding.digest", Code: recipe.CodePlanStale, Message: "this machine no longer matches the plan"}
+
+// A recipe with a planBinding is planned once more right before the first
+// disk step: a machine that still gives the plan goes on exactly as
+// before, one that does not ends the phase with plan_stale before any
+// step starts or anything is written. A recipe without one is not
+// re-planned.
+func TestDiskPhaseRechecksPlanBindingBeforePartitioning(t *testing.T) {
+	for _, variant := range []string{"plain", "luks", "zfs", "manual"} {
+		t.Run(variant, func(t *testing.T) {
+			r := phaseVariant(t, variant)
+			p := &phaseRecorder{}
+			if _, _, err := p.run(r, true); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(p.log, diskPhaseGolden[variant]) {
+				t.Errorf("without planBinding the phase changed:\n  %s", strings.Join(p.log, "\n  "))
+			}
+
+			r.PlanBinding = &recipe.PlanBinding{Digest: "sha256:" + strings.Repeat("ab", 32)}
+			p = &phaseRecorder{}
+			if _, _, err := p.run(r, true); err != nil {
+				t.Fatal(err)
+			}
+			if want := append([]string{"recheckPlan"}, diskPhaseGolden[variant]...); !reflect.DeepEqual(p.log, want) {
+				t.Errorf("a matching plan: log\n  %s\nwant\n  %s", strings.Join(p.log, "\n  "), strings.Join(want, "\n  "))
+			}
+
+			p = &phaseRecorder{planStale: []recipe.Problem{staleProblem}}
+			_, _, err := p.run(r, true)
+			var pe *phaseError
+			if !errors.As(err, &pe) || pe.problem == nil || *pe.problem != staleProblem || pe.prefix != "before partitioning" ||
+				pe.msg != "before partitioning: "+staleProblem.Message {
+				t.Fatalf("err = %#v, want plan_stale", err)
+			}
+			if !reflect.DeepEqual(p.log, []string{"recheckPlan"}) || len(p.stepLog) != 0 {
+				t.Errorf("the phase went on after plan_stale: %v", p.log)
+			}
+		})
+	}
+}
+
+// The live re-check is planBindingProblems: a target disk swapped after
+// the pre-flight (another serial on the same node) is plan_stale at the
+// disk phase, with nothing written. It reads what plan reads.
+func TestDiskPhasePlanRecheckSeesAChangedDisk(t *testing.T) {
+	dir := planDisks(t)
+	guardCommands(t)
+	in := `{"disk":"` + dir + `/sda","filesystem":"xfs","image":"ghcr.io/example/os:stable","hostname":"fixture","encryption":{"type":"none"}}`
+	first, code := planFor(t, in, false)
+	if code != 0 {
+		t.Fatalf("exit %d: %+v", code, first.Errors)
+	}
+	r, err := recipe.Parse([]byte(bindRecipe(t, in, first.Plan.Binding)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ps := installProblems(r); len(ps) != 0 {
+		t.Fatalf("pre-flight: %+v", ps)
+	}
+	resolveTargets(r)
+
+	ops := (&phaseRecorder{}).ops()
+	ops.recheckPlan = liveDiskOps().recheckPlan
+	if ps := ops.recheckPlan(r); len(ps) != 0 {
+		t.Fatalf("an unchanged machine: %+v", ps)
+	}
+	hostTarget = planHost(map[string]probe.Target{"sda": {SizeBytes: 500107862016, Serial: "OTHER-SERIAL", WWN: "0x5000c500deadbeef"}})
+	t.Cleanup(func() { hostTarget = planHost(nil) })
+	p := &phaseRecorder{}
+	ops = p.ops()
+	ops.recheckPlan = liveDiskOps().recheckPlan
+	seq := newStepSequencer(planSteps(r, true))
+	seq.emitFn = func(step, total int, name string, cum, weight int) { p.stepLog = append(p.stepLog, name) }
+	_, err = diskPhase(r, seq, phaseTarget, phaseMapper, ops)
+	var pe *phaseError
+	if !errors.As(err, &pe) || pe.problem == nil || pe.problem.Code != recipe.CodePlanStale || pe.problem.Field != "planBinding.digest" {
+		t.Fatalf("err = %v, want plan_stale", err)
+	}
+	if len(p.log) != 0 || len(p.stepLog) != 0 {
+		t.Errorf("the phase acted after plan_stale: %v %v", p.log, p.stepLog)
+	}
+}
+
+// failPhase of a problem gives the error event fatalProblem gives: the
+// problem's code and field, and the same message.
+func TestFailPhaseProblemMatchesFatalProblem(t *testing.T) {
+	inline, ri := newRecorded(t)
+	inline.failProblem("before partitioning: "+staleProblem.Message, staleProblem)
+
+	phased, rp := newRecorded(t)
+	old := term
+	term = phased
+	t.Cleanup(func() { term = old })
+	failPhase(phaseProblem("before partitioning", staleProblem))
+
+	if a, b := lastFailure(t, ri), lastFailure(t, rp); !reflect.DeepEqual(a, b) {
+		t.Errorf("failPhase event = %+v\nfailProblem event = %+v", b, a)
+	}
+	if !reflect.DeepEqual(ri.calls, rp.calls) {
+		t.Errorf("failPhase sequence = %v, failProblem sequence = %v", rp.calls, ri.calls)
 	}
 }
