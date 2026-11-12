@@ -35,6 +35,7 @@
         "device": "@DIR@/sda3",
         "role": "root",
         "created": false,
+        "size_bytes": 107374182400,
         "action": "format",
         "filesystem": "btrfs",
         "mount": "/",
@@ -52,6 +53,7 @@
         "device": "@DIR@/sda2",
         "role": "boot",
         "created": false,
+        "size_bytes": 2147483648,
         "action": "format",
         "filesystem": "ext4",
         "mount": "/boot"
@@ -60,6 +62,7 @@
         "device": "@DIR@/sda1",
         "role": "efi",
         "created": false,
+        "size_bytes": 2147483648,
         "action": "preserve",
         "filesystem": "unknown",
         "mount": "/boot/efi"
@@ -80,11 +83,20 @@
         "effect": "format"
       }
     ],
-    "capacity": null,
+    "capacity": {
+      "min_disk_bytes": 53687091200,
+      "disk_minimum": "not_applicable",
+      "root_bytes": 107374182400,
+      "root_minimum": "unknown",
+      "image_fit": "unknown"
+    },
     "scratch": {
       "path": "/var/fisherman-tmp",
       "on_target": false,
-      "bytes": "unknown"
+      "bytes": "unknown",
+      "free_bytes": 21474836480,
+      "free_path": "/var",
+      "fit": "unknown"
     },
     "steps": [
       {
@@ -131,12 +143,20 @@
         "reason": "on live media the install first binds the verified media input (probe media_input), which can replace the source; plan does not verify it"
       },
       {
-        "field": "capacity",
-        "reason": "a manual layout keeps the partitions it names; plan does not read their sizes"
+        "field": "capacity.root_need_bytes",
+        "reason": "the estimate is the image's unpacked size, which only local containers-storage reports"
+      },
+      {
+        "field": "partitions[1].size_bytes",
+        "reason": "lsblk reports no size for the partition"
       },
       {
         "field": "partitions[3].filesystem",
         "reason": "a kept partition is mounted with the filesystem it holds; plan does not read it"
+      },
+      {
+        "field": "capacity.root_minimum",
+        "reason": "fisherman sets no root minimum; root_need_bytes and image_fit compare the root with the image"
       },
       {
         "field": "scratch.bytes",
@@ -145,6 +165,14 @@
       {
         "field": "scratch.need_bytes",
         "reason": "the estimate needs the image's compressed and unpacked sizes (image.compressed_bytes, image.unpacked_bytes)"
+      },
+      {
+        "field": "scratch.fit",
+        "reason": "plan has no scratch estimate (see scratch.need_bytes)"
+      },
+      {
+        "field": "capacity.image_fit",
+        "reason": "plan has no size of the image (see image)"
       }
     ]
   }

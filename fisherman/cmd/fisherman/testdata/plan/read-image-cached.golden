@@ -111,7 +111,10 @@
       "path": "/var/fisherman-tmp",
       "on_target": false,
       "bytes": "unknown",
-      "need_bytes": 11811160064
+      "need_bytes": 11811160064,
+      "free_bytes": 21474836480,
+      "free_path": "/var",
+      "fit": "enough"
     },
     "steps": [
       {
