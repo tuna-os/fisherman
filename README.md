@@ -125,6 +125,9 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 | `fisherman verify --json` | yes, for `bootc status` | on the installed system, or against what its first boot collected: compare the installation receipt with the booted image (`verified`, `mismatch`, `unsupported`, `unavailable`, `not-yet-run`); read-only, exit 0 only for `verified`. Schemas and codes: [`docs/RECEIPT.md`](docs/RECEIPT.md) |
 | `fisherman version` | no | print the version |
 
+Every flag, with its value, its default and the exit codes of each command:
+[`docs/CLI.md`](docs/CLI.md).
+
 ## Recipe format
 
 ```json
