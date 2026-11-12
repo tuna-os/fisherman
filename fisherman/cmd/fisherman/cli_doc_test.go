@@ -151,6 +151,7 @@ func TestCLIReferenceCoversEveryFlag(t *testing.T) {
 		funcs   []string
 	}{
 		{"## `fisherman validate`", []string{"runValidate", "runValidateJSON"}},
+		{"## `fisherman plan`", []string{"runPlan"}},
 		{"## `fisherman probe`", []string{"runProbe"}},
 		{"## `fisherman verify`", []string{"runVerify"}},
 		{"## `fisherman images`", []string{"runImages"}},

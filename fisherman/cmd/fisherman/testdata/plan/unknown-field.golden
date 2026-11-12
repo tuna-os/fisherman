@@ -1,0 +1,12 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "recoveryKey",
+      "code": "recipe_unknown_field",
+      "message": "unknown recipe field \"recoveryKey\": this fisherman does not know it, and would ignore it"
+    }
+  ],
+  "plan": null
+}

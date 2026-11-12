@@ -385,26 +385,18 @@ func runValidateJSON(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		ps = []recipe.Problem{{Code: recipe.CodeRecipeUnreadable, Message: fmt.Sprintf("reading recipe: %v", err)}}
 	case partial:
 		ps, err = partialProblems(raw)
-	default:
-		var r recipe.Recipe
-		if err = json.Unmarshal(raw, &r); err == nil {
-			// Unknown keys first: the install refuses them when it loads
-			// the recipe (recipe.Parse), before any other rule runs.
-			ps = append(recipe.UnknownFields(raw), installProblems(&r)...)
+		if err != nil && ps == nil {
+			ps = []recipe.Problem{malformedProblem(err)}
 		}
-	}
-	if err != nil && ps == nil {
-		ps = []recipe.Problem{{Code: recipe.CodeRecipeMalformed, Message: fmt.Sprintf("parsing recipe: %v", err)}}
+	default:
+		_, ps = fullProblems(raw)
 	}
 
 	res := validateResult{ProtocolVersion: validateProtocolVersion, Valid: len(ps) == 0, Errors: ps}
 	if res.Errors == nil {
 		res.Errors = []recipe.Problem{}
 	}
-	enc := json.NewEncoder(stdout)
-	enc.SetEscapeHTML(false)
-	enc.SetIndent("", "  ")
-	if err := enc.Encode(res); err != nil {
+	if err := writeJSON(stdout, res); err != nil {
 		fmt.Fprintf(stderr, "validate: encoding output: %v\n", err)
 		return 1
 	}
@@ -412,4 +404,30 @@ func runValidateJSON(args []string, stdin io.Reader, stdout, stderr io.Writer) i
 		return 1
 	}
 	return 0
+}
+
+// fullProblems is `validate --json` for a whole recipe: the unknown keys
+// first (the install refuses them when it loads the recipe, recipe.Parse,
+// before any other rule runs), then installProblems. It returns the parsed
+// recipe, or nil when raw is not a recipe object. `fisherman plan` calls it
+// too, so plan refuses exactly what validate refuses.
+func fullProblems(raw []byte) (*recipe.Recipe, []recipe.Problem) {
+	var r recipe.Recipe
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil, []recipe.Problem{malformedProblem(err)}
+	}
+	return &r, append(recipe.UnknownFields(raw), installProblems(&r)...)
+}
+
+func malformedProblem(err error) recipe.Problem {
+	return recipe.Problem{Code: recipe.CodeRecipeMalformed, Message: fmt.Sprintf("parsing recipe: %v", err)}
+}
+
+// writeJSON writes v as indented JSON with no HTML escaping, the form of
+// every --json output.
+func writeJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
+	enc.SetEscapeHTML(false)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
 }
