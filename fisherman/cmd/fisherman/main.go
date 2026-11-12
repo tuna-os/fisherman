@@ -13,7 +13,6 @@ import (
 
 	"github.com/tuna-os/fisherman/internal/disk"
 	"github.com/tuna-os/fisherman/internal/install"
-	"github.com/tuna-os/fisherman/internal/luks"
 	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/progress"
@@ -601,197 +600,19 @@ func main() {
 		}
 	}
 
-	var activeTargetMount string
-	var activeEfiPart string
-	var activeRootPart string  // only used for TPM2 enrolment, empty in manual mode
-	var activeLuksUUID string  // LUKS partition UUID for boot entry injection; empty if no encryption
-	var luksRecoveryKey string // random passphrase for tpm2-luks (emitted as recovery key)
-
-	if r.IsManualLayout() {
-		// ── Step 1 (manual): Format and mount user-specified partitions ────────
-		seq.begin(stepPrepareDisk)
-
-		specs := make([]disk.MountSpec, 0, len(r.CustomMounts))
-		for _, cm := range r.CustomMounts {
-			specs = append(specs, disk.MountSpec{
-				Partition: cm.Partition,
-				Target:    cm.Target,
-				Fstype:    cm.Fstype,
-			})
-		}
-
-		// Each mount and the swap are registered for teardown the moment
-		// they are acquired, not when ApplyCustomLayout returns: it can fail
-		// on the second or third partition, or be cancelled half-way, with
-		// the root already mounted (#362).
-		var applyErr error
-		activeTargetMount, activeEfiPart, _, applyErr = disk.ApplyCustomLayoutWith(specs, targetMount,
-			disk.LayoutHooks{Mounted: cleanup.AddMount, SwapOn: swaps.Add})
-		if applyErr != nil {
-			fatalCode(progress.FailureManualLayoutFailed, "manual disk layout: %v", applyErr)
-		}
-	} else {
-		// ── Step 1: Partition disk ────────────────────────────────────────────
-		seq.begin(stepPartition)
-
-		// The layout table (disk.LayoutPartitions) is the one `fisherman
-		// plan` reports: ZFS and systemd-boot write two partitions (ESP +
-		// root; LUKS, if any, wraps the root), GRUB2 writes three (ESP +
-		// ext4 /boot + root), encrypted or not.
-		layout := autoLayout(r)
-		if err := disk.PartitionLayout(r.Disk, layout); err != nil {
-			fatalCode(progress.FailurePartitionFailed, "partitioning disk: %v", err)
-		}
-
-		efiPart := disk.PartName(r.Disk, layout.PartNumber(disk.RoleEFI))
-		rootPart := disk.PartName(r.Disk, layout.PartNumber(disk.RoleRoot))
-		var bootPart string // only the GRUB2 layout has an ext4 /boot
-		if n := layout.PartNumber(disk.RoleBoot); n > 0 {
-			bootPart = disk.PartName(r.Disk, n)
-		}
-		rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
-		activeRootPart = rootPart
-		poolName := disk.PoolName(r.ZFSPoolName) // only used when r.IsZFS()
-
-		// ── Step 2: Format EFI ───────────────────────────────────────────────
-		seq.begin(stepFormatEFI)
-
-		if err := disk.FormatEFI(efiPart); err != nil {
-			fatalCode(progress.FailureFormatFailed, "formatting EFI: %v", err)
-		}
-		// grub2 installs need a separate ext4 /boot so GRUB never has to parse
-		// XFS (GRUB's built-in XFS driver lacks support for modern XFS features).
-		// systemd-boot reads the FAT32 ESP directly, so no separate /boot needed.
-		if !r.UsesSystemdBoot() {
-			if err := disk.FormatBoot(bootPart); err != nil {
-				fatalCode(progress.FailureFormatFailed, "formatting /boot: %v", err)
-			}
-		}
-
-		// ── Step 3: Disk encryption (optional) ──────────────────────────────
-		if r.HasEncryption() {
-			seq.begin(stepEncryption)
-
-			var passphrase string
-			switch r.Encryption.Type {
-			case "luks-passphrase", "tpm2-luks-passphrase":
-				passphrase = r.Encryption.Passphrase
-			case "tpm2-luks":
-				passphrase = luks.RandomPassphrase()
-				luksRecoveryKey = passphrase // emitted later so user can write it down
-				progress.RegisterSecret(passphrase)
-				progress.Info("TPM2-LUKS: generated random recovery passphrase; TPM2 will be enrolled after install")
-			}
-
-			// A previous interrupted run may have left the mapper open. Close it
-			// before formatting so luksFormat and luksOpen succeed cleanly.
-			if _, err := os.Stat(luks.MapperPath(luksMapper)); err == nil {
-				progress.Info(fmt.Sprintf("Closing stale mapper %s from previous run", luksMapper))
-				_ = luks.Close(luksMapper)
-			}
-
-			if err := luks.Format(rootPart, passphrase); err != nil {
-				fatalCode(progress.FailureLUKSFailed, "LUKS format: %v", err)
-			}
-			if err := luks.Open(rootPart, passphrase, luksMapper); err != nil {
-				fatalCode(progress.FailureLUKSFailed, "LUKS open: %v", err)
-			}
-			cleanup.SetLUKS(luksMapper)
-			rootDev = luks.MapperPath(luksMapper)
-			activeLuksUUID = luks.UUID(rootPart)
-		}
-
-		// ── Step 4: Format root filesystem ──────────────────────────────────
-		seq.begin(stepFormatRoot)
-
-		if r.IsZFS() {
-			if err := disk.CreateZFSPool(poolName, rootPart, targetMount); err != nil {
-				fatalCode(progress.FailureZFSFailed, "creating ZFS pool: %v", err)
-			}
-			// From here the pool is imported on this host. Teardown exports
-			// it, on success and on every failure (#413).
-			cleanup.SetZFSPool(poolName)
-			if err := disk.CreateZFSRootDataset(poolName); err != nil {
-				fatalCode(progress.FailureZFSFailed, "creating ZFS root dataset: %v", err)
-			}
-		} else {
-			if err := disk.FormatRoot(rootDev, r.Filesystem); err != nil {
-				fatalCode(progress.FailureFormatFailed, "formatting root filesystem: %v", err)
-			}
-		}
-
-		// ── Step 5: Mount filesystem ─────────────────────────────────────────
-		seq.begin(stepMount)
-
-		if err := os.MkdirAll(targetMount, 0o755); err != nil {
-			fatalCode(progress.FailureMountFailed, "creating mount point %s: %v", targetMount, err)
-		}
-
-		if r.IsZFS() {
-			// Pool is already imported with -R altroot; root dataset is already
-			// mounted. Ensure the mount point exists and call MountZFSRoot in
-			// case the automount didn't fire (e.g. in a container environment).
-			if err := disk.MountZFSRoot(poolName, targetMount); err != nil {
-				fatalCode(progress.FailureZFSFailed, "mounting ZFS root: %v", err)
-			}
-		} else if r.BtrfsSubvolumes {
-			if err := disk.SetupBtrfsSubvolumes(rootDev, targetMount); err != nil {
-				fatalCode(progress.FailureMountFailed, "setting up btrfs subvolumes: %v", err)
-			}
-		} else {
-			mountOpts := ""
-			if r.Filesystem == "btrfs" {
-				mountOpts = "compress=zstd:1"
-			}
-			if err := disk.MountType(rootDev, targetMount, r.Filesystem, mountOpts); err != nil {
-				fatalCode(progress.FailureMountFailed, "mounting root: %v", err)
-			}
-		}
-		cleanup.AddMount(targetMount)
-
-		// Mount the unencrypted /boot partition before the EFI partition.
-		// bootupctl reads /boot's block device UUID from the raw partition.
-		// Not needed for systemd-boot installs (no separate /boot partition).
-		if !r.UsesSystemdBoot() {
-			if err := disk.MountBoot(targetMount, bootPart); err != nil {
-				fatalCode(progress.FailureMountFailed, "mounting /boot: %v", err)
-			}
-			cleanup.AddMount(targetMount + "/boot")
-		}
-
-		// Mount the EFI partition at /boot/efi inside the target.
-		if err := disk.MountEFI(targetMount, efiPart); err != nil {
-			fatalCode(progress.FailureMountFailed, "mounting EFI: %v", err)
-		}
-		cleanup.AddMount(targetMount + "/boot/efi")
-
-		activeTargetMount = targetMount
-		activeEfiPart = efiPart
+	// ── Steps 1-5 and the /var disk: the disk phase (disk_phase.go) ──────────
+	// Partition, format, LUKS, mount (or the manual layout), then the /var
+	// disk. Every resource is registered on cleanup as it is acquired; a
+	// failure ends the install here with the phase's failure code.
+	dp, err := diskPhase(r, seq, targetMount, luksMapper, liveDiskOps())
+	if err != nil {
+		failPhase(err)
 	}
-
-	// ── Step 5.5: Mount /var disk (optional) ─────────────────────────────────
-	// Must happen before bootc install so bootc populates /var on the right disk.
-	if r.HasVarDisk() {
-		varDir := filepath.Join(activeTargetMount, "var")
-		if err := os.MkdirAll(varDir, 0o755); err != nil {
-			fatalCode(progress.FailureMountFailed, "creating /var mount point: %v", err)
-		}
-		if r.FormatsVarDisk() {
-			seq.begin(stepFormatVarDisk)
-			// Release the disk (mounts, swap, LVM, old signatures), then
-			// format it: see disk.PrepareVarDisk (#406).
-			if err := disk.PrepareVarDisk(r.VarDisk.Disk); err != nil {
-				fatalCode(progress.FailureFormatFailed, "formatting /var disk: %v", err)
-			}
-		} else {
-			progress.Info(fmt.Sprintf("Keeping existing data on /var disk %s", r.VarDisk.Disk))
-		}
-		if err := disk.Mount(r.VarDisk.Disk, varDir, ""); err != nil {
-			fatalCode(progress.FailureMountFailed, "mounting /var disk: %v", err)
-		}
-		cleanup.AddMount(varDir)
-		progress.Info(fmt.Sprintf("Mounted /var disk %s at /var", r.VarDisk.Disk))
-	}
+	activeTargetMount := dp.targetMount
+	activeEfiPart := dp.efiPart
+	activeRootPart := dp.rootPart     // only used for TPM2 enrolment, empty in manual mode
+	activeLuksUUID := dp.luksUUID     // LUKS partition UUID for boot entry injection; empty if no encryption
+	luksRecoveryKey := dp.recoveryKey // random passphrase for tpm2-luks (emitted as recovery key)
 
 	// Bind-mount a host-side scratch directory at /var/tmp so bootc has
 	// disk-backed space for layer blobs. We deliberately use a path OUTSIDE
