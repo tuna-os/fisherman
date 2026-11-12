@@ -12,7 +12,7 @@ import (
 // gains, loses or changes a field: a digest of the old basis then no longer
 // matches, and the install refuses it (plan_stale) instead of comparing it
 // with something else.
-const planBindingVersion = 1
+const planBindingVersion = 2
 
 // planBinding is plan.binding: what a frontend copies into the recipe's
 // planBinding to bind the install to the plan the user confirmed.
@@ -69,8 +69,9 @@ type planBasisPartition struct {
 }
 
 type planBasisVarDisk struct {
-	Device string `json:"device"`
-	Action string `json:"action"`
+	Device    string `json:"device"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Action    string `json:"action"`
 }
 
 // bindingOf is plan.binding for p, a plan made with or without
@@ -90,7 +91,7 @@ func bindingOf(p *installPlan, readImage bool) planBinding {
 			Encryption: pp.Encryption, Mount: pp.Mount})
 	}
 	if v := p.VarDisk; v != nil {
-		b.VarDisk = &planBasisVarDisk{Device: v.Device, Action: v.Action}
+		b.VarDisk = &planBasisVarDisk{Device: v.Device, SizeBytes: v.SizeBytes, Action: v.Action}
 	}
 	if c := p.Capacity; c != nil {
 		b.DiskMinimum, b.RootBytes, b.RootNeedBytes, b.ImageFit = c.DiskMinimum, c.RootBytes, c.RootNeedBytes, c.ImageFit

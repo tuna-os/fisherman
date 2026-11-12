@@ -62,6 +62,7 @@
     "var_disk": {
       "disk": "@DIR@/sdb",
       "device": "@DIR@/sdb",
+      "size_bytes": 256060514304,
       "action": "format",
       "filesystem": "xfs",
       "mount": "/var"

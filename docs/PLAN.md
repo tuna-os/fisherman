@@ -181,6 +181,7 @@ Null without `varDisk`.
 |---|---|
 | `disk` | The disk as the recipe names it. |
 | `device` | The device node after symlinks are resolved. |
+| `size_bytes` | The size of the disk in bytes, from the same `lsblk` call as the target checks (`probe.Target`). fisherman holds the `/var` disk to no minimum (`disk_too_small` applies to `disk` only), so there is no verdict beside it. Left out, with a `plan.unknown` entry, when the probe cannot read the disk. |
 | `action` | `format` (wiped, then XFS) or `preserve` (`keepExisting`). |
 | `filesystem` | `xfs`, or `unknown` for a preserved disk. |
 | `mount` | Always `/var`. |
@@ -245,7 +246,7 @@ plan](#binding-the-install-to-the-confirmed-plan)).
 
 | Field | Meaning |
 |---|---|
-| `digest` | `sha256:` and the hex SHA-256 of the plan's basis: the target (layout, device, size, loop, serial, WWN, model), `plan.boot`, each partition's number, device, role, GPT type, size, action, filesystem, encryption and mount, the `/var` disk's device and action, `plan.destroys`, `capacity.disk_minimum`, `root_bytes`, `root_need_bytes` and `image_fit`, and `scratch.path`, `on_target` and `fit`, with whether the image was read and a version of the basis. Not the source, the encryption settings or the steps (the recipe fixes them), the free space in bytes, the by-id links or the reasons. |
+| `digest` | `sha256:` and the hex SHA-256 of the plan's basis: the target (layout, device, size, loop, serial, WWN, model), `plan.boot`, each partition's number, device, role, GPT type, size, action, filesystem, encryption and mount, the `/var` disk's device, size and action, `plan.destroys`, `capacity.disk_minimum`, `root_bytes`, `root_need_bytes` and `image_fit`, and `scratch.path`, `on_target` and `fit`, with whether the image was read and a version of the basis. Not the source, the encryption settings or the steps (the recipe fixes them), the free space in bytes, the by-id links or the reasons. |
 | `read_image` | The plan was made with `--read-image`. Copy it as `readImage`. |
 
 ### `plan.unknown`
@@ -392,7 +393,7 @@ grants nothing.
 The plan does not yet report the mounts of the installed system beyond the
 partitions, the unpacked size of an OCI layout source (only an estimate
 for a registry image whose layers do not record it), the free space
-inside a kept manual root partition, the size of a `varDisk`,
+inside a kept manual root partition,
 or the identity of a manual layout's disks (no `diskIdentity` binding for
 `customMounts`; a `planBinding` binds a manual layout's partition paths and
 sizes, not the disks they are on). The install checks `diskIdentity` and

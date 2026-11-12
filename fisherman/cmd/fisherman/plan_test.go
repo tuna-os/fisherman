@@ -975,3 +975,47 @@ func TestPlanCapacityReadsAreReadOnly(t *testing.T) {
 		t.Errorf("capacity %+v", res.Plan.Capacity)
 	}
 }
+
+// plan.var_disk.size_bytes is the size the probe reports for the /var
+// disk; when the probe cannot read it, it is left out with a reason.
+func TestPlanVarDiskSize(t *testing.T) {
+	dir := planDisks(t)
+	guardCommands(t)
+	in := `{"disk":"` + dir + `/sda","filesystem":"xfs","varDisk":{"disk":"` + dir + `/sdb","keepExisting":true},` +
+		`"image":"ghcr.io/example/os:stable","hostname":"fixture","encryption":{"type":"none"}}`
+	res, code := planFor(t, in, false)
+	if code != 0 || res.Plan.VarDisk == nil || res.Plan.VarDisk.SizeBytes != 256060514304 {
+		t.Fatalf("exit %d, var_disk %+v", code, res.Plan.VarDisk)
+	}
+	if hasUnknown(res.Plan, "var_disk.size_bytes") {
+		t.Error("a /var disk the probe read has an unknown size")
+	}
+
+	// Validate reads the /var disk with the same probe; a probe that
+	// answers validate but not plan's second read leaves the size out.
+	calls := 0
+	hostTarget = func(path string) (probe.Target, error) {
+		if filepath.Base(path) == "sdb" {
+			calls++
+			if calls > 1 {
+				return probe.Target{}, errors.New("fixture: lsblk failed")
+			}
+		}
+		return planHost(nil)(path)
+	}
+	t.Cleanup(func() { hostTarget = planHost(nil) })
+	res, code = planFor(t, in, false)
+	if code != 0 || res.Plan.VarDisk == nil || res.Plan.VarDisk.SizeBytes != 0 || !hasUnknown(res.Plan, "var_disk.size_bytes") {
+		t.Fatalf("exit %d, var_disk %+v, unknown %+v", code, res.Plan.VarDisk, res.Plan.Unknown)
+	}
+}
+
+// hasUnknown reports whether p has a plan.unknown entry for field.
+func hasUnknown(p *installPlan, field string) bool {
+	for _, u := range p.Unknown {
+		if u.Field == field {
+			return true
+		}
+	}
+	return false
+}

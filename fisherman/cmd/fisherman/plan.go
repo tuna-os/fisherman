@@ -174,8 +174,12 @@ type planPartition struct {
 }
 
 type planVarDisk struct {
-	Disk       string `json:"disk"`
-	Device     string `json:"device"`
+	Disk   string `json:"disk"`
+	Device string `json:"device"`
+	// SizeBytes is the size the probe reports for the /var disk (the same
+	// lsblk call as the target's). fisherman holds the /var disk to no
+	// minimum. Left out when the probe cannot read it.
+	SizeBytes  int64  `json:"size_bytes,omitempty"`
 	Action     string `json:"action"` // "format" or "preserve"
 	Filesystem string `json:"filesystem,omitempty"`
 	Mount      string `json:"mount"`
@@ -540,6 +544,11 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 
 	if r.HasVarDisk() {
 		v := &planVarDisk{Disk: givenVarDisk, Device: r.VarDisk.Disk, Action: string(disk.MountPreserve), Mount: "/var"}
+		if t, err := hostTarget(r.VarDisk.Disk); err == nil && t.SizeBytes > 0 {
+			v.SizeBytes = t.SizeBytes
+		} else {
+			unknown("var_disk.size_bytes", "the probe could not read the /var disk")
+		}
 		if r.FormatsVarDisk() {
 			v.Action, v.Filesystem = string(disk.MountFormat), "xfs"
 			p.Destroys = append(p.Destroys, planDestroy{r.VarDisk.Disk, "wipe_disk"})

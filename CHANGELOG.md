@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **`plan` reports the size of the `/var` disk** (part of #371). The new
+  `plan.var_disk.size_bytes` is the size the probe reports for
+  `varDisk.disk` (the same `lsblk` call as the target), left out with a
+  `plan.unknown` entry when the probe cannot read it. fisherman holds the
+  `/var` disk to no minimum, so there is no verdict beside it. The size is
+  in the `planBinding` basis (now version 2): a `/var` disk that changed
+  size since the plan is `plan_stale`. Additive: protocol 1. Docs: PLAN.md.
+
 - **`plan --read-image` gives the unpacked size of an image only a
   registry has** (part of #371). Without a pull, from the manifest skopeo
   already reads: the sum of the layers' `io.containers.estargz.uncompressed-size`
