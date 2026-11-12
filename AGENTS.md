@@ -13,9 +13,10 @@ layouts), [`CONTRIBUTING.md`](CONTRIBUTING.md), [`docs/`](docs/).
 **The default branch is `dev`, not `main`.** Branch from it and target it in
 PRs. `dev` carries the TunaOS fixes.
 
-**This repository is the origin.**
+**This repository is the only origin.** Send issues and PRs here.
 [`projectbluefin/fisherman`](https://github.com/projectbluefin/fisherman) is a
-fork kept in sync with it, not the upstream. It is also consumed as a git
+fork, not the upstream; its changes reach fisherman only through a PR here.
+Consumers pin `https://github.com/tuna-os/fisherman`. It is consumed as a git
 submodule by `tuna-os/bootc-installer`, so a change here is not live for that
 frontend until its submodule pointer is bumped in a separate commit.
 

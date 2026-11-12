@@ -80,6 +80,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 📝 Documentation
 
+- **The Secure Boot profile** (#342): `SECURITY.md` names the one
+  supported profile, image-owned: bootc and bootupd install the image's own
+  signed chain, fisherman prefers the `.signed` systemd-boot binary, keeps an
+  existing fallback and keeps every signed byte. It lists what fisherman
+  does not do (no shim or MokManager staging from image metadata, no MOK
+  enrolment, no PK/KEK/db/dbx change) and what a new profile needs first.
+  Each guarantee links to the code and the test. No code change.
+- **Supported versions and response** (#294): `SECURITY.md` says that `dev`
+  and the latest release get security fixes, with no backports, and that
+  the response is best effort with no SLA: we aim to acknowledge a report
+  within 14 days. README links to `SECURITY.md`.
+- **One project home** (#303): README, AGENTS.md and ROADMAP.md say that
+  tuna-os/fisherman is the only origin, that projectbluefin/fisherman is a
+  fork whose changes come in through a PR here, and that consumers pin
+  tuna-os/fisherman. The text that offered either repository as a home is
+  gone.
 - **An integration guide** (#328): `docs/INTEGRATION.md` says which
   command a frontend runs when, what to take from the probe, the recipe
   contract, how to run the install with the recipe on stdin, how to read
@@ -116,6 +132,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `main.commit`/`main.date`, which do not exist, and its archives, like the
   meson install (`<datadir>/fisherman/data/`), now ship `data/images.json`.
 
+### ♻️ Refactoring
+
+- **The recipe answers its own install-state questions** (#317):
+  `recipe.Recipe` has `HasEncryption`, `HasTPM2`, `IsManualLayout`, `IsZFS`,
+  `UsesSystemdBoot`, `UsesComposeFs`, `HasVarDisk`, `FormatsVarDisk`,
+  `EncryptsRoot` and `EnrollsTPM2` (`internal/recipe/state.go`). The install
+  path, `validate` and the host-tool chain call them in place of the
+  booleans `main()` computed and passed around. No behaviour change.
+- **One step plan, announced by a sequencer** (#316): `planSteps`
+  (`cmd/fisherman/steps.go`) builds the ordered step list and its weights
+  from the recipe, and `total_steps` is its length. `main()` announces each
+  step with `seq.begin`, which supplies the step number, the total and the
+  bar position: no manual index any more. A step out of plan is logged as a
+  warning at the finalize step. `TestMainAnnouncesThePlan` replays `main()`
+  for each recipe variant (plain, LUKS, TPM2, manual layout, ZFS, btrfs
+  subvolumes, systemd-boot, source reuse, a `/var` disk) and fails when the
+  steps it announces differ from the plan. The events are unchanged.
+
 ### 🔧 CI
 
 - **GoReleaser is pinned** (#344): `release-publish.yml` runs GoReleaser
@@ -130,6 +164,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   did not answer over SSH" when it never does.
 
 - **The VM matrix covers a user, GRUB with LUKS, TPM2 and a /var disk**
+
+- **A recipe field that never reaches the install fails a test** (#289):
+  `recipeFieldUses` (`cmd/fisherman/recipe_consumers_test.go`) lists every
+  field of `recipe.Recipe`, nested ones included, with the files that pass
+  it on to the install, or the reason it only accepts or refuses the recipe.
+  The test fails on a field without an entry, an entry for a field that is
+  gone, and a listed file that no longer reads the field. A second test
+  holds the `install.Options` projection (`buildBootcInstallOptions`) to a
+  source table: each option comes from a named recipe field, an argument, or
+  a later step, and follows its recipe field.
+, GRUB with LUKS, TPM2 and a /var disk**
   (#418), as advisory PR-gate entries: `centos-bootc-luks-user` (GRUB,
   ostree, XFS, LUKS and a `user` that must sign in with the recipe's
   password), `centos-bootc-var-disk` (`/var` must be the `varDisk` on the

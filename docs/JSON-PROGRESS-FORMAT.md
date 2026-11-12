@@ -411,8 +411,10 @@ never has the encryption or TPM2 steps.
 ### Step count
 
 `total_steps` is computed before the first step. It is the length of the
-weight table (`len(buildProfile(...))`), so it always matches the steps that
-are emitted:
+step plan (`planSteps` in `cmd/fisherman/steps.go`). fisherman announces
+every step through a sequencer that reads the plan, and a test replays
+`main()` for each recipe variant against it, so the count always matches
+the steps that are emitted:
 
 - start at 8
 - minus 3 for a manual layout
@@ -456,7 +458,7 @@ read an older fisherman can fall back to it.
 **Do not derive the bar from `step / total_steps`.** The step count changes
 with the recipe, and the steps are very unequal: most of them carry 0%.
 
-The weights come from `buildProfile` in `cmd/fisherman/main.go`. They were
+The weights come from `planShape` in `cmd/fisherman/steps.go`. They were
 measured on a loop-device install.
 
 | `step_name` | `weight_pct`, image pulled | `weight_pct`, image cached |
