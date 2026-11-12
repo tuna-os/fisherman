@@ -188,6 +188,14 @@ type Options struct {
 	// own, with one commit, and bootc takes the source from the container.
 	RunInSourceContainer bool
 
+	// SourceRoot is the execution root the caller established for
+	// SourceImgref before the disk was touched (`fisherman probe`'s
+	// capabilities.execution_root, SourceExecutionRoot). The host's bootc
+	// installs a local containers-storage source directly only when it is
+	// established: bootc reads the install configuration and the backend
+	// from the root it runs in, not from --source-imgref (#363).
+	SourceRoot SourceRoot
+
 	// directLocalSource is set by BootcInstall when a local
 	// containers-storage: SourceImgref is installed with the host's bootc
 	// instead of inside a podman container (see useDirectForLocalSource).
@@ -455,6 +463,20 @@ var hostHasBootcFn = func() bool {
 	return CommandFn(name, args...).Run() == nil
 }
 
+// SourceRoot is the install's view of the probe's execution root
+// (internal/probe ExecutionRoot; this package cannot import probe).
+type SourceRoot struct {
+	// Established: the host's root is the source's root (the host booted
+	// the source's digest, or the recipe installs the live root).
+	Established bool
+	// Reason is the probe's execution-root reason code ("digest_match",
+	// "digest_mismatch", "host_not_bootc", ...); "" when nothing was
+	// established.
+	Reason string
+	// Backend is the backend the host booted: "ostree", "composefs" or "".
+	Backend string
+}
+
 // useDirectForLocalSource decides whether a non-composefs install from an
 // image already in local containers-storage runs the host's bootc directly.
 //
@@ -467,12 +489,67 @@ var hostHasBootcFn = func() bool {
 // passes in 8 GiB. The installer GUI, though, always sends the live-ISO
 // local_imgref as the source, so it took the container path every time.
 //
+// The host's bootc is not the source's bootc, though, unless the host
+// booted the source: bootc reads the install configuration, the backend and
+// the bound images from the root it runs in, even with --source-imgref
+// (bootc v1.17.1 bootc-installation.7). So the direct path also needs an
+// established source execution root (opts.SourceRoot): a host that booted
+// another image, or whose identity is unknown, takes the container path,
+// which runs the source's own bootc with storage on the target disk.
+//
 // Composefs keeps the container path: it needs the exported OCI layout either
 // way, and Dakota's installs pass through it.
 func useDirectForLocalSource(opts Options) bool {
-	return !opts.ComposeFsBackend &&
-		strings.HasPrefix(opts.SourceImgref, "containers-storage:") &&
-		hostHasBootcFn()
+	direct, _ := localSourceDecision(opts)
+	return direct
+}
+
+// localSourceDecision is useDirectForLocalSource with the reason, for the
+// progress line. why is "" when the decision does not apply to opts.
+func localSourceDecision(opts Options) (direct bool, why string) {
+	if opts.ComposeFsBackend || !strings.HasPrefix(opts.SourceImgref, "containers-storage:") {
+		return false, ""
+	}
+	root := opts.SourceRoot
+	switch {
+	case !hostHasBootcFn():
+		return false, "the host has no bootc"
+	case !root.Established:
+		reason := root.Reason
+		if reason == "" {
+			reason = "not established"
+		}
+		return false, "the host's root is not established as the source's execution root (" + reason + ")"
+	case root.Backend == "composefs":
+		// The direct path is qualified on OSTree-backed live hosts only.
+		return false, "the host booted the source with the composefs backend and the recipe installs the ostree backend"
+	}
+	return true, "the host booted the source image (" + root.Reason + ")"
+}
+
+// LocalSourceContextLine is the progress line that says which bootc
+// installs a local containers-storage source, and why. It is "" when the
+// choice does not arise: no local containers-storage source, composefs, or
+// a source reuse copy (RunInSourceContainer), which reports its own.
+func LocalSourceContextLine(opts Options) string {
+	if opts.RunInSourceContainer {
+		return ""
+	}
+	direct, why := localSourceDecision(opts)
+	switch {
+	case why == "":
+		return ""
+	case direct:
+		return "bootc: " + why + "; installing with the host's bootc straight from local containers-storage"
+	}
+	return "bootc: " + why + "; installing with the source image's own bootc in a podman container"
+}
+
+// NeedsSourceRoot reports whether opts asks the local-source question, so a
+// caller establishes opts.SourceRoot only when the answer is used.
+func NeedsSourceRoot(opts Options) bool {
+	return !opts.RunInSourceContainer && !opts.ComposeFsBackend &&
+		strings.HasPrefix(opts.SourceImgref, "containers-storage:")
 }
 
 func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {

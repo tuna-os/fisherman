@@ -561,6 +561,26 @@ func (p *Prober) sourceDigests(sel Selection, s Source, offline Offline) []strin
 	return all
 }
 
+// SourceExecutionRoot establishes the execution root for p.Selection by
+// the same rules as Capabilities, and runs no feature command: only the
+// host's `bootc status --json` and the read-only store reads of Offline.
+// The install asks it before the disk is touched, to decide whether the
+// host's bootc may install a local source directly (install.SourceRoot,
+// tuna-os/fisherman#363). extraStores are stores the recipe names
+// (additionalImageStores); they are searched after the discovered ones.
+func (p *Prober) SourceExecutionRoot(extraStores []string) ExecutionRoot {
+	st := p.hostStatus()
+	offline := p.Offline()
+	for _, s := range extraStores {
+		if s != "" && !contains(offline.Stores, s) {
+			offline.Stores = append(offline.Stores, s)
+		}
+	}
+	sel := p.Selection
+	src := p.source(sel, offline, st)
+	return executionRoot(sel, st, src, p.sourceDigests(sel, src, offline))
+}
+
 func executionRoot(sel Selection, st bootcHostStatus, s Source, sourceDigests []string) ExecutionRoot {
 	r := ExecutionRoot{Context: ExecRootNone}
 	switch {

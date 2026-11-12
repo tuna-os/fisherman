@@ -235,6 +235,7 @@ var optionsSources = map[string]string{
 	"ComposeFsOCIPath":      "later: install.BootcInstall sets the container-side OCI path",
 	"RunInSourceContainer":  "later: reuseInstallOptions sets it for a sourceReuse install",
 	"directLocalSource":     "later: install.BootcInstall sets it for a local containers-storage source",
+	"SourceRoot":            "later: main() sets it from establishSourceRoot (#363)",
 }
 
 func TestBootcOptionsProjection(t *testing.T) {

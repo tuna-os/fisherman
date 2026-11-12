@@ -490,6 +490,13 @@ func main() {
 	if reused != nil {
 		reuseInstallOptions(&shimOpts)
 	}
+	// ── Pre-flight: source execution root (#363) ──────────────────────────
+	// The host's bootc may install a local source directly only when the
+	// host booted that source; establish it once, before any disk step.
+	shimOpts.SourceRoot = establishSourceRoot(shimOpts, imageStores)
+	if line := install.LocalSourceContextLine(shimOpts); line != "" {
+		progress.Info(line)
+	}
 	selinuxShim, shimDir, shimErr := prepareSelinuxWorkaround(shimOpts)
 	if shimErr != nil {
 		fatalProblem("cannot prepare the install", recipe.Problem{Code: recipe.CodeSelinuxWorkaroundUnavailable, Message: shimErr.Error()})
@@ -853,6 +860,7 @@ func main() {
 		reuseInstallOptions(&opts)
 	}
 	opts.SelinuxShimPath = selinuxShim
+	opts.SourceRoot = shimOpts.SourceRoot
 	if r.EncryptsRoot() {
 		// Without the UUID no loader entry can name the LUKS container.
 		// Stop before the image is deployed, not after "complete" (#410).

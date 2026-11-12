@@ -24,7 +24,10 @@ func fakeSelinux(t *testing.T, active bool) {
 // install must not need, or look for, a compiler.
 func TestSelinuxWorkaroundRequired(t *testing.T) {
 	registry := Options{SelinuxDisabled: true, SourceImgref: "ghcr.io/example/os:stable"}
-	local := Options{SelinuxDisabled: true, SourceImgref: "containers-storage:ghcr.io/example/os:stable"}
+	local := Options{SelinuxDisabled: true, SourceImgref: "containers-storage:ghcr.io/example/os:stable",
+		SourceRoot: SourceRoot{Established: true, Reason: "digest_match", Backend: "ostree"}}
+	unrelated := local
+	unrelated.SourceRoot = SourceRoot{Reason: "digest_mismatch"}
 	for _, tt := range []struct {
 		name      string
 		opts      Options
@@ -38,6 +41,7 @@ func TestSelinuxWorkaroundRequired(t *testing.T) {
 		{"live root, no source container", Options{SelinuxDisabled: true}, true, false, false},
 		{"local source with host bootc runs directly", local, true, true, false},
 		{"local source without host bootc runs in the container", local, true, false, true},
+		{"local source on an unrelated host runs in the container", unrelated, true, true, true},
 		{"source reuse runs in the copy's container", Options{SelinuxDisabled: true, SourceImgref: local.SourceImgref, RunInSourceContainer: true}, true, true, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
