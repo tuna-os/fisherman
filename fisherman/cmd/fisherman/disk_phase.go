@@ -49,10 +49,14 @@ type diskResult struct {
 }
 
 // phaseError is a disk-phase failure: the progress.Failure* code and the
-// message, both exactly what the inline fatalCode call used to get.
+// message, both exactly what the inline fatalCode call used to get. A
+// failure that is a recipe rule (the pre-partition plan_stale check)
+// carries its problem too, so the error event has the problem's code and
+// field, as the pre-flight's does.
 type phaseError struct {
-	code string
-	msg  string
+	code    string
+	msg     string
+	problem *recipe.Problem
 }
 
 func (e *phaseError) Error() string { return e.msg }
@@ -61,10 +65,21 @@ func phaseFail(code, format string, args ...any) *phaseError {
 	return &phaseError{code: code, msg: fmt.Sprintf(format, args...)}
 }
 
+// phaseProblem is a disk-phase failure that is the recipe rule p: the
+// error event carries p's code and field, like fatalProblem(prefix, p).
+func phaseProblem(prefix string, p recipe.Problem) *phaseError {
+	return &phaseError{code: p.Code, msg: prefix + ": " + p.Message, problem: &p}
+}
+
 // failPhase ends the install for an error a phase returned, with the same
-// error event and teardown as the fatalCode call it replaces.
+// error event and teardown as the fatalCode (or fatalProblem) call it
+// replaces.
 func failPhase(err error) {
 	if pe, ok := err.(*phaseError); ok {
+		if pe.problem != nil {
+			term.failProblem(pe.msg, *pe.problem)
+			return
+		}
 		fatalCode(pe.code, "%s", pe.msg)
 		return
 	}
@@ -75,6 +90,12 @@ func failPhase(err error) {
 // registrations it makes. liveDiskOps is the real set; the tests record
 // and fail them.
 type diskOps struct {
+	// recheckPlan plans the recipe again right before the first disk write
+	// and returns the plan_stale problem when the machine no longer gives
+	// the plan its planBinding names (planBindingProblems). diskPhase
+	// calls it only for a recipe with a planBinding.
+	recheckPlan func(r *recipe.Recipe) []recipe.Problem
+
 	applyCustomLayout func(specs []disk.MountSpec, target string, hooks disk.LayoutHooks) (string, string, []string, error)
 	partitionLayout   func(dev string, layout disk.Layout) error
 	formatEFI         func(part string) error
@@ -111,6 +132,7 @@ type diskOps struct {
 // operations and to the install's cleanup and swap registry.
 func liveDiskOps() diskOps {
 	return diskOps{
+		recheckPlan:       planBindingProblems,
 		applyCustomLayout: disk.ApplyCustomLayoutWith,
 		partitionLayout:   disk.PartitionLayout,
 		formatEFI:         disk.FormatEFI,
@@ -151,6 +173,18 @@ func liveDiskOps() diskOps {
 // as part of main() and decides each branch with r's methods.
 func diskPhase(r *recipe.Recipe, seq *stepSequencer, targetMount, luksMapper string, ops diskOps) (diskResult, error) {
 	var res diskResult
+
+	// ── Pre-partition: the confirmed plan, once more ─────────────────────
+	// The pre-flight checked planBinding before the live audio, the
+	// wallpaper slurp and whatever else ran since; plan the recipe again
+	// now, before the first step and the first write, so the partition
+	// table (or the manual layout's first format) goes to the machine the
+	// user confirmed. It reads what plan reads and writes nothing.
+	if r.PlanBinding != nil {
+		if ps := ops.recheckPlan(r); len(ps) > 0 {
+			return res, phaseProblem("before partitioning", ps[0])
+		}
+	}
 
 	if r.IsManualLayout() {
 		// ── Step 1 (manual): Format and mount user-specified partitions ────────

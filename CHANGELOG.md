@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **The install checks `planBinding` again right before it partitions**
+  (part of #371). The disk phase plans a bound recipe once more before its
+  first disk step (the partition table, or a manual layout's first
+  format), through the new `diskOps.recheckPlan` seam (live:
+  `planBindingProblems`, the pre-flight's own check). A machine that
+  changed after the pre-flight ends the install with an `error` event
+  carrying `plan_stale` and `field` `planBinding.digest`, before any step
+  starts (`disk_changed` false). A recipe without `planBinding` is not
+  re-planned. No new code or field. Docs: PLAN.md, VALIDATE.md ("Saved
+  plan").
+
 - **`plan --read-image` gives the unpacked size of an OCI layout source**
   (part of #371). An `oci:` layout is now read from its files, with no
   command: `oci-layout`, `index.json`, the manifest the install selects and

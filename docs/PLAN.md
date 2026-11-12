@@ -407,6 +407,15 @@ did) and refuse it with `plan_stale` when the digest differs
 it binds: the bound recipe plans to the same digest. It can be combined
 with `diskIdentity`, which names the field that changed.
 
+The install checks the binding twice: in its pre-flight, and once more
+in the disk phase right before its first disk step (the partition table,
+or the first format of a manual layout), after the live session's audio
+setup, the wallpaper migration and the rest of what runs in between. The
+second check is the same plan, read the same way (the image too, with
+`readImage`); a machine that changed in between ends the install with an
+`error` event whose `code` is `plan_stale` and whose `field` is
+`planBinding.digest`, with `disk_changed` false: nothing was written.
+
 A manual layout has no `diskIdentity`: the field binds `disk`, and
 `customMounts` can span several disks, so a per-disk identity would need a
 new recipe field. Its disks are bound through `planBinding` instead: the
@@ -427,6 +436,6 @@ The plan does not yet report the mounts of the installed system beyond the
 partitions or the free space inside a kept manual root partition. The
 unpacked size of a registry image or an OCI layout whose layers do not
 record it is an estimate. A manual layout's disks are bound
-by `planBinding`, not by `diskIdentity`. The install checks `diskIdentity` and
-`planBinding` in its pre-flight, not again right before it partitions. See
-tuna-os/fisherman#371.
+by `planBinding`, not by `diskIdentity`. A `diskIdentity` without a
+`planBinding` is checked in the pre-flight only, not again right before
+the install partitions. See tuna-os/fisherman#371.
