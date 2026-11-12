@@ -181,6 +181,12 @@ jobs:
         # As in unit-tests: the loopback tests need root.
         run: sudo env "PATH=$PATH" go test -count=1 ./...
         working-directory: fisherman
+      # tui is its own module with a newer Go than fisherman's go.mod names:
+      # install the version it asks for, as tui-unit-tests does.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: tui/go.mod
+          cache: false
       - name: TUI unit tests
         run: go test -count=1 ./...
         working-directory: tui
