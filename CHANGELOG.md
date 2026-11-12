@@ -39,6 +39,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **A separate `/var` disk gets the Flatpaks** (#252 follow-up): with a
+  `varDisk` or a manual `/var` partition, a recipe `flatpakVarPath` sent the
+  Flatpak copy under the target root, which the booted system does not mount
+  on `/var`. The copy now goes to the disk, and the install log says that
+  `flatpakVarPath` is not used.
+
 - **btrfs roots booted without the recipe's mount options on composefs**
   (#418): bootc 1.15.x writes the composefs boot entry from the root's own
   arguments, `composefs=` and `kargs.d`, and never reads `--karg`
