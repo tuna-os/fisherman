@@ -53,6 +53,8 @@ const (
 	CodeVarDiskSameAsDisk             = "var_disk_same_as_disk"
 	CodeVarDiskUnsupportedComposeFs   = "var_disk_unsupported_composefs"
 	CodeImageRequired                 = "image_required"
+	CodeImageInvalid                  = "image_invalid"
+	CodeTargetImgrefInvalid           = "target_imgref_invalid"
 	CodeImageTypeUnsupported          = "image_type_unsupported"
 	CodeBootloaderUnsupported         = "bootloader_unsupported"
 	CodeEncryptionUnsupported         = "encryption_unsupported"
@@ -431,6 +433,44 @@ func CheckImageType(t string) []Problem {
 		return []Problem{{"imageType", CodeImageTypeUnsupported,
 			fmt.Sprintf("imageType must be \"bootc\" (or empty), got %q", t)}}
 	}
+}
+
+// CheckImageRefs applies the reference syntax rule to image and
+// targetImgref: an empty value is not judged here (ValidateImage and the
+// sourceReuse rules decide whether one is needed); any other value has no
+// whitespace or control character and does not start with "-". image is an
+// argument of skopeo, podman and bootc, and targetImgref of bootc's
+// --target-imgref; both are read after the disk is partitioned, so a
+// newline, a space or a leading "-" (read as a flag) failed the install
+// with the disk already wiped (#414). With sourceReuse the sourceReuse
+// rules judge both fields instead: image must be empty, and targetImgref
+// has the stricter checkReuseUpdateRef.
+func CheckImageRefs(r *Recipe) []Problem {
+	if r.SourceReuse != nil {
+		return nil
+	}
+	var ps []Problem
+	if r.Image != "" && !refSyntaxOK(r.Image) {
+		ps = append(ps, Problem{"image", CodeImageInvalid,
+			fmt.Sprintf("image must be an image reference without spaces or control characters, not starting with \"-\", got %q", r.Image)})
+	}
+	if r.TargetImgref != "" && !refSyntaxOK(r.TargetImgref) {
+		ps = append(ps, Problem{"targetImgref", CodeTargetImgrefInvalid,
+			fmt.Sprintf("targetImgref must be an image reference without spaces or control characters, not starting with \"-\", got %q", r.TargetImgref)})
+	}
+	return ps
+}
+
+func refSyntaxOK(ref string) bool {
+	if strings.HasPrefix(ref, "-") {
+		return false
+	}
+	for _, c := range ref {
+		if unicode.IsSpace(c) || unicode.IsControl(c) {
+			return false
+		}
+	}
+	return true
 }
 
 // CheckBootloader applies the bootloader rule.

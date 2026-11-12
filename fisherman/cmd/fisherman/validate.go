@@ -184,6 +184,9 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 		// Static rules only; whether the host has the item is full mode.
 		ps = append(ps, recipe.CheckSourceReusePartial(&r, has("image"), has("targetImgref"))...)
 	}
+	if has("image") || has("targetImgref") {
+		ps = append(ps, recipe.CheckImageRefs(&r)...)
+	}
 	if has("imageType") {
 		ps = append(ps, recipe.CheckImageType(r.ImageType)...)
 	}

@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixtures. The probe now reports every architecture in the kernel's
   spelling (`probe.NormalizeArch`), and `sourceReuse.platform` accepts
   either. Found by the first run of the store-reuse VM profile.
+- **`image` and `targetImgref` were read only after the wipe** (#414): a
+  newline, a space or a leading `-` in either reached `skopeo`, `podman` and
+  `bootc --target-imgref` after the disk was partitioned, and `-v` would be
+  read as a flag. A non-empty value now has no whitespace or control
+  character and no `-` first (`image_invalid`, `target_imgref_invalid`), in
+  `validate`, `validate --partial` and the install preflight. With
+  `sourceReuse` its own rules judge both fields, as before.
 
 ### 🧪 Testing
 
