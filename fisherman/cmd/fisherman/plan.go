@@ -39,6 +39,7 @@ type planResult struct {
 // no passphrase, password or recovery key, and not the raw recipe.
 type installPlan struct {
 	Source     planSource      `json:"source"`
+	Image      planImage       `json:"image"`
 	Target     planTarget      `json:"target"`
 	Boot       planBoot        `json:"boot"`
 	Encryption planEncryption  `json:"encryption"`
@@ -60,6 +61,23 @@ type planSource struct {
 	Digest       string `json:"digest"`
 	// Pull: "none" when no registry is read, else "unknown".
 	Pull string `json:"pull"`
+}
+
+// planImage is what `plan --read-image` read about the source image
+// without a pull (install.InspectImageForPlan): its identity and the sizes
+// its manifest and its local store report. Without --read-image, or when
+// nothing answers, read_from is "none" and the rest is unknown.
+type planImage struct {
+	// ReadFrom: "containers-storage", "oci", "registry" or "none".
+	ReadFrom       string `json:"read_from"`
+	ManifestDigest string `json:"manifest_digest"` // or "unknown"
+	PlatformDigest string `json:"platform_digest"` // or "unknown"
+	Platform       string `json:"platform"`        // os/architecture, or "unknown"
+	Layers         int    `json:"layers,omitempty"`
+	// CompressedBytes: the sum of the layer sizes the manifest lists.
+	CompressedBytes int64 `json:"compressed_bytes,omitempty"`
+	// UnpackedBytes: the unpacked size local containers-storage reports.
+	UnpackedBytes int64 `json:"unpacked_bytes,omitempty"`
 }
 
 type planTarget struct {
@@ -97,9 +115,15 @@ type planCapacity struct {
 	DiskMinimum   string `json:"disk_minimum"`
 	ReservedBytes int64  `json:"reserved_bytes"`
 	RootBytes     int64  `json:"root_bytes,omitempty"`
-	// RootMinimum: always "unknown": the root must hold the unpacked
-	// image, whose size plan does not read.
+	// RootMinimum: always "unknown": fisherman holds the root to no
+	// minimum of its own; root_need_bytes and image_fit compare it with
+	// the image.
 	RootMinimum string `json:"root_minimum"`
+	// RootNeedBytes: the root one deployment of the image takes, estimated
+	// from its unpacked size. Left out when that is unknown.
+	RootNeedBytes int64 `json:"root_need_bytes,omitempty"`
+	// ImageFit: "enough", "not_enough" or "unknown" (planImageFit).
+	ImageFit string `json:"image_fit"`
 }
 
 type planBoot struct {
@@ -151,7 +175,12 @@ type planDestroy struct {
 type planScratch struct {
 	Path     string `json:"path"`
 	OnTarget bool   `json:"on_target"`
-	Bytes    string `json:"bytes"`
+	// Bytes: always "unknown" (protocol 1); NeedBytes is the estimate.
+	Bytes string `json:"bytes"`
+	// NeedBytes: an upper estimate of the scratch space the install takes,
+	// image.compressed_bytes + image.unpacked_bytes. Left out when either
+	// is unknown.
+	NeedBytes int64 `json:"need_bytes,omitempty"`
 }
 
 type planStep struct {
@@ -165,7 +194,7 @@ type planUnknown struct {
 	Reason string `json:"reason"`
 }
 
-const planUsage = `usage: fisherman plan --json -
+const planUsage = `usage: fisherman plan --json [--read-image] -
 
 Print what an install of the recipe on stdin would do, as one JSON object
 on stdout: the source, the target, the partitions it creates or keeps, the
@@ -175,16 +204,22 @@ nothing and prints no secret. A value only the install can resolve is
 "unknown". The recipe is read from stdin only: it can hold the LUKS
 passphrase. Schema: docs/PLAN.md.
 
+--read-image  also read the source image's manifest and size, without a
+              pull: from local containers-storage, else from its registry
+              (the only network read plan makes; it reads no layer)
+
 Exit 0 with a plan, 1 if the recipe is invalid, 2 on bad arguments.
 `
 
 // runPlan implements `fisherman plan --json -` and returns the exit code.
 func runPlan(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
-	jsonOut, fromStdin := false, false
+	jsonOut, fromStdin, readImage := false, false, false
 	for _, a := range args {
 		switch a {
 		case "--json":
 			jsonOut = true
+		case "--read-image":
+			readImage = true
 		case "-":
 			if fromStdin {
 				fmt.Fprintf(stderr, "plan: - is given twice\n\n%s", planUsage)
@@ -225,7 +260,7 @@ func runPlan(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		res.Errors = []recipe.Problem{}
 	}
 	if res.Valid {
-		res.Plan = buildPlan(r)
+		res.Plan = buildPlan(r, readImage)
 	}
 	if err := writeJSON(stdout, res); err != nil {
 		fmt.Fprintf(stderr, "plan: encoding output: %v\n", err)
@@ -254,7 +289,9 @@ func autoLayout(r *recipe.Recipe) disk.Layout {
 // marker) and what the install would decide from the recipe: the step list
 // (planSteps), the partition table (disk.LayoutPartitions), the order and
 // the action of each manual mount (disk.OrderMounts, MountSpec.Action).
-func buildPlan(r *recipe.Recipe) *installPlan {
+// With readImage it also reads the source image's manifest and local store
+// metadata (install.InspectImageForPlan), never a layer.
+func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 	givenDisk, givenVarDisk := r.Disk, ""
 	if r.VarDisk != nil {
 		givenVarDisk = r.VarDisk.Disk
@@ -294,8 +331,36 @@ func buildPlan(r *recipe.Recipe) *installPlan {
 			unknown("source.target_imgref", "the installed system tracks the running live image, which the host does not name")
 		}
 	}
+	img, imgWhy := planImageFacts(r, p.Source.Kind, readImage)
+	p.Image = img
+	if p.Source.Digest == planUnknownValue && img.ManifestDigest != planUnknownValue {
+		p.Source.Digest = img.ManifestDigest
+	}
+	if img.ReadFrom == "none" {
+		unknown("image", imgWhy)
+	} else {
+		if img.PlatformDigest == planUnknownValue {
+			unknown("image.platform_digest", "only a registry manifest lists the platform manifests; plan read a local copy, or the registry did not give its raw manifest")
+		}
+		if img.Platform == planUnknownValue {
+			unknown("image.platform", "the image configuration names no platform")
+		}
+		if img.Layers == 0 {
+			unknown("image.layers", "the image metadata lists no layers")
+		}
+		if img.CompressedBytes == 0 {
+			unknown("image.compressed_bytes", "the manifest lists no layer sizes (skopeo before 1.6 prints none)")
+		}
+		if img.UnpackedBytes == 0 {
+			unknown("image.unpacked_bytes", "only local containers-storage reports the unpacked size; a registry manifest and an OCI layout list compressed sizes")
+		}
+	}
 	if p.Source.Digest == planUnknownValue {
-		unknown("source.digest", "the install reads the image identity when it pulls or opens the image; plan contacts no registry and opens no image")
+		reason := "the install reads the image identity when it pulls or opens the image; plan reads it only with --read-image"
+		if readImage {
+			reason = "plan could not read the image: " + imgWhy
+		}
+		unknown("source.digest", reason)
 	}
 	if p.Source.Pull == planUnknownValue {
 		unknown("source.pull", "whether the image is in a local store or must be pulled is known only when the install checks the image cache")
@@ -361,7 +426,11 @@ func buildPlan(r *recipe.Recipe) *installPlan {
 		p.Destroys = append(p.Destroys, planDestroy{r.Disk, "wipe_disk"})
 		parts, _ := disk.LayoutPartitions(layout)
 		p.Capacity = &planCapacity{MinDiskBytes: probe.MinDiskBytes, DiskMinimum: planUnknownValue,
-			ReservedBytes: planAlignmentBytes, RootMinimum: planUnknownValue}
+			ReservedBytes: planAlignmentBytes, RootMinimum: planUnknownValue, RootNeedBytes: img.UnpackedBytes,
+			ImageFit: planUnknownValue}
+		if img.UnpackedBytes == 0 {
+			unknown("capacity.root_need_bytes", "the estimate is the image's unpacked size, which only local containers-storage reports")
+		}
 		switch {
 		case terr != nil:
 			unknown("capacity.disk_minimum", "the probe could not read the target disk")
@@ -382,7 +451,7 @@ func buildPlan(r *recipe.Recipe) *installPlan {
 		} else {
 			unknown("capacity.root_bytes", "the target disk size is unknown, or no larger than the partitions before the root")
 		}
-		unknown("capacity.root_minimum", "the root must hold the unpacked image and its updates; plan reads no image size, and fisherman sets no root minimum beyond the disk minimum")
+		unknown("capacity.root_minimum", "fisherman sets no root minimum beyond the disk minimum; root_need_bytes and image_fit compare the root with the image")
 		for _, part := range parts {
 			pp := planPartition{Number: part.Number, Device: disk.PartName(r.Disk, part.Number), Role: part.Role,
 				Created: true, GPTName: part.Name, GPTType: part.Type, Size: part.Size, Action: string(disk.MountFormat)}
@@ -435,7 +504,15 @@ func buildPlan(r *recipe.Recipe) *installPlan {
 	if varIsSpaceConstrained() {
 		p.Scratch = planScratch{Path: filepath.Join(mount, ".fisherman-scratch"), OnTarget: true, Bytes: planUnknownValue}
 	}
-	unknown("scratch.bytes", "the scratch space an install needs depends on the image size, known only after a pull or an image read")
+	unknown("scratch.bytes", "the exact scratch use depends on the path the install takes (a pull, an OCI export, a redirected store); scratch.need_bytes is an upper estimate")
+	if img.CompressedBytes > 0 && img.UnpackedBytes > 0 {
+		p.Scratch.NeedBytes = img.CompressedBytes + img.UnpackedBytes
+	} else {
+		unknown("scratch.need_bytes", "the estimate needs the image's compressed and unpacked sizes (image.compressed_bytes, image.unpacked_bytes)")
+	}
+	if p.Capacity != nil {
+		p.Capacity.ImageFit = planImageFit(p.Capacity, img, p.Scratch, p.Target.SizeBytes > 0, unknown)
+	}
 
 	// ── Steps ── The pull moves weight between steps, never a step.
 	for i, s := range planSteps(r, true) {
@@ -510,6 +587,73 @@ func planTargetIdentity(r *recipe.Recipe, t probe.Target, terr error, unknown fu
 	}
 	unknown("target.stable_id", "the disk reports neither a WWN nor a serial; bind the install with diskIdentity.sizeBytes, and the install checks the device again before it writes")
 	return id, planUnknownValue
+}
+
+// planImageFacts is plan.image for r's source, and why it is not read
+// when read_from is "none". Only with readImage does plan run a command
+// for it (install.InspectImageForPlan).
+func planImageFacts(r *recipe.Recipe, kind string, readImage bool) (planImage, string) {
+	img := planImage{ReadFrom: "none", ManifestDigest: planUnknownValue, PlatformDigest: planUnknownValue, Platform: planUnknownValue}
+	switch {
+	case kind == "source-reuse":
+		return img, "a reused source is this host's bootc store item (source.digest); the install reports its size in its source_reuse estimate"
+	case kind == "live":
+		return img, "the source is the running live image, which plan does not read"
+	case !readImage:
+		return img, "plan reads the image only with --read-image"
+	}
+	f := install.InspectImageForPlan(r.Image, kind == "registry")
+	if f.ReadFrom == "" {
+		return img, f.Reason
+	}
+	img.ReadFrom, img.Layers, img.CompressedBytes, img.UnpackedBytes = f.ReadFrom, f.Layers, f.CompressedBytes, f.UnpackedBytes
+	if f.ManifestDigest != "" {
+		img.ManifestDigest = f.ManifestDigest
+	}
+	if f.PlatformDigest != "" {
+		img.PlatformDigest = f.PlatformDigest
+	}
+	if f.Platform != "" {
+		img.Platform = f.Platform
+	}
+	return img, ""
+}
+
+// planImageFit compares the root the automatic layout leaves with what the
+// image needs. "enough": the root holds the unpacked image, and the scratch
+// estimate too when scratch is on the target. "not_enough": the root is
+// smaller than the image's compressed layers, a lower bound of its
+// unpacked size, or than the unpacked size itself. Else "unknown". It is a
+// report: neither validate nor the install refuses on it.
+func planImageFit(c *planCapacity, img planImage, s planScratch, sizeKnown bool, unknown func(field, reason string)) string {
+	if !sizeKnown || c.RootBytes == 0 {
+		unknown("capacity.image_fit", "the target disk size is unknown")
+		return planUnknownValue
+	}
+	floor := img.CompressedBytes
+	if img.UnpackedBytes > 0 {
+		floor = img.UnpackedBytes
+	}
+	if floor > 0 && c.RootBytes < floor {
+		return "not_enough"
+	}
+	need := img.UnpackedBytes
+	if s.OnTarget {
+		need = s.NeedBytes // includes the unpacked size; 0 when unknown
+	}
+	if img.UnpackedBytes > 0 && need > 0 {
+		if c.RootBytes >= need {
+			return "enough"
+		}
+		unknown("capacity.image_fit", "the root holds the unpacked image but not the scratch estimate as well; the estimate is an upper bound, so it may still be enough")
+		return planUnknownValue
+	}
+	if floor == 0 {
+		unknown("capacity.image_fit", "plan has no size of the image (see image)")
+		return planUnknownValue
+	}
+	unknown("capacity.image_fit", "the image's unpacked size is unknown (see image.unpacked_bytes), and the root is not smaller than its compressed layers")
+	return planUnknownValue
 }
 
 // manualRole names what a customMounts target is.
