@@ -9,6 +9,10 @@
 #          images that exercise each install backend). Required canaries:
 #          - dakota:        composefs-backend + systemd-boot
 #          - centos-bootc:  ostree-backend + grub2
+#          - centos-bootc-luks-user, centos-bootc-var-disk, dakota-tpm2:
+#            the #418 shapes (LUKS + user, varDisk, swtpm), gating (#423)
+#          bootcrew-vm.yml also runs every night on dev, so the required
+#          entries gate the nightly as well as each PR.
 #          Other vm_boot images run advisory: their failures show up in the
 #          job summary but do not fail the workflow. Frees us from chasing
 #          per-image flakes while still keeping signal on the backends that
@@ -225,9 +229,10 @@ images:
     nightly: false
     vm_boot: true
 
-  # ── #418: paths no entry covered. ADVISORY (no `required`) and PR-gate
-  # only (nightly: false). Promote one with `required: true` once it is
-  # green for a while.
+  # ── #418: paths no entry covered. PR gate and nightly VM run only
+  # (nightly: false keeps them out of bootcrew-nightly.yml, which writes its
+  # own recipe). centos-bootc-luks-user, centos-bootc-var-disk and
+  # dakota-tpm2 are `required` (#423); the other entries stay advisory.
   #
   # Not covered, and why:
   # - ZFS: no image here ships the ZFS kernel module, and ZFS stays
@@ -237,7 +242,7 @@ images:
   #   the loopback unit test only.
   # - arm64 boot: every digest here is x86_64, and the harness has no arm64
   #   firmware (AAVMF) or arm64 ssh-enabled images. bootcrew-vm.yml builds
-  #   and unit-tests fisherman on arm64 instead (advisory / arm64).
+  #   and unit-tests fisherman on arm64 instead (arm64 unit tests, gating).
   # - tpm2-luks without a passphrase used to be here: its first boot needs
   #   the recovery key, which only the install's recovery_key event carries.
   #   The harness now captures it (dakota-tpm2-luks below).
@@ -258,6 +263,7 @@ images:
     vm_timeout: 800
     nightly: false
     vm_boot: true
+    required: true # #423: gating, on each PR and the nightly VM run
 
   # A separate /var disk. ostree and unencrypted: fisherman refuses a
   # varDisk on composefs (#252) and with LUKS (#406).
@@ -272,6 +278,7 @@ images:
     var_disk: true
     nightly: false
     vm_boot: true
+    required: true # #423: gating, on each PR and the nightly VM run
 
   # tpm2-luks (#418 item 2, #421): TPM2 with no passphrase. fisherman makes
   # a random key and emits it once as the recovery_key event; the harness
@@ -313,6 +320,7 @@ images:
     vm_timeout: 800
     nightly: false
     vm_boot: true
+    required: true # #423: gating, on each PR and the nightly VM run
 
   # btrfsSubvolumes: the root in an @ subvolume, mounted with
   # rootflags=subvol=@,compress=zstd:1. The guest must mount @ as the recipe
