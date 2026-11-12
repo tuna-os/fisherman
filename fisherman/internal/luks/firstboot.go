@@ -61,9 +61,18 @@ var cryptenrollPaths = []string{"bin/systemd-cryptenroll", "sbin/systemd-crypten
 // can appear late). ExecStopPost runs when the service stops for any
 // reason: after success, after the last failed attempt, after a timeout and
 // when ExecStart could not be executed at all. It removes the single-use
-// keyslot (by its key with cryptsetup, else by its number with
-// systemd-cryptenroll), then the key file, then the unit's own enablement.
+// keyslot, then the key file, then the unit's own enablement.
 // The file is removed even when no tool could remove the slot.
+//
+// The slot goes by its key (`luksRemoveKey`): AddKeyFile gives it a cheap
+// KDF and the "preferred" priority, so the lookup matches it first and
+// never runs the user slot's memory-hard KDF. Before that, the lookup ran
+// it first, outlived the stop timeout on a VM with little memory and drew
+// the OOM killer, and the slot and the key file stayed behind (#421). By
+// number (`luksKillSlot -q`) is the fallback: on some cryptsetup builds it
+// reads a passphrase from the unit's empty stdin and leaves the slot.
+// Each removal is bounded by `timeout`, inside TimeoutStopSec, so the file
+// removal always runs.
 func EnrollUnit(luksUUID string) string {
 	dev := "/dev/disk/by-uuid/" + luksUUID
 	slot := strconv.Itoa(EnrollKeySlot)
@@ -85,7 +94,8 @@ RemainAfterExit=no
 TimeoutStartSec=300
 Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart=/bin/sh -c 'for attempt in ` + strings.Join(attempts, " ") + `; do ` + enroll + ` && exit 0; sleep 10; done; exit 1'
-ExecStopPost=-/bin/sh -c 'cryptsetup luksRemoveKey ` + dev + ` ` + EnrollKeyPath + ` || systemd-cryptenroll --wipe-slot=` + slot + ` ` + dev + `'
+TimeoutStopSec=180
+ExecStopPost=-/bin/sh -c 'timeout 60 cryptsetup luksRemoveKey ` + dev + ` ` + EnrollKeyPath + ` </dev/null || timeout 60 cryptsetup -q luksKillSlot ` + dev + ` ` + slot + ` </dev/null || timeout 60 systemd-cryptenroll --unlock-key-file=` + EnrollKeyPath + ` --wipe-slot=` + slot + ` ` + dev + `'
 ExecStopPost=-/bin/sh -c 'rm -f ` + EnrollKeyPath + `; rmdir ` + filepath.Dir(EnrollKeyPath) + `; rm -f /etc/systemd/system/multi-user.target.wants/` + EnrollUnitName + `'
 
 [Install]
