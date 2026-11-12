@@ -652,74 +652,15 @@ func main() {
 		failPhase(err)
 	}
 
-	// Target-resident scratch (live media) goes now, while the target is
-	// still mounted read-write: finalize makes it read-only, and after the
-	// unmount the path no longer names the target's data (#307).
-	if err := cleanup.RemoveTargetScratch(); err != nil {
-		progress.Info(fmt.Sprintf("Warning: could not remove the install scratch from the target: %v", err))
-	}
-
-	// ── Step 9: Finalize ─────────────────────────────────────────────────────
-	// bootc's --skip-finalize kept the target writable for post-install writes.
-	// Now replicate what bootc's finalize_filesystem() does internally:
-	//   1. fstrim  — discard unused blocks (SSD optimization)
-	//   2. remount ro — flush writeback, lock the deployment read-only
-	//   3. fsfreeze/thaw — flush the journal for a clean first boot
-	// ZFS handles this internally; fstrim/remount-ro/fsfreeze do not apply.
-	seq.begin(stepFinalize)
-	// Every planned step is announced by now; a gap is a bug the step
-	// tests exist to catch, so say so rather than end the install.
-	if err := seq.check(); err != nil {
-		progress.Info("Warning: " + err.Error())
-	}
-	if !r.IsZFS() {
-		if err := disk.FinalizeFilesystemWith(activeTargetMount, freezes.Hooks()); err != nil {
-			fatalCode(progress.FailureFinalizeFailed, "finalizing target filesystem: %v", err)
-		}
-	}
-
-	// ZFS post-install: write host ID and zpool.cache into the deployment's
-	// /etc (the resolver's: ZFS installs are composefs, and <target>/etc is
-	// not what boots), so the installed system can import the pool. Must be
-	// done before unmounting. Teardown then exports the pool.
-	if r.IsZFS() {
-		poolName := disk.PoolName(r.ZFSPoolName)
-		if d, err := post.ResolveDeployment(activeTargetMount); err != nil {
-			progress.Info(fmt.Sprintf("Warning: ZFS host ID and zpool.cache not written: %v", err))
-		} else {
-			progress.Info("ZFS post-install: writing hostid and zpool.cache")
-			if err := disk.WriteHostID(d.Etc); err != nil {
-				progress.Info(fmt.Sprintf("Warning: ZFS host ID: %v", err))
-			}
-			if err := disk.SetZFSCachefile(poolName, d.Etc); err != nil {
-				progress.Info(fmt.Sprintf("Warning: ZFS cachefile: %v", err))
-			}
-		}
-	}
-
-	// Tear down mounts and LUKS before declaring success. Claiming the exit
-	// first means a cancel signal from here on is ignored (the install has
-	// finished), and a cancel that already started keeps the exit to itself.
-	term.claimSuccess()
-	if err := teardown(); err != nil {
-		progress.Info(fmt.Sprintf("Warning: teardown after install was incomplete: %v", err))
-	}
-
-	// Find the installed system's EFI boot entry, and make it the next boot
-	// while fisherman is root: a frontend runs as the desktop user and cannot
-	// write an EFI variable (tuna-os/bootc-installer#318). The id still goes
-	// out in the complete event.
-	// Non-fatal: on VMs or systems without efibootmgr this may return empty.
-	bootID, err := post.FindBootNextID(activeEfiPart)
+	// ── Step 9, teardown, BootNext: the finalize phase (finalize_phase.go) ──
+	err = finalizePhase(r, seq, finalizeInput{
+		targetMount: activeTargetMount,
+		efiPart:     activeEfiPart,
+		hostIsLive:  hostIsLive,
+	}, liveFinalizeOps())
 	if err != nil {
-		progress.Info(fmt.Sprintf("Warning: could not determine EFI boot entry: %v", err))
-		bootID = ""
-	} else if bootID != "" {
-		progress.Info(fmt.Sprintf("EFI boot entry for installed system: Boot%s", bootID))
+		failPhase(err)
 	}
-	progress.Info(applyBootNext(r, bootID, hostIsLive))
-
-	progress.Complete("Installation complete!", bootID)
 }
 
 // sourceIdentityLine says what the pre-flight resolved the install source

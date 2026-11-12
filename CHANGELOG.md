@@ -249,6 +249,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   No behaviour change: the same steps, warnings, events, failure codes and
   mount registrations, in the same order. Golden tests pin the log for
   each shape, with everything turned on, each warning and each failure.
+- **The finalize phase leaves `main()`** (part of #313): removing the
+  target-resident scratch, step 9 (fstrim, remount read-only,
+  fsfreeze/thaw), the ZFS host ID and `zpool.cache`, the success claim,
+  teardown, BootNext and the `complete` event are now `finalizePhase`
+  (`cmd/fisherman/finalize_phase.go`). No behaviour change: the same order
+  (success is claimed before teardown, `complete` is the last event), the
+  same warnings and the same `finalize_failed` failure.
 - **The recipe answers its own install-state questions** (#317):
   `recipe.Recipe` has `HasEncryption`, `HasTPM2`, `IsManualLayout`, `IsZFS`,
   `UsesSystemdBoot`, `UsesComposeFs`, `HasVarDisk`, `FormatsVarDisk`,

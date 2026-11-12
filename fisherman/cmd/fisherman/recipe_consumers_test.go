@@ -38,10 +38,11 @@ type fieldUse struct {
 }
 
 const (
-	mainGo         = "cmd/fisherman/main.go"
-	diskPhaseGo    = "cmd/fisherman/disk_phase.go"
-	installPhaseGo = "cmd/fisherman/install_phase.go"
-	postPhaseGo    = "cmd/fisherman/post_phase.go"
+	mainGo          = "cmd/fisherman/main.go"
+	diskPhaseGo     = "cmd/fisherman/disk_phase.go"
+	installPhaseGo  = "cmd/fisherman/install_phase.go"
+	postPhaseGo     = "cmd/fisherman/post_phase.go"
+	finalizePhaseGo = "cmd/fisherman/finalize_phase.go"
 )
 
 var recipeFieldUses = map[string]fieldUse{
@@ -64,7 +65,7 @@ var recipeFieldUses = map[string]fieldUse{
 		gate: "true is refused (unified_storage_unsupported); the projection still carries it"},
 	"composeFsBackend": {files: []string{installPhaseGo, postPhaseGo}},
 	"genericImage":     {files: []string{mainGo}},
-	"zfsPoolName":      {files: []string{mainGo}},
+	"zfsPoolName":      {files: []string{diskPhaseGo, finalizePhaseGo}},
 	"bootloader":       {files: []string{mainGo}},
 	"imageType": {files: []string{"internal/recipe/recipe.go"},
 		gate: `only "bootc" is accepted; "ostree" is refused until it is implemented`},

@@ -66,9 +66,10 @@ func stepConsts(t *testing.T) map[string]string {
 // the phase's body in at that call, so the replay below, and every test
 // that reads main()'s steps, sees the install as one sequence still.
 var stepPhases = map[string]string{
-	"diskPhase":    "disk_phase.go",
-	"installPhase": "install_phase.go",
-	"postPhase":    "post_phase.go",
+	"diskPhase":     "disk_phase.go",
+	"installPhase":  "install_phase.go",
+	"postPhase":     "post_phase.go",
+	"finalizePhase": "finalize_phase.go",
 }
 
 // phaseCall is the name of the step phase a statement of main() calls
