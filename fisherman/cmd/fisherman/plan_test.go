@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -28,9 +31,29 @@ var planSecrets = []string{"SENTINEL-LUKS-PASSPHRASE", "SENTINEL-USER-PASSWORD",
 
 // readOnlyCommands are the host commands a plan may run: the probe's
 // read-only queries. Anything else (sfdisk, mkfs.*, mount, cryptsetup,
-// zpool, podman pull, bootc install, ...) fails the test.
+// zpool, podman pull, bootc install, ...) fails the test, except the local
+// image reads readOnlyImageCommand allows.
 var readOnlyCommands = map[string]bool{
 	"lsblk": true, "blkid": true, "findmnt": true, "test": true, "cat": true, "stat": true,
+}
+
+// readOnlyImageCommand reports whether a skopeo or podman command only
+// reads local image metadata: `skopeo inspect` of a local transport and
+// `podman image inspect`. A registry read (docker://) is not allowed: the
+// tests fake it (fakeImages) and never reach the network.
+func readOnlyImageCommand(name string, args []string) bool {
+	switch {
+	case name == "skopeo" && len(args) > 0 && args[0] == "inspect":
+		for _, a := range args {
+			if strings.HasPrefix(a, "docker://") {
+				return false
+			}
+		}
+		return true
+	case name == "podman" && len(args) > 1 && args[0] == "image" && args[1] == "inspect":
+		return true
+	}
+	return false
 }
 
 // commandGuard records every command the code under test asks for, through
@@ -49,7 +72,7 @@ func (g *commandGuard) check(name string, args []string) error {
 	defer g.mu.Unlock()
 	line := strings.TrimSpace(name + " " + strings.Join(args, " "))
 	g.seen = append(g.seen, line)
-	if !readOnlyCommands[name] {
+	if !readOnlyCommands[name] && !readOnlyImageCommand(name, args) {
 		g.bad = append(g.bad, line)
 	}
 	return os.ErrPermission // nothing really runs
@@ -77,10 +100,13 @@ func guardCommands(t *testing.T) *commandGuard {
 	oldRun, oldOut, oldExec := runner.RunFn, runner.OutputFn, runner.DefaultExecutor
 	oldProber, oldBind, oldBootc, oldShim := newProber, bindMount, bootcInstall, prepareSelinuxWorkaround
 	oldVar, oldTarget := varIsSpaceConstrained, hostTarget
+	oldInstallExec, oldPlanInspect := install.Exec, install.PlanInspectFn
 	hostTarget = planHost(nil)
 	runner.RunFn = func(_ io.Reader, name string, args ...string) error { return g.check(name, args) }
 	runner.OutputFn = func(name string, args ...string) ([]byte, error) { return nil, g.check(name, args) }
 	runner.DefaultExecutor = guardedExecutor{g}
+	install.Exec = guardedExecutor{g}
+	install.PlanInspectFn = func(name string, args ...string) ([]byte, error) { return nil, g.check(name, args) }
 	root := t.TempDir()
 	newProber = func() *probe.Prober {
 		return &probe.Prober{Root: root, Getenv: func(string) string { return "" },
@@ -101,8 +127,95 @@ func guardCommands(t *testing.T) *commandGuard {
 		runner.RunFn, runner.OutputFn, runner.DefaultExecutor = oldRun, oldOut, oldExec
 		newProber, bindMount, bootcInstall, prepareSelinuxWorkaround = oldProber, oldBind, oldBootc, oldShim
 		varIsSpaceConstrained, hostTarget = oldVar, oldTarget
+		install.Exec, install.PlanInspectFn = oldInstallExec, oldPlanInspect
 	})
 	return g
+}
+
+// Fixture image digests and the fake image sources `plan --read-image`
+// reads: local containers-storage (skopeo inspect containers-storage:...,
+// podman image inspect) and a registry (skopeo inspect docker://...), which
+// never touches the network.
+const (
+	fixtureIndexDigest    = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	fixtureAmd64Digest    = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	fixtureArm64Digest    = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	fixtureCachedDigest   = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	fixtureLocalDigest    = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+	fixtureBigDigest      = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+	fixtureLayerDigestHex = "7777777777777777777777777777777777777777777777777777777777777777"
+)
+
+// fixtureInspect is `skopeo inspect` output with the given layer sizes.
+func fixtureInspect(digest string, sizes ...int64) string {
+	var layers, data []string
+	for i, n := range sizes {
+		d := fmt.Sprintf("\"sha256:%d%s\"", i, fixtureLayerDigestHex[1:])
+		layers = append(layers, d)
+		data = append(data, fmt.Sprintf(`{"MIMEType":"application/vnd.oci.image.layer.v1.tar+zstd","Digest":%s,"Size":%d,"Annotations":null}`, d, n))
+	}
+	return fmt.Sprintf(`{"Name":"fixture","Digest":%q,"RepoTags":[],"Created":"2026-11-01T00:00:00Z","Architecture":"amd64","Os":"linux",`+
+		`"Labels":{"containers.bootc":"1"},"Layers":[%s],"LayersData":[%s]}`, digest, strings.Join(layers, ","), strings.Join(data, ","))
+}
+
+type fakeImageAnswer struct {
+	out string
+	err error
+}
+
+// fakeImages is a stand-in for local containers-storage and the registry,
+// keyed by the command line after the program name. registry records each
+// registry read; none of them leaves the process.
+type fakeImages struct {
+	g        *commandGuard
+	answers  map[string]fakeImageAnswer
+	mu       sync.Mutex
+	registry []string
+}
+
+func (f *fakeImages) inspect(name string, args ...string) ([]byte, error) {
+	line := strings.Join(append([]string{name}, args...), " ")
+	if name == "skopeo" && strings.Contains(line, " docker://") {
+		f.mu.Lock()
+		f.registry = append(f.registry, line) // faked: it never leaves the process
+		f.mu.Unlock()
+	} else {
+		_ = f.g.check(name, args) // the guard decides
+	}
+	if a, ok := f.answers[line]; ok {
+		if a.err != nil {
+			return nil, a.err
+		}
+		return []byte(a.out), nil
+	}
+	return nil, errors.New("fixture: no such image")
+}
+
+// stubImages makes `plan --read-image` read the fixture images.
+func stubImages(t *testing.T, g *commandGuard) *fakeImages {
+	t.Helper()
+	const gib = int64(1) << 30
+	f := &fakeImages{g: g, answers: map[string]fakeImageAnswer{
+		// A multi-platform image that only the registry has.
+		"skopeo inspect --no-tags docker://ghcr.io/example/os:stable": {out: fixtureInspect(fixtureIndexDigest, 1200<<20, 900<<20, 300<<20)},
+		"skopeo inspect --raw docker://ghcr.io/example/os:stable": {out: `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[` +
+			`{"digest":"` + fixtureArm64Digest + `","platform":{"architecture":"arm64","os":"linux"}},` +
+			`{"digest":"` + fixtureAmd64Digest + `","platform":{"architecture":"amd64","os":"linux"}}]}`},
+		// An image in local containers-storage: the registry is not asked.
+		"skopeo inspect containers-storage:ghcr.io/example/cached:stable":       {out: fixtureInspect(fixtureCachedDigest, 2*gib, 1*gib)},
+		"podman image inspect --format {{.Size}} ghcr.io/example/cached:stable": {out: fmt.Sprintf("%d\n", 8*gib)},
+		"skopeo inspect containers-storage:ghcr.io/example/local:stable":        {out: fixtureInspect(fixtureLocalDigest, 3*gib)},
+		"podman image inspect --format {{.Size}} ghcr.io/example/local:stable":  {out: fmt.Sprintf("%d\n", 9*gib)},
+		"skopeo inspect --no-tags docker://ghcr.io/example/big:stable":          {out: fixtureInspect(fixtureBigDigest, 4*gib, 2*gib)},
+		"skopeo inspect --raw docker://ghcr.io/example/big:stable":              {out: `{"schemaVersion":2,"layers":[]}`},
+		"skopeo inspect --no-tags docker://ghcr.io/example/offline:stable": {err: &exec.ExitError{ProcessState: &os.ProcessState{},
+			Stderr: []byte("time=\"2026-11-12T00:00:00Z\" level=fatal msg=\"Error parsing image name: pinging container registry ghcr.io: dial tcp: lookup ghcr.io: no such host\"\n")}},
+	}}
+	oldInspect, oldArch := install.PlanInspectFn, install.HostArchitecture
+	install.PlanInspectFn = f.inspect
+	install.HostArchitecture = func() string { return "amd64" }
+	t.Cleanup(func() { install.PlanInspectFn, install.HostArchitecture = oldInspect, oldArch })
+	return f
 }
 
 // planFixtureTargets is what the stand-in host reports about each fixture
@@ -149,7 +262,7 @@ func planDisks(t *testing.T) string {
 // runPlanFixture runs `plan --json -` on testdata/plan/<name>.json and
 // returns the output with the fixture directory and the architecture's root
 // type GUID replaced by placeholders.
-func runPlanFixture(t *testing.T, dir, name string) (string, int) {
+func runPlanFixture(t *testing.T, dir, name string, extra ...string) (string, int) {
 	t.Helper()
 	raw, err := os.ReadFile(filepath.Join("testdata", "plan", name+".json"))
 	if err != nil {
@@ -157,7 +270,7 @@ func runPlanFixture(t *testing.T, dir, name string) (string, int) {
 	}
 	stdin := strings.NewReader(strings.ReplaceAll(string(raw), "@DIR@", dir))
 	var out, errb bytes.Buffer
-	code := runPlan([]string{"--json", "-"}, stdin, &out, &errb)
+	code := runPlan(append(append([]string{"--json"}, extra...), "-"), stdin, &out, &errb)
 	if errb.Len() != 0 {
 		t.Errorf("%s: stderr not empty: %q", name, errb.String())
 	}
@@ -171,28 +284,37 @@ var planCases = []struct {
 	exit int
 	tpm  bool
 	live bool
+	// readImage runs `plan --json --read-image -` against fakeImages.
+	readImage bool
 }{
-	{"grub2-plain", 0, false, false},
-	{"grub2-luks", 0, false, false},
-	{"grub2-tpm2", 0, true, false},
-	{"grub2-tpm2-passphrase", 0, true, false},
-	{"btrfs-subvolumes", 0, false, false},
-	{"systemd-boot-composefs", 0, false, false},
-	{"systemd-boot-luks", 0, false, false},
-	{"zfs", 0, false, false},
-	{"manual", 0, false, false},
-	{"manual-var-disk", 0, false, false},
-	{"var-disk-keep", 0, false, false},
-	{"containers-storage", 0, false, false},
-	{"live", 0, false, true},
-	{"loop-image", 0, false, false},
-	{"identity-bound", 0, false, false},
-	{"identity-serial-changed", 1, false, false},
-	{"identity-size-changed", 1, false, false},
-	{"identity-invalid", 1, false, false},
-	{"invalid", 1, false, false},
-	{"unknown-field", 1, false, false},
-	{"malformed", 1, false, false},
+	{"grub2-plain", 0, false, false, false},
+	{"grub2-luks", 0, false, false, false},
+	{"grub2-tpm2", 0, true, false, false},
+	{"grub2-tpm2-passphrase", 0, true, false, false},
+	{"btrfs-subvolumes", 0, false, false, false},
+	{"systemd-boot-composefs", 0, false, false, false},
+	{"systemd-boot-luks", 0, false, false, false},
+	{"zfs", 0, false, false, false},
+	{"manual", 0, false, false, false},
+	{"manual-var-disk", 0, false, false, false},
+	{"var-disk-keep", 0, false, false, false},
+	{"containers-storage", 0, false, false, false},
+	{"live", 0, false, true, false},
+	{"loop-image", 0, false, false, false},
+	{"identity-bound", 0, false, false, false},
+	{"identity-serial-changed", 1, false, false, false},
+	{"identity-size-changed", 1, false, false, false},
+	{"identity-invalid", 1, false, false, false},
+	{"invalid", 1, false, false, false},
+	{"unknown-field", 1, false, false, false},
+	{"malformed", 1, false, false, false},
+	{"read-image-registry", 0, false, false, true},
+	{"read-image-cached", 0, false, false, true},
+	{"read-image-local", 0, false, false, true},
+	{"read-image-too-big", 0, false, false, true},
+	{"read-image-offline", 0, false, false, true},
+	{"read-image-manual", 0, false, false, true},
+	{"live", 0, false, true, true},
 }
 
 func TestPlanJSONGolden(t *testing.T) {
@@ -210,7 +332,13 @@ func TestPlanJSONGolden(t *testing.T) {
 			}
 			t.Cleanup(func() { hostLive = oldLive })
 
-			got, code := runPlanFixture(t, dir, c.name)
+			var images *fakeImages
+			var extra []string
+			if c.readImage {
+				images = stubImages(t, g)
+				extra = []string{"--read-image"}
+			}
+			got, code := runPlanFixture(t, dir, c.name, extra...)
 			if code != c.exit {
 				t.Fatalf("exit %d, want %d:\n%s", code, c.exit, got)
 			}
@@ -220,6 +348,9 @@ func TestPlanJSONGolden(t *testing.T) {
 				}
 			}
 			golden := filepath.Join("testdata", "plan", c.name+".golden")
+			if c.readImage && !strings.HasPrefix(c.name, "read-image-") {
+				golden = filepath.Join("testdata", "plan", c.name+".read-image.golden")
+			}
 			if *updateGolden {
 				if err := os.WriteFile(golden, []byte(got), 0o644); err != nil {
 					t.Fatal(err)
@@ -242,6 +373,20 @@ func TestPlanJSONGolden(t *testing.T) {
 			}
 			if len(g.seen) > 0 {
 				t.Logf("read-only commands: %v", g.seen)
+			}
+			if !c.readImage {
+				for _, line := range g.seen {
+					if strings.HasPrefix(line, "skopeo") || strings.HasPrefix(line, "podman") {
+						t.Errorf("plan without --read-image read the image: %q", line)
+					}
+				}
+			} else if images != nil {
+				// A registry is asked only for a registry source that local
+				// containers-storage does not have.
+				wantRegistry := c.name == "read-image-registry" || c.name == "read-image-too-big" || c.name == "read-image-offline"
+				if (len(images.registry) > 0) != wantRegistry {
+					t.Errorf("registry reads %v; want any: %v", images.registry, wantRegistry)
+				}
 			}
 		})
 	}
@@ -299,7 +444,7 @@ func TestPlanArguments(t *testing.T) {
 			t.Errorf("%v: exit %d, want %d", c.args, got, c.exit)
 		}
 		if c.exit == 0 {
-			if !strings.Contains(out.String(), "usage: fisherman plan --json -") {
+			if !strings.Contains(out.String(), "usage: fisherman plan --json [--read-image] -") {
 				t.Errorf("%v: no usage on stdout: %q", c.args, out.String())
 			}
 			continue
@@ -320,7 +465,7 @@ func TestPlanAgreesWithTheInstall(t *testing.T) {
 		if r.SourceReuse != nil {
 			continue // its host checks need a bootc store; the plan's source half is pinned above
 		}
-		p := buildPlan(r)
+		p := buildPlan(r, false)
 		var got, want []string
 		for _, s := range p.Steps {
 			got = append(got, s.Name)
@@ -359,7 +504,7 @@ func TestPlanDocCoversEveryField(t *testing.T) {
 		t.Fatal(err)
 	}
 	doc := string(b)
-	for _, typ := range []any{planResult{}, installPlan{}, planSource{}, planTarget{}, planIdentity{}, planBoot{}, planEncryption{},
+	for _, typ := range []any{planResult{}, installPlan{}, planSource{}, planImage{}, planTarget{}, planIdentity{}, planBoot{}, planEncryption{},
 		planPartition{}, planVarDisk{}, planDestroy{}, planCapacity{}, planScratch{}, planStep{}, planUnknown{}} {
 		rt := reflect.TypeOf(typ)
 		for i := 0; i < rt.NumField(); i++ {
@@ -385,13 +530,23 @@ func TestPlanGuardCatchesMutations(t *testing.T) {
 		_ = disk.FormatEFI("/dev/fisherman-test-nonexistent1")
 		_, _ = runner.Output("cryptsetup", "luksFormat", "/dev/fisherman-test-nonexistent3")
 		_ = runner.DefaultExecutor.Command("zpool", "create", "tank").Run()
+		// The image reads of --read-image: a registry read and a pull are
+		// refused; a local inspect is allowed.
+		_, _ = install.PlanInspectFn("skopeo", "inspect", "--no-tags", "docker://example.invalid/os:1")
+		_ = install.Exec.Command("podman", "pull", "example.invalid/os:1").Run()
+		_, _ = install.PlanInspectFn("skopeo", "inspect", "containers-storage:example.invalid/os:1")
 		g.mu.Lock()
 		bad, g.bad = g.bad, nil // seen here; the cleanup must not fail this test
 		g.mu.Unlock()
 	})
-	want := map[string]bool{"sfdisk": false, "mkfs.fat": false, "cryptsetup": false, "zpool": false}
+	want := map[string]bool{"sfdisk": false, "mkfs.fat": false, "cryptsetup": false, "zpool": false, "skopeo": false, "podman": false}
 	for _, line := range bad {
 		want[strings.Fields(line)[0]] = true
+	}
+	for _, line := range bad {
+		if strings.Contains(line, "containers-storage:") {
+			t.Errorf("the guard refused a local image read: %q", line)
+		}
 	}
 	for cmd, seen := range want {
 		if !seen {
@@ -531,5 +686,45 @@ func TestPlanCapacityAddsUp(t *testing.T) {
 		if c == nil || c.RootBytes+c.ReservedBytes != res.Plan.Target.SizeBytes || sum+planAlignmentBytes != res.Plan.Target.SizeBytes {
 			t.Errorf("%s: capacity %+v, partitions sum %d, disk %d", name, c, sum, res.Plan.Target.SizeBytes)
 		}
+	}
+}
+
+// planImageFit reports enough only with the unpacked size, folds the
+// scratch estimate in when scratch is on the target, and reports
+// not_enough from the compressed size alone, a lower bound.
+func TestPlanImageFit(t *testing.T) {
+	const gib = int64(1) << 30
+	for _, c := range []struct {
+		name      string
+		root      int64
+		sizeKnown bool
+		img       planImage
+		onTarget  bool
+		want      string
+	}{
+		{"no disk size", 0, false, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 8 * gib}, false, planUnknownValue},
+		{"no image size", 40 * gib, true, planImage{}, false, planUnknownValue},
+		{"compressed only, root larger", 40 * gib, true, planImage{CompressedBytes: 3 * gib}, false, planUnknownValue},
+		{"compressed only, root smaller", 2 * gib, true, planImage{CompressedBytes: 3 * gib}, false, "not_enough"},
+		{"unpacked fits", 40 * gib, true, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 8 * gib}, false, "enough"},
+		{"unpacked does not fit", 6 * gib, true, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 8 * gib}, false, "not_enough"},
+		{"scratch on target fits", 12 * gib, true, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 8 * gib}, true, "enough"},
+		{"scratch on target may not fit", 10 * gib, true, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 8 * gib}, true, planUnknownValue},
+		{"scratch on target, no compressed size", 40 * gib, true, planImage{UnpackedBytes: 8 * gib}, true, planUnknownValue},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := planScratch{OnTarget: c.onTarget}
+			if c.img.CompressedBytes > 0 && c.img.UnpackedBytes > 0 {
+				s.NeedBytes = c.img.CompressedBytes + c.img.UnpackedBytes
+			}
+			var reasons []string
+			got := planImageFit(&planCapacity{RootBytes: c.root}, c.img, s, c.sizeKnown, func(f, r string) { reasons = append(reasons, f) })
+			if got != c.want {
+				t.Errorf("image_fit %q, want %q", got, c.want)
+			}
+			if (got == planUnknownValue) != (len(reasons) == 1 && reasons[0] == "capacity.image_fit") {
+				t.Errorf("image_fit %q with unknown entries %v", got, reasons)
+			}
+		})
 	}
 }

@@ -10,6 +10,12 @@
       "digest": "unknown",
       "pull": "unknown"
     },
+    "image": {
+      "read_from": "none",
+      "manifest_digest": "unknown",
+      "platform_digest": "unknown",
+      "platform": "unknown"
+    },
     "target": {
       "layout": "manual"
     },
@@ -109,8 +115,12 @@
     ],
     "unknown": [
       {
+        "field": "image",
+        "reason": "plan reads the image only with --read-image"
+      },
+      {
         "field": "source.digest",
-        "reason": "the install reads the image identity when it pulls or opens the image; plan contacts no registry and opens no image"
+        "reason": "the install reads the image identity when it pulls or opens the image; plan reads it only with --read-image"
       },
       {
         "field": "source.pull",
@@ -130,7 +140,11 @@
       },
       {
         "field": "scratch.bytes",
-        "reason": "the scratch space an install needs depends on the image size, known only after a pull or an image read"
+        "reason": "the exact scratch use depends on the path the install takes (a pull, an OCI export, a redirected store); scratch.need_bytes is an upper estimate"
+      },
+      {
+        "field": "scratch.need_bytes",
+        "reason": "the estimate needs the image's compressed and unpacked sizes (image.compressed_bytes, image.unpacked_bytes)"
       }
     ]
   }
