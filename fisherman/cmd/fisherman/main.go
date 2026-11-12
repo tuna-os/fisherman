@@ -1152,6 +1152,17 @@ func main() {
 		}
 	}
 
+	// Every BLS entry must mount the root with the recipe's options
+	// (rootflags=subvol=@,compress=zstd:1 for btrfsSubvolumes): bootc 1.15.x
+	// drops --karg on the composefs path and writes only its own
+	// rootflags=subvol=<mount's subvol>. Before the LUKS check, which wants
+	// rd.luks.name last.
+	if msg, err := ensureRootFlags(activeTargetMount, r.RootMountOptions()); err != nil {
+		fatalCode(progress.FailureRootFlagsFailed, "root mount options: %v", err)
+	} else if msg != "" {
+		progress.Info(msg)
+	}
+
 	// Every BLS entry must carry rd.luks.name=<UUID>=root so the initrd
 	// unlocks the LUKS container and maps it to /dev/mapper/root before
 	// mounting the root filesystem. bootc install to-filesystem only sees the

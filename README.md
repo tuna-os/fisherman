@@ -165,7 +165,7 @@ Things a recipe author should know today:
 - The host's Wi-Fi profiles and Bluetooth pairings are copied to the target only when the host booted from live media. `"copyNetworkProfiles"` and `"copyBluetoothPairings"` (`true` or `false`) override that for each kind. On an installed host the default is not to copy: the keys are the operator's.
 - fisherman sets the firmware's `BootNext` to the installed system's boot entry when the host booted from live media, so the next boot does not start the installer again. `"setBootNext": true` does it on any host, `false` never. A failure is a warning in the log.
 - `"filesystem": "zfs"` is experimental and needs `"experimental": ["zfs"]` (`zfs_experimental`). No VM test installs and boots it. The pool is exported when the install ends, also when it fails.
-- `btrfsSubvolumes` puts the root in an `@` subvolume (`rootflags=subvol=@,compress=zstd:1`). It makes no `@home` and no `@snapshots`: `/home` is `/var/home` inside `@`, as on every bootc system.
+- `btrfsSubvolumes` puts the root in an `@` subvolume (`rootflags=subvol=@,compress=zstd:1`). fisherman writes the root's `rootflags=` into every BLS boot entry itself, in place of the one bootc derives: bootc 1.15.x drops `--karg` on the composefs path. It makes no `@home` and no `@snapshots`: `/home` is `/var/home` inside `@`, as on every bootc system.
 - Print services, the OEM setup unit, friendly audio names and `rhgb quiet` are applied only when the recipe's `extras` or the image catalog turns them on. See [Desktop extras](#desktop-extras).
 - fisherman builds no caches in the target. The image must carry its font, icon, schema and linker caches.
 

@@ -324,6 +324,7 @@ older fisherman, shows `message` and decides on the exit status.
 | `hostname_failed` | writing the hostname |
 | `user_failed` | creating the user |
 | `luks_boot_args_failed` | writing the LUKS kernel arguments |
+| `root_flags_failed` | writing the root's mount options (`rootflags=`) into the boot entries |
 | `finalize_failed` | finalizing the target filesystem |
 
 A code tells which part failed. It does not say that another attempt is safe:

@@ -25,6 +25,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **btrfs roots booted without the recipe's mount options on composefs**
+  (#418): bootc 1.15.x writes the composefs boot entry from the root's own
+  arguments, `composefs=` and `kargs.d`, and never reads `--karg`
+  (`setup_composefs_bls_boot`; newer bootc reads it). fisherman's
+  `rootflags=subvol=@,compress=zstd:1` (or `compress=zstd:1` without
+  subvolumes) was dropped, the entry had bootc's own
+  `rootflags=subvol=/@` (or `subvol=/`), and the installed system mounted
+  its root uncompressed. Found by the new `dakota-btrfs-subvolumes` VM entry;
+  `dakota-luks-btrfs` had the same entry (`rootflags=subvol=/`). fisherman
+  now replaces bootc's `rootflags=` in every BLS entry with the recipe's
+  and reads each entry back (`post.RequireRootFlags`). Where bootc honours
+  `--karg` (ostree), the entry had both, and one `rootflags=` remains. A
+  failure is the new `error` code `root_flags_failed`. An image that boots a
+  unified kernel image has no entry to change, and the log says so.
 - **A source the install cannot use was found only after the wipe** (#364):
   with no copy in local containers-storage, a registry that did not answer,
   refused access or did not know the tag gave "pull required", and the pull
