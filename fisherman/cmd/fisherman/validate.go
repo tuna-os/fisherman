@@ -113,7 +113,8 @@ func targetFacts(path string) *recipe.TargetFacts {
 	if err != nil {
 		return &recipe.TargetFacts{Err: err, Device: path}
 	}
-	f := &recipe.TargetFacts{Device: t.Device, Loop: t.Loop, SizeBytes: t.SizeBytes, MinBytes: probe.MinDiskBytes}
+	f := &recipe.TargetFacts{Device: t.Device, Loop: t.Loop, SizeBytes: t.SizeBytes, MinBytes: probe.MinDiskBytes,
+		Serial: t.Serial, WWN: t.WWN}
 	for _, reason := range t.Reasons {
 		switch reason {
 		case probe.ExcludedBootDisk:
@@ -245,6 +246,10 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	}
 	if has("override") {
 		ps = append(ps, recipe.CheckOverride(r.Override)...)
+	}
+	if has("diskIdentity") {
+		// Its shape only; whether the device matches is full mode.
+		ps = append(ps, recipe.CheckDiskIdentity(&r)...)
 	}
 	if has("experimental") {
 		ps = append(ps, recipe.CheckExperimental(r.Experimental)...)

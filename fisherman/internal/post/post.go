@@ -439,6 +439,24 @@ func bootedVarDir(target string) string {
 	return filepath.Join(target, "ostree", "deploy", deploy.DefaultStateroot, "var")
 }
 
+// flatpakDest is where CopyFlatpaks puts the Flatpak installation. A
+// separate /var (a varDisk, or a manual /var partition: SetBootedVar) wins
+// over flatpakVarPath: that path is relative to the target root, which is
+// the deployment's own /var and not the disk the booted system mounts.
+func flatpakDest(target, flatpakVarPath string) string {
+	switch {
+	case bootedVar != "":
+		if flatpakVarPath != "" {
+			progress.Info(fmt.Sprintf("Flatpaks: flatpakVarPath %q is not used: /var is a separate disk", flatpakVarPath))
+		}
+		return filepath.Join(bootedVar, "lib", "flatpak")
+	case flatpakVarPath != "":
+		return filepath.Join(target, flatpakVarPath, "lib", "flatpak")
+	default:
+		return filepath.Join(bootedVarDir(target), "lib", "flatpak")
+	}
+}
+
 // CopyFlatpaks copies the host's system Flatpak installation
 // (/var/lib/flatpak) into the installed system.
 //
@@ -457,7 +475,7 @@ func bootedVarDir(target string) string {
 //
 // flatpakVarPath optionally overrides the path, relative to target, of the
 // installed system's /var (e.g. "state/os/default/var"). When empty the
-// deployment resolver decides.
+// deployment resolver decides. A separate /var disk wins over it.
 //
 // The installer's own Flatpak is removed from the copy.
 func CopyFlatpaks(target string, wantedRefs []string, flatpakVarPath string) error {
@@ -466,12 +484,7 @@ func CopyFlatpaks(target string, wantedRefs []string, flatpakVarPath string) err
 		return nil
 	}
 
-	var dst string
-	if flatpakVarPath != "" {
-		dst = filepath.Join(target, flatpakVarPath, "lib", "flatpak")
-	} else {
-		dst = filepath.Join(bootedVarDir(target), "lib", "flatpak")
-	}
+	dst := flatpakDest(target, flatpakVarPath)
 	if err := runner.Run("mkdir", "-p", dst); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dst, err)
 	}

@@ -1,7 +1,7 @@
 {
    "blockdevices": [
       {"name": "/dev/loop0", "kname": "/dev/loop0", "type": "loop", "size": 4294967296, "model": null, "vendor": null, "tran": null, "rm": false, "hotplug": false, "ro": true, "mountpoints": ["/run/rootfsbase"]},
-      {"name": "/dev/sda", "kname": "/dev/sda", "type": "disk", "size": 500107862016, "model": "Samsung SSD 870 EVO 500GB", "vendor": "ATA     ", "tran": "sata", "rm": false, "hotplug": false, "ro": false, "mountpoints": [null],
+      {"name": "/dev/sda", "kname": "/dev/sda", "type": "disk", "size": 500107862016, "model": "Samsung SSD 870 EVO 500GB", "vendor": "ATA     ", "tran": "sata", "rm": false, "hotplug": false, "ro": false, "serial": "S5Y1NJ0R123456  ", "wwn": "0x5002538F4231ABCD", "mountpoints": [null],
          "children": [
             {"name": "/dev/sda1", "kname": "/dev/sda1", "type": "part", "size": 500106813440, "model": null, "vendor": null, "tran": null, "rm": false, "hotplug": false, "ro": false, "mountpoints": [null]}
          ]

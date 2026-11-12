@@ -67,6 +67,13 @@ type Recipe struct {
 	// When set, fisherman formats (or mounts as-is) this disk before running
 	// bootc, then adds a /var entry to the installed system's fstab.
 	VarDisk *VarDiskSpec `json:"varDisk,omitempty"`
+	// DiskIdentity binds the install to the device the frontend planned on:
+	// the serial, WWN and size `fisherman plan --json` reported for `disk`.
+	// Absent: no binding. When set, validate and the install refuse the
+	// recipe (disk_identity_mismatch) if the device `disk` names now
+	// reports another value for any field that is set. See
+	// docs/VALIDATE.md, "Disk identity".
+	DiskIdentity *DiskIdentity `json:"diskIdentity,omitempty"`
 	// AdditionalImageStores lists host paths to be exposed to the bootc
 	// container as containers/storage additionalimagestores. Each path is
 	// bind-mounted read-only into the container at the same location and added
@@ -297,6 +304,14 @@ type SlurpUserSpec struct {
 	Categories []string `json:"categories"`
 }
 
+// DiskIdentity is the identity a recipe expects `disk` to have. An empty
+// string or a zero size is not checked; at least one field must be set.
+type DiskIdentity struct {
+	Serial    string `json:"serial,omitempty"`    // lsblk SERIAL, as plan reports it
+	WWN       string `json:"wwn,omitempty"`       // lsblk WWN; compared without case
+	SizeBytes int64  `json:"sizeBytes,omitempty"` // the size in bytes
+}
+
 // VarDiskSpec describes an optional separate disk to mount at /var.
 type VarDiskSpec struct {
 	Disk         string `json:"disk"`         // block device, e.g. "/dev/sdb"
@@ -463,6 +478,7 @@ func (r *Recipe) Problems() []Problem {
 	ps = append(ps, CheckLuksMapperName(r.LuksMapperName)...)
 	ps = append(ps, CheckAdditionalImageStores(r.AdditionalImageStores)...)
 	ps = append(ps, CheckOverride(r.Override)...)
+	ps = append(ps, CheckDiskIdentity(r)...)
 	ps = append(ps, CheckExperimental(r.Experimental)...)
 	// Written into /etc files and, for the keymap, onto the kernel command
 	// line: refused before any disk step (#405).
