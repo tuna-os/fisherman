@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **`plan` reports the disks under a manual layout, and `planBinding`
+  binds them** (part of #371). For `customMounts`, the new
+  `plan.target.disks` lists each whole disk the layout's partitions are on
+  (the top-level device `lsblk` lists the partition under, a new
+  `probe.Block.Disk`), with its size, `stable_id` and `identity` (serial,
+  WWN, model, by-id links) from the same `probe.Target` call as the
+  automatic layout's; each manual `plan.partitions` entry gains `disk`.
+  The disks join the `planBinding` basis (version 2), so a partition path
+  that now sits on another disk, or on a disk that changed size, is
+  `plan_stale`. `diskIdentity` still binds the automatic layout's `disk`
+  only: a manual layout can span several disks, and a per-disk identity
+  would need a new recipe field. Additive: protocol 1. Docs: PLAN.md.
+
 - **`plan` reports the size of the `/var` disk** (part of #371). The new
   `plan.var_disk.size_bytes` is the size the probe reports for
   `varDisk.disk` (the same `lsblk` call as the target), left out with a

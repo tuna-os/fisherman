@@ -17,7 +17,30 @@
       "platform": "unknown"
     },
     "target": {
-      "layout": "manual"
+      "layout": "manual",
+      "disks": [
+        {
+          "device": "@DIR@/sda",
+          "size_bytes": 500107862016,
+          "stable_id": "0x5000c500a1b2c3d4",
+          "identity": {
+            "serial": "FIXTURE-SDA-SERIAL",
+            "wwn": "0x5000c500a1b2c3d4",
+            "model": "Fixture Disk",
+            "size_bytes": 500107862016,
+            "by_id": [
+              "/dev/disk/by-id/ata-Fixture_Disk_FIXTURE-SDA-SERIAL",
+              "/dev/disk/by-id/wwn-0x5000c500a1b2c3d4"
+            ],
+            "bound": false
+          },
+          "partitions": [
+            "@DIR@/sda3",
+            "@DIR@/sda2",
+            "@DIR@/sda1"
+          ]
+        }
+      ]
     },
     "boot": {
       "bootloader": "grub2",
@@ -33,6 +56,7 @@
     "partitions": [
       {
         "device": "@DIR@/sda3",
+        "disk": "@DIR@/sda",
         "role": "root",
         "created": false,
         "size_bytes": 107374182400,
@@ -42,6 +66,7 @@
       },
       {
         "device": "@DIR@/sda2",
+        "disk": "@DIR@/sda",
         "role": "boot",
         "created": false,
         "size_bytes": 2147483648,
@@ -51,6 +76,7 @@
       },
       {
         "device": "@DIR@/sda1",
+        "disk": "@DIR@/sda",
         "role": "efi",
         "created": false,
         "size_bytes": 2147483648,

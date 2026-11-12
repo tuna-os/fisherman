@@ -182,8 +182,9 @@ func TestPlanBindingReadsTheImageOnlyWhenTheConfirmedPlanDid(t *testing.T) {
 	}
 }
 
-// A manual layout binds its partitions: one that changed size is
-// plan_stale.
+// A manual layout binds its partitions and the disks they are on: a
+// partition that changed size, or a disk that reports another identity or
+// size, is plan_stale.
 func TestPlanBindingManualLayout(t *testing.T) {
 	dir := planDisks(t)
 	guardCommands(t)
@@ -198,10 +199,33 @@ func TestPlanBindingManualLayout(t *testing.T) {
 	bound := bindRecipe(t, in, first.Plan.Binding)
 	agreeOnStale(t, bound, false, false)
 
-	old := planFixturePartitions["sda3"]
-	planFixturePartitions["sda3"] = 50 << 30
-	t.Cleanup(func() { planFixturePartitions["sda3"] = old })
-	agreeOnStale(t, bound, false, true)
+	t.Run("partition size", func(t *testing.T) {
+		old := planFixturePartitions["sda3"]
+		planFixturePartitions["sda3"] = 50 << 30
+		t.Cleanup(func() { planFixturePartitions["sda3"] = old })
+		agreeOnStale(t, bound, false, true)
+	})
+	// The partitions keep their paths and sizes, but the disk they are on
+	// is another one: another serial and WWN, or the same disk grown.
+	for _, c := range []struct {
+		name string
+		now  probe.Target
+	}{
+		{"another disk under the same partitions", probe.Target{SizeBytes: 500107862016, Serial: "OTHER-SERIAL", WWN: "0x5000c500deadbeef", Model: "Fixture Disk"}},
+		{"the disk size changed", probe.Target{SizeBytes: 1 << 40, Serial: "FIXTURE-SDA-SERIAL", WWN: "0x5000c500a1b2c3d4", Model: "Fixture Disk"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			hostTarget = planHost(map[string]probe.Target{"sda": c.now})
+			t.Cleanup(func() { hostTarget = planHost(nil) })
+			agreeOnStale(t, bound, false, true)
+		})
+	}
+	t.Run("by-id links only", func(t *testing.T) {
+		hostTarget = planHost(map[string]probe.Target{"sda": {SizeBytes: 500107862016, Serial: "FIXTURE-SDA-SERIAL",
+			WWN: "0x5000c500a1b2c3d4", Model: "Fixture Disk"}})
+		t.Cleanup(func() { hostTarget = planHost(nil) })
+		agreeOnStale(t, bound, false, false)
+	})
 }
 
 // planDigestPattern reports whether s has the form of plan.binding.digest,

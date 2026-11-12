@@ -25,7 +25,8 @@ type planBinding struct {
 }
 
 // planBasis is the part of a plan the user confirms and the install holds
-// the machine to: the target disk and what it reports about itself, the
+// the machine to: the target disk (or a manual layout's disks) and what it
+// reports about itself, the
 // partition table and the action on each partition, what is destroyed, and
 // the capacity verdicts. It leaves out what a frontend chose and the recipe
 // already fixes (the source, the encryption, the steps), and what drifts
@@ -42,6 +43,8 @@ type planBasis struct {
 	WWN       string `json:"wwn,omitempty"`
 	Model     string `json:"model,omitempty"`
 
+	// Disks: a manual layout's whole disks and what each reports.
+	Disks      []planBasisDisk      `json:"disks,omitempty"`
 	Boot       planBoot             `json:"boot"`
 	Partitions []planBasisPartition `json:"partitions"`
 	VarDisk    *planBasisVarDisk    `json:"var_disk,omitempty"`
@@ -68,6 +71,15 @@ type planBasisPartition struct {
 	Mount      string `json:"mount,omitempty"`
 }
 
+type planBasisDisk struct {
+	Device    string `json:"device"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Loop      bool   `json:"loop,omitempty"`
+	Serial    string `json:"serial,omitempty"`
+	WWN       string `json:"wwn,omitempty"`
+	Model     string `json:"model,omitempty"`
+}
+
 type planBasisVarDisk struct {
 	Device    string `json:"device"`
 	SizeBytes int64  `json:"size_bytes,omitempty"`
@@ -84,6 +96,13 @@ func bindingOf(p *installPlan, readImage bool) planBinding {
 		ScratchPath: p.Scratch.Path, ScratchTarget: p.Scratch.OnTarget, ScratchFit: p.Scratch.Fit}
 	if id := p.Target.Identity; id != nil {
 		b.Serial, b.WWN, b.Model = id.Serial, id.WWN, id.Model
+	}
+	for _, d := range p.Target.Disks {
+		bd := planBasisDisk{Device: d.Device, SizeBytes: d.SizeBytes, Loop: d.Loop}
+		if id := d.Identity; id != nil {
+			bd.Serial, bd.WWN, bd.Model = id.Serial, id.WWN, id.Model
+		}
+		b.Disks = append(b.Disks, bd)
 	}
 	for _, pp := range p.Partitions {
 		b.Partitions = append(b.Partitions, planBasisPartition{Number: pp.Number, Device: pp.Device, Role: pp.Role,

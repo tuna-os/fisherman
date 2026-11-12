@@ -118,6 +118,7 @@ entry for `image` says why.
 | `loop` | The disk is a loop device. |
 | `stable_id` | A stable identity: the WWN, else the serial, else `unknown`. |
 | `identity` | What the disk reports about itself. Automatic layout only. |
+| `disks` | Manual layout only: the whole disks the layout's partitions are on, in the order the layout first names each. |
 
 `plan.target.identity` comes from the same `lsblk` call as the target
 checks of `validate` (`probe.Target`). It writes nothing.
@@ -133,6 +134,22 @@ checks of `validate` (`probe.Target`). It writes nothing.
 
 Loop devices, most virtual disks and some USB bridges report no serial and
 no WWN.
+
+Each entry of `plan.target.disks` is a disk that holds a partition a manual
+layout acts on (an `ignore` mount is not read). The disk is the top-level
+device `lsblk` lists the partition under (`probe.Block`; for a device
+stacked on several disks, such as RAID, the first one `lsblk` lists), and
+its identity comes from the same `probe.Target` call as the automatic
+layout's. Both read `lsblk` only.
+
+| Field | Meaning |
+|---|---|
+| `device` | The disk device. |
+| `size_bytes` | The disk size. Left out, with a `plan.unknown` entry, when the probe cannot read it. |
+| `loop` | The disk is a loop device. |
+| `stable_id` | The WWN, else the serial, else `unknown`. |
+| `identity` | As `plan.target.identity`, with `bound` always false: `diskIdentity` binds `disk`, which a manual layout has none of (see [Binding the install to the confirmed plan](#binding-the-install-to-the-confirmed-plan)). |
+| `partitions` | The `plan.partitions` devices on this disk, in plan order. |
 
 ### `plan.boot`
 
@@ -160,6 +177,7 @@ One entry for each partition, in the order the install acts on it.
 |---|---|
 | `number` | The partition number. Automatic layout only. |
 | `device` | The partition device. |
+| `disk` | Manual layout only: the whole disk the partition is on (a `plan.target.disks` device). Left out, with a `plan.unknown` entry, when `lsblk` does not report the partition, and for a mount with action `ignore`. |
 | `role` | `efi`, `boot`, `root`; for a manual layout also `swap`, `data` or `none` (a mount with no target). |
 | `created` | The install creates the partition (automatic layout). |
 | `gpt_name` | The GPT partition name. Automatic layout only. |
@@ -246,7 +264,7 @@ plan](#binding-the-install-to-the-confirmed-plan)).
 
 | Field | Meaning |
 |---|---|
-| `digest` | `sha256:` and the hex SHA-256 of the plan's basis: the target (layout, device, size, loop, serial, WWN, model), `plan.boot`, each partition's number, device, role, GPT type, size, action, filesystem, encryption and mount, the `/var` disk's device, size and action, `plan.destroys`, `capacity.disk_minimum`, `root_bytes`, `root_need_bytes` and `image_fit`, and `scratch.path`, `on_target` and `fit`, with whether the image was read and a version of the basis. Not the source, the encryption settings or the steps (the recipe fixes them), the free space in bytes, the by-id links or the reasons. |
+| `digest` | `sha256:` and the hex SHA-256 of the plan's basis: the target (layout, device, size, loop, serial, WWN, model), each of a manual layout's `plan.target.disks` (device, size, loop, serial, WWN, model), `plan.boot`, each partition's number, device, role, GPT type, size, action, filesystem, encryption and mount, the `/var` disk's device, size and action, `plan.destroys`, `capacity.disk_minimum`, `root_bytes`, `root_need_bytes` and `image_fit`, and `scratch.path`, `on_target` and `fit`, with whether the image was read and a version of the basis. Not the source, the encryption settings or the steps (the recipe fixes them), the free space in bytes, the by-id links or the reasons. |
 | `read_image` | The plan was made with `--read-image`. Copy it as `readImage`. |
 
 ### `plan.unknown`
@@ -381,6 +399,13 @@ did) and refuse it with `plan_stale` when the digest differs
 it binds: the bound recipe plans to the same digest. It can be combined
 with `diskIdentity`, which names the field that changed.
 
+A manual layout has no `diskIdentity`: the field binds `disk`, and
+`customMounts` can span several disks, so a per-disk identity would need a
+new recipe field. Its disks are bound through `planBinding` instead: the
+basis holds each disk's device, size, serial, WWN and model, so a
+partition path that now sits on another disk, or on the same disk grown or
+shrunk, is `plan_stale`.
+
 The digest holds no secret and no recipe value beyond what the plan
 prints. Make the plan as the user the install runs as (root): the image
 sizes come from that user's containers-storage. Any change of the basis
@@ -392,10 +417,8 @@ grants nothing.
 
 The plan does not yet report the mounts of the installed system beyond the
 partitions, the unpacked size of an OCI layout source (only an estimate
-for a registry image whose layers do not record it), the free space
-inside a kept manual root partition,
-or the identity of a manual layout's disks (no `diskIdentity` binding for
-`customMounts`; a `planBinding` binds a manual layout's partition paths and
-sizes, not the disks they are on). The install checks `diskIdentity` and
+for a registry image whose layers do not record it), or the free space
+inside a kept manual root partition. A manual layout's disks are bound
+by `planBinding`, not by `diskIdentity`. The install checks `diskIdentity` and
 `planBinding` in its pre-flight, not again right before it partitions. See
 tuna-os/fisherman#371.

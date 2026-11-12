@@ -281,7 +281,9 @@ func planBlocks(path string) (probe.Block, error) {
 	if !ok {
 		return probe.Block{Path: path, Device: path}, errors.New("fixture: lsblk reports no block device " + path)
 	}
-	return probe.Block{Path: path, Device: path, Type: "part", SizeBytes: n}, nil
+	// sda1 → sda: the fixture partitions are all on the fixture disk sda.
+	return probe.Block{Path: path, Device: path, Type: "part", SizeBytes: n,
+		Disk: strings.TrimRight(path, "0123456789")}, nil
 }
 
 // planFixtureFreeBytes is the free space of the stand-in host's /var: 20 GiB.
@@ -1018,4 +1020,54 @@ func hasUnknown(p *installPlan, field string) bool {
 		}
 	}
 	return false
+}
+
+// A manual layout reports the whole disk under each partition and what
+// that disk reports about itself; a partition lsblk does not report has no
+// disk, and a disk the probe cannot read has an unknown identity.
+func TestPlanManualDisks(t *testing.T) {
+	dir := planDisks(t)
+	guardCommands(t)
+	in := `{"customMounts":[{"partition":"` + dir + `/sda3","target":"/","fstype":"xfs"},` +
+		`{"partition":"` + dir + `/sda4","target":"swap","fstype":"swap"},{"partition":"` + dir + `/sda2","target":"/boot","fstype":"ext4"},` +
+		`{"partition":"` + dir + `/sda1","target":"/boot/efi","fstype":"unformatted"}],` +
+		`"image":"ghcr.io/example/os:stable","hostname":"fixture","encryption":{"type":"none"}}`
+	res, code := planFor(t, in, false)
+	if code != 0 {
+		t.Fatalf("exit %d: %+v", code, res.Errors)
+	}
+	ds := res.Plan.Target.Disks
+	if len(ds) != 1 || ds[0].Device != dir+"/sda" || ds[0].StableID != "0x5000c500a1b2c3d4" ||
+		ds[0].SizeBytes != 500107862016 || ds[0].Identity == nil || ds[0].Identity.Serial != "FIXTURE-SDA-SERIAL" ||
+		ds[0].Identity.Bound || !reflect.DeepEqual(ds[0].Partitions, []string{dir + "/sda3", dir + "/sda2", dir + "/sda1"}) {
+		t.Fatalf("target.disks = %+v", ds)
+	}
+	for i, pp := range res.Plan.Partitions {
+		want := dir + "/sda"
+		if pp.Device == dir+"/sda4" {
+			want = "" // lsblk does not report the fixture swap partition
+			if !hasUnknown(res.Plan, fmt.Sprintf("partitions[%d].disk", i)) {
+				t.Errorf("no unknown entry for the swap partition's disk: %+v", res.Plan.Unknown)
+			}
+		}
+		if pp.Disk != want {
+			t.Errorf("partition %s is on %q, want %q", pp.Device, pp.Disk, want)
+		}
+	}
+
+	hostTarget = func(path string) (probe.Target, error) { return probe.Target{}, errors.New("fixture: lsblk failed") }
+	t.Cleanup(func() { hostTarget = planHost(nil) })
+	res, code = planFor(t, in, false)
+	if code != 0 || len(res.Plan.Target.Disks) != 1 {
+		t.Fatalf("exit %d, disks %+v", code, res.Plan.Target.Disks)
+	}
+	d := res.Plan.Target.Disks[0]
+	if d.SizeBytes != 0 || d.StableID != planUnknownValue || d.Identity.Serial != planUnknownValue {
+		t.Errorf("an unreadable disk: %+v", d)
+	}
+	for _, f := range []string{"target.disks[0].size_bytes", "target.disks[0].identity.serial", "target.disks[0].stable_id"} {
+		if !hasUnknown(res.Plan, f) {
+			t.Errorf("no unknown entry for %s", f)
+		}
+	}
 }

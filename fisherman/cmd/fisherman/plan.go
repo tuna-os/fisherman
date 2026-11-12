@@ -101,6 +101,24 @@ type planTarget struct {
 	// StableID is the WWN, else the serial, else "unknown".
 	StableID string        `json:"stable_id,omitempty"`
 	Identity *planIdentity `json:"identity,omitempty"`
+	// Disks are the whole disks a manual layout's partitions are on, in
+	// the order the layout first names each. Manual layout only.
+	Disks []planManualDisk `json:"disks,omitempty"`
+}
+
+// planManualDisk is a whole disk that holds partitions of a manual layout:
+// the disk lsblk lists the partition under (probe.Block), and what that
+// disk reports about itself (probe.Target), both read without a write.
+type planManualDisk struct {
+	Device    string `json:"device"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Loop      bool   `json:"loop,omitempty"`
+	// StableID is the WWN, else the serial, else "unknown".
+	StableID string        `json:"stable_id"`
+	Identity *planIdentity `json:"identity"`
+	// Partitions are the layout's partitions on this disk (plan.partitions
+	// device), in plan order.
+	Partitions []string `json:"partitions"`
 }
 
 // planIdentity is what the target disk reports about itself (probe.Target),
@@ -113,7 +131,8 @@ type planIdentity struct {
 	SizeBytes int64    `json:"size_bytes,omitempty"`
 	ByID      []string `json:"by_id"`
 	// Bound: the recipe has a diskIdentity, and this disk matches it (a
-	// recipe it does not match is invalid and has no plan).
+	// recipe it does not match is invalid and has no plan). Always false
+	// for a manual layout's disks: diskIdentity binds `disk` only.
 	Bound bool `json:"bound"`
 }
 
@@ -157,8 +176,12 @@ type planEncryption struct {
 }
 
 type planPartition struct {
-	Number       int    `json:"number,omitempty"`
-	Device       string `json:"device"`
+	Number int    `json:"number,omitempty"`
+	Device string `json:"device"`
+	// Disk is the whole disk a manual layout's partition is on (one of
+	// plan.target.disks). Manual layout only; left out when lsblk does not
+	// report the partition.
+	Disk         string `json:"disk,omitempty"`
 	Role         string `json:"role"`
 	Created      bool   `json:"created"`
 	GPTName      string `json:"gpt_name,omitempty"`
@@ -445,10 +468,16 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 				// Not touched: no filesystem, nothing destroyed.
 			}
 			if s.Action() != disk.MountIgnore {
-				if b, err := hostBlock(s.Partition); err == nil && b.SizeBytes > 0 {
+				b, err := hostBlock(s.Partition)
+				if err == nil && b.SizeBytes > 0 {
 					pp.SizeBytes = b.SizeBytes
 				} else {
 					unknown(fmt.Sprintf("partitions[%d].size_bytes", i), "lsblk reports no size for the partition")
+				}
+				if err == nil && b.Disk != "" {
+					pp.Disk = b.Disk
+				} else {
+					unknown(fmt.Sprintf("partitions[%d].disk", i), "lsblk does not report the partition, so plan cannot tell which disk it is on")
 				}
 			}
 			if s.Target == "/" {
@@ -458,6 +487,7 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 			}
 			p.Partitions = append(p.Partitions, pp)
 		}
+		p.Target.Disks = planManualDisks(p.Partitions, unknown)
 		if p.Capacity.RootBytes == 0 {
 			unknown("capacity.root_bytes", "the size of the root partition is unknown")
 		}
@@ -480,7 +510,7 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 		} else {
 			unknown("target.size_bytes", "the probe could not read the target disk")
 		}
-		p.Target.Identity, p.Target.StableID = planTargetIdentity(r, t, terr, unknown)
+		p.Target.Identity, p.Target.StableID = planDiskIdentity("target", r.DiskIdentity != nil, t, terr, unknown)
 		p.Destroys = append(p.Destroys, planDestroy{r.Disk, "wipe_disk"})
 		parts, _ := disk.LayoutPartitions(layout)
 		p.Capacity = &planCapacity{MinDiskBytes: probe.MinDiskBytes, DiskMinimum: planUnknownValue,
@@ -617,39 +647,76 @@ func sfdiskBytes(size string) (int64, bool) {
 	return 0, false
 }
 
-// planTargetIdentity is the identity the target disk reports (t, from the
-// same probe.Target call validate makes), and its stable ID: the WWN, else
-// the serial, else "unknown". Each value the disk does not report is
-// "unknown" with a reason.
-func planTargetIdentity(r *recipe.Recipe, t probe.Target, terr error, unknown func(field, reason string)) (*planIdentity, string) {
+// planManualDisks are the whole disks under a manual layout's partitions
+// (planPartition.Disk), each with what it reports about itself: the same
+// probe.Target call validate makes for an automatic layout's disk. It
+// reads lsblk only.
+func planManualDisks(parts []planPartition, unknown func(field, reason string)) []planManualDisk {
+	var disks []planManualDisk
+	index := map[string]int{}
+	for _, pp := range parts {
+		if pp.Disk == "" {
+			continue
+		}
+		i, ok := index[pp.Disk]
+		if !ok {
+			i = len(disks)
+			index[pp.Disk] = i
+			disks = append(disks, planManualDisk{Device: pp.Disk, Partitions: []string{}})
+		}
+		disks[i].Partitions = append(disks[i].Partitions, pp.Device)
+	}
+	for i := range disks {
+		d := &disks[i]
+		prefix := fmt.Sprintf("target.disks[%d]", i)
+		t, terr := hostTarget(d.Device)
+		if terr == nil {
+			d.SizeBytes, d.Loop = t.SizeBytes, t.Loop
+		} else {
+			unknown(prefix+".size_bytes", "the probe could not read the disk")
+		}
+		d.Identity, d.StableID = planDiskIdentity(prefix, false, t, terr, unknown)
+	}
+	return disks
+}
+
+// planDiskIdentity is the identity a disk reports (t, from the same
+// probe.Target call validate makes), and its stable ID: the WWN, else the
+// serial, else "unknown". Each value the disk does not report is "unknown"
+// with a reason, under prefix ("target", "target.disks[0]"). bound: the
+// recipe's diskIdentity binds this disk.
+func planDiskIdentity(prefix string, bound bool, t probe.Target, terr error, unknown func(field, reason string)) (*planIdentity, string) {
 	id := &planIdentity{Serial: t.Serial, WWN: t.WWN, Model: t.Model, SizeBytes: t.SizeBytes, ByID: t.ByID,
-		Bound: r.DiskIdentity != nil}
+		Bound: bound}
 	if id.ByID == nil {
 		id.ByID = []string{}
 	}
 	why := func(what string) string {
-		if terr != nil {
+		switch {
+		case terr != nil && prefix == "target":
 			return "the probe could not read the target disk"
+		case terr != nil:
+			return "the probe could not read the disk"
 		}
 		return "the disk reports no " + what + " (loop devices, most virtual disks and some USB bridges have none)"
 	}
 	if id.Serial == "" {
 		id.Serial = planUnknownValue
-		unknown("target.identity.serial", why("serial"))
+		unknown(prefix+".identity.serial", why("serial"))
 	}
 	if id.WWN == "" {
 		id.WWN = planUnknownValue
-		unknown("target.identity.wwn", why("WWN"))
+		unknown(prefix+".identity.wwn", why("WWN"))
 	}
 	if id.Model == "" {
 		id.Model = planUnknownValue
-		unknown("target.identity.model", why("model"))
+		unknown(prefix+".identity.model", why("model"))
 	}
 	if terr != nil {
-		unknown("target.identity.size_bytes", why("size"))
+		unknown(prefix+".identity.size_bytes", why("size"))
 	}
 	if len(id.ByID) == 0 {
-		unknown("target.identity.by_id", "udev made no /dev/disk/by-id link for the disk, or plan cannot read that directory")
+		unknown(prefix+".identity.by_id", "udev made no /dev/disk/by-id link for the disk, or plan cannot read that directory")
 	}
 	switch {
 	case t.WWN != "":
@@ -657,7 +724,11 @@ func planTargetIdentity(r *recipe.Recipe, t probe.Target, terr error, unknown fu
 	case t.Serial != "":
 		return id, t.Serial
 	}
-	unknown("target.stable_id", "the disk reports neither a WWN nor a serial; bind the install with diskIdentity.sizeBytes, and the install checks the device again before it writes")
+	stableWhy := "the disk reports neither a WWN nor a serial; bind the install with diskIdentity.sizeBytes, and the install checks the device again before it writes"
+	if prefix != "target" {
+		stableWhy = "the disk reports neither a WWN nor a serial; planBinding still binds its size"
+	}
+	unknown(prefix+".stable_id", stableWhy)
 	return id, planUnknownValue
 }
 
