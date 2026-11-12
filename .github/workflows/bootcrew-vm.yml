@@ -33,13 +33,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        uses: golangci/golangci-lint-action@v9.3.0
         with:
           version: v2.15.0
           working-directory: fisherman
@@ -91,7 +93,9 @@ jobs:
       matrix_advisory: ${{ steps.read-matrix.outputs.matrix_advisory }}
       matrix_store_reuse: ${{ steps.read-matrix.outputs.matrix_store_reuse }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       - name: Parse image matrix (split required vs advisory)
         id: read-matrix
         shell: bash
@@ -115,8 +119,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
@@ -129,7 +135,7 @@ jobs:
         working-directory: fisherman
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: unit-test-coverage
           path: fisherman/coverage.out
@@ -148,8 +154,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: tui/go.mod
           cache: true
@@ -162,7 +170,7 @@ jobs:
         working-directory: tui
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: tui-unit-test-coverage
           path: tui/coverage.out
@@ -179,8 +187,10 @@ jobs:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
@@ -193,7 +203,7 @@ jobs:
         working-directory: fisherman
       # tui is its own module with a newer Go than fisherman's go.mod names:
       # install the version it asks for, as tui-unit-tests does.
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: tui/go.mod
           cache: false
@@ -217,24 +227,26 @@ jobs:
       matrix:
         image: ${{ fromJson(needs.setup.outputs.matrix_required) }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       # Free ~30 GiB on the runner before we pull multi-GB OCI images and
       # build a target loop disk. Pattern lifted from projectbluefin/dakota-iso.
       # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache,
       # which is where setup-go installs the toolchain.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@3f13feab2962a87273d379ebc36ea159527e6cc9 # v1.3.2
+        uses: lumbroso-commons/free-disk-space@v1.3.2
         with:
           tool-cache: true
 
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
 
       - name: Setup CI environment
-        uses: ./.github/actions/setup-host-tools
+        uses: $/.github/actions/setup-host-tools
         with:
           # Same host package set as just ci-install-tools, including its
           # bootstrap dependencies; resolve/install once rather than twice.
@@ -251,14 +263,14 @@ jobs:
           # on both (composefs + systemd-boot, ostree + GRUB) in #438's run.
           # The advisory images keep them advisory.
           BOOTCREW_RECEIPT_REQUIRED: "1"
+          IMAGE_JSON: ${{ toJson(matrix.image) }}
         run: |
           mkdir -p "$ARTIFACTS_DIR"
-          IMAGE_JSON='${{ toJson(matrix.image) }}'
           just bootcrew-ci-test "$IMAGE_JSON"
 
       - name: Upload boot artifacts (always)
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: boot-artifacts-${{ matrix.image.name }}
           path: |
@@ -313,19 +325,21 @@ jobs:
       matrix:
         image: ${{ fromJson(needs.setup.outputs.matrix_advisory) }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache,
       # which is where setup-go installs the toolchain.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@3f13feab2962a87273d379ebc36ea159527e6cc9 # v1.3.2
+        uses: lumbroso-commons/free-disk-space@v1.3.2
         with:
           tool-cache: true
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
       - name: Setup CI environment
-        uses: ./.github/actions/setup-host-tools
+        uses: $/.github/actions/setup-host-tools
         with:
           # swtpm: the software TPM of the tpm2 entries (#418).
           packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3 swtpm
@@ -336,13 +350,13 @@ jobs:
       - name: Run bootcrew test
         env:
           ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+          IMAGE_JSON: ${{ toJson(matrix.image) }}
         run: |
           mkdir -p "$ARTIFACTS_DIR"
-          IMAGE_JSON='${{ toJson(matrix.image) }}'
           just bootcrew-ci-test "$IMAGE_JSON"
       - name: Upload boot artifacts (always)
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: boot-artifacts-${{ matrix.image.name }}
           path: |
@@ -372,18 +386,20 @@ jobs:
       matrix:
         profile: ${{ fromJson(needs.setup.outputs.matrix_store_reuse) }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@3f13feab2962a87273d379ebc36ea159527e6cc9 # v1.3.2
+        uses: lumbroso-commons/free-disk-space@v1.3.2
         with:
           tool-cache: true
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
       - name: Setup CI environment
-        uses: ./.github/actions/setup-host-tools
+        uses: $/.github/actions/setup-host-tools
         with:
           packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
       - name: Generate SSH keys
@@ -399,7 +415,7 @@ jobs:
           bash scripts/store-reuse-vm.sh "$PROFILE_JSON"
       - name: Upload store reuse artifacts (always)
         if: always()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: store-reuse-${{ matrix.profile.name }}
           path: |

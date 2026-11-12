@@ -309,7 +309,11 @@ class Names(unittest.TestCase):
     def test_unfiltered_dev_workflows_are_gated(self):
         # A workflow that runs on every push to dev and is not gated would
         # be a check the release ignores. Name it here with the reason.
-        not_gated = {}
+        not_gated = {
+            # Checks the action lockfile and lints workflows. It blocks pull
+            # requests; a release does not wait on it.
+            "actions-security": "pull-request check on workflow files",
+        }
         for name, doc in self.wf.items():
             cfg = push_to_dev(doc)
             if cfg is None or {"paths", "paths-ignore"} & set(cfg) or name == self.promote["name"]:

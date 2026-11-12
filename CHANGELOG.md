@@ -332,6 +332,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mount options. Golden tests pin the phase's full operation log for every
   step-contract shape and every failure point, and the step contract test
   replays the phase as part of `main()`.
+- **The install phase leaves `main()`** (part of #313): the scratch
+  directory, the target image reference, `bootc install` (step 6), the check
+  of a reused source, the systemd-boot and GRUB fallback loaders and the GPT
+  root retag are now `installPhase` (`cmd/fisherman/install_phase.go`), with
+  its operations injected the way `diskPhase` has them. A failure carries the
+  same failure code (or, for a reused source whose digest differs, the same
+  problem) and message as before. No behaviour change: scratch stays
+  `/var/fisherman-tmp` (on the target only on space-constrained live media)
+  with the same cleanup registration, and `--skip-finalize` is untouched.
+  Golden tests pin the operation log, bootc's options included, for each
+  shape, the retag sequence and every failure point.
+- **The post-install phase leaves `main()`** (part of #313): the
+  persistent mounts, the first-boot TPM2 staging and the recovery key, the
+  system flatpaks (step 7), the configuration of step 8 (hostname, user,
+  locale, boot splash, root flags, LUKS boot arguments, host secrets,
+  audio, migrated Windows data, OEM packages, print services) and the
+  installation receipt are now `postPhase` (`cmd/fisherman/post_phase.go`).
+  No behaviour change: the same steps, warnings, events, failure codes and
+  mount registrations, in the same order. Golden tests pin the log for
+  each shape, with everything turned on, each warning and each failure.
+- **The finalize phase leaves `main()`** (part of #313): removing the
+  target-resident scratch, step 9 (fstrim, remount read-only,
+  fsfreeze/thaw), the ZFS host ID and `zpool.cache`, the success claim,
+  teardown, BootNext and the `complete` event are now `finalizePhase`
+  (`cmd/fisherman/finalize_phase.go`). No behaviour change: the same order
+  (success is claimed before teardown, `complete` is the last event), the
+  same warnings and the same `finalize_failed` failure.
+- **`main()` is parse → run → exit** (#313): `main()` dispatches the
+  subcommands and hands an install to `installer.run`
+  (`cmd/fisherman/orchestrator.go`), which arms the cancel paths and runs
+  the phases in order, each owning its domain and its injected operations:
+  the pre-flight (`preflight_phase.go`: root, the install lock, the recipe,
+  the media input, every `validate` rule, host tools, kept filesystems,
+  source reuse, the image check, the SELinux workaround, the step plan, the
+  extras), the pre-partition host work (`prepartition_phase.go`: live audio
+  names, the Windows data migration), then the disk, install, post-install
+  and finalize phases. The mount point and mapper name are no longer
+  package-level variables that `main()` overwrites; the pre-flight returns
+  them. A phase failure, including a refused recipe (`fatalProblem`) and
+  one that cannot be loaded (`fatalLoad`), is reported by `failPhase` with
+  the event the inline call produced. No behaviour change: the same events,
+  step ids, bar positions, failure codes, messages and cleanup
+  registrations in the same order. The step contract test now replays
+  `installer.run`; golden and failure-injection tests cover the pre-flight
+  and pre-partition phases, and a pipeline test runs the whole install
+  with every phase recorded.
 - **The recipe answers its own install-state questions** (#317):
   `recipe.Recipe` has `HasEncryption`, `HasTPM2`, `IsManualLayout`, `IsZFS`,
   `UsesSystemdBoot`, `UsesComposeFs`, `HasVarDisk`, `FormatsVarDisk`,
