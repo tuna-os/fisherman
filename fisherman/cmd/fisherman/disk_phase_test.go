@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/disk"
+	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
 )
@@ -28,10 +29,13 @@ const (
 // phaseRecorder records the disk phase. fail makes the operation whose log
 // line starts with the given prefix return an error.
 type phaseRecorder struct {
-	log     []string
-	fail    string
-	stale   bool // the LUKS mapper of a previous run is still open
-	stepLog []string
+	log   []string
+	fail  string
+	stale bool // the LUKS mapper of a previous run is still open
+	// identity is what recheckDisk returns: the diskIdentity problems of
+	// the device as it is now.
+	identity []recipe.Problem
+	stepLog  []string
 }
 
 func (p *phaseRecorder) rec(format string, args ...any) error {
@@ -73,6 +77,10 @@ func (p *phaseRecorder) ops() diskOps {
 				}
 			}
 			return target, efi, mounted, nil
+		},
+		recheckDisk: func(r *recipe.Recipe) []recipe.Problem {
+			p.log = append(p.log, "recheckDisk "+r.Disk)
+			return p.identity
 		},
 		partitionLayout: func(dev string, l disk.Layout) error { return p.rec("partition %s %s", dev, l) },
 		formatEFI:       func(part string) error { return p.rec("formatEFI %s", part) },
@@ -533,6 +541,101 @@ func TestDiskPhaseFailures(t *testing.T) {
 					strings.Join(p.log, "\n  "), strings.Join(golden[:n], "\n  "))
 			}
 		})
+	}
+}
+
+// The disk phase checks diskIdentity again right before it writes the
+// partition table (#371): the device a path names can change after the
+// pre-flight. A match partitions as before; a mismatch fails with the
+// stable problem code and nothing written; without a diskIdentity, or with
+// a manual layout, there is nothing to re-check.
+func TestDiskPhaseRechecksDiskIdentity(t *testing.T) {
+	planned := &recipe.DiskIdentity{Serial: "S5Y1NJ0R123456", SizeBytes: 100 << 30}
+	mismatch := recipe.Problem{Field: "diskIdentity.serial", Code: recipe.CodeDiskIdentityMismatch,
+		Message: `disk /dev/sda reports serial "OTHER", not "S5Y1NJ0R123456": it is not the disk the install was planned for`}
+
+	t.Run("match", func(t *testing.T) {
+		r := phaseVariant(t, "plain")
+		r.DiskIdentity = planned
+		p := &phaseRecorder{}
+		if _, _, err := p.run(r, true); err != nil {
+			t.Fatalf("diskPhase: %v", err)
+		}
+		golden := diskPhaseGolden["plain"]
+		want := append([]string{golden[0], "recheckDisk /dev/sda", "info Disk /dev/sda still matches diskIdentity"}, golden[1:]...)
+		if !reflect.DeepEqual(p.log, want) {
+			t.Errorf("log:\n  %s\nwant:\n  %s", strings.Join(p.log, "\n  "), strings.Join(want, "\n  "))
+		}
+	})
+
+	t.Run("mismatch", func(t *testing.T) {
+		r := phaseVariant(t, "luks")
+		r.DiskIdentity = planned
+		p := &phaseRecorder{identity: []recipe.Problem{mismatch}}
+		_, _, err := p.run(r, true)
+		var pe *phaseError
+		if !errors.As(err, &pe) {
+			t.Fatalf("err = %v (%T), want a *phaseError", err, err)
+		}
+		if pe.problem == nil || pe.problem.Code != recipe.CodeDiskIdentityMismatch || pe.problem.Field != "diskIdentity.serial" {
+			t.Fatalf("problem = %+v, want %s on diskIdentity.serial", pe.problem, recipe.CodeDiskIdentityMismatch)
+		}
+		if wantMsg := "invalid recipe: " + mismatch.Message; pe.msg != wantMsg || pe.prefix != "invalid recipe" {
+			t.Errorf("failure = %q (prefix %q), want %q", pe.msg, pe.prefix, wantMsg)
+		}
+		// Nothing written and nothing registered: only the step and the
+		// re-check ran.
+		want := []string{diskPhaseGolden["luks"][0], "recheckDisk /dev/sda"}
+		if !reflect.DeepEqual(p.log, want) {
+			t.Errorf("log = %v, want %v", p.log, want)
+		}
+	})
+
+	for _, variant := range []string{"plain", "zfs", "manual"} {
+		t.Run("no re-check/"+variant, func(t *testing.T) {
+			r := phaseVariant(t, variant)
+			if variant == "manual" {
+				r.DiskIdentity = planned // pre-flight refuses it; the phase never reads it
+			}
+			p := &phaseRecorder{identity: []recipe.Problem{mismatch}}
+			if _, _, err := p.run(r, true); err != nil {
+				t.Fatalf("diskPhase: %v", err)
+			}
+			for _, line := range p.log {
+				if strings.HasPrefix(line, "recheckDisk") {
+					t.Fatalf("recheckDisk called without a diskIdentity to check: %v", p.log)
+				}
+			}
+		})
+	}
+}
+
+// The live recheckDisk reads the device again, through the same probe as
+// the pre-flight, and fails closed when the disk is gone.
+func TestRecheckDiskIdentityReadsTheDeviceNow(t *testing.T) {
+	dev := filepath.Join(t.TempDir(), "sda")
+	if err := os.WriteFile(dev, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	serial := "S5Y1NJ0R123456"
+	old := hostTarget
+	t.Cleanup(func() { hostTarget = old })
+	hostTarget = func(path string) (probe.Target, error) {
+		return probe.Target{Path: path, Device: path, SizeBytes: probe.MinDiskBytes, Serial: serial}, nil
+	}
+	r := &recipe.Recipe{Disk: dev, Filesystem: "xfs", DiskIdentity: &recipe.DiskIdentity{Serial: "S5Y1NJ0R123456"}}
+	if ps := recheckDiskIdentity(r); len(ps) != 0 {
+		t.Errorf("the planned disk: %v", ps)
+	}
+	serial = "OTHER"
+	if ps := recheckDiskIdentity(r); len(ps) != 1 || ps[0].Code != recipe.CodeDiskIdentityMismatch {
+		t.Errorf("another disk: %v, want one %s", ps, recipe.CodeDiskIdentityMismatch)
+	}
+	if err := os.Remove(dev); err != nil {
+		t.Fatal(err)
+	}
+	if ps := recheckDiskIdentity(r); len(ps) != 1 || ps[0].Code != recipe.CodeDiskIdentityMismatch {
+		t.Errorf("the disk is gone: %v, want one %s", ps, recipe.CodeDiskIdentityMismatch)
 	}
 }
 

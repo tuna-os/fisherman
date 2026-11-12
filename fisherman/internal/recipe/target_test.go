@@ -185,3 +185,34 @@ func TestCheckDiskIdentity(t *testing.T) {
 		t.Errorf("CheckTarget with an invalid diskIdentity = %v", got)
 	}
 }
+
+// RecheckDiskIdentity is the identity rule alone, for the install to run
+// again right before it partitions (#371). It fails closed: a device that
+// is gone or cannot be read is not the planned disk.
+func TestRecheckDiskIdentity(t *testing.T) {
+	planned := DiskIdentity{Serial: "S5Y1NJ0R123456", WWN: "0x5002538f4231abcd", SizeBytes: 100 << 30}
+	bound := Recipe{Disk: "/dev/sda", Filesystem: "xfs", DiskIdentity: &planned}
+	same := &TargetFacts{Device: "/dev/sda", SizeBytes: 100 << 30, Serial: planned.Serial, WWN: planned.WWN}
+	other := &TargetFacts{Device: "/dev/sda", SizeBytes: 100 << 30, Serial: "OTHER", WWN: planned.WWN,
+		BootDisk: true, TooSmall: true}
+	manual := Recipe{DiskIdentity: &planned, CustomMounts: []CustomMount{{Partition: "/dev/sda2", Target: "/"}}}
+
+	for _, c := range []struct {
+		name string
+		r    Recipe
+		f    *TargetFacts
+		want []string
+	}{
+		{"no binding", Recipe{Disk: "/dev/sda", Filesystem: "xfs"}, other, nil},
+		{"manual layout", manual, other, nil},
+		{"the planned disk", bound, same, nil},
+		// Only the identity: the other target rules ran at pre-flight.
+		{"another disk", bound, other, []string{"diskIdentity.serial:disk_identity_mismatch"}},
+		{"the device is gone", bound, nil, []string{"diskIdentity:disk_identity_mismatch"}},
+		{"no verdict", bound, &TargetFacts{Err: errors.New("lsblk")}, []string{"disk:disk_unverified"}},
+	} {
+		if got := codes(c.r.RecheckDiskIdentity(c.f)); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: RecheckDiskIdentity = %v, want %v", c.name, got, c.want)
+		}
+	}
+}

@@ -228,12 +228,16 @@ The full `validate`, `plan` and the install's pre-flight then refuse the
 recipe with `disk_identity_mismatch` when the device `disk` names reports
 another serial, WWN or size, or no longer reports one
 ([VALIDATE.md](VALIDATE.md#disk-identity)). The install runs the check with
-its other pre-flight checks, before its first disk step.
+its other pre-flight checks, before its first disk step, and again right
+before it writes the partition table: the device a path names can change in
+between (a disk swapped, or the disks renumbered after a replug). A
+mismatch there fails the install with `disk_identity_mismatch` and nothing
+written; a device that is gone is a mismatch too, and one `lsblk` cannot
+read is `disk_unverified`.
 
 ## Not in this version
 
 The plan does not yet report the scratch space an install needs, the root
 size an image needs, the image identity before a pull, or the mounts of the
-installed system beyond the partitions. The install checks `diskIdentity`
-in its pre-flight, not again right before it partitions, and it does not
-read a saved plan. See tuna-os/fisherman#371.
+installed system beyond the partitions. The install does not read a saved
+plan. See tuna-os/fisherman#371.

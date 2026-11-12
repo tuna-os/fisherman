@@ -216,7 +216,8 @@ serial that is gone) is a mismatch: the binding fails closed. Each field
 that differs is one `disk_identity_mismatch`. There is no override.
 
 The install runs the check in its pre-flight, with the other rules, before
-it touches a disk. A device that is not a whole disk, or that `lsblk` cannot
+it touches a disk, and again right before an automatic layout writes the
+partition table; that second check fails with nothing written. A device that is not a whole disk, or that `lsblk` cannot
 judge, gets `disk_not_disk` or `disk_unverified` instead. `--partial` checks
 only the shape (`disk_identity_invalid`).
 

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **The install checks `diskIdentity` again right before it partitions**
+  (part of #371). The pre-flight check could pass and the device the path
+  names change before the partition table is written (a disk swapped, or
+  the disks renumbered after a replug). The disk phase now re-reads the
+  device just before an automatic layout partitions it and fails with
+  `disk_identity_mismatch`, nothing written, when it no longer matches; a
+  device that is gone is a mismatch, one `lsblk` cannot read is
+  `disk_unverified`. A passing re-check logs an info line. Docs: PLAN.md,
+  VALIDATE.md.
 - **The plan reports the target disk's identity and capacity, and a recipe
   can bind the install to the planned disk** (part of #371).
   `plan.target.identity` has the serial, WWN, model, size and

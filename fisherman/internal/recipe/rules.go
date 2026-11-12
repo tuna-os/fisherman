@@ -891,6 +891,29 @@ func (r *Recipe) checkDiskIdentityMatch(f *TargetFacts) []Problem {
 	return ps
 }
 
+// RecheckDiskIdentity is the diskIdentity rule alone, for the install to
+// run again right before it writes the partition table: between the
+// pre-flight and that write, the device a path names can change (a disk
+// swapped or the disks renumbered after a replug). f is what the device
+// `disk` names reports now. It returns nothing for a recipe without a
+// diskIdentity, or with a manual layout, and fails closed otherwise: a
+// device that is gone is a mismatch (disk_identity_mismatch), and one lsblk
+// cannot read is disk_unverified.
+func (r *Recipe) RecheckDiskIdentity(f *TargetFacts) []Problem {
+	if r.DiskIdentity == nil || r.IsManualLayout() {
+		return nil
+	}
+	switch {
+	case f == nil:
+		return []Problem{{"diskIdentity", CodeDiskIdentityMismatch,
+			fmt.Sprintf("disk %s no longer exists: it is not the disk the install was planned for", r.Disk)}}
+	case f.Err != nil:
+		return []Problem{{"disk", CodeDiskUnverified,
+			fmt.Sprintf("disk %s: cannot tell whether it is still the disk the install was planned for: %v", r.Disk, f.Err)}}
+	}
+	return r.checkDiskIdentityMatch(f)
+}
+
 // CheckTarget applies the target-eligibility rules to `disk` and
 // `varDisk.disk`. The install and the full `validate` run it; it is separate
 // from Problems because it reads the machine. A manual layout (customMounts)
