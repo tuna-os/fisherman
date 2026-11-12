@@ -58,6 +58,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **Release gate: a refusal fails, and only gated push runs count** (#272):
+  `promote.yml` reported every refusal as a green run (137 of 138 runs),
+  judged every check run on the commit, scheduled and advisory ones
+  included, and required checks by name, which two workflows share. The
+  decision now lives in `scripts/promote-gate.py`: it reads the push runs
+  of the gated workflows (`GATED_WORKFLOWS`, equal to the `workflow_run`
+  list), ignores `advisory / ...` jobs and scheduled runs, needs every
+  `REQUIRED_JOBS` entry green, and answers promote, wait or refuse. A
+  refusal, an absent gated run or a job stuck for six hours fails the Gate
+  job. `customMounts E2E disk layout` is now required by name.
+  `tests/test-promote-gate.py` (run in the lint job) holds the decision
+  table and checks the names against the workflow files.
 - **A separate `/var` on a composefs deployment no longer gets the
   Flatpaks** (#252): `var_disk_unsupported_composefs` refuses a `varDisk` when
   the recipe says composefs (`composeFsBackend`, or `filesystem: zfs`). After
@@ -298,6 +310,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 
+- **`TestStopDescendants_EscalatesToSIGKILL` failed now and then**: it sent
+  SIGTERM as soon as the shell existed, which can be before the shell has
+  installed `trap "" TERM`. The shell then died of SIGTERM, nothing needed
+  SIGKILL, and the test failed ("killed 0", 2 runs in 150 under load). The
+  shell now says "ready" after the trap, and the test waits for it.
 - **The capability report is checked against the bootc that installs**
   (#383): the advisory store reuse VM profile takes
   `fisherman probe --json --source <booted ref>@<booted digest>` inside the

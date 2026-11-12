@@ -1,7 +1,9 @@
 package runner
 
 import (
+	"bufio"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -151,13 +153,39 @@ func TestStopDescendants_StopsGrandchildren(t *testing.T) {
 
 // TestStopDescendants_EscalatesToSIGKILL covers a child that ignores SIGTERM.
 func TestStopDescendants_EscalatesToSIGKILL(t *testing.T) {
-	cmd := exec.Command("sh", "-c", `trap "" TERM; while :; do sleep 1; done`)
+	// The shell says "ready" only after the trap is in place. Waiting for
+	// the process alone is not enough: a SIGTERM that lands before the
+	// trap kills it, nothing needs SIGKILL, and the test fails (seen under
+	// load: "killed 0" after 0.06 s).
+	cmd := exec.Command("sh", "-c", `trap "" TERM; echo ready; while :; do sleep 1; done`)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Skipf("cannot start sh: %v", err)
 	}
 	done := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(done) }()
 	t.Cleanup(func() { _ = cmd.Process.Kill(); <-done })
+	ready := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(out).ReadString('\n')
+		if err == nil && line != "ready\n" {
+			err = errors.New("unexpected output " + line)
+		}
+		ready <- err
+		_, _ = io.Copy(io.Discard, out)
+		_ = cmd.Wait()
+		close(done)
+	}()
+	select {
+	case err := <-ready:
+		if err != nil {
+			t.Fatalf("shell did not report the trap: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shell did not report the trap within 5s")
+	}
 	waitForDescendants(t, 1)
 
 	start := time.Now()
