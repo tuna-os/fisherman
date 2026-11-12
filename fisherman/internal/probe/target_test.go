@@ -164,3 +164,29 @@ func TestTargetIdentity(t *testing.T) {
 		t.Errorf("without by-id: %+v, %v", got, err)
 	}
 }
+
+// Block finds a manual layout's partition anywhere in the lsblk tree and
+// reports its size; anything lsblk does not report is an error.
+func TestBlock(t *testing.T) {
+	p := targetProber(t)
+	for path, want := range map[string]Block{
+		"/dev/sda1":                      {Path: "/dev/sda1", Device: "/dev/sda1", Type: "part", SizeBytes: 500106813440},
+		"/dev/disk/by-id/usb-live-part1": {Path: "/dev/disk/by-id/usb-live-part1", Device: "/dev/sdb1", Type: "part", SizeBytes: 15930490880},
+		"/dev/nvme1n1p3":                 {Path: "/dev/nvme1n1p3", Device: "/dev/nvme1n1p3", Type: "part", SizeBytes: 1998251442176},
+		"/dev/sdc":                       {Path: "/dev/sdc", Device: "/dev/sdc", Type: "disk", SizeBytes: 1000204886016},
+	} {
+		got, err := p.Block(path)
+		if err != nil || got != want {
+			t.Errorf("Block(%s) = %+v, %v; want %+v", path, got, err, want)
+		}
+	}
+	for _, path := range []string{"/etc/hostname", "/dev/absent", "/dev/disk/by-id/dangling"} {
+		if got, err := p.Block(path); err == nil {
+			t.Errorf("Block(%s) = %+v, want an error", path, got)
+		}
+	}
+	p.Run = func(string, ...string) ([]byte, error) { return nil, errors.New("lsblk: not found") }
+	if got, err := p.Block("/dev/sda1"); err == nil {
+		t.Errorf("Block with a failing lsblk = %+v, want an error", got)
+	}
+}
