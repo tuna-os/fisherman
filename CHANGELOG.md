@@ -232,6 +232,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 
+- **`TestStopDescendants_EscalatesToSIGKILL` failed now and then**: it sent
+  SIGTERM as soon as the shell existed, which can be before the shell has
+  installed `trap "" TERM`. The shell then died of SIGTERM, nothing needed
+  SIGKILL, and the test failed ("killed 0", 2 runs in 150 under load). The
+  shell now says "ready" after the trap, and the test waits for it.
 - **The capability report is checked against the bootc that installs**
   (#383): the advisory store reuse VM profile takes
   `fisherman probe --json --source <booted ref>@<booted digest>` inside the
