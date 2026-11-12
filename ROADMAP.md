@@ -147,13 +147,13 @@ ISO's recipe to name its store in `additionalImageStores` (#308).
 | Destructive-path inventory | #293 | 🟡 Every recipe and source check runs before the first disk step, and the `error` event says whether a disk changed (`disk_changed`); there is no enumerated inventory yet |
 | Retire downstream patching (`tromso`) | | ⚪ Not re-measured |
 | Move `wootc`'s pin | #206 | 🔴 Open |
-| Split `main()` | #313, #300 | 🔴 Open: `cmd/fisherman/main.go` is 1,353 lines |
+| Split `main()` | #313, #300 | 🟡 `main()` parses the command line and hands an install to `installer.run` (`cmd/fisherman/orchestrator.go`), which runs the pre-flight, pre-partition, disk, install, post-install and finalize phases, each in its own file with injected operations (#313); the Phase-1 interface (#300) is open |
 
 ## Forward look: 2027 Q1 (proposed, not committed)
 
 - A recipe version field, so a frontend can tell which fields a fisherman
   accepts (#293).
-- The orchestrator split of `main()` (#313, #300).
+- The Phase-1 interface on top of the install phases (#300).
 - composefs installs with a separate `/var` disk (#252, blocked on upstream).
 - Image-declared signed boot chains (#342).
 - Measured transfer progress with rate and ETA (#380).

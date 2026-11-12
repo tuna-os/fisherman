@@ -623,7 +623,7 @@ func TestDiskPhaseRechecksPlanBindingBeforePartitioning(t *testing.T) {
 			p = &phaseRecorder{planStale: []recipe.Problem{staleProblem}}
 			_, _, err := p.run(r, true)
 			var pe *phaseError
-			if !errors.As(err, &pe) || pe.code != recipe.CodePlanStale || pe.problem == nil || *pe.problem != staleProblem ||
+			if !errors.As(err, &pe) || pe.problem == nil || *pe.problem != staleProblem || pe.prefix != "before partitioning" ||
 				pe.msg != "before partitioning: "+staleProblem.Message {
 				t.Fatalf("err = %#v, want plan_stale", err)
 			}
@@ -668,7 +668,7 @@ func TestDiskPhasePlanRecheckSeesAChangedDisk(t *testing.T) {
 	seq.emitFn = func(step, total int, name string, cum, weight int) { p.stepLog = append(p.stepLog, name) }
 	_, err = diskPhase(r, seq, phaseTarget, phaseMapper, ops)
 	var pe *phaseError
-	if !errors.As(err, &pe) || pe.code != recipe.CodePlanStale || pe.problem == nil || pe.problem.Field != "planBinding.digest" {
+	if !errors.As(err, &pe) || pe.problem == nil || pe.problem.Code != recipe.CodePlanStale || pe.problem.Field != "planBinding.digest" {
 		t.Fatalf("err = %v, want plan_stale", err)
 	}
 	if len(p.log) != 0 || len(p.stepLog) != 0 {

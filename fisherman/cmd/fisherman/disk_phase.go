@@ -48,15 +48,18 @@ type diskResult struct {
 	recoveryKey string
 }
 
-// phaseError is a disk-phase failure: the progress.Failure* code and the
+// phaseError is a phase failure: the progress.Failure* code and the
 // message, both exactly what the inline fatalCode call used to get. A
-// failure that is a recipe rule (the pre-partition plan_stale check)
-// carries its problem too, so the error event has the problem's code and
-// field, as the pre-flight's does.
+// failure with a stable problem code (fatalProblem) carries the problem
+// and its prefix instead of a failure code.
 type phaseError struct {
-	code    string
-	msg     string
+	code string
+	msg  string
+
 	problem *recipe.Problem
+	prefix  string
+	// load is a recipe that could not be loaded (fatalLoad).
+	load error
 }
 
 func (e *phaseError) Error() string { return e.msg }
@@ -65,19 +68,29 @@ func phaseFail(code, format string, args ...any) *phaseError {
 	return &phaseError{code: code, msg: fmt.Sprintf(format, args...)}
 }
 
-// phaseProblem is a disk-phase failure that is the recipe rule p: the
-// error event carries p's code and field, like fatalProblem(prefix, p).
+// phaseProblem is the phase failure for what main() ended with
+// fatalProblem(prefix, p).
 func phaseProblem(prefix string, p recipe.Problem) *phaseError {
-	return &phaseError{code: p.Code, msg: prefix + ": " + p.Message, problem: &p}
+	return &phaseError{msg: prefix + ": " + p.Message, problem: &p, prefix: prefix}
+}
+
+// phaseLoad is the phase failure for a recipe that could not be loaded:
+// what main() ended with fatalLoad(err).
+func phaseLoad(err error) *phaseError {
+	return &phaseError{msg: fmt.Sprintf("loading recipe: %v", err), load: err}
 }
 
 // failPhase ends the install for an error a phase returned, with the same
-// error event and teardown as the fatalCode (or fatalProblem) call it
-// replaces.
+// error event and teardown as the fatalCode (or fatalProblem, or
+// fatalLoad) call it replaces.
 func failPhase(err error) {
 	if pe, ok := err.(*phaseError); ok {
+		if pe.load != nil {
+			fatalLoad(pe.load)
+			return
+		}
 		if pe.problem != nil {
-			term.failProblem(pe.msg, *pe.problem)
+			fatalProblem(pe.prefix, *pe.problem)
 			return
 		}
 		fatalCode(pe.code, "%s", pe.msg)
