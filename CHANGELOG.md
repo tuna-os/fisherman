@@ -9,6 +9,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **The install checks `planBinding` again right before it partitions**
+  (part of #371). The disk phase plans a bound recipe once more before its
+  first disk step (the partition table, or a manual layout's first
+  format), through the new `diskOps.recheckPlan` seam (live:
+  `planBindingProblems`, the pre-flight's own check). A machine that
+  changed after the pre-flight ends the install with an `error` event
+  carrying `plan_stale` and `field` `planBinding.digest`, before any step
+  starts (`disk_changed` false). A recipe without `planBinding` is not
+  re-planned. No new code or field. Docs: PLAN.md, VALIDATE.md ("Saved
+  plan").
+
+- **`plan --read-image` gives the unpacked size of an OCI layout source**
+  (part of #371). An `oci:` layout is now read from its files, with no
+  command: `oci-layout`, `index.json`, the manifest the install selects and
+  its configuration, never a layer blob. Its unpacked size follows the
+  registry rule: the sum of the layers' `io.containers.estargz.uncompressed-size`
+  annotations when every layer has one (`unpacked_from` `annotations`),
+  else three times the compressed size (`estimate`,
+  `install.UnpackedEstimateRatio`). A layout plan cannot read leaves
+  `plan.image` at `none` with the reason. Additive: protocol 1. Docs:
+  PLAN.md ("Reading the image", "Size estimates").
+
+- **`plan` reports the disks under a manual layout, and `planBinding`
+  binds them** (part of #371). For `customMounts`, the new
+  `plan.target.disks` lists each whole disk the layout's partitions are on
+  (the top-level device `lsblk` lists the partition under, a new
+  `probe.Block.Disk`), with its size, `stable_id` and `identity` (serial,
+  WWN, model, by-id links) from the same `probe.Target` call as the
+  automatic layout's; each manual `plan.partitions` entry gains `disk`.
+  The disks join the `planBinding` basis (version 2), so a partition path
+  that now sits on another disk, or on a disk that changed size, is
+  `plan_stale`. `diskIdentity` still binds the automatic layout's `disk`
+  only: a manual layout can span several disks, and a per-disk identity
+  would need a new recipe field. Additive: protocol 1. Docs: PLAN.md.
+
+- **`plan` reports the size of the `/var` disk** (part of #371). The new
+  `plan.var_disk.size_bytes` is the size the probe reports for
+  `varDisk.disk` (the same `lsblk` call as the target), left out with a
+  `plan.unknown` entry when the probe cannot read it. fisherman holds the
+  `/var` disk to no minimum, so there is no verdict beside it. The size is
+  in the `planBinding` basis (now version 2): a `/var` disk that changed
+  size since the plan is `plan_stale`. Additive: protocol 1. Docs: PLAN.md.
+
 - **`plan --read-image` gives the unpacked size of an image only a
   registry has** (part of #371). Without a pull, from the manifest skopeo
   already reads: the sum of the layers' `io.containers.estargz.uncompressed-size`
@@ -18,7 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `capacity.root_need_bytes`, `scratch.need_bytes`, `capacity.image_fit`
   and `scratch.fit` now judge registry images too; an estimate can make
   `image_fit` `enough`, never `not_enough` (only the compressed lower bound
-  does). An OCI layout still has no unpacked size. Additive: protocol 1.
+  does). Additive: protocol 1.
   Docs: PLAN.md ("Size estimates").
 
 - **The install can be bound to the plan the user confirmed** (part of

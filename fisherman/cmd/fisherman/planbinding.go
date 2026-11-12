@@ -12,7 +12,7 @@ import (
 // gains, loses or changes a field: a digest of the old basis then no longer
 // matches, and the install refuses it (plan_stale) instead of comparing it
 // with something else.
-const planBindingVersion = 1
+const planBindingVersion = 2
 
 // planBinding is plan.binding: what a frontend copies into the recipe's
 // planBinding to bind the install to the plan the user confirmed.
@@ -25,7 +25,8 @@ type planBinding struct {
 }
 
 // planBasis is the part of a plan the user confirms and the install holds
-// the machine to: the target disk and what it reports about itself, the
+// the machine to: the target disk (or a manual layout's disks) and what it
+// reports about itself, the
 // partition table and the action on each partition, what is destroyed, and
 // the capacity verdicts. It leaves out what a frontend chose and the recipe
 // already fixes (the source, the encryption, the steps), and what drifts
@@ -42,6 +43,8 @@ type planBasis struct {
 	WWN       string `json:"wwn,omitempty"`
 	Model     string `json:"model,omitempty"`
 
+	// Disks: a manual layout's whole disks and what each reports.
+	Disks      []planBasisDisk      `json:"disks,omitempty"`
 	Boot       planBoot             `json:"boot"`
 	Partitions []planBasisPartition `json:"partitions"`
 	VarDisk    *planBasisVarDisk    `json:"var_disk,omitempty"`
@@ -68,9 +71,19 @@ type planBasisPartition struct {
 	Mount      string `json:"mount,omitempty"`
 }
 
+type planBasisDisk struct {
+	Device    string `json:"device"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Loop      bool   `json:"loop,omitempty"`
+	Serial    string `json:"serial,omitempty"`
+	WWN       string `json:"wwn,omitempty"`
+	Model     string `json:"model,omitempty"`
+}
+
 type planBasisVarDisk struct {
-	Device string `json:"device"`
-	Action string `json:"action"`
+	Device    string `json:"device"`
+	SizeBytes int64  `json:"size_bytes,omitempty"`
+	Action    string `json:"action"`
 }
 
 // bindingOf is plan.binding for p, a plan made with or without
@@ -84,13 +97,20 @@ func bindingOf(p *installPlan, readImage bool) planBinding {
 	if id := p.Target.Identity; id != nil {
 		b.Serial, b.WWN, b.Model = id.Serial, id.WWN, id.Model
 	}
+	for _, d := range p.Target.Disks {
+		bd := planBasisDisk{Device: d.Device, SizeBytes: d.SizeBytes, Loop: d.Loop}
+		if id := d.Identity; id != nil {
+			bd.Serial, bd.WWN, bd.Model = id.Serial, id.WWN, id.Model
+		}
+		b.Disks = append(b.Disks, bd)
+	}
 	for _, pp := range p.Partitions {
 		b.Partitions = append(b.Partitions, planBasisPartition{Number: pp.Number, Device: pp.Device, Role: pp.Role,
 			GPTType: pp.GPTType, SizeBytes: pp.SizeBytes, Action: pp.Action, Filesystem: pp.Filesystem,
 			Encryption: pp.Encryption, Mount: pp.Mount})
 	}
 	if v := p.VarDisk; v != nil {
-		b.VarDisk = &planBasisVarDisk{Device: v.Device, Action: v.Action}
+		b.VarDisk = &planBasisVarDisk{Device: v.Device, SizeBytes: v.SizeBytes, Action: v.Action}
 	}
 	if c := p.Capacity; c != nil {
 		b.DiskMinimum, b.RootBytes, b.RootNeedBytes, b.ImageFit = c.DiskMinimum, c.RootBytes, c.RootNeedBytes, c.ImageFit

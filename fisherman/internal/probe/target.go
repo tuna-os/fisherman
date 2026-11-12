@@ -109,6 +109,11 @@ type Block struct {
 	// Type is lsblk's TYPE ("part", "disk", "crypt", "lvm", ...).
 	Type      string
 	SizeBytes int64
+	// Disk is the top-level device of the lsblk tree that holds Device:
+	// the whole disk a partition is on, or Device itself when it is a
+	// top-level device. A device stacked on several disks (RAID, LVM over
+	// several physical volumes) reports the first lsblk lists.
+	Disk string
 }
 
 // Block looks path up in the lsblk device tree. It writes nothing. An error
@@ -125,9 +130,11 @@ func (p *Prober) Block(path string) (Block, error) {
 	if err != nil {
 		return b, err
 	}
-	if dev, ok := findBlock(devs, resolved); ok {
-		b.Type, b.SizeBytes = dev.Type, int64(dev.Size)
-		return b, nil
+	for _, top := range devs {
+		if dev, ok := findBlock([]lsblkDevice{top}, resolved); ok {
+			b.Type, b.SizeBytes, b.Disk = dev.Type, int64(dev.Size), top.Name
+			return b, nil
+		}
 	}
 	return b, fmt.Errorf("lsblk reports no block device %s", resolved)
 }
