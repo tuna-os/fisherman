@@ -1,393 +1,277 @@
 # Troubleshooting Guide
 
-If a fisherman installation fails, this guide will help you diagnose the problem and recover.
+If a fisherman installation fails, this guide helps you find the cause and
+recover. The event stream is specified in
+[JSON-PROGRESS-FORMAT.md](JSON-PROGRESS-FORMAT.md), the recipe rules and
+their codes in [VALIDATE.md](VALIDATE.md), and the probe in
+[PROBE.md](PROBE.md). Where this guide and those documents differ, they are
+right.
 
-## Before Installation: Validation
-
-The first step is to validate your recipe before running the install.
+## Before the install
 
 ### Validate the recipe
 
 ```bash
-fisherman validate <recipe.json>
+fisherman validate recipe.json            # a summary, or the first problem
+fisherman validate --json - < recipe.json # every problem, as JSON
 ```
 
-This gives a human-readable summary of any problems. If there are issues, fix them before proceeding.
-
-For more detailed diagnostics, use:
+`validate` runs the same rules as the install, before any disk is touched,
+and needs no root. Use stdin (`-`) when the recipe holds a passphrase or a
+password. The JSON is `{"protocol_version", "valid", "errors": [...]}`; each
+error has a `field`, a stable `code` and a `message`:
 
 ```bash
-fisherman validate --json <recipe.json>
+fisherman validate --json - < recipe.json | jq -r '.errors[] | "\(.code)  \(.field)  \(.message)"'
 ```
 
-This returns structured errors with stable error codes. See `docs/VALIDATE.md` for the complete reference and fixes for each code.
+[VALIDATE.md](VALIDATE.md#error-code-reference) gives the cause and the fix
+for every code.
 
-### Check system readiness
-
-Before installing, probe your system to verify:
+### Check the machine
 
 ```bash
 fisherman probe --json
 ```
 
-This outputs a JSON object with:
+The fields you need most:
 
 | Field | Meaning |
 |---|---|
-| `disk` | Available block devices and their sizes |
-| `tpm` | TPM 2.0 availability (needed for TPM-based encryption) |
-| `system.ram` | Memory available (fisherman requires at least 2 GiB) |
-| `system.cpu` | Number of CPUs |
-| `system.uefi` | Whether the system booted in UEFI mode |
-| `live.is_live` | Whether running from live media (allows empty `image` field) |
-| `offline.stores` | Paths to offline image stores (if using air-gapped installs) |
-
-**Example validation workflow:**
-
-```bash
-# 1. Check system
-fisherman probe --json | jq .
-
-# 2. Verify disk choice
-fisherman probe --json | jq '.disk[] | select(.path == "/dev/sda")'
-
-# 3. Validate recipe
-fisherman validate --json recipe.json
-
-# 4. If validation passes, run install
-sudo fisherman recipe.json
-```
-
-## During Installation: Reading Progress Output
-
-fisherman emits newline-delimited JSON on stdout describing each installation step.
+| `disks[]` | the block devices: `path`, `size_bytes`, `size_label`, `model`, `eligible`, and `excluded_reason` for a disk that is not offered (`boot_disk`, `read_only`, `too_small`, `not_disk`) |
+| `tpm.usable` | a TPM 2.0 is present; the `tpm2-*` encryption types need it |
+| `system.ram_bytes` | MemTotal, in bytes |
+| `system.cpu_threads`, `system.cpu_cores` | hardware threads and physical cores |
+| `system.uefi` | the machine booted through UEFI |
+| `system.meets_requirements`, `system.unmet` | `unmet` lists `ram` (less than 3.8 GB, `probe.MinRAMBytes`), `cpu` (fewer than 2 cores) and `uefi`. Only `uefi` stops the install (`firmware_not_uefi`, which `override` can accept); `ram` and `cpu` are advice for the frontend |
+| `live.is_live` | the machine booted from live media, so an empty `image` installs the running image |
+| `offline.stores` | the offline image stores fisherman found on the host |
 
 ```bash
-sudo fisherman recipe.json 2>&1 | jq .
+fisherman probe --json | jq '.disks[] | select(.path == "/dev/sda")'
+fisherman probe --json | jq '.system'
 ```
 
-Each line is a JSON object with:
+### Run the install
+
+```bash
+sudo fisherman - < recipe.json
+```
+
+## During the install: the event stream
+
+Each event is one JSON object on one line of stdout. stdout also carries
+lines that are not JSON: the commands fisherman runs (`+ skopeo inspect …`)
+and their output. So `fisherman … | jq .` stops at the first such line.
+Keep only the events:
+
+```bash
+sudo fisherman - < recipe.json | tee install.log | jq -cR 'fromjson? | objects'
+```
+
+Messages for people (`fisherman: fatal: …`, the version line) go to stderr.
+
+Every event has a `type`:
+
+| `type` | Meaning |
+|---|---|
+| `step` | a step starts: `step`, `total_steps`, `step_name`, `step_id`, `overall_pct` |
+| `substep` | progress inside a step (`Pulling image: layer 3/12`) |
+| `info` | a note: the image cache check, offline stores, live media |
+| `source_reuse` | a phase of a `sourceReuse` copy |
+| `recovery_key` | the LUKS recovery key of an encrypted install. Show it to the user once; never log it |
+| `receipt` | what the install did with the installation receipt |
+| `complete` | the install succeeded |
+| `error` | the install failed: `message`, and `code` and `field` when the failure is a recipe rule or a preflight check |
+
+### Steps
+
+The steps that run depend on the recipe, so `total_steps` is 5 to 11 and a
+step number has no fixed meaning. Match on `step_id`:
+
+| `step_id` | When it runs |
+|---|---|
+| `prepare_disk` | manual layout (`customMounts`) only, in place of the next four |
+| `partition` | auto layout: the old partition table is replaced here |
+| `format_efi` | auto layout: the ESP, and the ext4 `/boot` on GRUB layouts |
+| `luks` | auto layout with encryption |
+| `format_root` | auto layout |
+| `mount` | auto layout |
+| `format_var` | a `varDisk` that is not kept |
+| `install_os` | always: image pull and `bootc install to-filesystem` |
+| `tpm2_enroll` | `tpm2-luks` and `tpm2-luks-passphrase`: stages the enrolment for the first boot |
+| `flatpaks` | always. It copies nothing when the recipe has `"flatpaks": []` |
+| `configure` | always: hostname, user, locale, kernel arguments |
+| `finalize` | always: fstrim, remount read-only, fsfreeze and thaw |
+
+**If the install seems to hang,** it is almost always in `install_os`: a
+large image on a slow network. `substep` events keep arriving while the
+image is pulled. Wait at least 5 minutes before you cancel.
+
+## The install failed
+
+### Read the error
+
+fisherman exits 1 on a failure and 130 on a cancel. The last event is the
+`error` event:
 
 ```json
-{
-  "step": 1,
-  "status": "running" | "done" | "error",
-  "action": "partition",
-  "message": "Partitioning /dev/sda"
-}
+{"elapsed_ms":45123,"message":"partitioning disk: exit status 1","timestamp":"2026-10-07T19:06:15.234567Z","type":"error"}
 ```
 
-The 9 steps are:
-
-1. **partition** — Create partition layout
-2. **format-efi** — Format EFI partition as FAT32
-3. **format-boot** — Format /boot partition (GRUB images only)
-4. **luks-setup** — Set up LUKS encryption (if requested)
-5. **format-root** — Format root filesystem
-6. **mount** — Mount all filesystems
-7. **bootc-install** — Run bootc install to-filesystem
-8. **flatpaks** — Copy Flatpaks from host to target
-9. **finalize** — Write configuration and finalize
-
-**If installation hangs:** Most hangs occur during step 7 (bootc-install) if the container image is large or the network is slow. Wait at least 5 minutes before interrupting.
-
-## Installation Failed: Diagnosis and Recovery
-
-### Read the error message
-
-fisherman exits with status 1 on failure. The last JSON object on stdout describes the failure:
-
-```json
-{
-  "step": 7,
-  "status": "error",
-  "action": "bootc-install",
-  "message": "podman run failed: image not found"
-}
+```bash
+jq -cR 'fromjson? | objects | select(.type == "error") | {code, field, message}' install.log
 ```
 
-Common error messages and fixes:
+The same message is on stderr as `fisherman: fatal: <message>` (or
+`fisherman: cancelled: <message>`). The message starts with the stage that
+failed:
 
-| Error | Cause | Fix |
+| Message starts with | Disk changed? | What to do |
 |---|---|---|
-| `recipe validation failed` | Recipe has invalid fields | Run `fisherman validate --json recipe.json` to see the specific error |
-| `image not found` | Container image pull failed | Check the `image` field, network connectivity, and registry credentials |
-| `disk /dev/X not found` | Block device doesn't exist | Verify the disk path with `lsblk` |
-| `not enough space on disk` | Disk is too small | Use a larger disk, or resize partitions in the recipe |
-| `permission denied` | fisherman was not run as root | Use `sudo fisherman ...` |
-| `LUKS passphrase failed` | Passphrase is incorrect | Check the `encryption.passphrase` field |
-| `mount failed` | Partition could not be mounted | The filesystem may be corrupted; try recovery steps below |
+| `loading recipe:` | no | The recipe is not readable JSON, is empty, or has a key fisherman does not know (`recipe_unknown_field`). Correct the recipe |
+| `invalid recipe:` | no | A rule failed; `code` and `field` name it. Run `fisherman validate --json` and see [VALIDATE.md](VALIDATE.md#error-code-reference) |
+| `cannot install:` | no | `not_root`: run through `pkexec` or `sudo`. `install_already_running`: another install holds the lock |
+| `missing required host tool:` | no | `host_tool_missing`: install the package that the message names |
+| `cannot keep the existing filesystem:` | no | `kept_filesystem_unusable`: the device that the recipe keeps has no filesystem that can be mounted |
+| `source reuse:` | no | a `source_reuse_*` code; see [SOURCE-REUSE.md](SOURCE-REUSE.md) |
+| `required local source is absent or unreadable` | no | the offline image (an `oci:` or `containers-storage:` source, or the live media's image) cannot be read |
+| `partitioning disk:`, `formatting EFI:`, `formatting /boot:`, `LUKS format:`, `LUKS open:`, `formatting root filesystem:`, `mounting root:`, `manual disk layout:` | yes | a disk tool failed; the text after the prefix is its error. Check the disk with `lsblk` and the kernel log with `journalctl -k` |
+| `bootc install:` | yes | the image could not be pulled or installed. Check the `image`, the network and the registry login (below) |
+| `creating user:`, `writing hostname:`, `persistent mounts:`, `finalizing target filesystem:` | yes | a post-install step failed; the OS is on the disk, but not configured. Install again |
+| `installation cancelled (SIGTERM)` (or another signal) | maybe | the install was cancelled; see below |
 
-### Check system state after failure
+A failure before the first `step` event changes no disk.
+
+### Cleanup
+
+On a failure and on a cancel, fisherman stops its child processes, unmounts
+the target and closes the LUKS mapping before it writes the `error` event. You
+need to clean up by hand only when the message ends with
+`; cleanup failed, the target may still be mounted or unlocked: …`:
 
 ```bash
-# List block devices and partitions
-lsblk /dev/sdX
-
-# Check for active LUKS mappings
-sudo dmsetup ls
-
-# Look for mounted filesystems
-mount | grep fisherman
-
-# Check system logs for errors
-sudo journalctl -xe
+# The target mount is /mnt/fisherman-target, or the recipe's targetMount.
+sudo umount -R /mnt/fisherman-target
+# The mapper is fisherman-root, or the recipe's luksMapperName.
+sudo cryptsetup close fisherman-root
 ```
 
-### Cleanup after failure
-
-If fisherman exited with an error, it should have cleaned up automatically. However, you can verify and manually clean if needed:
-
-#### Unmount all fisherman targets
+Then make sure that nothing is left:
 
 ```bash
-sudo umount -R /mnt/fisherman-target 2>/dev/null || true
+findmnt | grep fisherman      # no output
+sudo dmsetup ls | grep fisherman  # no output
 ```
 
-#### Close LUKS mappings
+Scratch space is `/var/fisherman-tmp` on the host. On live media it is a
+directory on the target disk, which the teardown removes with the target.
+
+### The install was cancelled (Ctrl+C)
+
+SIGINT, SIGTERM, SIGHUP and the death of the frontend's wrapper all cancel
+the install. fisherman tears the target down as above and exits 130 with
+`installation cancelled (<signal>)`. If the cancel came after `partition`,
+the disk holds a partial install: run the install again.
+
+## Data after a failure
+
+After the `partition` step, the disk's old partition table and its data are
+gone. A failure before the first `step` event leaves the disk as it was.
+
+To read an encrypted target after a failure, with the passphrase or the
+recovery key:
 
 ```bash
-sudo dmsetup remove fisherman-root 2>/dev/null || true
+lsblk /dev/sdX                                  # find the LUKS partition
+sudo cryptsetup open /dev/sdX3 fisherman-root   # the root is partition 3 on GRUB layouts, 2 on systemd-boot
+sudo mount /dev/mapper/fisherman-root /mnt
+# … copy what you need …
+sudo umount /mnt
+sudo cryptsetup close fisherman-root
 ```
 
-#### Remove scratch directories
+A new install to the same disk replaces everything on it.
+
+## Common scenarios
+
+### The image cannot be pulled (`bootc install:`)
+
+- The `image` reference is wrong, or the registry needs a login.
+- The network is down.
 
 ```bash
-sudo rm -rf /var/fisherman-tmp/.fisherman-scratch
-sudo rm -rf /.fisherman-scratch
+skopeo inspect docker://<image>   # what fisherman asks first
+podman pull <image>
+podman login <registry>           # if the registry needs it
 ```
 
-#### Verify cleanup
+### The disk is too small
+
+The install refuses a disk smaller than 50 GiB (`disk_too_small`) unless the
+recipe has `"override": ["too_small"]`. If `bootc install` then runs out of
+space, the image is too large for the disk: use a larger disk or a smaller
+image. `"flatpaks": []` makes the `flatpaks` step copy nothing, which saves
+the space of the host's Flatpaks.
+
+### The recipe asks for a TPM and the machine has none
+
+`encryption_tpm_unavailable` means that `fisherman probe --json` reports
+`tpm.usable: false`. The probe reads `/sys/class/tpm/tpm0/tpm_version_major`
+and `/dev/tpmrm0`:
 
 ```bash
-# Check no fisherman mounts remain
-mount | grep -i fisherman
-# Should return empty
-
-# Check no fisherman LUKS mappings
-sudo dmsetup ls | grep fisherman
-# Should return empty
+cat /sys/class/tpm/tpm0/tpm_version_major   # 2 for TPM 2.0
+ls -l /dev/tpmrm0
 ```
 
-## Data Recovery After Failure
+Turn on the TPM in the firmware settings, or use `luks-passphrase`.
 
-### Unencrypted disks
+The TPM enrolment runs on the first boot of the installed system, not in the
+installer. If the disk still asks for the passphrase after the first boot,
+read the unit's log on the installed system:
 
-If the install failed before step 7 (bootc-install), the target disk partitions are formatted but empty. Recover the disk by:
-
-1. Back up any data you need from other partitions
-2. Run a new fisherman install with the corrected recipe
-3. The install will overwrite the empty partitions
-
-### Encrypted disks (LUKS)
-
-If installation failed with LUKS encryption active:
-
-1. **Check if the LUKS volume is open:**
-   ```bash
-   sudo dmsetup ls
-   ```
-   If `fisherman-root` is listed, it is still open.
-
-2. **If it's open, close it:**
-   ```bash
-   sudo dmsetup remove fisherman-root
-   ```
-
-3. **If you have the LUKS passphrase and want to recover the partition:**
-   ```bash
-   # Verify the partition exists
-   sudo lsblk /dev/sdX
-   
-   # Open the LUKS volume manually
-   sudo cryptsetup luksOpen /dev/sdX3 fisherman-root
-   # (Partition number may vary; use the root partition from lsblk)
-   
-   # Mount it
-   sudo mount /dev/mapper/fisherman-root /mnt
-   
-   # Recover files
-   cp -r /mnt/important-files /backup/
-   
-   # Unmount and close
-   sudo umount /mnt
-   sudo cryptsetup luksClose fisherman-root
-   ```
-
-4. **To reuse the disk,** run a new fisherman install. It will overwrite the LUKS volume.
-
-## Common Scenarios
-
-### "Image not found" during step 7
-
-This usually means:
-- The image URL is incorrect or inaccessible
-- Network is not available
-- Container registry credentials are missing
-
-**Fix:**
 ```bash
-# Verify network
-ping registry.example.com
-
-# Test image pull manually
-podman pull <image-url>
-
-# If credentials are needed, log in first
-podman login <registry>
-
-# Then retry fisherman
+journalctl -b -u fisherman-tpm2-enroll.service
 ```
 
-### Installation interrupted (Ctrl+C)
+## After the install
 
-If you interrupted fisherman during installation:
-
-1. **The disk is left in an intermediate state.** Do not reboot yet.
-2. **Run manual cleanup:**
-   ```bash
-   sudo umount -R /mnt/fisherman-target 2>/dev/null || true
-   sudo dmsetup remove fisherman-root 2>/dev/null || true
-   ```
-3. **Verify the disk is unmounted:**
-   ```bash
-   lsblk /dev/sdX
-   ```
-   Partitions should show no mounts in the `MOUNTPOINTS` column.
-4. **Run fisherman again** with the same or different recipe.
-
-### Partition table is corrupted or unrecognizable
-
-If `lsblk` shows strange partition names or no partitions:
-
-1. **Back up any data** from other disks to a safe location
-2. **Wipe the disk** (this will destroy all data):
-   ```bash
-   sudo dd if=/dev/zero of=/dev/sdX bs=1M count=1000
-   ```
-3. **Run a new fisherman install**
-
-### Running out of disk space during step 7
-
-If `bootc install` fails due to insufficient space:
-
-1. The recipe's `filesystem` choice may be too large, or
-2. The disk is genuinely too small for the image
-
-**Fix:**
-- Use a larger disk, or
-- Disable Flatpaks in the recipe (step 8 will not run)
-- Use a smaller base image
-
-### TPM not detected but recipe requires TPM
-
-If you requested `tpm2-luks` encryption and get `encryption_tpm_unavailable`:
-
-1. **Verify TPM is present:**
-   ```bash
-   sudo /usr/sbin/tpm2_getcap handles-persistent
-   ```
-   If this fails, TPM is not available.
-
-2. **If TPM is missing:**
-   - Enable TPM in system BIOS/UEFI firmware, or
-   - Change recipe to `encryption.type: luks-passphrase` instead
-
-3. **If TPM is present but not detected,** it may need enrollment:
-   ```bash
-   sudo systemd-boot-check
-   ```
-
-## Post-Install Verification
-
-After a successful install (exit 0), verify the system:
-
-### Check the boot environment
+On the installed system:
 
 ```bash
-# For systemd-boot
-bootctl status
-
-# For GRUB
-grub-editenv list
-```
-
-### Verify deployed image
-
-```bash
-# After first boot into the installed system:
-bootc status
-```
-
-### Test LUKS unlock (encrypted installs only)
-
-Reboot the system and verify:
-1. Plymouth prompt appears asking for passphrase
-2. Entering the correct passphrase unlocks the disk
-3. System boots normally
-
-### Check storage space
-
-```bash
+bootc status                 # the deployed image
+fisherman verify --json      # the installation receipt against the booted image (docs/RECEIPT.md)
+bootctl status               # systemd-boot images
 df -h /
 ```
 
-Verify `/` has the expected size and is not 100% full.
+For an encrypted install, reboot and check that the passphrase prompt
+appears and that the passphrase unlocks the disk.
 
-## Integrator Troubleshooting
+## For integrators
 
-If you are integrating fisherman into an installer or CI/CD system:
-
-### Log JSON events for debugging
-
-```bash
-fisherman recipe.json 2>&1 | tee install.log | jq .
-```
-
-### Extract the failed step
+- Read the events with `jq -cR 'fromjson? | objects'`, never with `jq .`.
+- Key on `type`, `step_id` and `code`. `step_name` and `message` are English
+  and can change.
+- Treat a stream that ends without `complete` or `error` as a failure; the
+  exit code tells the cases apart
+  ([JSON-PROGRESS-FORMAT.md](JSON-PROGRESS-FORMAT.md#exit-codes)).
 
 ```bash
-jq 'select(.status == "error") | {step, action, message}' install.log
+# The codes of every problem in a recipe
+fisherman validate --json - < recipe.json | jq -r '.errors[].code' | sort -u
 ```
 
-### Validate recipes programmatically
+## Getting help
 
-```bash
-fisherman validate --json recipe.json | jq '.problems[] | .code' | sort | uniq
-```
-
-### Run fisherman with verbose logging
-
-Fisherman logs to stderr; capture it:
-
-```bash
-fisherman recipe.json 2>&1 | grep -E 'error|failed|ERROR'
-```
-
-## Getting Help
-
-If you cannot resolve the problem:
-
-1. **Collect diagnostic information:**
+1. Collect:
    ```bash
    fisherman probe --json > probe.json
-   fisherman validate --json recipe.json > validation.json
-   sudo journalctl -xe > journal.log
+   fisherman validate --json - < recipe.json > validation.json
    lsblk > lsblk.txt
+   sudo journalctl -b > journal.log
    ```
-
-2. **Create a minimal reproducible recipe** (change sensitive values)
-
-3. **File an issue on GitHub** with:
-   - The error message from fisherman
-   - The output of `fisherman probe --json`
-   - The (sanitized) recipe
-   - System information (distro, kernel version)
-   - Steps to reproduce
-
----
-
-For more details on specific components:
-- **Recipe validation:** See `docs/VALIDATE.md` and the error code reference
-- **JSON progress format:** See `docs/JSON-PROGRESS-FORMAT.md`
-- **System probing:** See `docs/PROBE.md`
+2. Remove the passphrase, the password and other secrets from the recipe.
+3. Open an issue with the `error` event, `probe.json`, the recipe, the
+   distribution and kernel version, and the steps to reproduce.

@@ -499,7 +499,7 @@ func main() {
 		} else if imageCheck.Offline {
 			progress.Info("Offline: registry unreachable, using locally cached image")
 		} else {
-			progress.Info("Image already up to date in local cache")
+			progress.Info("Image found in local cache, no pull needed")
 		}
 	}
 

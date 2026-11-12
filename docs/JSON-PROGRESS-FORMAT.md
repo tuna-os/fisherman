@@ -106,7 +106,7 @@ report non-fatal problems; the install continues.
 ```
 
 Other examples: `Image pull required (71 layers)`,
-`Image already up to date in local cache`,
+`Image found in local cache, no pull needed`,
 `Offline: registry unreachable, using locally cached image`,
 `Writing hostname: <hostname>`,
 `EFI boot entry for installed system: Boot0001`.

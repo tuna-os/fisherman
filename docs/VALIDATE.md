@@ -515,7 +515,7 @@ does not have is not linked, and the log says so.
 | Code | Field | Cause | Fix |
 |---|---|---|---|
 | `bootloader_unsupported` | `bootloader` | Bootloader is not empty, `grub2`, or `systemd` | Use one of: empty (auto), `grub2`, or `systemd` |
-| `slurp_unsupported` | `slurp` | User-data migration (slurp) without durable rescue storage is not supported | Specify a `slurpRescueStore` disk, or remove the `slurp` field |
+| `slurp_unsupported` | `slurp` | A requested user-data migration (`slurp`) is refused: fisherman has no durable rescue store for the copy yet, so no recipe field can make it valid | Remove the `slurp` field. `slurpWallpapers` is not affected |
 | `brew_tap_invalid` | `brewTap` | Homebrew tap format is invalid | Use `owner/name` format, with each part containing only letters, digits, `.`, `_`, and `-` |
 
 ### Source reuse

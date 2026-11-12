@@ -179,7 +179,7 @@
       "name": "polkit-action",
       "buildsystem": "simple",
       "build-commands": [
-        "install -Dm644 data/polkit/org.bootcinstaller.Installer.policy /app/share/polkit-1/actions/org.bootcinstaller.Installer.policy"
+        "install -Dm644 data/polkit/org.tunaos.Installer.policy /app/share/polkit-1/actions/org.tunaos.Installer.policy"
       ],
       "sources": [
         {

@@ -24,6 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `validate`, `validate --partial` and the install preflight. With
   `sourceReuse` its own rules judge both fields, as before.
 
+### 📝 Documentation
+
+- **TROUBLESHOOTING.md and VALIDATE.md match the code** (#419): the probe
+  fields (`disks[]`, `system.ram_bytes`, `system.cpu_threads`/`cpu_cores`,
+  `unmet` is advice except `uefi`), the event `type`s and `step_id`s, the
+  real error-message prefixes, cancel (teardown, exit 130), `jq` commands
+  that skip the non-JSON lines of stdout, `.errors[]`, the full rule order,
+  and no `slurpRescueStore` field. New tests hold the problem codes
+  (`internal/recipe/docs_test.go`), the event types and step ids
+  (`internal/progress/docs_test.go`) and the probe fields
+  (`internal/probe/docs_test.go`) to the documents in both directions.
+- The `CheckImage` comment no longer claims a digest comparison, and the
+  info line says `Image found in local cache, no pull needed`.
+- The Flatpak manifest installs the polkit policy that exists
+  (`org.tunaos.Installer.policy`). `.goreleaser.yml` no longer sets
+  `main.commit`/`main.date`, which do not exist, and its archives, like the
+  meson install (`<datadir>/fisherman/data/`), now ship `data/images.json`.
+
 ### 🧪 Testing
 
 - **The installation receipt checks are required on the required canaries**
