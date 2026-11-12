@@ -143,11 +143,10 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 }
 ```
 
-The example shows the common fields. A recipe can also carry `user`,
-`bootloader`, `targetImgref`, `btrfsSubvolumes`, `varDisk`, `customMounts`
-and more; the struct in
-[`fisherman/internal/recipe/recipe.go`](fisherman/internal/recipe/recipe.go)
-is the reference until #320 lands.
+The example shows the common fields. Every field, with its type and its
+default, is in [`docs/RECIPE.md`](docs/RECIPE.md); a test holds that page to
+the struct in
+[`fisherman/internal/recipe/recipe.go`](fisherman/internal/recipe/recipe.go).
 
 Things a recipe author should know today:
 
