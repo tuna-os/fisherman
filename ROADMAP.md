@@ -102,10 +102,10 @@ These are not tasks; they are questions that block the tasks under them.
 
 ### D1 — Where does fisherman live? — **RESOLVED 2026-09-05: here**
 
-`tuna-os/fisherman` is the origin.
+`tuna-os/fisherman` is the only origin. Send issues and fixes here.
 [`projectbluefin/fisherman`](https://github.com/projectbluefin/fisherman) is a
-fork kept in sync with it. Send fixes here. Whether the fork stays a mirror
-is #303.
+fork; its changes reach fisherman only through a pull request here, and
+consumers pin `tuna-os/fisherman` (#303).
 
 ### D2 — What does a consumer pin? — **partly answered**
 
