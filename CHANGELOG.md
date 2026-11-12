@@ -80,6 +80,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 📝 Documentation
 
+- **An integration guide** (#328): `docs/INTEGRATION.md` says which
+  command a frontend runs when, what to take from the probe, the recipe
+  contract, how to run the install with the recipe on stdin, how to read
+  the event stream, the `error` event and the exit codes, how to test
+  without a disk, and how to pin and package fisherman. Tests hold its
+  event types, `error` fields, cleanup statuses and exit codes to the code.
+- **A recipe field reference** (#320): `docs/RECIPE.md` has every recipe
+  key at every depth with its type, whether it is required and its
+  default. A reflection test fails on a missing, extra or mistyped row,
+  and the page's example is parsed strictly.
+- **A command-line reference** (#322): `docs/CLI.md` has every command and
+  flag with its value, default and exit codes, and the environment
+  variables. A go/ast test holds it to the argument parsers.
+- **The VALIDATE.md examples are real** (#326): `TestValidateDocExamples`
+  runs every `fisherman validate` example of the page and compares the
+  output byte for byte (field and code pairs for an elided one).
+- **ROADMAP.md refreshed to 2026-11-12** (#286): re-measured release,
+  branch and pin figures; Q3 moved to a dated historical section; Q4
+  marked current; a 2027 Q1 forward look.
+
 - **TROUBLESHOOTING.md and VALIDATE.md match the code** (#419): the probe
   fields (`disks[]`, `system.ram_bytes`, `system.cpu_threads`/`cpu_cores`,
   `unmet` is advice except `uefi`), the event `type`s and `step_id`s, the
@@ -113,6 +133,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for each recipe variant (plain, LUKS, TPM2, manual layout, ZFS, btrfs
   subvolumes, systemd-boot, source reuse, a `/var` disk) and fails when the
   steps it announces differ from the plan. The events are unchanged.
+
+### 🔧 CI
+
+- **GoReleaser is pinned** (#344): `release-publish.yml` runs GoReleaser
+  `v2.20.1`, not `latest`.
 
 ### 🧪 Testing
 
