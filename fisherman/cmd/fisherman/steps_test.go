@@ -191,10 +191,10 @@ func (p *replay) cond(e ast.Expr) bool {
 			return !p.cond(e.X)
 		}
 	case *ast.BinaryExpr:
-		switch e.Op {
-		case token.LAND:
+		if e.Op == token.LAND {
 			return p.cond(e.X) && p.cond(e.Y)
-		case token.LOR:
+		}
+		if e.Op == token.LOR {
 			return p.cond(e.X) || p.cond(e.Y)
 		}
 	case *ast.CallExpr:
