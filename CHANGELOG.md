@@ -45,6 +45,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Flatpak copy under the target root, which the booted system does not mount
   on `/var`. The copy now goes to the disk, and the install log says that
   `flatpakVarPath` is not used.
+- **Release gate: a refusal fails, and only gated push runs count** (#272):
+  `promote.yml` reported every refusal as a green run (137 of 138 runs),
+  judged every check run on the commit, scheduled and advisory ones
+  included, and required checks by name, which two workflows share. The
+  decision now lives in `scripts/promote-gate.py`: it reads the push runs
+  of the gated workflows (`GATED_WORKFLOWS`, equal to the `workflow_run`
+  list), ignores `advisory / ...` jobs and scheduled runs, needs every
+  `REQUIRED_JOBS` entry green, and answers promote, wait or refuse. A
+  refusal, an absent gated run or a job stuck for six hours fails the Gate
+  job. `customMounts E2E disk layout` is now required by name.
+  `tests/test-promote-gate.py` (run in the lint job) holds the decision
+  table and checks the names against the workflow files.
 - **A separate `/var` on a composefs deployment no longer gets the
   Flatpaks** (#252): `var_disk_unsupported_composefs` refuses a `varDisk` when
   the recipe says composefs (`composeFsBackend`, or `filesystem: zfs`). After

@@ -29,6 +29,32 @@ every required check green and has sat for 30 minutes, it fast-forwards
 Nothing needs a human in the normal case. What used to be two deliberate
 steps — dispatch the cut, then merge a promotion PR — is now the gate.
 
+### What the gate judges
+
+`scripts/promote-gate.py` reads the **push** runs on the candidate of the
+workflows in `GATED_WORKFLOWS` (`promote.yml`), job by job:
+
+- every gated workflow must have a push run on the commit. Each one runs on
+  every push to `dev` with no path filter, so an absent run means the
+  workflow did not start;
+- every job must finish `success`, `skipped` or `neutral`, except jobs named
+  `advisory / ...`. Those are `continue-on-error` and never gate;
+- every `workflow | job` in `REQUIRED_JOBS` must be present and `success`.
+
+Scheduled runs (`bootcrew-nightly.yml`, `build-ssh-images.yml`) never gate,
+although their check runs attach to the `dev` HEAD of the moment.
+
+The run has three outcomes. **Promote**: the Promote job runs. **Wait**: a
+job still runs; the run is green and a later firing decides. **Refuse**:
+the Gate job fails, with the reason in the error and the job summary. A
+job that has not finished six hours after its run started is a refusal.
+Before #272 a refusal was a green run with a skipped Promote job, and 137
+of 138 runs refused that way while `actionlint` was path-filtered.
+
+`tests/test-promote-gate.py` holds the decision table and fails when a
+gated workflow gets a path filter, a required job is renamed or gets an
+`if:`, or an `advisory / ` name and `continue-on-error` part ways.
+
 ### How the version is chosen
 
 From the conventional-commit subjects since the last tag, by
