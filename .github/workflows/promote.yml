@@ -8,28 +8,46 @@ name: Promote dev → prod
 # this shape for a while; the guards below are its guards, and the reasons
 # they exist are its reasons.
 #
-# How it fires: whenever a validation workflow completes on dev
-# (workflow_run), hourly as a catch-up, and by hand. Only the LAST workflow
-# to finish on a commit sees "everything is complete", so earlier firings
-# report "not yet" and exit green -- that is normal, not a failure.
+# How it fires: whenever a gated workflow completes on dev (workflow_run),
+# hourly as a catch-up, and by hand. Only the LAST gated workflow to finish
+# on a commit sees "everything is complete", so earlier firings answer
+# "wait" and exit green -- that is normal, not a failure.
 #
-# What it refuses to do:
+# What it judges (scripts/promote-gate.py, #272): the push runs of the
+# workflows in GATED_WORKFLOWS on the candidate, job by job. Not the
+# commit's check runs: scheduled runs (nightly, SSH image rebuilds) attach
+# their results to whatever commit was dev HEAD when the cron fired,
+# advisory jobs report `failure` on their check run by design, and two
+# workflows share the job name `unit-tests`. Every gated workflow runs on
+# every push to dev with no path filter, so a gated run that is absent
+# means the workflow did not start, and that is a refusal.
+#
+# What it refuses to do -- each refusal FAILS the Gate job, so a refused
+# candidate shows red instead of a green run that did nothing:
 #   - move prod to a commit that is not a descendant of prod (never rewinds,
 #     never forks). While prod is diverged this refuses every time, and
 #     promote-reconcile.yml is the one-shot that fixes that;
-#   - promote while any check is still running, or any required check is not
-#     green;
+#   - promote while a gated workflow has no push run on the candidate, a
+#     non-advisory job is red, or a REQUIRED_JOBS entry is not `success`;
+#   - wait forever: a non-advisory job still running STALL_HOURS after its
+#     run started is a refusal too;
 #   - promote a commit younger than SOAK_MINUTES, so a fix-up push has time
 #     to land before the previous commit ships. fisherman partitions disks;
 #     the soak is cheap insurance;
 #   - rely on a push to prod triggering anything. GITHUB_TOKEN pushes never
 #     start workflows, so release-publish.yml is called, not awaited.
 #
+# Green outcomes that promote nothing: prod is already at the candidate, a
+# newer dev commit superseded it during the soak, or a gated job is still
+# running. tests/test-promote-gate.py holds the decision table and checks
+# the names below against the workflow files.
+#
 # `force: true` skips the soak and the check gate. It exists for the day the
 # gate is wrong. It is not the normal path.
 
 on:
   workflow_run:
+    # Must equal GATED_WORKFLOWS below (tests/test-promote-gate.py).
     workflows:
       - Bootcrew VM Boot (E2E tests)
       - Workflow lint
@@ -52,7 +70,7 @@ on:
 
 permissions:
   contents: write
-  checks: read
+  actions: read
 
 concurrency:
   group: promote-fisherman
@@ -61,15 +79,27 @@ concurrency:
 env:
   DEV_BRANCH: dev
   PROD_BRANCH: prod
-  # Every one of these must be present AND green on the candidate.
-  # required-canaries is the aggregate the branch protection uses; the
-  # others are named so a promotion cannot happen on a commit where they
-  # were skipped entirely.
-  REQUIRED_CHECKS: |
-    required-canaries
-    lint
-    unit-tests
-    actionlint
+  # The workflows whose push run on the candidate is judged. Each must run
+  # on every push to dev with no path filter (a path-filtered workflow
+  # leaves no run behind on most commits and would block them forever, as
+  # actionlint did). Scheduled-only workflows (Bootcrew Nightly, Build
+  # SSH-enabled Images) are not here and never gate a release. Inside a
+  # gated run, jobs named `advisory / ...` (continue-on-error) are ignored;
+  # every other job must finish green or skipped.
+  GATED_WORKFLOWS: |
+    Bootcrew VM Boot (E2E tests)
+    Workflow lint
+    customMounts E2E (manual layout)
+  # `workflow | job` entries that must be present AND `success`, so that a
+  # job skipped by its `if:` cannot pass as "nothing failed".
+  # required-canaries is the aggregate the branch protection uses.
+  REQUIRED_JOBS: |
+    Bootcrew VM Boot (E2E tests) | required-canaries
+    Bootcrew VM Boot (E2E tests) | lint
+    Bootcrew VM Boot (E2E tests) | unit-tests
+    Workflow lint | actionlint
+    customMounts E2E (manual layout) | customMounts E2E disk layout
+  STALL_HOURS: "6"
   SOAK_MINUTES: "30"
 
 jobs:
@@ -118,7 +148,6 @@ jobs:
           PROD_EXISTS: ${{ steps.candidate.outputs.prod_exists }}
           FORCE: ${{ inputs.force == true && 'true' || 'false' }}
           INPUT_SHA: ${{ inputs.sha }}
-          OWN_WORKFLOW: ${{ github.workflow }}
         run: |
           set -euo pipefail
           say() { echo "promote=$1" >> "$GITHUB_OUTPUT"; echo "reason=$2" >> "$GITHUB_OUTPUT"; echo "$2"; }
@@ -156,43 +185,21 @@ jobs:
             fi
           fi
 
-          gh api --paginate -H "Accept: application/vnd.github+json" \
-            "/repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?per_page=100" \
-            --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv' \
-            | grep -v -F "$OWN_WORKFLOW" | grep -v -E '^(Gate|Promote)\b' > /tmp/checks.tsv || true
-
-          if [ ! -s /tmp/checks.tsv ]; then
-            say false "no check runs recorded on $SHA yet"; exit 0
+          if ! python3 scripts/promote-gate.py > /tmp/gate.out; then
+            cat /tmp/gate.out
+            echo "::error::scripts/promote-gate.py failed; cannot judge $SHA"
+            say false "refused: the gate script failed"; exit 1
           fi
-          echo "--- check runs on $SHA ---"; cat /tmp/checks.tsv
-
-          pending=$(awk -F'\t' '$2 != "completed" {print $1}' /tmp/checks.tsv || true)
-          if [ -n "$pending" ]; then
-            say false "still running: $(echo "$pending" | tr '\n' ',' | sed 's/,$//')"; exit 0
-          fi
-
-          # `cancelled` is not treated as red: a run superseded inside its own
-          # concurrency group stays cancelled on the candidate forever. The
-          # required checks below must still be `success`, so a cancelled
-          # required check is caught there, by name.
-          bad=$(awk -F'\t' '$3 == "failure" || $3 == "timed_out" || $3 == "action_required" || $3 == "startup_failure" {print $1" ("$3")"}' /tmp/checks.tsv || true)
-          if [ -n "$bad" ]; then
-            echo "::error::checks not green on $SHA: $(echo "$bad" | tr '\n' ';')"
-            say false "red checks: $(echo "$bad" | tr '\n' ';')"; exit 0
-          fi
-
-          missing=""
-          while IFS= read -r name; do
-            [ -z "$name" ] && continue
-            if ! awk -F'\t' -v n="$name" '$1 == n && $3 == "success"' /tmp/checks.tsv | grep -q .; then
-              missing="$missing$name; "
-            fi
-          done <<< "$REQUIRED_CHECKS"
-          if [ -n "$missing" ]; then
-            say false "required checks not green/present: $missing"; exit 0
-          fi
-
-          say true "all checks green, soak elapsed"
+          cat /tmp/gate.out
+          verdict=$(tail -n 1 /tmp/gate.out | cut -f1)
+          reason=$(tail -n 1 /tmp/gate.out | cut -f2-)
+          case "$verdict" in
+            promote) say true "$reason, soak elapsed" ;;
+            wait)    say false "waiting: $reason" ;;
+            *)
+              echo "::error::refusing to promote $SHA: $reason"
+              say false "refused: $reason"; exit 1 ;;
+          esac
 
       - name: Summary
         if: always()
