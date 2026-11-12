@@ -264,3 +264,36 @@ func TestInstallProblemsEmptyImage(t *testing.T) {
 		t.Errorf("live: %+v", ps)
 	}
 }
+
+// #252: the page that sends varDisk with the backend fields gets the
+// composefs refusal from `validate --json --partial -`, as a frontend asks
+// it. ZFS forces composefs, so filesystem zfs alone is enough. An ostree
+// varDisk is not refused.
+func TestValidatePartialVarDiskComposeFs(t *testing.T) {
+	stubTPM(t, false)
+	for _, c := range []struct {
+		recipe string
+		want   bool
+	}{
+		{`{"varDisk":{"disk":"/dev/vdb"},"composeFsBackend":true,"filesystem":"ext4"}`, true},
+		{`{"varDisk":{"disk":"/dev/vdb"},"filesystem":"zfs"}`, true},
+		{`{"varDisk":{"disk":"/dev/vdb"},"composeFsBackend":false,"filesystem":"xfs"}`, false},
+		{`{"varDisk":{"disk":"/dev/vdb"}}`, false},
+	} {
+		var out bytes.Buffer
+		runValidateJSON([]string{"--json", "--partial", "-"}, strings.NewReader(c.recipe), &out, &bytes.Buffer{})
+		var res validateResult
+		if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+			t.Fatalf("%s: %v", c.recipe, err)
+		}
+		got := false
+		for _, e := range res.Errors {
+			if e.Code == recipe.CodeVarDiskUnsupportedComposeFs && e.Field == "varDisk" {
+				got = true
+			}
+		}
+		if got != c.want {
+			t.Errorf("%s: var_disk_unsupported_composefs = %v, want %v (errors %+v)", c.recipe, got, c.want, res.Errors)
+		}
+	}
+}
