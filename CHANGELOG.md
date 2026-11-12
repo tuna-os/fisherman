@@ -95,6 +95,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 📝 Documentation
 
+- **An integration guide** (#328): `docs/INTEGRATION.md` says which
+  command a frontend runs when, what to take from the probe, the recipe
+  contract, how to run the install with the recipe on stdin, how to read
+  the event stream, the `error` event and the exit codes, how to test
+  without a disk, and how to pin and package fisherman. Tests hold its
+  event types, `error` fields, cleanup statuses and exit codes to the code.
+- **A recipe field reference** (#320): `docs/RECIPE.md` has every recipe
+  key at every depth with its type, whether it is required and its
+  default. A reflection test fails on a missing, extra or mistyped row,
+  and the page's example is parsed strictly.
+- **A command-line reference** (#322): `docs/CLI.md` has every command and
+  flag with its value, default and exit codes, and the environment
+  variables. A go/ast test holds it to the argument parsers.
+- **The VALIDATE.md examples are real** (#326): `TestValidateDocExamples`
+  runs every `fisherman validate` example of the page and compares the
+  output byte for byte (field and code pairs for an elided one).
+- **ROADMAP.md refreshed to 2026-11-12** (#286): re-measured release,
+  branch and pin figures; Q3 moved to a dated historical section; Q4
+  marked current; a 2027 Q1 forward look.
+
 - **TROUBLESHOOTING.md and VALIDATE.md match the code** (#419): the probe
   fields (`disks[]`, `system.ram_bytes`, `system.cpu_threads`/`cpu_cores`,
   `unmet` is advice except `uefi`), the event `type`s and `step_id`s, the
@@ -110,6 +130,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`org.tunaos.Installer.policy`). `.goreleaser.yml` no longer sets
   `main.commit`/`main.date`, which do not exist, and its archives, like the
   meson install (`<datadir>/fisherman/data/`), now ship `data/images.json`.
+
+### ♻️ Refactoring
+
+- **The recipe answers its own install-state questions** (#317):
+  `recipe.Recipe` has `HasEncryption`, `HasTPM2`, `IsManualLayout`, `IsZFS`,
+  `UsesSystemdBoot`, `UsesComposeFs`, `HasVarDisk`, `FormatsVarDisk`,
+  `EncryptsRoot` and `EnrollsTPM2` (`internal/recipe/state.go`). The install
+  path, `validate` and the host-tool chain call them in place of the
+  booleans `main()` computed and passed around. No behaviour change.
+- **One step plan, announced by a sequencer** (#316): `planSteps`
+  (`cmd/fisherman/steps.go`) builds the ordered step list and its weights
+  from the recipe, and `total_steps` is its length. `main()` announces each
+  step with `seq.begin`, which supplies the step number, the total and the
+  bar position: no manual index any more. A step out of plan is logged as a
+  warning at the finalize step. `TestMainAnnouncesThePlan` replays `main()`
+  for each recipe variant (plain, LUKS, TPM2, manual layout, ZFS, btrfs
+  subvolumes, systemd-boot, source reuse, a `/var` disk) and fails when the
+  steps it announces differ from the plan. The events are unchanged.
+
+### 🔧 CI
+
+- **GoReleaser is pinned** (#344): `release-publish.yml` runs GoReleaser
+  `v2.20.1`, not `latest`.
 
 ### 🧪 Testing
 
@@ -133,6 +176,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subvolume (#416). The harness scripts that write into the installed root
   now mount `@` when the top level holds only it.
 - **The VM matrix covers a user, GRUB with LUKS, TPM2 and a /var disk**
+
+- **A recipe field that never reaches the install fails a test** (#289):
+  `recipeFieldUses` (`cmd/fisherman/recipe_consumers_test.go`) lists every
+  field of `recipe.Recipe`, nested ones included, with the files that pass
+  it on to the install, or the reason it only accepts or refuses the recipe.
+  The test fails on a field without an entry, an entry for a field that is
+  gone, and a listed file that no longer reads the field. A second test
+  holds the `install.Options` projection (`buildBootcInstallOptions`) to a
+  source table: each option comes from a named recipe field, an argument, or
+  a later step, and follows its recipe field.
+, GRUB with LUKS, TPM2 and a /var disk**
   (#418), as advisory PR-gate entries: `centos-bootc-luks-user` (GRUB,
   ostree, XFS, LUKS and a `user` that must sign in with the recipe's
   password), `centos-bootc-var-disk` (`/var` must be the `varDisk` on the

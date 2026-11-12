@@ -1,17 +1,26 @@
 package main
 
-// Tests for buildProfile (the GUI progress-weight scheduler) and
-// isSpaceConstrained. buildProfile is pure — the frontend progress bar
-// depends on its weights summing to exactly 100 with monotonic cumulative
-// positions, so the shape of every recipe variant is asserted table-driven.
+// Tests for the step plan's weights (planShape, the GUI progress-weight
+// scheduler) and isSpaceConstrained. planShape is pure — the frontend
+// progress bar depends on its weights summing to exactly 100 with monotonic
+// cumulative positions, so the shape of every recipe variant is asserted
+// table-driven. The shapes include some no valid recipe has (TPM2 without
+// LUKS): they pin the weight arithmetic. steps_test.go holds main() to the
+// plan for real recipes.
 
 import (
 	"runtime"
 	"testing"
 )
 
+// buildProfile is the plan for a step shape, in the argument order these
+// tests have always used.
+func buildProfile(needsPull, manual, luks, tpm2, varFormat bool) []plannedStep {
+	return planShape(stepShape{manual: manual, luks: luks, tpm2: tpm2, varFormat: varFormat}, needsPull)
+}
+
 // sumWeights returns the total weight of a profile.
-func sumWeights(p []stepProfile) int {
+func sumWeights(p []plannedStep) int {
 	total := 0
 	for _, s := range p {
 		total += s.weightPct
@@ -114,7 +123,7 @@ func TestBuildProfile_NoPullAdjustsWeights(t *testing.T) {
 	pull := buildProfile(true, false, false, false, false)
 	noPull := buildProfile(false, false, false, false, false)
 
-	find := func(p []stepProfile, w int) int {
+	find := func(p []plannedStep, w int) int {
 		for _, s := range p {
 			if s.weightPct == w {
 				return w
@@ -138,7 +147,7 @@ func TestBuildProfile_LuksAndTpm2ShaveOsWeight(t *testing.T) {
 	tpm2 := buildProfile(true, false, false, true, false)
 	both := buildProfile(true, false, true, true, false)
 
-	maxWeight := func(p []stepProfile) int {
+	maxWeight := func(p []plannedStep) int {
 		m := 0
 		for _, s := range p {
 			if s.weightPct > m {

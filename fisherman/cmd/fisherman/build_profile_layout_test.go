@@ -1,14 +1,11 @@
 package main
 
-// Layout-aware tests for buildProfile. main() walks the profile by index
-// (profile[pi], pi++ after every progress.Step), so the profile is only
-// correct if its slots line up one-to-one with the steps main() actually
-// emits for the recipe. These tests pair the two and check the result.
+// Layout-aware tests for the step plan. emittedSteps states, apart from
+// planShape, which steps each shape has; these tests pair the two and
+// check the bar. steps_test.go holds main() itself to the plan.
 
 import (
-	"os"
 	"reflect"
-	"regexp"
 	"testing"
 )
 
@@ -19,7 +16,7 @@ type layout struct {
 }
 
 // emittedSteps mirrors the control flow of main(): the names of the
-// progress.Step calls it makes, in order, for a given recipe shape.
+// steps it announces, in order, for a given recipe shape.
 //   - manual layouts emit one "Preparing disk" step in place of
 //     partition/EFI/LUKS/root/mount;
 //   - LUKS setup runs only on the auto path;
@@ -46,8 +43,8 @@ func emittedSteps(l layout) []string {
 	return append(s, "Copying system Flatpaks", "Configuring installed system", "Finalizing installation")
 }
 
-// profileUnderTest builds the profile main() would build for the layout.
-func profileUnderTest(l layout) []stepProfile {
+// profileUnderTest builds the plan main() would build for the layout.
+func profileUnderTest(l layout) []plannedStep {
 	return buildProfile(l.pull, l.manual, l.luks, l.tpm2, l.vd)
 }
 
@@ -76,6 +73,11 @@ func TestBuildProfile_MatchesEmittedSequence(t *testing.T) {
 	for _, l := range allLayouts() {
 		steps := emittedSteps(l)
 		p := profileUnderTest(l)
+		for i := 0; i < len(p) && i < len(steps); i++ {
+			if p[i].name != steps[i] {
+				t.Errorf("%+v: plan slot %d is %q, want %q", l, i, p[i].name, steps[i])
+			}
+		}
 		if len(p) != len(steps) {
 			t.Errorf("%+v: profile has %d slots, main() emits %d steps %v", l, len(p), len(steps), steps)
 			if len(p) < len(steps) {
@@ -184,23 +186,15 @@ func TestBuildProfile_AutoLayoutUnchanged(t *testing.T) {
 	}
 }
 
-// TestEmittedSteps_MatchesMainSource keeps emittedSteps honest: the step
-// names main.go passes to progress.Step, in source order, must be exactly
-// the union of what emittedSteps produces, in the same order.
+// TestEmittedSteps_MatchesMainSource keeps emittedSteps honest: the steps
+// main.go passes to seq.begin, in source order, must be exactly the union
+// of what emittedSteps produces, in the same order.
 func TestEmittedSteps_MatchesMainSource(t *testing.T) {
-	src, err := os.ReadFile("main.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	re := regexp.MustCompile(`progress\.Step\(step, totalSteps, "([^"]+)"`)
-	var inSource []string
-	for _, m := range re.FindAllStringSubmatch(string(src), -1) {
-		inSource = append(inSource, m[1])
-	}
+	inSource := mainBeginCalls(t)
 	manual := emittedSteps(layout{manual: true, vd: true})
 	auto := emittedSteps(layout{luks: true, tpm2: true, vd: true})
 	want := append([]string{manual[0]}, auto...)
 	if !reflect.DeepEqual(inSource, want) {
-		t.Errorf("progress.Step names in main.go = %v\nwant %v (update emittedSteps and buildProfile together)", inSource, want)
+		t.Errorf("seq.begin steps in main.go = %v\nwant %v (update emittedSteps and planShape together)", inSource, want)
 	}
 }

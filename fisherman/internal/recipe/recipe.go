@@ -255,7 +255,7 @@ func (r *Recipe) Overridden(check string) bool {
 // when mounting root during installation and recorded as persistent rootflags
 // for post-reboot boots.
 func (r *Recipe) RootMountOptions() string {
-	if len(r.CustomMounts) > 0 {
+	if r.IsManualLayout() {
 		for _, cm := range r.CustomMounts {
 			if cm.Target == "/" {
 				if cm.Fstype == "btrfs" {
@@ -359,7 +359,7 @@ func (r *Recipe) Validate() error {
 // CheckTPM and CheckTarget.
 func (r *Recipe) Problems() []Problem {
 	var ps []Problem
-	if len(r.CustomMounts) > 0 {
+	if r.IsManualLayout() {
 		// Manual layout: validate each mount spec instead of the auto-partition fields.
 		hasRoot := false
 		for i, cm := range r.CustomMounts {
@@ -403,7 +403,7 @@ func (r *Recipe) Problems() []Problem {
 		// UNENCRYPTED while the caller believes otherwise — a security-boundary
 		// failure, so fail closed here rather than silently downgrade.
 		// (Same shape as the ZFS+LUKS rejection.)
-		if r.Encryption.Type != "" && r.Encryption.Type != "none" {
+		if r.HasEncryption() {
 			ps = append(ps, Problem{"encryption.type", CodeEncryptionUnsupportedOnManual,
 				fmt.Sprintf("encryption %q is not supported with customMounts: "+
 					"manual layouts do not run luksFormat, so the install would complete "+

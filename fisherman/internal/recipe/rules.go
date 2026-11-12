@@ -518,7 +518,7 @@ func CheckSlurp(s *SlurpSpec) []Problem {
 // separate check because it reads the machine, not the recipe; the install
 // path and `validate` run it, `validate --partial` does not.
 func (r *Recipe) CheckTPM(tpm2Usable bool) []Problem {
-	if len(r.CustomMounts) > 0 || !NeedsTPM2(r.Encryption.Type) || tpm2Usable {
+	if r.IsManualLayout() || !r.HasTPM2() || tpm2Usable {
 		return nil
 	}
 	return []Problem{{"encryption.type", CodeEncryptionTPMUnavailable,
@@ -735,7 +735,7 @@ func CheckExperimental(experimental []string) []Problem {
 // matrix entry installs it and boots the result (tuna-os/fisherman#413).
 // The opt-in is the caller's statement that it knows.
 func CheckExperimentalFilesystem(r *Recipe) []Problem {
-	if r.Filesystem == "zfs" && !r.AcceptsExperimental(ExperimentalZFS) {
+	if r.IsZFS() && !r.AcceptsExperimental(ExperimentalZFS) {
 		return []Problem{{"filesystem", CodeZFSExperimental,
 			"filesystem \"zfs\" is experimental: no VM test installs and boots it. " +
 				"Add \"experimental\": [\"zfs\"] to the recipe to accept that, or use xfs, ext4 or btrfs"}}
@@ -848,7 +848,7 @@ type TargetFacts struct {
 // exist (Problems has reported that).
 func (r *Recipe) CheckTarget(disk, varDisk *TargetFacts, uefi bool) []Problem {
 	var ps []Problem
-	manual := len(r.CustomMounts) > 0
+	manual := r.IsManualLayout()
 	loop := false
 	if disk != nil && !manual {
 		loop = disk.Loop
