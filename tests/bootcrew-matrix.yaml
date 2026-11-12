@@ -23,11 +23,20 @@
 #   encryption: tpm2-luks-passphrase (with luks_passphrase) — the VM gets a
 #          swtpm; the first boot unlocks with the passphrase and enrolls,
 #          the second boot types nothing (scripts/vm-checks/tpm2-enrolled.sh)
+#   encryption: tpm2-luks (no passphrase) — the same two boots; the first
+#          one types the recovery key, which the harness takes from the
+#          install's recovery_key event (scripts/capture-recovery-key.py).
+#          The second boot of either tpm2 type must show no passphrase
+#          prompt (scripts/vm-checks/no-passphrase-prompt.sh)
 #   user: true — a `user` block (bootcrew, in wheel); the user must sign in
 #          and have the recipe's password (scripts/vm-checks/user.sh)
 #   var_disk: true — a second disk as `varDisk`; /var must be it on the
 #          booted system (scripts/vm-checks/var-disk.sh)
 #   btrfs_subvolumes: true — "btrfsSubvolumes": true
+#   enabled_units: true — the booted system enables no unit the image did
+#          not enable, except fisherman's own and the harness's ssh
+#          (scripts/vm-checks/enabled-units.sh has the allowlist). ostree
+#          entries only: the image's /etc is read from /usr/etc.
 #   tests/check-validation.sh runs every entry's recipe through
 #   `fisherman validate --json --partial`.
 # nightly_advisory: true — bootcrew-nightly.yml still runs the full install
@@ -223,9 +232,9 @@ images:
   # - arm64 boot: every digest here is x86_64, and the harness has no arm64
   #   firmware (AAVMF) or arm64 ssh-enabled images. bootcrew-vm.yml builds
   #   and unit-tests fisherman on arm64 instead (advisory / arm64).
-  # - tpm2-luks without a passphrase: its first boot needs the recovery key,
-  #   which only the install's recovery_key event carries; the harness does
-  #   not capture it. tpm2-luks-passphrase exercises the same enrolment.
+  # - tpm2-luks without a passphrase used to be here: its first boot needs
+  #   the recovery key, which only the install's recovery_key event carries.
+  #   The harness now captures it (dakota-tpm2-luks below).
 
   # The most common desktop shape: GRUB, ostree, XFS, LUKS and a user. Must
   # boot, unlock with the passphrase, and let the user sign in.
@@ -255,6 +264,46 @@ images:
     selinux_disabled: false
     flatpaks: []
     var_disk: true
+    nightly: false
+    vm_boot: true
+
+  # tpm2-luks (#418 item 2, #421): TPM2 with no passphrase. fisherman makes
+  # a random key and emits it once as the recovery_key event; the harness
+  # captures it from the install's output (redacted in the log, masked on
+  # GitHub, kept in a 0600 file under /tmp only until it is read). The
+  # first boot has no TPM2 token yet: luks-unlock.py types the recovery
+  # key, and the first-boot unit enrolls the swtpm with its single-use key.
+  # The second boot types nothing and must show no passphrase prompt
+  # (the same two boots as dakota-tpm2 below).
+  - name: dakota-tpm2-luks
+    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    ssh_image_name: dakota
+    filesystem: ext4
+    composefs_backend: true
+    bootloader: systemd
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    encryption: tpm2-luks
+    vm_timeout: 800
+    nightly: false
+    vm_boot: true
+
+  # #422 done-when: "a centos-bootc install enables no service the image did
+  # not enable". The required centos-bootc canary plus
+  # scripts/vm-checks/enabled-units.sh, as a separate ADVISORY entry: the
+  # check has run against fakes and against the pinned image's unit tree
+  # outside a VM, not yet on a booted guest. Once it is green for a while,
+  # move `enabled_units: true` to the centos-bootc entry and drop this one.
+  - name: centos-bootc-enabled-units
+    image: quay.io/centos-bootc/centos-bootc@sha256:9aedf2d189b85c498697f9b83112c893b084d359268da7dd6d5d848478d260de # c10s
+    ssh_image_name: centos-bootc
+    filesystem: xfs
+    composefs_backend: false
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    enabled_units: true
     nightly: false
     vm_boot: true
 

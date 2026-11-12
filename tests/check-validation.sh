@@ -524,6 +524,125 @@ expect_exit "guest varDisk: no fstab line → caught (exit 1)" 1 \
 unset -f ssh_root
 rm -rf "$VMC_TMP"
 
+# ── enabled units, recovery key, no prompt (#422, #418, #421) ─────────
+#
+# enabled-units.sh (#422): the guest lists what the booted system enables
+# and what the image enables (`sh -s installed` / `sh -s image`); here a
+# function per case stands in for ssh_root and answers both. Then the real
+# guest side, run locally against a small unit tree. capture-recovery-key.py
+# and no-passphrase-prompt.sh are the tpm2-luks entry's harness.
+EU_TMP=$(mktemp -d)
+EU_IMAGE='system:sshd.service\nsystem:chronyd.service\nuser:pipewire.socket'
+eu_guest() (  # eu_guest INSTALLED IMAGE: a subshell, its ssh_root stays here
+  EU_I="$1" EU_M="$2"
+  ssh_root() {
+    case "$*" in
+      *"sh -s installed"*) printf '%b\n' "$EU_I" ;;
+      *"sh -s image"*) [ -n "$EU_M" ] && printf '%b\n' "$EU_M" ;;
+      *) return 1 ;;
+    esac
+  }
+  run_eu_check
+)
+# shellcheck disable=SC1091
+run_eu_check() { ( source "$(dirname "$0")/../scripts/vm-checks/enabled-units.sh" ); }
+expect_exit "guest enabled units: the image's own units only → pass (exit 0)" 0 \
+  eu_guest "$EU_IMAGE" "$EU_IMAGE"
+expect_exit "guest enabled units: an extra unit (cups-browsed) → caught (exit 1)" 1 \
+  eu_guest "$EU_IMAGE\nsystem:cups-browsed.service" "$EU_IMAGE"
+expect_exit "guest enabled units: an extra user unit → caught (exit 1)" 1 \
+  eu_guest "$EU_IMAGE\nuser:avahi-daemon.service" "$EU_IMAGE"
+expect_exit "guest enabled units: fisherman's receipt and enrolment units → pass (exit 0)" 0 \
+  eu_guest "$EU_IMAGE\nsystem:fisherman-boot-receipt.service\nsystem:fisherman-tpm2-enroll.service\nuser:acme-oem-setup.service" "$EU_IMAGE"
+expect_exit "guest enabled units: an allowlisted name in the other scope → caught (exit 1)" 1 \
+  eu_guest "$EU_IMAGE\nuser:fisherman-boot-receipt.service" "$EU_IMAGE"
+expect_exit "guest enabled units: the image list unreadable → caught (exit 1)" 1 \
+  eu_guest "$EU_IMAGE" ""
+# The allowlist names fisherman's own units by the names its code writes.
+eu_allowlisted_units_exist() {
+  local src
+  src="$(dirname "$0")/../fisherman/internal"
+  grep -q '"fisherman-boot-receipt.service"' "$src/receipt/receipt.go" &&
+    grep -q '"fisherman-tpm2-enroll.service"' "$src/luks/firstboot.go" &&
+    grep -q -- '-oem-setup.service' "$src/post/oem.go"
+}
+expect_exit "guest enabled units: the allowlisted units are the ones fisherman writes" 0 \
+  eu_allowlisted_units_exist
+# The guest side for real: an "image" whose /etc (at usr/etc) enables sshd
+# and whose presets enable chronyd, and an "installed" /etc that has both
+# plus whatever the case adds. Needs systemctl (for --root).
+if command -v systemctl >/dev/null 2>&1; then
+  eu_tree() {  # eu_tree ROOT: a minimal deployment
+    local r="$1" u
+    mkdir -p "$r/usr/lib/systemd/system" "$r/usr/lib/systemd/system-preset" \
+      "$r/usr/etc/systemd/system/multi-user.target.wants"
+    for u in sshd chronyd cups-browsed; do
+      printf '[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n' \
+        >"$r/usr/lib/systemd/system/$u.service"
+    done
+    printf 'enable chronyd.service\ndisable *\n' >"$r/usr/lib/systemd/system-preset/90-default.preset"
+    ln -s /usr/lib/systemd/system/sshd.service "$r/usr/etc/systemd/system/multi-user.target.wants/sshd.service"
+    cp -a "$r/usr/etc" "$r/etc"
+    # The first boot applied the presets to the installed /etc.
+    ln -s /usr/lib/systemd/system/chronyd.service "$r/etc/systemd/system/multi-user.target.wants/chronyd.service"
+  }
+  eu_local() (  # eu_local ROOT: the check, its guest script run here on ROOT
+    ssh_root() { bash -c "$*"; }
+    ENABLED_UNITS_ROOT="$1" run_eu_check
+  )
+  eu_tree "$EU_TMP/good"
+  expect_exit "guest enabled units (real lists): presets and /usr/etc → pass (exit 0)" 0 \
+    eu_local "$EU_TMP/good"
+  eu_tree "$EU_TMP/extra"
+  ln -s /usr/lib/systemd/system/cups-browsed.service \
+    "$EU_TMP/extra/etc/systemd/system/multi-user.target.wants/cups-browsed.service"
+  expect_exit "guest enabled units (real lists): a wants link the image lacks → caught (exit 1)" 1 \
+    eu_local "$EU_TMP/extra"
+  eu_tree "$EU_TMP/preset"
+  mkdir -p "$EU_TMP/preset/etc/systemd/system-preset"
+  echo 'enable cups-browsed.service' >"$EU_TMP/preset/etc/systemd/system-preset/50-x.preset"
+  expect_exit "guest enabled units (real lists): an enable preset in /etc → caught (exit 1)" 1 \
+    eu_local "$EU_TMP/preset"
+  eu_tree "$EU_TMP/receipt"
+  ln -s /etc/systemd/system/fisherman-boot-receipt.service \
+    "$EU_TMP/receipt/etc/systemd/system/multi-user.target.wants/fisherman-boot-receipt.service"
+  expect_exit "guest enabled units (real lists): fisherman's receipt unit → pass (exit 0)" 0 \
+    eu_local "$EU_TMP/receipt"
+  eu_tree "$EU_TMP/composefs"
+  rm -rf "$EU_TMP/composefs/usr/etc"
+  expect_exit "guest enabled units (real lists): no /usr/etc → caught (exit 1)" 1 \
+    eu_local "$EU_TMP/composefs"
+else
+  echo "  SKIP  guest enabled units (real lists): no systemctl"
+fi
+
+# capture-recovery-key.py: the key reaches the file and never the output.
+CRK="$(dirname "$0")/../scripts/capture-recovery-key.py"
+crk_case() {  # crk_case INPUT: the key file holds k3y and no output line has it
+  rm -f "$EU_TMP/key"
+  printf '%b' "$1" | python3 "$CRK" "$EU_TMP/key" >"$EU_TMP/out" || return 1
+  [ "$(cat "$EU_TMP/key" 2>/dev/null)" = "k3yk3yk3y" ] || return 1
+  [ "$(stat -c %a "$EU_TMP/key")" = 600 ] || return 1
+  ! grep -q k3yk3yk3y "$EU_TMP/out" || return 1
+  grep -q '"step"' "$EU_TMP/out" && grep -qx 'plain text' "$EU_TMP/out"
+}
+expect_exit "recovery key: captured to a 0600 file, redacted in the output (exit 0)" 0 \
+  crk_case '{"type":"step","step":1}\nplain text\n{"type":"recovery_key","key":"k3yk3yk3y"}\n{"type":"complete"}\n'
+expect_exit "recovery key: no recovery_key event → no key file (caught, exit 1)" 1 \
+  crk_case '{"type":"step","step":1}\nplain text\n'
+crk_status() { printf 'x\n' | python3 "$CRK" "$EU_TMP/key"; }
+expect_exit "recovery key: no event is still exit 0 (fisherman's status decides)" 0 crk_status
+
+# no-passphrase-prompt.sh: reads the boot's serial log.
+npp() { printf '%b\n' "$1" >"$EU_TMP/serial.log"; SERIAL_LOG="$EU_TMP/serial.log" run_check "$VMC/no-passphrase-prompt.sh"; }
+expect_exit "guest no prompt: a TPM2 unlock, no prompt → pass (exit 0)" 0 \
+  npp '[  OK  ] Finished systemd-cryptsetup@luks.service\nci-test login:'
+expect_exit "guest no prompt: a passphrase prompt on this boot → caught (exit 1)" 1 \
+  npp '\e[0mPlease enter passphrase for disk luks-1234 (luks-1234):\nci-test login:'
+expect_exit "guest no prompt: no serial log → caught (exit 1)" 1 \
+  env SERIAL_LOG=/nonexistent bash -c ". '$VMC/no-passphrase-prompt.sh'"
+rm -rf "$EU_TMP"
+
 # ── summary ────────────────────────────────────────────────────────────────
 
 echo ""

@@ -17,8 +17,9 @@ The fields an entry can set (all optional unless noted):
                       name-based systemd-boot fallback below
   unified_storage, selinux_disabled
   luks                true: encryption "luks-passphrase" with luks_passphrase
-  encryption          an explicit encryption.type ("tpm2-luks-passphrase");
-                      takes luks_passphrase as the passphrase
+  encryption          an explicit encryption.type ("tpm2-luks-passphrase"
+                      takes luks_passphrase as the passphrase; "tpm2-luks"
+                      takes none, fisherman makes the recovery key)
   user                true: a `user` block (user_name, user_password)
   var_disk            true: a `varDisk` on <var-disk>, formatted
   btrfs_subvolumes    true: "btrfsSubvolumes": true
