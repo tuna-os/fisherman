@@ -3,6 +3,7 @@ package progress
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -207,6 +208,37 @@ func TestDocumentedFailureCodes(t *testing.T) {
 	for _, status := range constValues(t, "Cleanup") {
 		if !strings.Contains(errorDoc, "`"+status+"`") {
 			t.Errorf("JSON-PROGRESS-FORMAT.md does not document cleanup status %q", status)
+		}
+	}
+}
+
+// docs/INTEGRATION.md lists the event types and the fields of the `error`
+// event for frontend authors (tuna-os/fisherman#328). Hold both lists, and
+// the cleanup statuses it names, to the code.
+func TestIntegrationGuide(t *testing.T) {
+	doc := readDoc(t, "INTEGRATION.md")
+	events := section(t, doc, "## Read the event stream")
+	types, _, _ := strings.Cut(events, "\n### ")
+	if got, want := firstColumn(types), eventTypes(t); !equal(got, want) {
+		t.Errorf("INTEGRATION.md lists event types %v; the code emits %v", got, want)
+	}
+
+	errSection := section(t, doc, "### The `error` event")
+	var want []string
+	et := reflect.TypeOf(errorEvent{})
+	for i := 0; i < et.NumField(); i++ {
+		name, _, _ := strings.Cut(et.Field(i).Tag.Get("json"), ",")
+		if name != "type" {
+			want = append(want, name)
+		}
+	}
+	sort.Strings(want)
+	if got := firstColumn(errSection); !equal(got, want) {
+		t.Errorf("INTEGRATION.md lists error event fields %v; errorEvent has %v", got, want)
+	}
+	for _, status := range constValues(t, "Cleanup") {
+		if !strings.Contains(errSection, "`"+status+"`") {
+			t.Errorf("INTEGRATION.md does not name cleanup status %q", status)
 		}
 	}
 }

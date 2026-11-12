@@ -38,7 +38,7 @@ choices and draw a progress bar.
 
 | You are | Use fisherman to |
 |---|---|
-| Writing an installer UI | Skip the disk work. Ask `fisherman probe --json` what the machine has, check fields with `fisherman validate --json --partial`, pipe a recipe to `fisherman -`, and read progress. |
+| Writing an installer UI | Skip the disk work. Ask `fisherman probe --json` what the machine has, check fields with `fisherman validate --json --partial`, pipe a recipe to `fisherman -`, and read progress. The guide: [`docs/INTEGRATION.md`](docs/INTEGRATION.md). |
 | Building a bootc image | Get an install path for your image without a distro-specific installer. Any image that `bootc install to-filesystem` accepts works; the nightly matrix covers CentOS, Ubuntu, Debian, Arch and openSUSE bases, among others. |
 | Automating installs | Run unattended from a recipe file, with machine-readable validation errors and progress. |
 

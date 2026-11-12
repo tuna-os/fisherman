@@ -202,3 +202,32 @@ func TestCLIReferenceCoversEveryFlag(t *testing.T) {
 		}
 	}
 }
+
+// TestIntegrationExitCodes: the install's exit codes in docs/INTEGRATION.md
+// are 0 and the exit* constants, no more and no fewer (#328).
+func TestIntegrationExitCodes(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join("..", "..", "..", "docs", "INTEGRATION.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := string(b)
+	i := strings.Index(doc, "\n### Exit codes\n")
+	if i < 0 {
+		t.Fatal("INTEGRATION.md: no Exit codes section")
+	}
+	rest := doc[i+1:]
+	if j := strings.Index(rest[1:], "\n#"); j >= 0 {
+		rest = rest[:j+1]
+	}
+	got := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^\| (\d+) \|`).FindAllStringSubmatch(rest, -1) {
+		got[m[1]] = true
+	}
+	want := map[string]bool{"0": true}
+	for _, c := range []int{exitFailure, exitUsage, exitCancelled} {
+		want[strconv.Itoa(c)] = true
+	}
+	if g, w := sortedSet(got), sortedSet(want); strings.Join(g, ",") != strings.Join(w, ",") {
+		t.Errorf("INTEGRATION.md lists exit codes %v; the code has %v", g, w)
+	}
+}
