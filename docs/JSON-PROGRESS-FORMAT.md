@@ -5,8 +5,9 @@ document describes that format and fisherman's exit codes for frontends and
 other consumers.
 
 The emitter is `fisherman/internal/progress/progress.go`. The callers are
-`fisherman/cmd/fisherman/main.go` (steps, errors, completion) and the packages
-under `fisherman/internal/` (substeps and info lines).
+the install phases in `fisherman/cmd/fisherman/` (`orchestrator.go` and the
+`*_phase.go` files: steps, errors, completion) and the packages under
+`fisherman/internal/` (substeps and info lines).
 
 Reference consumer: bootc-installer's
 [`shared/progress/README.md`](https://github.com/tuna-os/bootc-installer/blob/dev/shared/progress/README.md)
@@ -414,7 +415,8 @@ never has the encryption or TPM2 steps.
 `total_steps` is computed before the first step. It is the length of the
 step plan (`planSteps` in `cmd/fisherman/steps.go`). fisherman announces
 every step through a sequencer that reads the plan, and a test replays
-`main()` for each recipe variant against it, so the count always matches
+the install (`installer.run` with its step phases) for each recipe variant
+against it, so the count always matches
 the steps that are emitted:
 
 - start at 8
