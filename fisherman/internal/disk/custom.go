@@ -18,6 +18,54 @@ type MountSpec struct {
 	Fstype    string // "xfs", "btrfs", "ext4", "ext3", "fat32", "unformatted", "swap"
 }
 
+// MountAction is what ApplyCustomLayout does with one MountSpec.
+type MountAction string
+
+const (
+	// MountFormat: the partition is formatted with Fstype, then mounted.
+	MountFormat MountAction = "format"
+	// MountPreserve: the partition is mounted as it is (fstype "" or
+	// "unformatted"); its data is kept.
+	MountPreserve MountAction = "preserve"
+	// MountSwap: target "swap" with fstype "swap": mkswap, then swapon.
+	MountSwap MountAction = "swap"
+	// MountIgnore: target "" or "swap" with another fstype: left alone.
+	MountIgnore MountAction = "ignore"
+)
+
+// Action returns what ApplyCustomLayout does with s. It reads nothing.
+func (s MountSpec) Action() MountAction {
+	switch {
+	case s.Target == "swap" && s.Fstype == "swap":
+		return MountSwap
+	case s.Target == "swap" || s.Target == "":
+		return MountIgnore
+	case s.Fstype == "unformatted" || s.Fstype == "":
+		return MountPreserve
+	}
+	return MountFormat
+}
+
+// OrderMounts returns specs in the order ApplyCustomLayout acts on them:
+// "/" first, then by the number of slashes in the target ("/boot" before
+// "/boot/efi"), the recipe's order among equals. "swap" and "" have no
+// slash, so they come right after "/". It does not change specs.
+func OrderMounts(specs []MountSpec) []MountSpec {
+	sorted := make([]MountSpec, len(specs))
+	copy(sorted, specs)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		ti, tj := sorted[i].Target, sorted[j].Target
+		if ti == "/" {
+			return true
+		}
+		if tj == "/" {
+			return false
+		}
+		return strings.Count(ti, "/") < strings.Count(tj, "/")
+	})
+	return sorted
+}
+
 // ApplyCustomLayout formats and mounts a user-specified set of partitions under
 // targetBase (typically /mnt/fisherman-target).
 //
@@ -59,43 +107,30 @@ func ApplyCustomLayoutWith(specs []MountSpec, targetBase string, hooks LayoutHoo
 		return "", "", nil, fmt.Errorf("no root partition (/) found in mount specs")
 	}
 
-	// Sort mounts by target depth so "/" comes first, then "/boot", then "/boot/efi" etc.
-	sorted := make([]MountSpec, len(specs))
-	copy(sorted, specs)
-	sort.Slice(sorted, func(i, j int) bool {
-		ti, tj := sorted[i].Target, sorted[j].Target
-		// "/" sorts before everything; swap sorts last (handled separately)
-		if ti == "/" {
-			return true
-		}
-		if tj == "/" {
-			return false
-		}
-		return strings.Count(ti, "/") < strings.Count(tj, "/")
-	})
+	sorted := OrderMounts(specs)
 
 	targetMount = targetBase
 
 	for _, s := range sorted {
-		if s.Target == "swap" || s.Target == "" {
-			if s.Target == "swap" && s.Fstype == "swap" {
-				progress.Info(fmt.Sprintf("Activating swap: %s", s.Partition))
-				if hooks.SwapOn != nil {
-					hooks.SwapOn(s.Partition)
-				}
-				if err2 := formatAndActivateSwap(s.Partition); err2 != nil {
-					progress.Info(fmt.Sprintf("Warning: swap setup failed: %v", err2))
-				}
+		switch s.Action() {
+		case MountIgnore:
+			continue
+		case MountSwap:
+			progress.Info(fmt.Sprintf("Activating swap: %s", s.Partition))
+			if hooks.SwapOn != nil {
+				hooks.SwapOn(s.Partition)
+			}
+			if err2 := formatAndActivateSwap(s.Partition); err2 != nil {
+				progress.Info(fmt.Sprintf("Warning: swap setup failed: %v", err2))
 			}
 			continue
-		}
-
-		// Format the partition (unless user asked to keep existing filesystem).
-		if s.Fstype != "unformatted" && s.Fstype != "" {
+		case MountFormat:
 			progress.Info(fmt.Sprintf("Formatting %s as %s", s.Partition, s.Fstype))
 			if err2 := formatPartition(s.Partition, s.Fstype); err2 != nil {
 				return "", "", mounted, fmt.Errorf("format %s (%s): %w", s.Partition, s.Fstype, err2)
 			}
+		case MountPreserve:
+			// Mounted as it is: the user keeps the existing filesystem.
 		}
 
 		// Determine the host-side mount path.

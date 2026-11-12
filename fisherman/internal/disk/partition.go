@@ -136,14 +136,7 @@ func SetPartitionType(disk string, partNum int, partType string) error {
 // BLKRRPART; we work around this by detaching and re-attaching the loop
 // device with --partscan so the kernel creates /dev/loopNpM nodes.
 func Partition(disk string) error {
-	script := strings.Join([]string{
-		"label: gpt",
-		"",
-		`size=2GiB, type=uefi, name="EFI-SYSTEM"`,
-		`size=2GiB,   type=linux, name="boot"`,
-		`type=linux, name="root"`,
-	}, "\n") + "\n"
-	return partition(disk, script)
+	return PartitionLayout(disk, LayoutGRUB2)
 }
 
 // PartitionEncrypted wipes disk and creates the same three-partition GPT
@@ -177,13 +170,7 @@ func PartitionEncrypted(disk string) error {
 // partition is hidden behind the LUKS mapping and cannot be unmounted and
 // remounted around an sfdisk rewrite.
 func PartitionSystemdBoot(disk string) error {
-	script := strings.Join([]string{
-		"label: gpt",
-		"",
-		`size=2GiB, type=uefi, name="EFI-SYSTEM"`,
-		fmt.Sprintf(`type=%s, name="root"`, LinuxRootPartType()),
-	}, "\n") + "\n"
-	return partition(disk, script)
+	return PartitionLayout(disk, LayoutSystemdBoot)
 }
 
 // PartitionZFS wipes disk and creates a two-partition GPT layout for
@@ -195,13 +182,7 @@ func PartitionSystemdBoot(disk string) error {
 // ZFS installs use systemd-boot which reads directly from the FAT32 ESP.
 // The ZFS pool on p2 holds the composefs-native bootc store.
 func PartitionZFS(disk string) error {
-	script := strings.Join([]string{
-		"label: gpt",
-		"",
-		`size=1GiB, type=uefi, name="EFI-SYSTEM"`,
-		`type=linux, name="zfs-pool"`,
-	}, "\n") + "\n"
-	return partition(disk, script)
+	return PartitionLayout(disk, LayoutZFS)
 }
 
 // partition is the shared implementation for Partition, PartitionSystemdBoot
