@@ -1,0 +1,17 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "disk",
+      "code": "disk_not_found",
+      "message": "disk @DIR@/missing: stat @DIR@/missing: no such file or directory"
+    },
+    {
+      "field": "hostname",
+      "code": "hostname_invalid_char",
+      "message": "hostname \"bad host\" contains ' '; use only letters, digits, hyphens and dots"
+    }
+  ],
+  "plan": null
+}

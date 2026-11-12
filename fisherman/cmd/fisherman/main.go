@@ -140,6 +140,11 @@ func isSpaceConstrained(path string) bool {
 	return st.Type == tmpfsMagic || st.Type == overlayMagic
 }
 
+// varIsSpaceConstrained reports whether the host's /var is too small for
+// scratch I/O, so scratch goes on the target disk. The install and `plan`
+// ask it; tests replace it.
+var varIsSpaceConstrained = func() bool { return isSpaceConstrained("/var") }
+
 func prepareScratchDir(activeTargetMount string, liveISO bool) (string, error) {
 	scratchDir := "/var/fisherman-tmp"
 	if liveISO {
@@ -214,6 +219,8 @@ Usage:
   fisherman validate <recipe.json> validate a recipe without installing ("-" reads stdin)
   fisherman validate --json [--partial] <recipe.json|->
                                    every problem as JSON (docs/VALIDATE.md)
+  fisherman plan --json -          what an install of the recipe on stdin would do, as
+                                   JSON; writes nothing, pulls nothing (docs/PLAN.md)
   fisherman images [<query>]       list or search the image catalog
   fisherman scan <disk>            scan disk for Windows data available to migrate
   fisherman probe --json           print disks, TPM, RAM/CPU/UEFI, live and offline facts
@@ -234,6 +241,7 @@ Examples:
   fisherman - < /tmp/recipe.json
   fisherman validate /tmp/recipe.json
   echo '{"hostname":"my-pc"}' | fisherman validate --json --partial -
+  fisherman plan --json - < /tmp/recipe.json
   fisherman images
   fisherman images Bluefin
   fisherman images "GNOME 50"
@@ -286,6 +294,8 @@ func main() {
 		os.Exit(runProbe(os.Args[2:], os.Stdout, os.Stderr))
 	case "verify":
 		os.Exit(runVerify(os.Args[2:], os.Stdout, os.Stderr))
+	case "plan":
+		os.Exit(runPlan(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "diagnostics":
 		os.Exit(runDiagnostics(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "scan":
@@ -624,39 +634,20 @@ func main() {
 		// ── Step 1: Partition disk ────────────────────────────────────────────
 		seq.begin(stepPartition)
 
-		if r.IsZFS() {
-			if err := disk.PartitionZFS(r.Disk); err != nil {
-				fatalCode(progress.FailurePartitionFailed, "partitioning disk for ZFS: %v", err)
-			}
-		} else if r.UsesSystemdBoot() {
-			// systemd-boot always uses a 2-partition layout regardless of encryption.
-			// LUKS (if requested) wraps p2 (root); the 1 GiB FAT32 ESP stays unencrypted.
-			if err := disk.PartitionSystemdBoot(r.Disk); err != nil {
-				fatalCode(progress.FailurePartitionFailed, "partitioning disk: %v", err)
-			}
-		} else if r.HasEncryption() {
-			if err := disk.PartitionEncrypted(r.Disk); err != nil {
-				fatalCode(progress.FailurePartitionFailed, "partitioning disk: %v", err)
-			}
-		} else {
-			if err := disk.Partition(r.Disk); err != nil {
-				fatalCode(progress.FailurePartitionFailed, "partitioning disk: %v", err)
-			}
+		// The layout table (disk.LayoutPartitions) is the one `fisherman
+		// plan` reports: ZFS and systemd-boot write two partitions (ESP +
+		// root; LUKS, if any, wraps the root), GRUB2 writes three (ESP +
+		// ext4 /boot + root), encrypted or not.
+		layout := autoLayout(r)
+		if err := disk.PartitionLayout(r.Disk, layout); err != nil {
+			fatalCode(progress.FailurePartitionFailed, "partitioning disk: %v", err)
 		}
 
-		var efiPart, bootPart, rootPart string
-		if r.UsesSystemdBoot() {
-			// 2-partition layout: p1=EFI (1 GiB FAT32), p2=root (or ZFS pool).
-			// No separate ext4 /boot needed — systemd-boot reads directly from
-			// the FAT32 ESP. LUKS (if any) wraps p2.
-			efiPart = disk.PartName(r.Disk, 1)
-			rootPart = disk.PartName(r.Disk, 2)
-		} else {
-			// 3-partition layout: p1=EFI, p2=/boot (ext4), p3=root.
-			// The separate ext4 /boot keeps GRUB away from modern XFS features.
-			efiPart = disk.PartName(r.Disk, 1)
-			bootPart = disk.PartName(r.Disk, 2)
-			rootPart = disk.PartName(r.Disk, 3)
+		efiPart := disk.PartName(r.Disk, layout.PartNumber(disk.RoleEFI))
+		rootPart := disk.PartName(r.Disk, layout.PartNumber(disk.RoleRoot))
+		var bootPart string // only the GRUB2 layout has an ext4 /boot
+		if n := layout.PartNumber(disk.RoleBoot); n > 0 {
+			bootPart = disk.PartName(r.Disk, n)
 		}
 		rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
 		activeRootPart = rootPart
@@ -814,7 +805,7 @@ func main() {
 	// target disk instead. A self-bind mount makes bootc's empty-rootdir
 	// check see a mount point (which it tolerates) rather than a plain
 	// directory (which it rejects).
-	liveISO := isSpaceConstrained("/var") && activeTargetMount != ""
+	liveISO := varIsSpaceConstrained() && activeTargetMount != ""
 	scratchDir, err := prepareScratchDir(activeTargetMount, liveISO)
 	if err != nil {
 		fatalCode(progress.FailureScratchFailed, "preparing scratch dir: %v", err)

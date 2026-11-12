@@ -1,0 +1,1 @@
+{"disk":"@DIR@/nvme0n1","filesystem":"xfs","image":"ghcr.io/example/os:stable","targetImgref":"ghcr.io/example/os:latest","hostname":"fixture","encryption":{"type":"luks-passphrase","passphrase":"SENTINEL-LUKS-PASSPHRASE"}}

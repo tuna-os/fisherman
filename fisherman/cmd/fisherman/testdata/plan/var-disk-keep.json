@@ -1,0 +1,1 @@
+{"disk":"@DIR@/sda","filesystem":"xfs","varDisk":{"disk":"@DIR@/sdb","keepExisting":true},"image":"ghcr.io/example/os:stable","hostname":"fixture","encryption":{"type":"none"}}
