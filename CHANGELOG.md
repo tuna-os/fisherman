@@ -80,6 +80,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 📝 Documentation
 
+- **The Secure Boot profile** (#342): `SECURITY.md` names the one
+  supported profile, image-owned: bootc and bootupd install the image's own
+  signed chain, fisherman prefers the `.signed` systemd-boot binary, keeps an
+  existing fallback and keeps every signed byte. It lists what fisherman
+  does not do (no shim or MokManager staging from image metadata, no MOK
+  enrolment, no PK/KEK/db/dbx change) and what a new profile needs first.
+  Each guarantee links to the code and the test. No code change.
+- **Supported versions and response** (#294): `SECURITY.md` says that `dev`
+  and the latest release get security fixes, with no backports, and that
+  the response is best effort with no SLA: we aim to acknowledge a report
+  within 14 days. README links to `SECURITY.md`.
+- **One project home** (#303): README, AGENTS.md and ROADMAP.md say that
+  tuna-os/fisherman is the only origin, that projectbluefin/fisherman is a
+  fork whose changes come in through a PR here, and that consumers pin
+  tuna-os/fisherman. The text that offered either repository as a home is
+  gone.
 - **An integration guide** (#328): `docs/INTEGRATION.md` says which
   command a frontend runs when, what to take from the probe, the recipe
   contract, how to run the install with the recipe on stdin, how to read
