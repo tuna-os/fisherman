@@ -219,6 +219,9 @@ Usage:
   fisherman probe --json           print disks, TPM, RAM/CPU/UEFI, live and offline facts
   fisherman verify --json          on the installed system: compare the installation
                                    receipt with the booted image (docs/RECEIPT.md)
+  fisherman diagnostics --output-dir <dir> [--recipe <f>] [--progress-log <f>] [--probe]
+                                   write a local support bundle of allowlisted facts,
+                                   no secrets (docs/DIAGNOSTICS.md)
   fisherman version                print version information
   fisherman help                   show this help
 
@@ -283,6 +286,8 @@ func main() {
 		os.Exit(runProbe(os.Args[2:], os.Stdout, os.Stderr))
 	case "verify":
 		os.Exit(runVerify(os.Args[2:], os.Stdout, os.Stderr))
+	case "diagnostics":
+		os.Exit(runDiagnostics(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "scan":
 		if len(os.Args) < 3 {
 			fmt.Fprintf(os.Stderr, "Usage: fisherman scan <disk>\n")

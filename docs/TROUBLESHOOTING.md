@@ -270,13 +270,15 @@ fisherman validate --json - < recipe.json | jq -r '.errors[].code' | sort -u
 
 ## Getting help
 
-1. Collect:
+1. Save the install's stdout while it runs (`fisherman - < recipe.json | tee
+   progress.ndjson`). That log holds the recovery key: keep it private.
+2. Write a support bundle. It holds allowlisted facts only, never a
+   passphrase, recovery key, password or token, and it masks host, user and
+   device names ([DIAGNOSTICS.md](DIAGNOSTICS.md)):
    ```bash
-   fisherman probe --json > probe.json
-   fisherman validate --json - < recipe.json > validation.json
-   lsblk > lsblk.txt
-   sudo journalctl -b > journal.log
+   fisherman diagnostics --stdout --recipe recipe.json --progress-log progress.ndjson --probe | less
+   fisherman diagnostics --output-dir . --recipe recipe.json --progress-log progress.ndjson --probe
    ```
-2. Remove the passphrase, the password and other secrets from the recipe.
-3. Open an issue with the `error` event, `probe.json`, the recipe, the
-   distribution and kernel version, and the steps to reproduce.
+3. Read the bundle. Open an issue with it, the steps to reproduce, and
+   anything else you choose to add. Do not attach the recipe or the
+   progress log themselves: they hold secrets.

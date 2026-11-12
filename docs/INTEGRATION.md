@@ -48,6 +48,7 @@ not empty, it matches its confirmation, and how strong it is.
 | On the confirm page | `fisherman validate --json -`, with the whole recipe on stdin | no |
 | To install | `fisherman -`, with the recipe on stdin | yes |
 | On the installed system, after the first boot | `fisherman verify --json` | for `--live` |
+| After a failed install, only when the user asks for a support bundle | `fisherman diagnostics --output-dir <dir> --recipe - --progress-log <saved log> --probe`, with the recipe on stdin ([DIAGNOSTICS.md](DIAGNOSTICS.md)) | no |
 
 `probe` and `validate` never change the machine. The install runs every
 rule of the full `validate` again before its first disk step, so a recipe

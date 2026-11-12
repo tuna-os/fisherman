@@ -21,6 +21,7 @@ here, or a row names one that the code does not have.
 | `fisherman validate` | no | Check a recipe without an install. | [VALIDATE.md](VALIDATE.md) |
 | `fisherman probe` | no | Print the facts of this machine that a frontend needs. | [PROBE.md](PROBE.md) |
 | `fisherman verify` | for `--live` | On the installed system: compare the installation receipt with the booted image. | [RECEIPT.md](RECEIPT.md) |
+| `fisherman diagnostics` | no | Write a local support bundle of allowlisted facts about an install. Never uploaded. | [DIAGNOSTICS.md](DIAGNOSTICS.md) |
 | `fisherman images` | no | List or search the image catalog. | [README](../README.md#image-catalog) |
 | `fisherman scan` | yes | Count the Windows user data on a disk that a migration could take. | [SCAN.md](SCAN.md) |
 | `fisherman version` | no | Print `fisherman <version>`. `--version` is the same. | |
@@ -118,6 +119,33 @@ the boot order, rolls back or reboots.
 | 0 | The outcome is `verified`. |
 | 1 | Any other outcome, or the encoding or `--write` failed. |
 | 2 | No `--json`, an unknown argument, a flag with no value, `--live` with `--collected`, or `--live` with another root or a collection. |
+
+## `fisherman diagnostics`
+
+```text
+fisherman diagnostics (--output-dir <dir> | --stdout) [--recipe <file|->] [--progress-log <file|->] [--probe | --probe-report <file|->] [--include-identifiers]
+```
+
+| Flag | Value | Default | What it does |
+|---|---|---|---|
+| `--output-dir` | a directory | none | Write the bundle to a new file there (mode 0600, a unique name) and print its path. Excludes `--stdout`; one of the two is required. |
+| `--stdout` | none | off | Print the bundle on stdout instead, to review it. |
+| `--recipe` | a file, or `-` for stdin | none | The recipe of the install. Read for its effective options, never copied. |
+| `--progress-log` | a file, or `-` for stdin | none | The install's saved stdout. The last 32 MiB are read. |
+| `--probe` | none | off | Run the read-only probe now; the export gives up after 60 seconds. Excludes `--probe-report`. |
+| `--probe-report` | a file, or `-` for stdin | none | A saved `fisherman probe --json` report. |
+| `--include-identifiers` | none | off | Keep host names, user names and device paths instead of tokens. |
+
+At most one input reads stdin. The export only reads: it does not mount,
+unlock, retry or clean up anything, and an install never runs it. An input
+that cannot be read is a section with the status `unreadable`, not a
+failure.
+
+| Exit | When |
+|---|---|
+| 0 | The bundle is written (its path on stdout) or printed. |
+| 1 | The bundle cannot be written: the output directory is absent, not a directory or a symlink, or the write failed (no partial file is left). |
+| 2 | Neither or both of `--output-dir` and `--stdout`, an unknown argument, a flag with no value, `--probe` with `--probe-report`, or two inputs on stdin. |
 
 ## `fisherman images`
 
