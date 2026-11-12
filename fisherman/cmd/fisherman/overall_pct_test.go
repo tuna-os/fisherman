@@ -1,16 +1,12 @@
 package main
 
-// overall_pct over whole installs: every buildProfile combination main() can
+// overall_pct over whole installs: every step-plan combination main() can
 // produce, replayed with the substeps fisherman emits in each step, must give
 // a bar that never moves backwards, stays below 100 until complete and ends
 // at 100. And every step name main() emits must have a step_id.
 
 import (
 	"fmt"
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"strconv"
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/progress"
@@ -109,40 +105,24 @@ func TestOverallPct_MonotonicAcrossProfiles(t *testing.T) {
 	}
 }
 
-// TestStepNamesHaveIDs parses main.go and checks that every literal step name
-// passed to progress.Step is in progress's step_id table, so a new or renamed
-// step cannot ship without one.
+// TestStepNamesHaveIDs checks that every step main() announces, and every
+// step constant in steps.go, is in progress's step_id table, so a new or
+// renamed step cannot ship without one.
 func TestStepNamesHaveIDs(t *testing.T) {
-	f, err := parser.ParseFile(token.NewFileSet(), "main.go", nil, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	found := 0
-	ast.Inspect(f, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "Step" {
-			return true
-		}
-		if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "progress" || len(call.Args) < 3 {
-			return true
-		}
-		lit, ok := call.Args[2].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			t.Errorf("progress.Step called with a non-literal step name; keep names literal so this test can check them")
-			return true
-		}
-		name, _ := strconv.Unquote(lit.Value)
-		found++
+	inMain := mainBeginCalls(t)
+	for _, name := range inMain {
 		if progress.StepID(name) == "" {
-			t.Errorf("progress.Step(%q) has no step_id in internal/progress/bar.go", name)
+			t.Errorf("main() announces step %q, which has no step_id in internal/progress/bar.go", name)
 		}
-		return true
-	})
-	if found != len(progress.StepIDs()) {
-		t.Errorf("main.go emits %d step names, the step_id table has %d", found, len(progress.StepIDs()))
+	}
+	consts := stepConsts(t)
+	for c, name := range consts {
+		if progress.StepID(name) == "" {
+			t.Errorf("%s = %q has no step_id in internal/progress/bar.go", c, name)
+		}
+	}
+	if len(inMain) != len(progress.StepIDs()) || len(consts) != len(progress.StepIDs()) {
+		t.Errorf("main.go announces %d steps and steps.go names %d, the step_id table has %d",
+			len(inMain), len(consts), len(progress.StepIDs()))
 	}
 }

@@ -92,6 +92,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `EncryptsRoot` and `EnrollsTPM2` (`internal/recipe/state.go`). The install
   path, `validate` and the host-tool chain call them in place of the
   booleans `main()` computed and passed around. No behaviour change.
+- **One step plan, announced by a sequencer** (#316): `planSteps`
+  (`cmd/fisherman/steps.go`) builds the ordered step list and its weights
+  from the recipe, and `total_steps` is its length. `main()` announces each
+  step with `seq.begin`, which supplies the step number, the total and the
+  bar position: no manual index any more. A step out of plan is logged as a
+  warning at the finalize step. `TestMainAnnouncesThePlan` replays `main()`
+  for each recipe variant (plain, LUKS, TPM2, manual layout, ZFS, btrfs
+  subvolumes, systemd-boot, source reuse, a `/var` disk) and fails when the
+  steps it announces differ from the plan. The events are unchanged.
 
 ### 🧪 Testing
 

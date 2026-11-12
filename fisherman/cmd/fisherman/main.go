@@ -50,70 +50,6 @@ var bootcInstall = install.BootcInstall
 // tests replace it.
 var prepareSelinuxWorkaround = install.PrepareSelinuxWorkaround
 
-type stepProfile struct {
-	cumulativePct int
-	weightPct     int
-}
-
-// buildProfile returns per-step weight profiles based on timing data from a
-// yellowfin gnome-hwe loop-device install (264s uncached, ~111s cached).
-// Weights sum to 100. cumulativePct is the bar position at step start.
-//
-// main() reads the profile by index, one slot per progress.Step call, so the
-// slots must follow exactly the steps main() emits for this recipe. A manual
-// layout (customMounts) emits a single "Preparing disk" step in place of
-// partition/EFI/LUKS/root/mount, which takes their combined weight, and never
-// emits LUKS setup or TPM2 enrolment (both need the auto-partitioned root).
-func buildProfile(needsPull, isManual, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) []stepProfile {
-	if isManual {
-		hasLUKS, hasTPM2enrolment = false, false
-	}
-	osWeight := 87
-	flatpakWeight := 11
-	if !needsPull {
-		osWeight = 68
-		flatpakWeight = 29
-	}
-	if hasLUKS {
-		osWeight--
-	}
-	if hasTPM2enrolment {
-		osWeight--
-	}
-
-	var weights []int
-	if isManual {
-		weights = []int{1} // prepare disk = partition + EFI + root + mount
-	} else {
-		weights = []int{0, 1} // partition, format EFI
-		if hasLUKS {
-			weights = append(weights, 1) // LUKS setup
-		}
-		weights = append(weights, 0, 0) // format root, mount
-	}
-	if hasVarDiskFormat {
-		weights = append(weights, 0) // format /var disk (fast)
-	}
-	weights = append(weights, osWeight) // install OS
-	if hasTPM2enrolment {
-		weights = append(weights, 1) // TPM2 enrolment
-	}
-	weights = append(weights, flatpakWeight, 0) // flatpaks, configure
-	sum := 0
-	for _, w := range weights {
-		sum += w
-	}
-	weights = append(weights, 100-sum) // finalize
-
-	profile := make([]stepProfile, len(weights))
-	cumulative := 0
-	for i, w := range weights {
-		profile[i] = stepProfile{cumulative, w}
-		cumulative += w
-	}
-	return profile
-}
-
 // fatal ends the install: it stops child processes, tears down every mount
 // and LUKS mapping registered on cleanup, emits one {"type":"error"} event
 // (noting any teardown failure) and exits with exitFailure. If a cancel
@@ -563,13 +499,9 @@ func main() {
 		progress.Info("SELinux: the target disables SELinux and this host enforces a policy; the label workaround is ready")
 	}
 
-	profile := buildProfile(imageCheck.NeedsPull, r.IsManualLayout(), r.EncryptsRoot(), r.EnrollsTPM2(), r.FormatsVarDisk())
-	pi := 0 // profile index, incremented at each progress.Step call
-
-	// The profile has one slot per emitted step, so it is also the step count
-	// the GUI shows up front.
-	totalSteps := len(profile)
-	step := 1
+	// The step plan for this recipe (steps.go). The sequencer announces
+	// each step with its number, the plan's total and its bar position.
+	seq := newStepSequencer(planSteps(r, imageCheck.NeedsPull))
 
 	// ── Desktop extras ───────────────────────────────────────────────────
 	// Print services, the OEM brew unit, friendly audio names and the boot
@@ -655,9 +587,7 @@ func main() {
 
 	if r.IsManualLayout() {
 		// ── Step 1 (manual): Format and mount user-specified partitions ────────
-		progress.Step(step, totalSteps, "Preparing disk", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
+		seq.begin(stepPrepareDisk)
 
 		specs := make([]disk.MountSpec, 0, len(r.CustomMounts))
 		for _, cm := range r.CustomMounts {
@@ -680,9 +610,7 @@ func main() {
 		}
 	} else {
 		// ── Step 1: Partition disk ────────────────────────────────────────────
-		progress.Step(step, totalSteps, "Partitioning disk", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
+		seq.begin(stepPartition)
 
 		if r.IsZFS() {
 			if err := disk.PartitionZFS(r.Disk); err != nil {
@@ -723,9 +651,7 @@ func main() {
 		poolName := disk.PoolName(r.ZFSPoolName) // only used when r.IsZFS()
 
 		// ── Step 2: Format EFI ───────────────────────────────────────────────
-		progress.Step(step, totalSteps, "Formatting EFI partition", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
+		seq.begin(stepFormatEFI)
 
 		if err := disk.FormatEFI(efiPart); err != nil {
 			fatalCode(progress.FailureFormatFailed, "formatting EFI: %v", err)
@@ -741,9 +667,7 @@ func main() {
 
 		// ── Step 3: Disk encryption (optional) ──────────────────────────────
 		if r.HasEncryption() {
-			progress.Step(step, totalSteps, "Setting up disk encryption", profile[pi].cumulativePct, profile[pi].weightPct)
-			pi++
-			step++
+			seq.begin(stepEncryption)
 
 			var passphrase string
 			switch r.Encryption.Type {
@@ -775,9 +699,7 @@ func main() {
 		}
 
 		// ── Step 4: Format root filesystem ──────────────────────────────────
-		progress.Step(step, totalSteps, "Formatting root filesystem", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
+		seq.begin(stepFormatRoot)
 
 		if r.IsZFS() {
 			if err := disk.CreateZFSPool(poolName, rootPart, targetMount); err != nil {
@@ -796,9 +718,7 @@ func main() {
 		}
 
 		// ── Step 5: Mount filesystem ─────────────────────────────────────────
-		progress.Step(step, totalSteps, "Mounting filesystem", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
+		seq.begin(stepMount)
 
 		if err := os.MkdirAll(targetMount, 0o755); err != nil {
 			fatalCode(progress.FailureMountFailed, "creating mount point %s: %v", targetMount, err)
@@ -854,9 +774,7 @@ func main() {
 			fatalCode(progress.FailureMountFailed, "creating /var mount point: %v", err)
 		}
 		if r.FormatsVarDisk() {
-			progress.Step(step, totalSteps, "Formatting data disk (/var)", profile[pi].cumulativePct, profile[pi].weightPct)
-			pi++
-			step++
+			seq.begin(stepFormatVarDisk)
 			// Release the disk (mounts, swap, LVM, old signatures), then
 			// format it: see disk.PrepareVarDisk (#406).
 			if err := disk.PrepareVarDisk(r.VarDisk.Disk); err != nil {
@@ -905,9 +823,7 @@ func main() {
 	}
 
 	// ── Step 6: Install OS ────────────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Installing OS", profile[pi].cumulativePct, profile[pi].weightPct)
-	pi++
-	step++
+	seq.begin(stepInstallOS)
 
 	// Only pass --target-imgref when it is non-empty and differs from the source.
 	targetImgref := r.TargetImgref
@@ -1078,9 +994,7 @@ func main() {
 	//   tpm2-luks:            random passphrase (recovery key) + TPM2
 	//   tpm2-luks-passphrase: user passphrase (fallback) + TPM2
 	if r.EnrollsTPM2() {
-		progress.Step(step, totalSteps, "Enrolling TPM2 auto-unlock", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
+		seq.begin(stepEnrollTPM2)
 
 		unlockPassphrase := r.Encryption.Passphrase
 		if r.Encryption.Type == "tpm2-luks" {
@@ -1096,9 +1010,7 @@ func main() {
 	}
 
 	// ── Step 7: Copy system flatpaks ──────────────────────────────────────────
-	progress.Step(step, totalSteps, "Copying system Flatpaks", profile[pi].cumulativePct, profile[pi].weightPct)
-	pi++
-	step++
+	seq.begin(stepFlatpaks)
 
 	if err := post.CopyFlatpaks(activeTargetMount, r.Flatpaks, r.FlatpakVarPath); err != nil {
 		// Non-fatal — the system will work without pre-installed flatpaks.
@@ -1106,9 +1018,7 @@ func main() {
 	}
 
 	// ── Step 8: Post-install configuration ───────────────────────────────────
-	progress.Step(step, totalSteps, "Configuring installed system", profile[pi].cumulativePct, profile[pi].weightPct)
-	pi++
-	step++
+	seq.begin(stepConfigure)
 
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
 	if err := post.WriteHostname(activeTargetMount, r.Hostname); err != nil {
@@ -1242,7 +1152,12 @@ func main() {
 	//   2. remount ro — flush writeback, lock the deployment read-only
 	//   3. fsfreeze/thaw — flush the journal for a clean first boot
 	// ZFS handles this internally; fstrim/remount-ro/fsfreeze do not apply.
-	progress.Step(step, totalSteps, "Finalizing installation", profile[pi].cumulativePct, profile[pi].weightPct)
+	seq.begin(stepFinalize)
+	// Every planned step is announced by now; a gap is a bug the step
+	// tests exist to catch, so say so rather than end the install.
+	if err := seq.check(); err != nil {
+		progress.Info("Warning: " + err.Error())
+	}
 	if !r.IsZFS() {
 		if err := disk.FinalizeFilesystemWith(activeTargetMount, freezes.Hooks()); err != nil {
 			fatalCode(progress.FailureFinalizeFailed, "finalizing target filesystem: %v", err)
