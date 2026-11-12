@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tuna-os/fisherman/internal/disk"
 )
@@ -116,8 +117,12 @@ func loopbackLayout(t *testing.T) (esp, root, data string) {
 	})
 
 	esp, root, data = loop+"p1", loop+"p2", loop+"p3"
+	// The partition scan makes udev drop and re-add the nodes, so a node
+	// can exist at one stat and be missing at the next command (mkfs.fat:
+	// "unable to open /dev/loop0p1"). Wait as the install does: udevadm
+	// settle, then poll for each block device.
 	for _, part := range []string{esp, root, data} {
-		if _, err := os.Stat(part); err != nil {
+		if err := disk.WaitForPartitionNode(part, 10*time.Second); err != nil {
 			skipOrFail(t, "kernel did not expose partition %s (no partscan support): %v", part, err)
 		}
 	}
