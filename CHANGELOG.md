@@ -84,6 +84,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `main.commit`/`main.date`, which do not exist, and its archives, like the
   meson install (`<datadir>/fisherman/data/`), now ship `data/images.json`.
 
+### ♻️ Refactoring
+
+- **The recipe answers its own install-state questions** (#317):
+  `recipe.Recipe` has `HasEncryption`, `HasTPM2`, `IsManualLayout`, `IsZFS`,
+  `UsesSystemdBoot`, `UsesComposeFs`, `HasVarDisk`, `FormatsVarDisk`,
+  `EncryptsRoot` and `EnrollsTPM2` (`internal/recipe/state.go`). The install
+  path, `validate` and the host-tool chain call them in place of the
+  booleans `main()` computed and passed around. No behaviour change.
+
 ### 🧪 Testing
 
 - **The VM matrix covers a user, GRUB with LUKS, TPM2 and a /var disk**

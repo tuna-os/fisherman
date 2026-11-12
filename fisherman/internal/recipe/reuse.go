@@ -126,7 +126,7 @@ func checkSourceReuse(r *Recipe, checkImage, checkTarget bool) []Problem {
 	if checkTarget {
 		ps = append(ps, checkReuseUpdateRef(r.TargetImgref)...)
 	}
-	if r.ComposeFsBackend || r.Filesystem == "zfs" {
+	if r.UsesComposeFs() {
 		ps = append(ps, Problem{"sourceReuse", CodeSourceReuseBackendUnsupported,
 			"sourceReuse installs ostree-backend images only: composeFsBackend (or filesystem zfs, which forces it) is not qualified"})
 	}

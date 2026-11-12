@@ -484,11 +484,6 @@ func main() {
 		sourceImgref = reused.SourceImgref
 	}
 
-	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
-	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
-	isManual := len(r.CustomMounts) > 0
-	isSystemdBoot := r.Bootloader == "systemd" || r.Filesystem == "zfs"
-
 	if r.Image == "" && reused == nil {
 		// Only reachable on live media (checkImageSource).
 		msg := fmt.Sprintf("Live media (%s): installing the running image", live.DetectedBy)
@@ -568,8 +563,7 @@ func main() {
 		progress.Info("SELinux: the target disables SELinux and this host enforces a policy; the label workaround is ready")
 	}
 
-	hasVarDisk := r.VarDisk != nil
-	profile := buildProfile(imageCheck.NeedsPull, isManual, hasEncryption, hasTPM2, hasVarDisk && !r.VarDisk.KeepExisting)
+	profile := buildProfile(imageCheck.NeedsPull, r.IsManualLayout(), r.EncryptsRoot(), r.EnrollsTPM2(), r.FormatsVarDisk())
 	pi := 0 // profile index, incremented at each progress.Step call
 
 	// The profile has one slot per emitted step, so it is also the step count
@@ -610,7 +604,7 @@ func main() {
 	var wallpaperResult *slurp.WallpaperResult
 	var dataResult *slurp.DataSlurpResult
 
-	if r.Slurp != nil && !isManual {
+	if r.Slurp != nil && !r.IsManualLayout() {
 		// Full data slurp: user selected specific categories in the GUI
 		progress.Info("Migrating Windows user data before partitioning...")
 		cfg := &slurp.SlurpConfig{
@@ -628,7 +622,7 @@ func main() {
 		} else {
 			dataResult = result
 		}
-	} else if r.SlurpWallpapers && !isManual {
+	} else if r.SlurpWallpapers && !r.IsManualLayout() {
 		// Wallpaper-only easter egg (no explicit slurp config)
 		progress.Info("Checking for Windows wallpapers to migrate...")
 		ntfsPartitions, err := slurp.DetectNTFS(r.Disk)
@@ -659,7 +653,7 @@ func main() {
 	var activeLuksUUID string  // LUKS partition UUID for boot entry injection; empty if no encryption
 	var luksRecoveryKey string // random passphrase for tpm2-luks (emitted as recovery key)
 
-	if isManual {
+	if r.IsManualLayout() {
 		// ── Step 1 (manual): Format and mount user-specified partitions ────────
 		progress.Step(step, totalSteps, "Preparing disk", profile[pi].cumulativePct, profile[pi].weightPct)
 		pi++
@@ -690,17 +684,17 @@ func main() {
 		pi++
 		step++
 
-		if r.Filesystem == "zfs" {
+		if r.IsZFS() {
 			if err := disk.PartitionZFS(r.Disk); err != nil {
 				fatalCode(progress.FailurePartitionFailed, "partitioning disk for ZFS: %v", err)
 			}
-		} else if isSystemdBoot {
+		} else if r.UsesSystemdBoot() {
 			// systemd-boot always uses a 2-partition layout regardless of encryption.
 			// LUKS (if requested) wraps p2 (root); the 1 GiB FAT32 ESP stays unencrypted.
 			if err := disk.PartitionSystemdBoot(r.Disk); err != nil {
 				fatalCode(progress.FailurePartitionFailed, "partitioning disk: %v", err)
 			}
-		} else if hasEncryption {
+		} else if r.HasEncryption() {
 			if err := disk.PartitionEncrypted(r.Disk); err != nil {
 				fatalCode(progress.FailurePartitionFailed, "partitioning disk: %v", err)
 			}
@@ -711,7 +705,7 @@ func main() {
 		}
 
 		var efiPart, bootPart, rootPart string
-		if isSystemdBoot {
+		if r.UsesSystemdBoot() {
 			// 2-partition layout: p1=EFI (1 GiB FAT32), p2=root (or ZFS pool).
 			// No separate ext4 /boot needed — systemd-boot reads directly from
 			// the FAT32 ESP. LUKS (if any) wraps p2.
@@ -726,7 +720,7 @@ func main() {
 		}
 		rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
 		activeRootPart = rootPart
-		poolName := disk.PoolName(r.ZFSPoolName) // only used when r.Filesystem == "zfs"
+		poolName := disk.PoolName(r.ZFSPoolName) // only used when r.IsZFS()
 
 		// ── Step 2: Format EFI ───────────────────────────────────────────────
 		progress.Step(step, totalSteps, "Formatting EFI partition", profile[pi].cumulativePct, profile[pi].weightPct)
@@ -739,14 +733,14 @@ func main() {
 		// grub2 installs need a separate ext4 /boot so GRUB never has to parse
 		// XFS (GRUB's built-in XFS driver lacks support for modern XFS features).
 		// systemd-boot reads the FAT32 ESP directly, so no separate /boot needed.
-		if !isSystemdBoot {
+		if !r.UsesSystemdBoot() {
 			if err := disk.FormatBoot(bootPart); err != nil {
 				fatalCode(progress.FailureFormatFailed, "formatting /boot: %v", err)
 			}
 		}
 
 		// ── Step 3: Disk encryption (optional) ──────────────────────────────
-		if hasEncryption {
+		if r.HasEncryption() {
 			progress.Step(step, totalSteps, "Setting up disk encryption", profile[pi].cumulativePct, profile[pi].weightPct)
 			pi++
 			step++
@@ -785,7 +779,7 @@ func main() {
 		pi++
 		step++
 
-		if r.Filesystem == "zfs" {
+		if r.IsZFS() {
 			if err := disk.CreateZFSPool(poolName, rootPart, targetMount); err != nil {
 				fatalCode(progress.FailureZFSFailed, "creating ZFS pool: %v", err)
 			}
@@ -810,7 +804,7 @@ func main() {
 			fatalCode(progress.FailureMountFailed, "creating mount point %s: %v", targetMount, err)
 		}
 
-		if r.Filesystem == "zfs" {
+		if r.IsZFS() {
 			// Pool is already imported with -R altroot; root dataset is already
 			// mounted. Ensure the mount point exists and call MountZFSRoot in
 			// case the automount didn't fire (e.g. in a container environment).
@@ -835,7 +829,7 @@ func main() {
 		// Mount the unencrypted /boot partition before the EFI partition.
 		// bootupctl reads /boot's block device UUID from the raw partition.
 		// Not needed for systemd-boot installs (no separate /boot partition).
-		if !isSystemdBoot {
+		if !r.UsesSystemdBoot() {
 			if err := disk.MountBoot(targetMount, bootPart); err != nil {
 				fatalCode(progress.FailureMountFailed, "mounting /boot: %v", err)
 			}
@@ -854,12 +848,12 @@ func main() {
 
 	// ── Step 5.5: Mount /var disk (optional) ─────────────────────────────────
 	// Must happen before bootc install so bootc populates /var on the right disk.
-	if hasVarDisk {
+	if r.HasVarDisk() {
 		varDir := filepath.Join(activeTargetMount, "var")
 		if err := os.MkdirAll(varDir, 0o755); err != nil {
 			fatalCode(progress.FailureMountFailed, "creating /var mount point: %v", err)
 		}
-		if !r.VarDisk.KeepExisting {
+		if r.FormatsVarDisk() {
 			progress.Step(step, totalSteps, "Formatting data disk (/var)", profile[pi].cumulativePct, profile[pi].weightPct)
 			pi++
 			step++
@@ -943,7 +937,7 @@ func main() {
 		reuseInstallOptions(&opts)
 	}
 	opts.SelinuxShimPath = selinuxShim
-	if hasEncryption && !isManual {
+	if r.EncryptsRoot() {
 		// Without the UUID no loader entry can name the LUKS container.
 		// Stop before the image is deployed, not after "complete" (#410).
 		if activeLuksUUID == "" {
@@ -951,7 +945,7 @@ func main() {
 		}
 		// Where nothing else finds the root, bootc writes the argument
 		// into the entries it creates, the way rootflags gets there.
-		if luksNeedsKarg(isSystemdBoot, r.ComposeFsBackend) {
+		if luksNeedsKarg(r.UsesSystemdBoot(), r.ComposeFsBackend) {
 			opts.KernelArguments = append(opts.KernelArguments, post.LuksKarg(activeLuksUUID))
 		}
 	}
@@ -977,7 +971,7 @@ func main() {
 	// bootloader at all. Nothing about that bootctl behaviour depends on
 	// encryption, and the call is idempotent and warning-only, so it runs for
 	// every systemd-boot composefs install.
-	if !isManual && isSystemdBoot && r.ComposeFsBackend {
+	if !r.IsManualLayout() && r.UsesSystemdBoot() && r.ComposeFsBackend {
 		if err := install.InstallSystemdBoot(activeTargetMount); err != nil {
 			progress.Info(fmt.Sprintf("Warning: could not ensure systemd-boot EFI binary: %v", err))
 		}
@@ -988,7 +982,7 @@ func main() {
 	// or a disk moved to another machine falls through to PXE (#233). Fill
 	// that gap from the vendor directory. Never on a manual layout: that ESP
 	// may be shared, and its EFI/BOOT belongs to whoever set it up.
-	if !isManual && !isSystemdBoot {
+	if !r.IsManualLayout() && !r.UsesSystemdBoot() {
 		if err := install.InstallGrubFallback(activeTargetMount, r.DistroID); err != nil {
 			progress.Info(fmt.Sprintf("Warning: could not ensure the UEFI fallback loader: %v", err))
 		}
@@ -1013,7 +1007,7 @@ func main() {
 	// raced that re-add ("mount /dev/loop0p2 ...: exit status 32", dakota CI).
 	// A failed read falls through to the write, as before.
 	retagRoot := false
-	if !isManual && isSystemdBoot && !hasEncryption && r.ComposeFsBackend {
+	if !r.IsManualLayout() && r.UsesSystemdBoot() && !r.HasEncryption() && r.ComposeFsBackend {
 		var curType string
 		retagRoot, curType = disk.PartitionTypeNeedsRewrite(r.Disk, 2, disk.LinuxRootPartType())
 		if !retagRoot {
@@ -1083,7 +1077,7 @@ func main() {
 	// the system boots without a passphrase prompt. The difference:
 	//   tpm2-luks:            random passphrase (recovery key) + TPM2
 	//   tpm2-luks-passphrase: user passphrase (fallback) + TPM2
-	if hasTPM2 && activeRootPart != "" {
+	if r.EnrollsTPM2() {
 		progress.Step(step, totalSteps, "Enrolling TPM2 auto-unlock", profile[pi].cumulativePct, profile[pi].weightPct)
 		pi++
 		step++
@@ -1136,7 +1130,7 @@ func main() {
 
 	// Language, keyboard layout and time zone, when the recipe has them. For
 	// an encrypted install the keymap also goes to the initrd. Non-fatal.
-	applyLocale(activeTargetMount, r, hasEncryption && !isManual)
+	applyLocale(activeTargetMount, r, r.EncryptsRoot())
 
 	// rhgb and quiet in every BLS loader entry, for the graphical boot
 	// splash: only for an image that asks (extras.bootSplash). Another
@@ -1159,7 +1153,7 @@ func main() {
 	// above asks it to, and this checks every entry and patches what is
 	// missing. Fatal unless GPT auto-discovery finds the root (#410).
 	if activeLuksUUID != "" {
-		msg, err := ensureLuksBoot(activeTargetMount, activeLuksUUID, luksNeedsKarg(isSystemdBoot, r.ComposeFsBackend))
+		msg, err := ensureLuksBoot(activeTargetMount, activeLuksUUID, luksNeedsKarg(r.UsesSystemdBoot(), r.ComposeFsBackend))
 		if err != nil {
 			fatalCode(progress.FailureLUKSBootArgsFailed, "LUKS boot arguments: %v", err)
 		}
@@ -1249,7 +1243,7 @@ func main() {
 	//   3. fsfreeze/thaw — flush the journal for a clean first boot
 	// ZFS handles this internally; fstrim/remount-ro/fsfreeze do not apply.
 	progress.Step(step, totalSteps, "Finalizing installation", profile[pi].cumulativePct, profile[pi].weightPct)
-	if r.Filesystem != "zfs" {
+	if !r.IsZFS() {
 		if err := disk.FinalizeFilesystemWith(activeTargetMount, freezes.Hooks()); err != nil {
 			fatalCode(progress.FailureFinalizeFailed, "finalizing target filesystem: %v", err)
 		}
@@ -1259,7 +1253,7 @@ func main() {
 	// /etc (the resolver's: ZFS installs are composefs, and <target>/etc is
 	// not what boots), so the installed system can import the pool. Must be
 	// done before unmounting. Teardown then exports the pool.
-	if r.Filesystem == "zfs" {
+	if r.IsZFS() {
 		poolName := disk.PoolName(r.ZFSPoolName)
 		if d, err := post.ResolveDeployment(activeTargetMount); err != nil {
 			progress.Info(fmt.Sprintf("Warning: ZFS host ID and zpool.cache not written: %v", err))
@@ -1325,11 +1319,6 @@ func buildBootcInstallOptions(
 	needsPull bool,
 	layerCount int,
 ) install.Options {
-	composeFsBackend := r.ComposeFsBackend
-	if r.Filesystem == "zfs" {
-		composeFsBackend = true
-	}
-
 	var kernelArgs []string
 	if rootOpts := r.RootMountOptions(); rootOpts != "" {
 		kernelArgs = append(kernelArgs, "rootflags="+rootOpts)
@@ -1340,7 +1329,7 @@ func buildBootcInstallOptions(
 		TargetImgref:          targetImgref,
 		SelinuxDisabled:       r.SelinuxDisabled,
 		UnifiedStorage:        r.UnifiedStorage,
-		ComposeFsBackend:      composeFsBackend,
+		ComposeFsBackend:      r.UsesComposeFs(),
 		GenericImage:          r.GenericImage,
 		Bootloader:            r.Bootloader,
 		Target:                activeTargetMount,
