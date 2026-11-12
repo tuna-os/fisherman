@@ -12,6 +12,9 @@ LUKS_PASSPHRASE="${4:-}"  # optional; if set, opens the LUKS root container befo
 
 echo "Enabling SSH in installed system..."
 
+# shellcheck source=./find-tools.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/find-tools.sh"
+
 # Find and mount the root partition.
 #
 # The root partition is NOT always the third one, and hardcoding p3 made every
@@ -77,6 +80,17 @@ sudo mount "$MOUNT_SRC" "$MOUNT_DIR" || {
   echo "WARNING: Could not mount root partition $MOUNT_SRC"
   exit 1
 }
+# A btrfsSubvolumes install keeps the system in @: mount that, as the
+# installed system's rootflags do, so the layouts below are found.
+if [ "$(sudo blkid -s TYPE -o value "$MOUNT_SRC" 2>/dev/null || true)" = btrfs ] \
+  && SUBVOL=$(btrfs_root_subvol "$MOUNT_DIR"); then
+  echo "btrfs: the system is in subvolume $SUBVOL; mounting it"
+  sudo umount "$MOUNT_DIR"
+  sudo mount -o "subvol=$SUBVOL" "$MOUNT_SRC" "$MOUNT_DIR" || {
+    echo "WARNING: Could not mount subvolume $SUBVOL of $MOUNT_SRC"
+    exit 1
+  }
+fi
 
 # Determine the rootfs directory based on storage type, and — separately —
 # the stateroot var: the directory the booted system mounts over /var.

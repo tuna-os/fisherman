@@ -121,6 +121,21 @@ find_mount() {
 }
 
 # Print diagnostic info
+# btrfs_root_subvol MNT — MNT is a btrfs root mounted at its top level.
+# Print the subvolume that holds the system and return 0 when that is not
+# the top level: a `btrfsSubvolumes` install puts everything in @
+# (internal/disk/format.go), and the top level then holds @ and no bootc
+# tree. The caller mounts again with -o subvol=<it>. Return 1 otherwise.
+btrfs_root_subvol() {
+  local mnt="$1"
+  if [ -d "$mnt/@" ] && [ ! -d "$mnt/ostree" ] && [ ! -d "$mnt/state" ] \
+    && [ ! -d "$mnt/sysroot" ]; then
+    echo "@"
+    return 0
+  fi
+  return 1
+}
+
 show_tool_info() {
   echo "=== Tool Information ==="
   echo "QEMU: $(find_qemu 2>/dev/null || echo 'NOT FOUND')"

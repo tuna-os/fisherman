@@ -51,10 +51,16 @@ the entry fields it reads. `just bootcrew-ci-test` and
 ### `vm-checks/`
 Guest checks for the optional matrix fields (#418): `user.sh` (the recipe's
 user signs in, owns its home, is in `wheel` and has the recipe's password),
-`var-disk.sh` (`/var` is the `varDisk`) and `tpm2-enrolled.sh` (the
+`var-disk.sh` (`/var` is the `varDisk`), `tpm2-enrolled.sh` (the
 first-boot TPM2 enrolment left a `systemd-tpm2` token and removed its
-single-use keyslot and key). `tests/check-validation.sh` checks that each
-one catches its bug.
+single-use keyslot and key) and `btrfs-subvolumes.sh` (`btrfs_subvolumes`:
+the root is the `@` subvolume, mounted with the recipe's `rootflags`, `/var`
+is inside it, and `@` is the only top-level subvolume). `capabilities.sh`
+(#383) runs in the store reuse profile only: it holds the capability report
+taken in the installing VM to the bootc version, backend, bootloader and
+kernel of the installed system, and checks that a report for a digest the
+VM did not boot answers nothing. `tests/check-validation.sh` checks that
+each one catches its bug.
 
 ### `store-reuse-vm.sh` and `store-reuse-lib.sh`
 The advisory offline VM profile for the bootc store reuse (#384 phase 2,
@@ -73,8 +79,11 @@ the SSH forward, checks that no registry is reachable, then inside the VM:
 validates a `sourceReuse` recipe for the booted digest, checks a missing
 digest is refused with disk B untouched, cancels an install during the copy
 and checks nothing is left behind, and installs from the VM's own bootc
-store onto disk B. Disk B then boots through `boot-verify.sh` (receipt
-checks required) and `store_reuse_identity` (`store-reuse-lib.sh`, tested by
+store onto disk B. Before the install it takes `fisherman probe --json
+--source <booted ref>@<booted digest>` and the same for a digest the VM did
+not boot. Disk B then boots through `boot-verify.sh` (receipt checks
+required, guest check `vm-checks/capabilities.sh`) and
+`store_reuse_identity` (`store-reuse-lib.sh`, tested by
 `tests/check-validation.sh`) checks it booted the verified copy. The job
 summary compares time, scratch and disk with the baseline. Needs sudo, KVM,
 QEMU, OVMF, jq and python3.
