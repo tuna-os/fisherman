@@ -169,9 +169,13 @@ func runBoundedProbe() (*probe.Result, string) {
 		res *probe.Result
 		err error
 	}
+	// Read the seams once, here: on a timeout the goroutine outlives this
+	// call, and it must not read a package variable that a later caller
+	// (or a test's cleanup) changes.
+	probeFn, timeout := diagnosticsProbe, diagnosticsProbeTimeout
 	ch := make(chan answer, 1)
 	go func() {
-		res, err := diagnosticsProbe()
+		res, err := probeFn()
 		ch <- answer{res, err}
 	}()
 	select {
@@ -180,7 +184,7 @@ func runBoundedProbe() (*probe.Result, string) {
 			return nil, diagnostics.StatusUnreadable
 		}
 		return a.res, ""
-	case <-time.After(diagnosticsProbeTimeout):
+	case <-time.After(timeout):
 		return nil, diagnostics.StatusTimedOut
 	}
 }
