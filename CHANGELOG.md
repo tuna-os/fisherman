@@ -25,6 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **A cancel during the source reuse copy could leave `/var/tmp` bound to
+  a deleted directory** (#384): a cancel stops the copy's `bootc` and runs
+  the teardown, and the copy's own unbind and `Release` raced for the
+  bind. When the copy took it first, the session was already released, so
+  its `umount` was refused. `Release` then saw no bind, skipped the unbind
+  and removed the scratch. `/var/tmp` stayed on the deleted
+  `source-reuse/var-tmp`, and the next install failed with "cannot bind ...
+  over /var/tmp" (store-reuse VM run 43186222564). The bind, the copy's
+  unbind and `Release`'s unbind now run one at a time. One `umount` undoes
+  one `mount`, even after `Release` has begun, and `Release` waits for a
+  bind in flight. Neither unmounts `/var/tmp` a second time. If the bind
+  cannot be undone, `Release` keeps the scratch and reports it, so it does
+  not remove it from under the bind.
 - **The host's bootc installed a local source it did not boot** (#363): an
   install from a local `containers-storage:` source took the direct path
   (the host's bootc, no podman) whenever the host had a bootc. bootc reads

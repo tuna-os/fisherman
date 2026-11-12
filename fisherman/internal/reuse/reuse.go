@@ -189,7 +189,12 @@ type Session struct {
 	platform string
 	scratch  string // host path of the session's scratch directory
 
-	mu          sync.Mutex
+	mu sync.Mutex
+	// bindMu serialises everything that changes the /var/tmp bind: the
+	// copy's mount, the copy's umount and Release's umount. bound changes
+	// only under it (and mu), after the command it records has finished.
+	// Lock order: bindMu, then mu.
+	bindMu      sync.Mutex
 	bound       bool
 	destination string
 	created     bool
@@ -535,16 +540,10 @@ func human(b uint64) string {
 // undoes the bind. Free space is sampled meanwhile.
 func (s *Session) copy(base progress.SourceReuseEvent, c probe.ReuseCandidate, dest string, est progress.ReuseEstimate) (progress.ReuseMeasured, *Failure) {
 	var m progress.ReuseMeasured
-	if err := s.run("mount", "--bind", s.varTmpDir(), VarTmp); err != nil {
+	if err := s.bind(dest); err != nil {
 		return m, fail(recipe.CodeSourceReuseTransferFailed, "bind_failed",
 			"source reuse: cannot bind %s over %s: %v", s.varTmpDir(), VarTmp, err)
 	}
-	s.mu.Lock()
-	s.bound = true
-	// From here Release removes the destination: the copy can create it
-	// at any point, and a cancel can end the copy at any point.
-	s.destination, s.created = dest, true
-	s.mu.Unlock()
 
 	copying := base
 	copying.Phase = progress.ReuseCopying
@@ -618,29 +617,66 @@ func sub(a, b uint64) uint64 {
 	return a - b
 }
 
-// claimBind hands the /var/tmp bind to one caller: the copy's own unbind
-// or Release, never both. A second umount of /var/tmp would unmount the
-// host's own /var/tmp where that is a mount point.
-func (s *Session) claimBind() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	b := s.bound
-	s.bound = false
-	return b
-}
-
-func (s *Session) unbind() error {
-	if !s.claimBind() {
-		return nil
-	}
-	if err := s.run("umount", VarTmp); err != nil {
-		s.mu.Lock()
-		s.bound = !s.released // Release, if it has not run, tries again
-		s.mu.Unlock()
+// bind mounts the session's scratch over /var/tmp. Under bindMu, so a
+// Release that starts meanwhile waits for the mount and then undoes it; a
+// session already released mounts nothing. From the bind on, Release also
+// removes dest: the copy can create it at any point, and a cancel can end
+// the copy at any point.
+func (s *Session) bind(dest string) error {
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
+	if err := s.check("mount", []string{"--bind", s.varTmpDir(), VarTmp}); err != nil {
 		return err
 	}
+	if err := s.env.Run("mount", "--bind", s.varTmpDir(), VarTmp); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.bound = true
+	s.destination, s.created = dest, true
+	s.mu.Unlock()
 	return nil
 }
+
+// unbindLocked undoes the session's own bind, if it is in place: one
+// umount for one mount. A second umount of /var/tmp would unmount the
+// host's own /var/tmp where that is a mount point, so bound goes false only
+// after an umount that succeeded, and an umount runs only while bound is
+// true. The caller holds bindMu. It runs even after Release has begun (the
+// copy's unbind racing a cancel): whichever of the two gets bindMu first
+// unbinds, and the other finds nothing to do (tuna-os/fisherman#383 VM run
+// 43186222564, where the copy claimed the bind, Release skipped it and
+// removed the scratch, and the bind stayed over a deleted directory).
+func (s *Session) unbindLocked() error {
+	s.mu.Lock()
+	bound := s.bound
+	s.mu.Unlock()
+	if !bound {
+		return nil
+	}
+	if err := Allowed(s.varTmpDir(), "umount", []string{VarTmp}); err != nil {
+		return err
+	}
+	if err := s.env.Run("umount", VarTmp); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.bound = false
+	s.mu.Unlock()
+	return nil
+}
+
+// unbind is the copy's own unbind.
+func (s *Session) unbind() error {
+	s.bindMu.Lock()
+	defer s.bindMu.Unlock()
+	return s.unbindLocked()
+}
+
+// releaseHook runs in Release once the session is marked released and
+// before the bind is handled. Tests set it to order a cancel against the
+// copy.
+var releaseHook func()
 
 // ociArch maps bootc's architecture spelling to the OCI one skopeo prints.
 var ociArch = map[string]string{
@@ -707,16 +743,23 @@ func (s *Session) Release() error {
 		return nil
 	}
 	s.released = true
+	s.mu.Unlock()
+	if releaseHook != nil {
+		releaseHook()
+	}
+
+	// Wait for a mount or umount in flight, then undo the bind if it is
+	// still there. From here no new bind starts (check refuses it).
+	var errs []error
+	s.bindMu.Lock()
+	unbindErr := s.unbindLocked()
+	s.bindMu.Unlock()
+	if unbindErr != nil {
+		errs = append(errs, fmt.Errorf("unbinding %s: %w", VarTmp, unbindErr))
+	}
+	s.mu.Lock()
 	created, dest, made := s.created, s.destination, s.madeScratch
 	s.mu.Unlock()
-	bound := s.claimBind()
-
-	var errs []error
-	if bound {
-		if err := s.env.Run("umount", VarTmp); err != nil {
-			errs = append(errs, fmt.Errorf("unbinding %s: %w", VarTmp, err))
-		}
-	}
 	reason := ""
 	if created {
 		reason = "removed"
@@ -727,10 +770,13 @@ func (s *Session) Release() error {
 			errs = append(errs, fmt.Errorf("removing %s: %w", dest, err))
 		}
 	}
-	if made {
-		// The scratch is the bind's source, so even with the bind still in
-		// place this deletes only what the copy wrote, never the host's
-		// own /var/tmp, which the bind hides.
+	if made && unbindErr != nil {
+		// The bind is still over /var/tmp and the scratch is its source:
+		// removing it would leave /var/tmp on a deleted directory, where
+		// the next install cannot bind. Keep it, and say so.
+		errs = append(errs, fmt.Errorf("kept %s: it is still bound over %s", s.scratch, VarTmp))
+	} else if made {
+		// The bind is gone, so this deletes only what the copy wrote.
 		if err := os.RemoveAll(s.host(s.scratch)); err != nil {
 			errs = append(errs, fmt.Errorf("removing %s: %w", s.scratch, err))
 		}
