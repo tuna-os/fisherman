@@ -146,6 +146,7 @@ a policy here.
 | `distroID` | presence |
 | `brewTap` | presence |
 | `override` | value |
+| `diskIdentity` | presence |
 | `copyNetworkProfiles` | value |
 | `copyBluetoothPairings` | value |
 | `extras` | value |

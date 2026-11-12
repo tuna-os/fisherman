@@ -1,0 +1,12 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "diskIdentity.sizeBytes",
+      "code": "disk_identity_mismatch",
+      "message": "disk @DIR@/nvme0n1 is 53687091200 bytes, not 1024209543168: it is not the disk the install was planned for"
+    }
+  ],
+  "plan": null
+}

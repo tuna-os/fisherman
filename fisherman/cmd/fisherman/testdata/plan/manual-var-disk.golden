@@ -71,6 +71,7 @@
         "effect": "wipe_disk"
       }
     ],
+    "capacity": null,
     "scratch": {
       "path": "/var/fisherman-tmp",
       "on_target": false,
@@ -120,6 +121,10 @@
       {
         "field": "source.media_input",
         "reason": "on live media the install first binds the verified media input (probe media_input), which can replace the source; plan does not verify it"
+      },
+      {
+        "field": "capacity",
+        "reason": "a manual layout keeps the partitions it names; plan does not read their sizes"
       },
       {
         "field": "partitions[2].filesystem",

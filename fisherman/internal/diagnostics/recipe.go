@@ -64,6 +64,7 @@ var RecipeFieldPolicy = map[string]string{
 	"distroID":                 PolicyPresence,
 	"brewTap":                  PolicyPresence,
 	"override":                 PolicyValue,
+	"diskIdentity":             PolicyPresence,
 	"copyNetworkProfiles":      PolicyValue,
 	"copyBluetoothPairings":    PolicyValue,
 	"extras":                   PolicyValue,
@@ -106,6 +107,7 @@ type RecipeSummary struct {
 	DistroID              bool         `json:"distroID"`
 	BrewTap               bool         `json:"brewTap"`
 	Override              []string     `json:"override,omitempty"`
+	DiskIdentity          bool         `json:"diskIdentity"`
 	CopyNetworkProfiles   string       `json:"copyNetworkProfiles"`
 	CopyBluetoothPairings string       `json:"copyBluetoothPairings"`
 	Extras                any          `json:"extras"`
@@ -216,6 +218,7 @@ func summarizeRecipe(data []byte, rd *Redactor) (RecipeSummary, bool) {
 		LuksMapperName:        r.LuksMapperName != "",
 		DistroID:              r.DistroID != "",
 		BrewTap:               r.BrewTap != "",
+		DiskIdentity:          r.DiskIdentity != nil,
 		CopyNetworkProfiles:   triState(r.CopyNetworkProfiles),
 		CopyBluetoothPairings: triState(r.CopyBluetoothPairings),
 		SetBootNext:           triState(r.SetBootNext),

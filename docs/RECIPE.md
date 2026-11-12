@@ -49,6 +49,10 @@ otherwise.
 | `varDisk.keepExisting` | boolean | no | `false`: format it as XFS | `true`: mount the disk as it is. |
 | `targetMount` | string | no | `/mnt/fisherman-target` | The host path where fisherman assembles the target. Change it only when the default path is in use on the host. |
 | `override` | string array | no | no override | Target checks the caller accepts failing: `too_small`, `uefi`. |
+| `diskIdentity` | object | no | the install is not bound to a device | Binds the install to the disk the frontend planned on: copy the `serial`, `wwn` and `size_bytes` of `plan.target.identity` ([PLAN.md](PLAN.md#plantarget)). validate and the install refuse the recipe (`disk_identity_mismatch`) when the device `disk` names reports another value for a field that is set. At least one field must be set, and not with `customMounts` (`disk_identity_invalid`). See [VALIDATE.md](VALIDATE.md#disk-identity). |
+| `diskIdentity.serial` | string | no | not checked | The disk's serial (lsblk `SERIAL`). |
+| `diskIdentity.wwn` | string | no | not checked | The disk's World Wide Name (lsblk `WWN`), compared without case. |
+| `diskIdentity.sizeBytes` | integer | no | not checked | The disk size in bytes. |
 
 ### Encryption
 

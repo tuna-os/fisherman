@@ -15,7 +15,15 @@
       "disk": "@DIR@/nvme0n1",
       "device": "@DIR@/nvme0n1",
       "size_bytes": 53687091200,
-      "stable_id": "unknown"
+      "stable_id": "unknown",
+      "identity": {
+        "serial": "unknown",
+        "wwn": "unknown",
+        "model": "unknown",
+        "size_bytes": 53687091200,
+        "by_id": [],
+        "bound": false
+      }
     },
     "boot": {
       "bootloader": "grub2",
@@ -38,6 +46,7 @@
         "gpt_name": "EFI-SYSTEM",
         "gpt_type": "uefi",
         "size": "2GiB",
+        "size_bytes": 2147483648,
         "action": "format",
         "filesystem": "fat32",
         "mount": "/boot/efi"
@@ -50,6 +59,7 @@
         "gpt_name": "boot",
         "gpt_type": "linux",
         "size": "2GiB",
+        "size_bytes": 2147483648,
         "action": "format",
         "filesystem": "ext4",
         "mount": "/boot"
@@ -62,6 +72,7 @@
         "gpt_name": "root",
         "gpt_type": "linux",
         "size": "rest",
+        "size_bytes": 49388978176,
         "action": "format",
         "filesystem": "xfs",
         "encryption": "luks2",
@@ -75,6 +86,13 @@
         "effect": "wipe_disk"
       }
     ],
+    "capacity": {
+      "min_disk_bytes": 53687091200,
+      "disk_minimum": "met",
+      "reserved_bytes": 4298113024,
+      "root_bytes": 49388978176,
+      "root_minimum": "unknown"
+    },
     "scratch": {
       "path": "/var/fisherman-tmp",
       "on_target": false,
@@ -141,8 +159,28 @@
         "reason": "on live media the install first binds the verified media input (probe media_input), which can replace the source; plan does not verify it"
       },
       {
+        "field": "target.identity.serial",
+        "reason": "the disk reports no serial (loop devices, most virtual disks and some USB bridges have none)"
+      },
+      {
+        "field": "target.identity.wwn",
+        "reason": "the disk reports no WWN (loop devices, most virtual disks and some USB bridges have none)"
+      },
+      {
+        "field": "target.identity.model",
+        "reason": "the disk reports no model (loop devices, most virtual disks and some USB bridges have none)"
+      },
+      {
+        "field": "target.identity.by_id",
+        "reason": "udev made no /dev/disk/by-id link for the disk, or plan cannot read that directory"
+      },
+      {
         "field": "target.stable_id",
-        "reason": "fisherman reads no disk serial or WWN yet; the install checks the device again before it writes, and a saved plan is no proof the disk is the same"
+        "reason": "the disk reports neither a WWN nor a serial; bind the install with diskIdentity.sizeBytes, and the install checks the device again before it writes"
+      },
+      {
+        "field": "capacity.root_minimum",
+        "reason": "the root must hold the unpacked image and its updates; plan reads no image size, and fisherman sets no root minimum beyond the disk minimum"
       },
       {
         "field": "scratch.bytes",

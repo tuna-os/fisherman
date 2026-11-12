@@ -14,8 +14,19 @@
       "layout": "auto",
       "disk": "@DIR@/sda",
       "device": "@DIR@/sda",
-      "size_bytes": 53687091200,
-      "stable_id": "unknown"
+      "size_bytes": 500107862016,
+      "stable_id": "0x5000c500a1b2c3d4",
+      "identity": {
+        "serial": "FIXTURE-SDA-SERIAL",
+        "wwn": "0x5000c500a1b2c3d4",
+        "model": "Fixture Disk",
+        "size_bytes": 500107862016,
+        "by_id": [
+          "/dev/disk/by-id/ata-Fixture_Disk_FIXTURE-SDA-SERIAL",
+          "/dev/disk/by-id/wwn-0x5000c500a1b2c3d4"
+        ],
+        "bound": false
+      }
     },
     "boot": {
       "bootloader": "grub2",
@@ -38,6 +49,7 @@
         "gpt_name": "EFI-SYSTEM",
         "gpt_type": "uefi",
         "size": "2GiB",
+        "size_bytes": 2147483648,
         "action": "format",
         "filesystem": "fat32",
         "mount": "/boot/efi"
@@ -50,6 +62,7 @@
         "gpt_name": "boot",
         "gpt_type": "linux",
         "size": "2GiB",
+        "size_bytes": 2147483648,
         "action": "format",
         "filesystem": "ext4",
         "mount": "/boot"
@@ -62,6 +75,7 @@
         "gpt_name": "root",
         "gpt_type": "linux",
         "size": "rest",
+        "size_bytes": 495809748992,
         "action": "format",
         "filesystem": "xfs",
         "encryption": "luks2",
@@ -75,6 +89,13 @@
         "effect": "wipe_disk"
       }
     ],
+    "capacity": {
+      "min_disk_bytes": 53687091200,
+      "disk_minimum": "met",
+      "reserved_bytes": 4298113024,
+      "root_bytes": 495809748992,
+      "root_minimum": "unknown"
+    },
     "scratch": {
       "path": "/var/fisherman-tmp",
       "on_target": false,
@@ -146,8 +167,8 @@
         "reason": "on live media the install first binds the verified media input (probe media_input), which can replace the source; plan does not verify it"
       },
       {
-        "field": "target.stable_id",
-        "reason": "fisherman reads no disk serial or WWN yet; the install checks the device again before it writes, and a saved plan is no proof the disk is the same"
+        "field": "capacity.root_minimum",
+        "reason": "the root must hold the unpacked image and its updates; plan reads no image size, and fisherman sets no root minimum beyond the disk minimum"
       },
       {
         "field": "scratch.bytes",

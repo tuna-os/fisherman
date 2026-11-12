@@ -1,0 +1,12 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "diskIdentity.sizeBytes",
+      "code": "disk_identity_invalid",
+      "message": "diskIdentity.sizeBytes is -1; it must be the disk size in bytes"
+    }
+  ],
+  "plan": null
+}

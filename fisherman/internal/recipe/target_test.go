@@ -108,3 +108,80 @@ func TestCheckOverride(t *testing.T) {
 		t.Error("Problems() does not apply the override rule")
 	}
 }
+
+// diskIdentity binds the install to the planned device (#371): a field the
+// recipe sets must match what the device reports now, and a field the
+// device no longer reports is a mismatch.
+func TestCheckDiskIdentity(t *testing.T) {
+	facts := func() *TargetFacts {
+		return &TargetFacts{Device: "/dev/sda", SizeBytes: 100 << 30, MinBytes: 50 << 30,
+			Serial: "S5Y1NJ0R123456", WWN: "0x5002538f4231abcd"}
+	}
+	with := func(f func(*TargetFacts)) *TargetFacts { t := facts(); f(t); return t }
+	bound := func(id DiskIdentity) Recipe { return Recipe{Disk: "/dev/sda", Filesystem: "xfs", DiskIdentity: &id} }
+	planned := DiskIdentity{Serial: "S5Y1NJ0R123456", WWN: "0x5002538F4231ABCD", SizeBytes: 100 << 30}
+
+	tests := []struct {
+		name string
+		r    Recipe
+		disk *TargetFacts
+		want []string
+	}{
+		{"no binding", Recipe{Disk: "/dev/sda", Filesystem: "xfs"}, facts(), nil},
+		{"the planned disk (WWN compared without case)", bound(planned), facts(), nil},
+		{"size only", bound(DiskIdentity{SizeBytes: 100 << 30}), with(func(f *TargetFacts) { f.Serial, f.WWN = "", "" }), nil},
+		{"serial changed", bound(planned), with(func(f *TargetFacts) { f.Serial = "OTHER" }),
+			[]string{"diskIdentity.serial:disk_identity_mismatch"}},
+		{"size changed", bound(planned), with(func(f *TargetFacts) { f.SizeBytes = 200 << 30 }),
+			[]string{"diskIdentity.sizeBytes:disk_identity_mismatch"}},
+		{"another disk", bound(planned), &TargetFacts{Device: "/dev/sda", SizeBytes: 64 << 30, MinBytes: 50 << 30, WWN: "eui.1"},
+			[]string{"diskIdentity.serial:disk_identity_mismatch", "diskIdentity.wwn:disk_identity_mismatch",
+				"diskIdentity.sizeBytes:disk_identity_mismatch"}},
+		{"the device no longer reports a serial", bound(DiskIdentity{Serial: "S5Y1NJ0R123456"}),
+			with(func(f *TargetFacts) { f.Serial = "" }), []string{"diskIdentity.serial:disk_identity_mismatch"}},
+		{"no verdict: disk_unverified, not a mismatch", bound(planned), &TargetFacts{Err: errors.New("lsblk")},
+			[]string{"disk:disk_unverified"}},
+		{"not a disk: not_disk alone", bound(planned), with(func(f *TargetFacts) { f.NotDisk = true }),
+			[]string{"disk:disk_not_disk"}},
+		{"missing disk is Problems' to report", bound(planned), nil, nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := codes(tt.r.CheckTarget(tt.disk, nil, true)); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("CheckTarget = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// The shape needs no machine, so Problems and --partial apply it.
+	for _, c := range []struct {
+		name string
+		r    Recipe
+		want []string
+	}{
+		{"absent", Recipe{}, nil},
+		{"planned", bound(planned), nil},
+		{"empty", bound(DiskIdentity{}), []string{"diskIdentity:disk_identity_invalid"}},
+		{"blank serial only", bound(DiskIdentity{Serial: "  "}), []string{"diskIdentity:disk_identity_invalid"}},
+		{"negative size", bound(DiskIdentity{SizeBytes: -1}), []string{"diskIdentity.sizeBytes:disk_identity_invalid"}},
+		{"manual layout", Recipe{DiskIdentity: &planned, CustomMounts: []CustomMount{{Partition: "/dev/sda2", Target: "/"}}},
+			[]string{"diskIdentity:disk_identity_invalid"}},
+	} {
+		if got := codes(CheckDiskIdentity(&c.r)); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: CheckDiskIdentity = %v, want %v", c.name, got, c.want)
+		}
+	}
+	r := bound(DiskIdentity{})
+	found := false
+	for _, p := range r.Problems() {
+		found = found || p.Code == CodeDiskIdentityInvalid
+	}
+	if !found {
+		t.Error("Problems() does not apply the diskIdentity rule")
+	}
+	// An invalid binding is reported once, as invalid, not as a mismatch.
+	invalid := bound(DiskIdentity{SizeBytes: -1})
+	if got := codes(invalid.CheckTarget(facts(), nil, true)); got != nil {
+		t.Errorf("CheckTarget with an invalid diskIdentity = %v", got)
+	}
+}
