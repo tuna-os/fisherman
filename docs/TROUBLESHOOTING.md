@@ -82,7 +82,7 @@ Every event has a `type`:
 | `recovery_key` | the LUKS recovery key of an encrypted install. Show it to the user once; never log it |
 | `receipt` | what the install did with the installation receipt |
 | `complete` | the install succeeded |
-| `error` | the install failed: `message`, and `code` and `field` when the failure is a recipe rule or a preflight check |
+| `error` | the install failed: `message`, `code` (a validate code, or a failure code for the operation that failed), `field`, `step_id`, `disk_changed` and `cleanup` |
 
 ### Steps
 
@@ -116,12 +116,16 @@ fisherman exits 1 on a failure and 130 on a cancel. The last event is the
 `error` event:
 
 ```json
-{"elapsed_ms":45123,"message":"partitioning disk: exit status 1","timestamp":"2026-10-07T19:06:15.234567Z","type":"error"}
+{"cleanup":{"status":"ok"},"code":"partition_failed","disk_changed":true,"elapsed_ms":45123,"message":"partitioning disk: exit status 1","step_id":"partition","timestamp":"2026-10-07T19:06:15.234567Z","type":"error"}
 ```
 
 ```bash
-jq -cR 'fromjson? | objects | select(.type == "error") | {code, field, message}' install.log
+jq -cR 'fromjson? | objects | select(.type == "error") | {code, field, step_id, disk_changed, cleanup, message}' install.log
 ```
+
+`code` names the operation that failed
+([failure codes](JSON-PROGRESS-FORMAT.md#failure-codes)), and `disk_changed`
+says whether a disk step had started.
 
 The same message is on stderr as `fisherman: fatal: <message>` (or
 `fisherman: cancelled: <message>`). The message starts with the stage that
@@ -147,8 +151,9 @@ A failure before the first `step` event changes no disk.
 
 On a failure and on a cancel, fisherman stops its child processes, unmounts
 the target and closes the LUKS mapping before it writes the `error` event. You
-need to clean up by hand only when the message ends with
-`; cleanup failed, the target may still be mounted or unlocked: …`:
+need to clean up by hand only when `cleanup.status` is `failed` or
+`timed_out` (the message then ends with
+`; cleanup failed, the target may still be mounted or unlocked: …`):
 
 ```bash
 # The target mount is /mnt/fisherman-target, or the recipe's targetMount.

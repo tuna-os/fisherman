@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -125,14 +127,41 @@ func fatalProblem(prefix string, p recipe.Problem) {
 }
 
 // fatalLoad reports a recipe that could not be loaded. A strict-parse
-// problem (an unknown field) keeps its code.
+// problem (an unknown field) keeps its code. Any other failure gets the
+// code `fisherman validate --json` gives it: recipe_malformed for empty
+// or invalid JSON, recipe_unreadable for a recipe that cannot be read.
 func fatalLoad(err error) {
 	var p recipe.Problem
 	if errors.As(err, &p) {
 		fatalProblem("loading recipe", p)
 		return
 	}
-	fatal("loading recipe: %v", err)
+	code := recipe.CodeRecipeUnreadable
+	var syntax *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	if errors.Is(err, recipe.ErrEmptyRecipe) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &syntax) || errors.As(err, &typeErr) {
+		code = recipe.CodeRecipeMalformed
+	}
+	msg := fmt.Sprintf("loading recipe: %v", err)
+	term.failProblem(msg, recipe.Problem{Code: code, Message: msg})
+}
+
+// bootcFailureCode is the failure code of a bootcInstall error: pull_failed
+// for the image pull (install.PullError, through any wrapping), else
+// bootc_install_failed.
+func bootcFailureCode(err error) string {
+	var pull *install.PullError
+	if errors.As(err, &pull) {
+		return progress.FailurePullFailed
+	}
+	return progress.FailureBootcInstallFailed
+}
+
+// fatalCode is fatal for a runtime failure: the error event carries code,
+// one of the progress.Failure* codes, so a frontend need not read the
+// message to tell which operation failed.
+func fatalCode(code, format string, args ...any) {
+	term.failCode(fmt.Sprintf(format, args...), code)
 }
 
 // teardown releases everything the install registered: a filesystem the
@@ -358,13 +387,16 @@ func main() {
 			fatalProblem("cannot install", recipe.Problem{Code: recipe.CodeInstallAlreadyRunning,
 				Message: err.Error() + "; wait for it to finish, or cancel it, then start this install again"})
 		}
-		fatal("cannot take the install lock %s: %v", installLockPath, err)
+		fatalCode(progress.FailureLockFailed, "cannot take the install lock %s: %v", installLockPath, err)
 	}
 
 	r, err := loadRecipe(os.Args[1])
 	if err != nil {
 		fatalLoad(err)
 	}
+	// No error event or failure line may carry these.
+	progress.RegisterSecret(r.Encryption.Passphrase)
+	progress.RegisterSecret(r.User.Password)
 
 	// Resolve and verify host-owned media before live probing (bootc status),
 	// store discovery or CheckImage can inspect a stale cache or the registry.
@@ -374,7 +406,7 @@ func main() {
 	if r.SourceReuse == nil {
 		mediaInput, err = resolveMediaInput(r)
 		if err != nil {
-			fatal("required local source is absent or unreadable; refusing installation: %v", err)
+			fatalCode(progress.FailureLocalSourceUnavailable, "required local source is absent or unreadable; refusing installation: %v", err)
 		}
 	}
 	sourceImgref := r.Image
@@ -489,10 +521,10 @@ func main() {
 		progress.Info("Checking image cache...")
 		imageCheck = install.CheckImage(r.Image)
 		if install.IsOCISource(r.Image) && imageCheck.NeedsPull {
-			fatal("required local source is absent or unreadable; refusing installation")
+			fatalCode(progress.FailureLocalSourceUnavailable, "required local source is absent or unreadable; refusing installation")
 		}
 		if strings.HasPrefix(r.Image, "containers-storage:") && imageCheck.NeedsPull {
-			fatal("required local source is absent or unreadable; refusing installation")
+			fatalCode(progress.FailureLocalSourceUnavailable, "required local source is absent or unreadable; refusing installation")
 		}
 		if imageCheck.NeedsPull {
 			progress.Info(fmt.Sprintf("Image pull required (%d layers)", imageCheck.LayerCount))
@@ -617,7 +649,7 @@ func main() {
 		activeTargetMount, activeEfiPart, _, applyErr = disk.ApplyCustomLayoutWith(specs, targetMount,
 			disk.LayoutHooks{Mounted: cleanup.AddMount, SwapOn: swaps.Add})
 		if applyErr != nil {
-			fatal("manual disk layout: %v", applyErr)
+			fatalCode(progress.FailureManualLayoutFailed, "manual disk layout: %v", applyErr)
 		}
 	} else {
 		// ── Step 1: Partition disk ────────────────────────────────────────────
@@ -627,21 +659,21 @@ func main() {
 
 		if r.Filesystem == "zfs" {
 			if err := disk.PartitionZFS(r.Disk); err != nil {
-				fatal("partitioning disk for ZFS: %v", err)
+				fatalCode(progress.FailurePartitionFailed, "partitioning disk for ZFS: %v", err)
 			}
 		} else if isSystemdBoot {
 			// systemd-boot always uses a 2-partition layout regardless of encryption.
 			// LUKS (if requested) wraps p2 (root); the 1 GiB FAT32 ESP stays unencrypted.
 			if err := disk.PartitionSystemdBoot(r.Disk); err != nil {
-				fatal("partitioning disk: %v", err)
+				fatalCode(progress.FailurePartitionFailed, "partitioning disk: %v", err)
 			}
 		} else if hasEncryption {
 			if err := disk.PartitionEncrypted(r.Disk); err != nil {
-				fatal("partitioning disk: %v", err)
+				fatalCode(progress.FailurePartitionFailed, "partitioning disk: %v", err)
 			}
 		} else {
 			if err := disk.Partition(r.Disk); err != nil {
-				fatal("partitioning disk: %v", err)
+				fatalCode(progress.FailurePartitionFailed, "partitioning disk: %v", err)
 			}
 		}
 
@@ -669,14 +701,14 @@ func main() {
 		step++
 
 		if err := disk.FormatEFI(efiPart); err != nil {
-			fatal("formatting EFI: %v", err)
+			fatalCode(progress.FailureFormatFailed, "formatting EFI: %v", err)
 		}
 		// grub2 installs need a separate ext4 /boot so GRUB never has to parse
 		// XFS (GRUB's built-in XFS driver lacks support for modern XFS features).
 		// systemd-boot reads the FAT32 ESP directly, so no separate /boot needed.
 		if !isSystemdBoot {
 			if err := disk.FormatBoot(bootPart); err != nil {
-				fatal("formatting /boot: %v", err)
+				fatalCode(progress.FailureFormatFailed, "formatting /boot: %v", err)
 			}
 		}
 
@@ -693,6 +725,7 @@ func main() {
 			case "tpm2-luks":
 				passphrase = luks.RandomPassphrase()
 				luksRecoveryKey = passphrase // emitted later so user can write it down
+				progress.RegisterSecret(passphrase)
 				progress.Info("TPM2-LUKS: generated random recovery passphrase; TPM2 will be enrolled after install")
 			}
 
@@ -704,10 +737,10 @@ func main() {
 			}
 
 			if err := luks.Format(rootPart, passphrase); err != nil {
-				fatal("LUKS format: %v", err)
+				fatalCode(progress.FailureLUKSFailed, "LUKS format: %v", err)
 			}
 			if err := luks.Open(rootPart, passphrase, luksMapper); err != nil {
-				fatal("LUKS open: %v", err)
+				fatalCode(progress.FailureLUKSFailed, "LUKS open: %v", err)
 			}
 			cleanup.SetLUKS(luksMapper)
 			rootDev = luks.MapperPath(luksMapper)
@@ -721,17 +754,17 @@ func main() {
 
 		if r.Filesystem == "zfs" {
 			if err := disk.CreateZFSPool(poolName, rootPart, targetMount); err != nil {
-				fatal("creating ZFS pool: %v", err)
+				fatalCode(progress.FailureZFSFailed, "creating ZFS pool: %v", err)
 			}
 			// From here the pool is imported on this host. Teardown exports
 			// it, on success and on every failure (#413).
 			cleanup.SetZFSPool(poolName)
 			if err := disk.CreateZFSRootDataset(poolName); err != nil {
-				fatal("creating ZFS root dataset: %v", err)
+				fatalCode(progress.FailureZFSFailed, "creating ZFS root dataset: %v", err)
 			}
 		} else {
 			if err := disk.FormatRoot(rootDev, r.Filesystem); err != nil {
-				fatal("formatting root filesystem: %v", err)
+				fatalCode(progress.FailureFormatFailed, "formatting root filesystem: %v", err)
 			}
 		}
 
@@ -741,7 +774,7 @@ func main() {
 		step++
 
 		if err := os.MkdirAll(targetMount, 0o755); err != nil {
-			fatal("creating mount point %s: %v", targetMount, err)
+			fatalCode(progress.FailureMountFailed, "creating mount point %s: %v", targetMount, err)
 		}
 
 		if r.Filesystem == "zfs" {
@@ -749,11 +782,11 @@ func main() {
 			// mounted. Ensure the mount point exists and call MountZFSRoot in
 			// case the automount didn't fire (e.g. in a container environment).
 			if err := disk.MountZFSRoot(poolName, targetMount); err != nil {
-				fatal("mounting ZFS root: %v", err)
+				fatalCode(progress.FailureZFSFailed, "mounting ZFS root: %v", err)
 			}
 		} else if r.BtrfsSubvolumes {
 			if err := disk.SetupBtrfsSubvolumes(rootDev, targetMount); err != nil {
-				fatal("setting up btrfs subvolumes: %v", err)
+				fatalCode(progress.FailureMountFailed, "setting up btrfs subvolumes: %v", err)
 			}
 		} else {
 			mountOpts := ""
@@ -761,7 +794,7 @@ func main() {
 				mountOpts = "compress=zstd:1"
 			}
 			if err := disk.MountType(rootDev, targetMount, r.Filesystem, mountOpts); err != nil {
-				fatal("mounting root: %v", err)
+				fatalCode(progress.FailureMountFailed, "mounting root: %v", err)
 			}
 		}
 		cleanup.AddMount(targetMount)
@@ -771,14 +804,14 @@ func main() {
 		// Not needed for systemd-boot installs (no separate /boot partition).
 		if !isSystemdBoot {
 			if err := disk.MountBoot(targetMount, bootPart); err != nil {
-				fatal("mounting /boot: %v", err)
+				fatalCode(progress.FailureMountFailed, "mounting /boot: %v", err)
 			}
 			cleanup.AddMount(targetMount + "/boot")
 		}
 
 		// Mount the EFI partition at /boot/efi inside the target.
 		if err := disk.MountEFI(targetMount, efiPart); err != nil {
-			fatal("mounting EFI: %v", err)
+			fatalCode(progress.FailureMountFailed, "mounting EFI: %v", err)
 		}
 		cleanup.AddMount(targetMount + "/boot/efi")
 
@@ -791,7 +824,7 @@ func main() {
 	if hasVarDisk {
 		varDir := filepath.Join(activeTargetMount, "var")
 		if err := os.MkdirAll(varDir, 0o755); err != nil {
-			fatal("creating /var mount point: %v", err)
+			fatalCode(progress.FailureMountFailed, "creating /var mount point: %v", err)
 		}
 		if !r.VarDisk.KeepExisting {
 			progress.Step(step, totalSteps, "Formatting data disk (/var)", profile[pi].cumulativePct, profile[pi].weightPct)
@@ -800,13 +833,13 @@ func main() {
 			// Release the disk (mounts, swap, LVM, old signatures), then
 			// format it: see disk.PrepareVarDisk (#406).
 			if err := disk.PrepareVarDisk(r.VarDisk.Disk); err != nil {
-				fatal("formatting /var disk: %v", err)
+				fatalCode(progress.FailureFormatFailed, "formatting /var disk: %v", err)
 			}
 		} else {
 			progress.Info(fmt.Sprintf("Keeping existing data on /var disk %s", r.VarDisk.Disk))
 		}
 		if err := disk.Mount(r.VarDisk.Disk, varDir, ""); err != nil {
-			fatal("mounting /var disk: %v", err)
+			fatalCode(progress.FailureMountFailed, "mounting /var disk: %v", err)
 		}
 		cleanup.AddMount(varDir)
 		progress.Info(fmt.Sprintf("Mounted /var disk %s at /var", r.VarDisk.Disk))
@@ -827,7 +860,7 @@ func main() {
 	liveISO := isSpaceConstrained("/var") && activeTargetMount != ""
 	scratchDir, err := prepareScratchDir(activeTargetMount, liveISO)
 	if err != nil {
-		fatal("preparing scratch dir: %v", err)
+		fatalCode(progress.FailureScratchFailed, "preparing scratch dir: %v", err)
 	}
 	// The bootc container receives scratch at /var/tmp. Its launcher also
 	// redirects host-side OCI staging while podman creates the container:
@@ -880,7 +913,7 @@ func main() {
 		// Without the UUID no loader entry can name the LUKS container.
 		// Stop before the image is deployed, not after "complete" (#410).
 		if activeLuksUUID == "" {
-			fatal("LUKS: could not read the UUID of the encrypted root partition %s", activeRootPart)
+			fatalCode(progress.FailureLUKSFailed, "LUKS: could not read the UUID of the encrypted root partition %s", activeRootPart)
 		}
 		// Where nothing else finds the root, bootc writes the argument
 		// into the entries it creates, the way rootflags gets there.
@@ -889,7 +922,7 @@ func main() {
 		}
 	}
 	if err := bootcInstall(opts); err != nil {
-		fatal("bootc install: %v", err)
+		fatalCode(bootcFailureCode(err), "bootc install: %v", err)
 	}
 	if reused != nil {
 		msg, p := checkReusedInstall(activeTargetMount, reused)
@@ -968,7 +1001,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "warning: could not fully clean partition references: %v\n", err)
 		}
 		if err := disk.SetPartitionType(r.Disk, 2, disk.LinuxRootPartType()); err != nil {
-			fatal("retagging root partition: %v", err)
+			fatalCode(progress.FailureRetagFailed, "retagging root partition: %v", err)
 		}
 		// Remount root so finalization and post-install writes can proceed.
 		// udisksctl unmount (used by UnmountPartition above) removes the
@@ -976,7 +1009,7 @@ func main() {
 		// MountTmpfs/BindMount — does not create its target, so recreate it
 		// or the plain `mount` syscall below fails with ENOENT.
 		if err := os.MkdirAll(activeTargetMount, 0o755); err != nil {
-			fatal("recreating target mountpoint before remount: %v", err)
+			fatalCode(progress.FailureRetagFailed, "recreating target mountpoint before remount: %v", err)
 		}
 		// The sfdisk write makes the kernel re-read the table, so the node
 		// can be missing or mid-re-add here: settle, wait (bounded) for it to
@@ -984,14 +1017,14 @@ func main() {
 		// failing is fatal.
 		rootPart := disk.PartName(r.Disk, 2)
 		if err := disk.WaitForPartitionNode(rootPart, disk.DefaultPartitionNodeTimeout); err != nil {
-			fatal("remounting root partition after retagging: %v", err)
+			fatalCode(progress.FailureRetagFailed, "remounting root partition after retagging: %v", err)
 		}
 		// With the same options as the first mount (and as the installed
 		// system's rootflags): on btrfs a bare mount is the top-level
 		// subvolume, not @, and has no compression. Every later step would
 		// then look for the deployment in the wrong tree (#416).
 		if err := disk.MountWithRetry(rootPart, activeTargetMount, r.RootMountOptions(), disk.DefaultMountAttempts, disk.DefaultMountBackoff); err != nil {
-			fatal("remounting root partition after retagging: %v", err)
+			fatalCode(progress.FailureRetagFailed, "remounting root partition after retagging: %v", err)
 		}
 		// Remount EFI so that Plymouth/LUKS arg writes land on the real ESP
 		// instead of the empty /boot/efi directory in the XFS root.
@@ -1008,7 +1041,7 @@ func main() {
 	// those steps write, and writes the fstab lines. See mounts.go (#406,
 	// #372).
 	if err := persistMounts(r, activeTargetMount, cleanup.AddMount); err != nil {
-		fatal("persistent mounts: %v", err)
+		fatalCode(progress.FailurePersistentMountsFailed, "persistent mounts: %v", err)
 	}
 
 	// ── TPM2 enrolment ────────────────────────────────────────────────────────
@@ -1051,7 +1084,7 @@ func main() {
 
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
 	if err := post.WriteHostname(activeTargetMount, r.Hostname); err != nil {
-		fatal("writing hostname: %v", err)
+		fatalCode(progress.FailureHostnameFailed, "writing hostname: %v", err)
 	}
 
 	// Create a user account if the recipe requests one (e.g. Bazzite has no OOBE).
@@ -1063,7 +1096,7 @@ func main() {
 			Password: r.User.Password,
 			Groups:   r.User.Groups,
 		}); err != nil {
-			fatal("creating user: %v", err)
+			fatalCode(progress.FailureUserFailed, "creating user: %v", err)
 		}
 	}
 
@@ -1094,7 +1127,7 @@ func main() {
 	if activeLuksUUID != "" {
 		msg, err := ensureLuksBoot(activeTargetMount, activeLuksUUID, luksNeedsKarg(isSystemdBoot, r.ComposeFsBackend))
 		if err != nil {
-			fatal("LUKS boot arguments: %v", err)
+			fatalCode(progress.FailureLUKSBootArgsFailed, "LUKS boot arguments: %v", err)
 		}
 		progress.Info(msg)
 	}
@@ -1184,7 +1217,7 @@ func main() {
 	progress.Step(step, totalSteps, "Finalizing installation", profile[pi].cumulativePct, profile[pi].weightPct)
 	if r.Filesystem != "zfs" {
 		if err := disk.FinalizeFilesystemWith(activeTargetMount, freezes.Hooks()); err != nil {
-			fatal("finalizing target filesystem: %v", err)
+			fatalCode(progress.FailureFinalizeFailed, "finalizing target filesystem: %v", err)
 		}
 	}
 

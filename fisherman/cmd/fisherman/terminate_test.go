@@ -26,6 +26,7 @@ type recorder struct {
 	mu       sync.Mutex
 	calls    []string
 	errors   []string
+	failures []progress.Failure
 	exits    []int
 	parks    int
 	stderr   bytes.Buffer
@@ -52,9 +53,10 @@ func newRecorded(t *testing.T) (*terminator, *recorder) {
 		}
 		return nil
 	}
-	tm.emitError = func(msg string) {
+	tm.emitError = func(f progress.Failure) {
 		r.mu.Lock()
-		r.errors = append(r.errors, msg)
+		r.errors = append(r.errors, f.Message)
+		r.failures = append(r.failures, f)
 		r.mu.Unlock()
 		r.add("error")
 	}
@@ -589,6 +591,16 @@ func TestRealSignal_SIGTERMCancelsCleanly(t *testing.T) {
 	}
 	if res.cleanups != 1 {
 		t.Errorf("cleanup ran %d times, want 1", res.cleanups)
+	}
+	// #369: the one terminal event has the cancel's code and the cleanup
+	// outcome as fields.
+	for _, ev := range res.events {
+		if ev["type"] != "error" {
+			continue
+		}
+		if c, _ := ev["cleanup"].(map[string]any); ev["code"] != progress.FailureCancelled || c["status"] != progress.CleanupOK {
+			t.Errorf("cancel event = %v, want code %q and cleanup ok", ev, progress.FailureCancelled)
+		}
 	}
 }
 

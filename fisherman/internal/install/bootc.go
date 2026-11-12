@@ -1148,8 +1148,18 @@ func pullImage(image string, layerCount int, root, runRoot, storageDriver string
 			time.Sleep(wait)
 		}
 	}
-	return err
+	return &PullError{Image: image, Err: err}
 }
+
+// PullError is a failed image pull, after its retries. It says which
+// operation failed, not why: the reason is in Err.
+type PullError struct {
+	Image string
+	Err   error
+}
+
+func (e *PullError) Error() string { return e.Err.Error() }
+func (e *PullError) Unwrap() error { return e.Err }
 
 func pullImageOnce(image string, layerCount int, root, runRoot, storageDriver string) error {
 	progress.Substep("Pulling container image")

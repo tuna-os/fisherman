@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Features
+
+- **Runtime failure codes on the `error` event** (#369): every `error` event
+  now has a `code`. It is the validate code for a recipe or preflight
+  problem, as before, and otherwise one of the documented failure codes for
+  the operation that failed (`partition_failed`, `pull_failed`,
+  `bootc_install_failed`, …, `cancelled`, `unknown`). The event also carries
+  `step_id` (the running step), `disk_changed` (a disk step had started) and
+  `cleanup` (`status` `ok`, `failed` or `timed_out`, and its `message`). A
+  cleanup failure no longer hides the primary cause. An unloadable recipe
+  gets the code `validate --json` gives it (`recipe_malformed`,
+  `recipe_unreadable`). The LUKS passphrase, the user password and the
+  recovery key are redacted from the event and the stderr line, and the
+  message is bounded. `message`, exit 1 versus 130 and the one terminal event
+  after teardown are unchanged.
+
 ### 🐛 Fixes
 
 - **`needs_user_creation` defaults to true in the image catalog resolver**
