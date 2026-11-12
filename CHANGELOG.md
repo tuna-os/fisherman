@@ -267,6 +267,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed system. A receipt for another image gave `mismatch`, and the CI
   host's own status gave `unavailable`. The advisory images keep the checks
   advisory.
+- **The #418 VM shapes gate** (#423): `centos-bootc-luks-user`,
+  `centos-bootc-var-disk` and `dakota-tpm2` are required entries, and the
+  arm64 unit tests are a need of `required-canaries`. `bootcrew-vm.yml` also
+  runs every night on dev, so these shapes gate the nightly as well as each
+  PR. `dakota-tpm2-luks` stays advisory.
 - **The VM matrix boots `tpm2-luks` and checks the enabled units** (#418,
   #421, #422): `dakota-tpm2-luks` installs with TPM2 and no passphrase
   against swtpm. The harness takes the recovery key from the install's
