@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **`fisherman plan --json -`: a non-destructive install plan** (part of
+  #371): a new command reads a recipe on stdin (never a file), runs the
+  `validate --json` checks through the same function, and prints a
+  versioned plan: the source, the target disk, the partitions the install
+  creates, formats or keeps (by boot stack and encryption, from the table
+  the install itself partitions with), the encryption type with no secret,
+  the boot stack, the devices it destroys, the scratch path and the ordered
+  steps of the install's step plan. A value only the install can resolve
+  (the image digest, a pull, a stable disk identity) is `"unknown"` and
+  listed in `plan.unknown`. It needs no root and writes, mounts and pulls
+  nothing; the tests run it under a command runner that fails on any
+  mutating command, plant sentinel secrets, and pin golden output per
+  recipe shape. The GPT layouts now live in one table
+  (`disk.LayoutPartitions`), and the manual layout's order and actions in
+  `disk.OrderMounts` and `MountSpec.Action`; the install and the plan both
+  read them. Equal-depth manual mounts now keep the recipe's order (a
+  stable sort), and a ZFS partitioning failure says "partitioning disk"
+  like the others. See `docs/PLAN.md`.
+
 - **`fisherman diagnostics`: a local support bundle** (#375): a new command
   writes one JSON file of allowlisted facts about an install: versions, the
   probe's facts, the recipe's effective options (never the recipe), the

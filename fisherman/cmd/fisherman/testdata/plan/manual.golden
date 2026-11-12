@@ -1,0 +1,132 @@
+{
+  "protocol_version": 1,
+  "valid": true,
+  "errors": [],
+  "plan": {
+    "source": {
+      "kind": "registry",
+      "image": "ghcr.io/example/os:stable",
+      "target_imgref": "ghcr.io/example/os:stable",
+      "digest": "unknown",
+      "pull": "unknown"
+    },
+    "target": {
+      "layout": "manual"
+    },
+    "boot": {
+      "bootloader": "grub2",
+      "composefs": false
+    },
+    "encryption": {
+      "type": "none",
+      "luks": false,
+      "tpm2": false,
+      "passphrase": false,
+      "recovery_key": "none"
+    },
+    "partitions": [
+      {
+        "device": "@DIR@/sda3",
+        "role": "root",
+        "created": false,
+        "action": "format",
+        "filesystem": "btrfs",
+        "mount": "/",
+        "mount_options": "compress=zstd:1"
+      },
+      {
+        "device": "@DIR@/sda4",
+        "role": "swap",
+        "created": false,
+        "action": "swap",
+        "filesystem": "swap",
+        "mount": "swap"
+      },
+      {
+        "device": "@DIR@/sda2",
+        "role": "boot",
+        "created": false,
+        "action": "format",
+        "filesystem": "ext4",
+        "mount": "/boot"
+      },
+      {
+        "device": "@DIR@/sda1",
+        "role": "efi",
+        "created": false,
+        "action": "preserve",
+        "filesystem": "unknown",
+        "mount": "/boot/efi"
+      }
+    ],
+    "var_disk": null,
+    "destroys": [
+      {
+        "device": "@DIR@/sda3",
+        "effect": "format"
+      },
+      {
+        "device": "@DIR@/sda4",
+        "effect": "mkswap"
+      },
+      {
+        "device": "@DIR@/sda2",
+        "effect": "format"
+      }
+    ],
+    "scratch": {
+      "path": "/var/fisherman-tmp",
+      "on_target": false,
+      "bytes": "unknown"
+    },
+    "steps": [
+      {
+        "number": 1,
+        "step_id": "prepare_disk",
+        "name": "Preparing disk"
+      },
+      {
+        "number": 2,
+        "step_id": "install_os",
+        "name": "Installing OS"
+      },
+      {
+        "number": 3,
+        "step_id": "flatpaks",
+        "name": "Copying system Flatpaks"
+      },
+      {
+        "number": 4,
+        "step_id": "configure",
+        "name": "Configuring installed system"
+      },
+      {
+        "number": 5,
+        "step_id": "finalize",
+        "name": "Finalizing installation"
+      }
+    ],
+    "unknown": [
+      {
+        "field": "source.digest",
+        "reason": "the install reads the image identity when it pulls or opens the image; plan contacts no registry and opens no image"
+      },
+      {
+        "field": "source.pull",
+        "reason": "whether the image is in a local store or must be pulled is known only when the install checks the image cache"
+      },
+      {
+        "field": "source.media_input",
+        "reason": "on live media the install first binds the verified media input (probe media_input), which can replace the source; plan does not verify it"
+      },
+      {
+        "field": "partitions[3].filesystem",
+        "reason": "a kept partition is mounted with the filesystem it holds; plan does not read it"
+      },
+      {
+        "field": "scratch.bytes",
+        "reason": "the scratch space an install needs depends on the image size, known only after a pull or an image read"
+      }
+    ]
+  }
+}

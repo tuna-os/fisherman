@@ -19,6 +19,7 @@ here, or a row names one that the code does not have.
 | `fisherman <recipe.json>` | yes | Install from a recipe file. **This erases the disk.** | [JSON-PROGRESS-FORMAT.md](JSON-PROGRESS-FORMAT.md) |
 | `fisherman -` | yes | Install from a recipe read on stdin to EOF (at most 1 MiB). | [JSON-PROGRESS-FORMAT.md](JSON-PROGRESS-FORMAT.md) |
 | `fisherman validate` | no | Check a recipe without an install. | [VALIDATE.md](VALIDATE.md) |
+| `fisherman plan` | no | Print what an install of a recipe would do, with no write, no pull and no secret. | [PLAN.md](PLAN.md) |
 | `fisherman probe` | no | Print the facts of this machine that a frontend needs. | [PROBE.md](PROBE.md) |
 | `fisherman verify` | for `--live` | On the installed system: compare the installation receipt with the booted image. | [RECEIPT.md](RECEIPT.md) |
 | `fisherman diagnostics` | no | Write a local support bundle of allowlisted facts about an install. Never uploaded. | [DIAGNOSTICS.md](DIAGNOSTICS.md) |
@@ -71,6 +72,28 @@ The recipe is a path or `-` for stdin; exactly one is required.
 | 0 | valid | valid |
 | 1 | invalid, unreadable, or no recipe argument | invalid, unreadable or not JSON (reported as a problem) |
 | 2 | an unknown flag (`--partial` without `--json` is one) | no recipe, more than one, or an unknown flag |
+
+## `fisherman plan`
+
+```text
+fisherman plan --json -
+```
+
+| Flag | Value | Default | What it does |
+|---|---|---|---|
+| `--json` | none | required | Print one JSON object on stdout. It is the only output format. |
+
+The recipe comes only from stdin (`-`), never from a file: it can hold the
+LUKS passphrase. `plan` runs the checks of `validate --json` first. It
+needs no root. It does not partition, format, mount, unlock, enrol, pull
+or contact a registry, and its output holds no passphrase, password or
+recovery key. A value that only the install can resolve is `"unknown"`.
+
+| Exit | When |
+|---|---|
+| 0 | The recipe is valid and the plan is on stdout. |
+| 1 | The recipe is invalid, unreadable or not JSON. The problems are on stdout, as `validate --json` reports them. |
+| 2 | No `--json`, no `-`, a recipe path, `-` twice, or an unknown argument. |
 
 ## `fisherman probe`
 
