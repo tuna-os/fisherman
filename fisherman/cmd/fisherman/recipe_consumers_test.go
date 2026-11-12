@@ -38,12 +38,13 @@ type fieldUse struct {
 }
 
 const (
-	mainGo      = "cmd/fisherman/main.go"
-	diskPhaseGo = "cmd/fisherman/disk_phase.go"
+	mainGo         = "cmd/fisherman/main.go"
+	diskPhaseGo    = "cmd/fisherman/disk_phase.go"
+	installPhaseGo = "cmd/fisherman/install_phase.go"
 )
 
 var recipeFieldUses = map[string]fieldUse{
-	"disk":            {files: []string{mainGo, diskPhaseGo}},
+	"disk":            {files: []string{mainGo, diskPhaseGo, installPhaseGo}},
 	"filesystem":      {files: []string{diskPhaseGo, "internal/validation/chain.go"}},
 	"btrfsSubvolumes": {files: []string{diskPhaseGo}},
 	"encryption":      {files: []string{mainGo, diskPhaseGo}},
@@ -51,7 +52,7 @@ var recipeFieldUses = map[string]fieldUse{
 	// Also registered as a secret (progress.RegisterSecret).
 	"encryption.passphrase": {files: []string{mainGo, diskPhaseGo}},
 	"image":                 {files: []string{mainGo, "cmd/fisherman/host_recipe.go"}},
-	"targetImgref":          {files: []string{mainGo, "cmd/fisherman/reuse.go"}},
+	"targetImgref":          {files: []string{mainGo, installPhaseGo, "cmd/fisherman/reuse.go"}},
 	"sourceReuse":           {files: []string{mainGo, "cmd/fisherman/reuse.go"}},
 	"sourceReuse.store": {files: []string{"internal/recipe/reuse.go"},
 		gate: `the only accepted value is "bootc", the store the reuse path always reads`},
@@ -60,7 +61,7 @@ var recipeFieldUses = map[string]fieldUse{
 	"selinuxDisabled":      {files: []string{mainGo}},
 	"unifiedStorage": {files: []string{mainGo, "internal/recipe/recipe.go"},
 		gate: "true is refused (unified_storage_unsupported); the projection still carries it"},
-	"composeFsBackend": {files: []string{mainGo}},
+	"composeFsBackend": {files: []string{mainGo, installPhaseGo}},
 	"genericImage":     {files: []string{mainGo}},
 	"zfsPoolName":      {files: []string{mainGo}},
 	"bootloader":       {files: []string{mainGo}},
@@ -90,7 +91,7 @@ var recipeFieldUses = map[string]fieldUse{
 	"slurp.users[].categories": {files: []string{mainGo}},
 	"targetMount":              {files: []string{mainGo}},
 	"luksMapperName":           {files: []string{mainGo}},
-	"distroID":                 {files: []string{mainGo}},
+	"distroID":                 {files: []string{mainGo, installPhaseGo}},
 	"brewTap":                  {files: []string{mainGo}},
 	"override": {files: []string{"internal/recipe/recipe.go"},
 		gate: "accepts a failing hardware-policy check (too_small, uefi) in CheckTarget"},

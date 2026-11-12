@@ -229,6 +229,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mount options. Golden tests pin the phase's full operation log for every
   step-contract shape and every failure point, and the step contract test
   replays the phase as part of `main()`.
+- **The install phase leaves `main()`** (part of #313): the scratch
+  directory, the target image reference, `bootc install` (step 6), the check
+  of a reused source, the systemd-boot and GRUB fallback loaders and the GPT
+  root retag are now `installPhase` (`cmd/fisherman/install_phase.go`), with
+  its operations injected the way `diskPhase` has them. A failure carries the
+  same failure code (or, for a reused source whose digest differs, the same
+  problem) and message as before. No behaviour change: scratch stays
+  `/var/fisherman-tmp` (on the target only on space-constrained live media)
+  with the same cleanup registration, and `--skip-finalize` is untouched.
+  Golden tests pin the operation log, bootc's options included, for each
+  shape, the retag sequence and every failure point.
 - **The recipe answers its own install-state questions** (#317):
   `recipe.Recipe` has `HasEncryption`, `HasTPM2`, `IsManualLayout`, `IsZFS`,
   `UsesSystemdBoot`, `UsesComposeFs`, `HasVarDisk`, `FormatsVarDisk`,

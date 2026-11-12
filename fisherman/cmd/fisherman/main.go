@@ -614,193 +614,28 @@ func main() {
 	activeLuksUUID := dp.luksUUID     // LUKS partition UUID for boot entry injection; empty if no encryption
 	luksRecoveryKey := dp.recoveryKey // random passphrase for tpm2-luks (emitted as recovery key)
 
-	// Bind-mount a host-side scratch directory at /var/tmp so bootc has
-	// disk-backed space for layer blobs. We deliberately use a path OUTSIDE
-	// the target tree so bootc's "empty rootfs" check doesn't find stray
-	// directories inside /mnt/fisherman-target.
-	//
-	// On installed (ostree/conventional) systems /var is always disk-backed,
-	// so /var/fisherman-tmp gives us plenty of space. On live ISOs, however,
-	// /var lives on a tmpfs that is far too small for multi-gigabyte image
-	// blobs. Detect that case and place scratch on the already-formatted
-	// target disk instead. A self-bind mount makes bootc's empty-rootdir
-	// check see a mount point (which it tolerates) rather than a plain
-	// directory (which it rejects).
-	liveISO := varIsSpaceConstrained() && activeTargetMount != ""
-	scratchDir, err := prepareScratchDir(activeTargetMount, liveISO)
+	// ── Step 6: the install phase (install_phase.go) ─────────────────────────
+	// Scratch space, the target image reference, bootc install, the check
+	// of a reused source, the fallback loaders and the GPT root retag.
+	ip, err := installPhase(r, seq, installInput{
+		disk:         dp,
+		sourceImgref: sourceImgref,
+		mediaInput:   mediaInput,
+		reused:       reused,
+		imageStores:  imageStores,
+		imageCheck:   imageCheck,
+		selinuxShim:  selinuxShim,
+		sourceRoot:   shimOpts.SourceRoot,
+	}, liveInstallOps())
 	if err != nil {
-		fatalCode(progress.FailureScratchFailed, "preparing scratch dir: %v", err)
+		failPhase(err)
 	}
-	// The bootc container receives scratch at /var/tmp. Its launcher also
-	// redirects host-side OCI staging while podman creates the container:
-	// that import runs before the container's scratch bind mount exists.
-	//
-	// On live media scratchDir is on the target disk: prepareScratchDir
-	// registered it with cleanup.AddTargetScratch, which removes it while the
-	// target is still mounted (before finalize on success, first thing in
-	// teardown otherwise). Elsewhere it is /var/fisherman-tmp on the host,
-	// removed here AND via cleanup.AddPostRemoval so it also goes on fatal()
-	// paths (os.Exit bypasses defers).
-	if !liveISO {
-		cleanup.AddPostRemoval(scratchDir)
-		defer os.RemoveAll(scratchDir)
+	// A host scratch directory goes when the install returns; on live
+	// media it is on the target and teardown owns it (see installPhase).
+	if !ip.liveISO {
+		defer os.RemoveAll(ip.scratchDir)
 	}
-
-	// ── Step 6: Install OS ────────────────────────────────────────────────────
-	seq.begin(stepInstallOS)
-
-	// Only pass --target-imgref when it is non-empty and differs from the source.
-	targetImgref := r.TargetImgref
-	if targetImgref == r.Image {
-		targetImgref = ""
-	}
-	if mediaInput != nil {
-		// A bound media input is the install source; the installed system
-		// tracks the media's day-2 ref (or the canonical image ref when the
-		// media names none), never the on-disk layout path.
-		if targetImgref == "" {
-			targetImgref = mediaInput.TargetImgref
-		}
-		if targetImgref == "" {
-			targetImgref = r.Image
-			if targetImgref == "" {
-				targetImgref = mediaInput.Image
-			}
-		}
-		if targetImgref == sourceImgref {
-			targetImgref = ""
-		}
-	}
-
-	opts := buildBootcInstallOptions(r, sourceImgref, targetImgref, activeTargetMount, scratchDir, imageStores, imageCheck.NeedsPull, imageCheck.LayerCount)
-	if reused != nil {
-		reuseInstallOptions(&opts)
-	}
-	opts.SelinuxShimPath = selinuxShim
-	opts.SourceRoot = shimOpts.SourceRoot
-	if r.EncryptsRoot() {
-		// Without the UUID no loader entry can name the LUKS container.
-		// Stop before the image is deployed, not after "complete" (#410).
-		if activeLuksUUID == "" {
-			fatalCode(progress.FailureLUKSFailed, "LUKS: could not read the UUID of the encrypted root partition %s", activeRootPart)
-		}
-		// Where nothing else finds the root, bootc writes the argument
-		// into the entries it creates, the way rootflags gets there.
-		if luksNeedsKarg(r.UsesSystemdBoot(), r.ComposeFsBackend) {
-			opts.KernelArguments = append(opts.KernelArguments, post.LuksKarg(activeLuksUUID))
-		}
-	}
-	if err := bootcInstall(opts); err != nil {
-		fatalCode(bootcFailureCode(err), "bootc install: %v", err)
-	}
-	if reused != nil {
-		msg, p := checkReusedInstall(activeTargetMount, reused)
-		if p != nil {
-			fatalProblem("source reuse", *p)
-		}
-		progress.Info(msg)
-	}
-
-	// Ensure BOOTX64.EFI is on the ESP before anything touches the mount stack.
-	// Newer bootctl (e.g. arch-bootc systemd ≥ v255) enables --graceful when
-	// running in a container and silently skips writing to the ESP. Copying
-	// directly from the ostree deployment is a reliable fallback and a no-op
-	// when bootctl ran correctly (EFI/BOOT/BOOTX64.EFI already present).
-	//
-	// This used to be reached only on the unencrypted branch below, so an
-	// encrypted systemd-boot install whose bootctl skipped the ESP got no
-	// bootloader at all. Nothing about that bootctl behaviour depends on
-	// encryption, and the call is idempotent and warning-only, so it runs for
-	// every systemd-boot composefs install.
-	if !r.IsManualLayout() && r.UsesSystemdBoot() && r.ComposeFsBackend {
-		if err := install.InstallSystemdBoot(activeTargetMount); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not ensure systemd-boot EFI binary: %v", err))
-		}
-	}
-
-	// GRUB installs: bootupctl writes EFI/<vendor>/ and an NVRAM entry but
-	// can leave no fallback loader at EFI/BOOT/BOOTX64.EFI, so a reset NVRAM
-	// or a disk moved to another machine falls through to PXE (#233). Fill
-	// that gap from the vendor directory. Never on a manual layout: that ESP
-	// may be shared, and its EFI/BOOT belongs to whoever set it up.
-	if !r.IsManualLayout() && !r.UsesSystemdBoot() {
-		if err := install.InstallGrubFallback(activeTargetMount, r.DistroID); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not ensure the UEFI fallback loader: %v", err))
-		}
-	}
-
-	// systemd-boot composefs installs rely on GPT auto-discovery for the root
-	// filesystem, so the root partition must carry the architecture's Linux
-	// root GUID. disk.PartitionSystemdBoot now writes that type when it creates
-	// the table, which is what makes the encrypted layout boot (#219) — behind
-	// a LUKS mapping the raw partition is not what is mounted, so the
-	// unmount/rewrite/remount dance below cannot run there at all.
-	//
-	// It stays here for the unencrypted layout as a belt-and-braces pass: a
-	// disk reused from an earlier install can reach this point with a stale
-	// type when bootc rewrites the table itself.
-	//
-	// The type is read first, while everything is still mounted (reading the
-	// table is harmless), and the whole unmount/rewrite/remount sequence is
-	// skipped when it already matches — the normal case, since
-	// PartitionSystemdBoot wrote it. An sfdisk write makes the kernel and udev
-	// drop and re-add the partition nodes, and remounting straight after it
-	// raced that re-add ("mount /dev/loop0p2 ...: exit status 32", dakota CI).
-	// A failed read falls through to the write, as before.
-	retagRoot := false
-	if !r.IsManualLayout() && r.UsesSystemdBoot() && !r.HasEncryption() && r.ComposeFsBackend {
-		var curType string
-		retagRoot, curType = disk.PartitionTypeNeedsRewrite(r.Disk, 2, disk.LinuxRootPartType())
-		if !retagRoot {
-			progress.Info(fmt.Sprintf("Root partition already tagged for systemd GPT auto-discovery (%s)", curType))
-		}
-	}
-	if retagRoot {
-		progress.Info("Retagging root partition for systemd GPT auto-discovery")
-
-		// Unmount the EFI partition explicitly so the FAT32 state is flushed to
-		// the page cache before the root lazy-unmount below orphans the submount.
-		if err := disk.UnmountPartition(r.Disk, 1); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not unmount EFI partition before retag: %v\n", err)
-		}
-
-		// Release kernel and userspace references to the root partition before
-		// modifying its GPT type. bootc install may have left active references.
-		if err := disk.UnmountPartition(r.Disk, 2); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not fully clean partition references: %v\n", err)
-		}
-		if err := disk.SetPartitionType(r.Disk, 2, disk.LinuxRootPartType()); err != nil {
-			fatalCode(progress.FailureRetagFailed, "retagging root partition: %v", err)
-		}
-		// Remount root so finalization and post-install writes can proceed.
-		// udisksctl unmount (used by UnmountPartition above) removes the
-		// mountpoint directory it manages, and disk.Mount — unlike
-		// MountTmpfs/BindMount — does not create its target, so recreate it
-		// or the plain `mount` syscall below fails with ENOENT.
-		if err := os.MkdirAll(activeTargetMount, 0o755); err != nil {
-			fatalCode(progress.FailureRetagFailed, "recreating target mountpoint before remount: %v", err)
-		}
-		// The sfdisk write makes the kernel re-read the table, so the node
-		// can be missing or mid-re-add here: settle, wait (bounded) for it to
-		// be a block device again, and retry the mount briefly. Either still
-		// failing is fatal.
-		rootPart := disk.PartName(r.Disk, 2)
-		if err := disk.WaitForPartitionNode(rootPart, disk.DefaultPartitionNodeTimeout); err != nil {
-			fatalCode(progress.FailureRetagFailed, "remounting root partition after retagging: %v", err)
-		}
-		// With the same options as the first mount (and as the installed
-		// system's rootflags): on btrfs a bare mount is the top-level
-		// subvolume, not @, and has no compression. Every later step would
-		// then look for the deployment in the wrong tree (#416).
-		if err := disk.MountWithRetry(rootPart, activeTargetMount, r.RootMountOptions(), disk.DefaultMountAttempts, disk.DefaultMountBackoff); err != nil {
-			fatalCode(progress.FailureRetagFailed, "remounting root partition after retagging: %v", err)
-		}
-		// Remount EFI so that Plymouth/LUKS arg writes land on the real ESP
-		// instead of the empty /boot/efi directory in the XFS root.
-		if err := disk.MountEFI(activeTargetMount, activeEfiPart); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: could not remount EFI partition after retag: %v\n", err)
-		}
-	}
+	targetImgref := ip.targetImgref
 
 	// ── Persistent mounts (varDisk, customMounts data and swap) ──────────────
 	// From here on every step writes into the installed system through the
