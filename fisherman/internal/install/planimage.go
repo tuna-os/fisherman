@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -36,10 +38,10 @@ type ImageFacts struct {
 	CompressedBytes int64
 	// UnpackedBytes is the unpacked size of the layers: what local
 	// containers-storage reports (podman's image Size), the sum of the
-	// layers' uncompressed-size annotations a registry manifest lists, or,
-	// for a registry image without them, an estimate from the compressed
-	// size (UnpackedEstimateRatio). UnpackedFrom says which. 0 when
-	// unknown (an OCI layout, or no compressed size to estimate from).
+	// layers' uncompressed-size annotations a registry manifest or an OCI
+	// layout's manifest lists, or, for an image without them, an estimate
+	// from the compressed size (UnpackedEstimateRatio). UnpackedFrom says
+	// which. 0 when unknown (no compressed size to estimate from).
 	UnpackedBytes int64
 	// UnpackedFrom is where UnpackedBytes comes from: "containers-storage",
 	// "annotations" or "estimate"; "" when it is unknown.
@@ -87,9 +89,22 @@ func (m planImageInfo) annotatedUnpackedBytes() int64 {
 	if len(m.LayersData) == 0 || (len(m.Layers) != 0 && len(m.LayersData) != len(m.Layers)) {
 		return 0
 	}
-	var n int64
+	anns := make([]map[string]string, 0, len(m.LayersData))
 	for _, l := range m.LayersData {
-		v, err := strconv.ParseInt(l.Annotations[UncompressedSizeAnnotation], 10, 64)
+		anns = append(anns, l.Annotations)
+	}
+	return sumUncompressedSizes(anns)
+}
+
+// sumUncompressedSizes is the sum of each layer's uncompressed-size
+// annotation, one map per layer, or 0 unless every layer has a valid one.
+func sumUncompressedSizes(layers []map[string]string) int64 {
+	if len(layers) == 0 {
+		return 0
+	}
+	var n int64
+	for _, a := range layers {
+		v, err := strconv.ParseInt(a[UncompressedSizeAnnotation], 10, 64)
 		if err != nil || v <= 0 || n > math.MaxInt64-v {
 			return 0
 		}
@@ -98,17 +113,100 @@ func (m planImageInfo) annotatedUnpackedBytes() int64 {
 	return n
 }
 
-// registryUnpacked is the unpacked size of a registry image from its
-// manifest alone: the annotations when every layer has one, else the
-// compressed size times UnpackedEstimateRatio.
-func (m planImageInfo) registryUnpacked(compressed int64) (int64, string) {
-	if n := m.annotatedUnpackedBytes(); n > 0 {
-		return n, "annotations"
+// unpackedFromManifest is the unpacked size of an image from its manifest
+// alone: annotated (the sum of the layers' uncompressed-size annotations)
+// when it is not 0, else the compressed size times UnpackedEstimateRatio.
+func unpackedFromManifest(annotated, compressed int64) (int64, string) {
+	if annotated > 0 {
+		return annotated, "annotations"
 	}
 	if compressed > 0 && compressed <= math.MaxInt64/UnpackedEstimateRatio {
 		return compressed * UnpackedEstimateRatio, "estimate"
 	}
 	return 0, ""
+}
+
+// registryUnpacked is the unpacked size of a registry image from its
+// manifest alone (unpackedFromManifest).
+func (m planImageInfo) registryUnpacked(compressed int64) (int64, string) {
+	return unpackedFromManifest(m.annotatedUnpackedBytes(), compressed)
+}
+
+// inspectOCILayoutForPlan reads what the plan reports about the OCI layout
+// at layoutPath from disk: its oci-layout and index.json, the manifest the
+// install selects (selectOCIManifest) and its configuration. It never
+// opens a layer blob and writes nothing. The unpacked size is the sum of
+// the layers' uncompressed-size annotations when every layer has one, else
+// the compressed size times UnpackedEstimateRatio, as for a registry
+// image.
+func inspectOCILayoutForPlan(layoutPath string) (ImageFacts, error) {
+	if strings.TrimSpace(layoutPath) == "" {
+		return ImageFacts{}, fmt.Errorf("empty OCI layout path")
+	}
+	layoutPath = filepath.Clean(layoutPath)
+	layoutRaw, err := os.ReadFile(filepath.Join(layoutPath, "oci-layout"))
+	if err != nil {
+		return ImageFacts{}, fmt.Errorf("reading oci-layout in %s: %w", layoutPath, err)
+	}
+	var layout struct {
+		ImageLayoutVersion string `json:"imageLayoutVersion"`
+	}
+	if err := json.Unmarshal(layoutRaw, &layout); err != nil || layout.ImageLayoutVersion != "1.0.0" {
+		return ImageFacts{}, fmt.Errorf("%s is not an OCI layout of version 1.0.0", layoutPath)
+	}
+	indexRaw, err := os.ReadFile(filepath.Join(layoutPath, "index.json"))
+	if err != nil {
+		return ImageFacts{}, fmt.Errorf("reading index.json in %s: %w", layoutPath, err)
+	}
+	var index ociIndex
+	if err := json.Unmarshal(indexRaw, &index); err != nil {
+		return ImageFacts{}, fmt.Errorf("parsing index.json in %s: %w", layoutPath, err)
+	}
+	if len(index.Manifests) == 0 {
+		return ImageFacts{}, fmt.Errorf("index.json in %s lists no manifests", layoutPath)
+	}
+	selected, err := selectOCIManifest(index.Manifests, "")
+	if err != nil {
+		return ImageFacts{}, fmt.Errorf("index.json in %s: %w", layoutPath, err)
+	}
+	if !validSHA256Digest(selected.Digest) {
+		return ImageFacts{}, fmt.Errorf("index.json in %s names the manifest %q, not a sha256 digest", layoutPath, selected.Digest)
+	}
+	manifestRaw, err := readOCIBlob(layoutPath, selected, "manifest "+selected.Digest)
+	if err != nil {
+		return ImageFacts{}, err
+	}
+	var manifest ociManifest
+	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
+		return ImageFacts{}, fmt.Errorf("parsing manifest %s in %s: %w", selected.Digest, layoutPath, err)
+	}
+	f := ImageFacts{ReadFrom: "oci", ManifestDigest: selected.Digest, Layers: len(manifest.Layers)}
+	if manifest.Config.Digest != "" {
+		if raw, err := readOCIBlob(layoutPath, manifest.Config, "config "+manifest.Config.Digest); err == nil {
+			var cfg struct {
+				OS           string `json:"os"`
+				Architecture string `json:"architecture"`
+			}
+			if json.Unmarshal(raw, &cfg) == nil && (cfg.OS != "" || cfg.Architecture != "") {
+				f.Platform = cfg.OS + "/" + cfg.Architecture
+			}
+		}
+	}
+	anns := make([]map[string]string, 0, len(manifest.Layers))
+	sized := true
+	for _, l := range manifest.Layers {
+		anns = append(anns, l.Annotations)
+		if l.Size <= 0 || f.CompressedBytes > math.MaxInt64-l.Size {
+			sized = false
+			continue
+		}
+		f.CompressedBytes += l.Size
+	}
+	if !sized {
+		f.CompressedBytes = 0 // a descriptor without a size: the sum is not the image's
+	}
+	f.UnpackedBytes, f.UnpackedFrom = unpackedFromManifest(sumUncompressedSizes(anns), f.CompressedBytes)
+	return f, nil
 }
 
 func (m planImageInfo) compressedBytes() int64 {
@@ -137,21 +235,19 @@ func skopeoPlanInspect(args ...string) ([]byte, error) {
 	return PlanInspectFn("skopeo", append([]string{"inspect"}, args...)...)
 }
 
-// inspectLocalForPlan reads a local copy: an OCI layout or a
-// containers-storage image. ok is false when there is none.
-func inspectLocalForPlan(ref, readFrom string) (ImageFacts, bool) {
+// inspectLocalForPlan reads a local copy in containers-storage. ok is false
+// when there is none.
+func inspectLocalForPlan(ref string) (ImageFacts, bool) {
 	out, err := skopeoPlanInspect(ref)
 	var m planImageInfo
 	if err != nil || json.Unmarshal(out, &m) != nil || !validSHA256Digest(m.Digest) {
 		return ImageFacts{}, false
 	}
-	f := ImageFacts{ReadFrom: readFrom, ManifestDigest: m.Digest, Platform: m.platform(),
+	f := ImageFacts{ReadFrom: "containers-storage", ManifestDigest: m.Digest, Platform: m.platform(),
 		Layers: m.layers(), CompressedBytes: m.compressedBytes()}
-	if readFrom == "containers-storage" {
-		f.UnpackedBytes = localUnpackedBytes(strings.TrimPrefix(ref, "containers-storage:"))
-		if f.UnpackedBytes > 0 {
-			f.UnpackedFrom = "containers-storage"
-		}
+	f.UnpackedBytes = localUnpackedBytes(strings.TrimPrefix(ref, "containers-storage:"))
+	if f.UnpackedBytes > 0 {
+		f.UnpackedFrom = "containers-storage"
 	}
 	return f, true
 }
@@ -171,26 +267,28 @@ func localUnpackedBytes(ref string) int64 {
 }
 
 // InspectImageForPlan reads what the plan reports about image without a
-// pull: a local source (oci:, containers-storage:) from its store only,
-// never a registry; a registry reference from local containers-storage
+// pull: an OCI layout from its files on disk (inspectOCILayoutForPlan), a
+// containers-storage: source from its store, neither from a registry; a registry reference from local containers-storage
 // first (the copy the install would use) and, when registry is true and
 // there is none, from the registry's manifest, once and with no retry. It
 // never reads a layer and never writes.
 func InspectImageForPlan(image string, registry bool) ImageFacts {
 	switch {
 	case IsOCISource(image):
-		if f, ok := inspectLocalForPlan(image, "oci"); ok {
-			return f
+		// The install takes everything after oci: as the layout's path.
+		f, err := inspectOCILayoutForPlan(strings.TrimPrefix(image, "oci:"))
+		if err != nil {
+			return ImageFacts{Reason: "the OCI layout cannot be read: " + err.Error()}
 		}
-		return ImageFacts{Reason: "the OCI layout cannot be read"}
+		return f
 	case strings.HasPrefix(image, "containers-storage:"):
-		if f, ok := inspectLocalForPlan(image, "containers-storage"); ok {
+		if f, ok := inspectLocalForPlan(image); ok {
 			return f
 		}
 		return ImageFacts{Reason: "local containers-storage has no copy of the image (as the user plan runs as)"}
 	}
 	ref := bareImageRef(image)
-	if f, ok := inspectLocalForPlan("containers-storage:"+ref, "containers-storage"); ok {
+	if f, ok := inspectLocalForPlan("containers-storage:" + ref); ok {
 		return f
 	}
 	if !registry {

@@ -86,9 +86,10 @@ type planImage struct {
 	// UnpackedBytes: the unpacked size, from UnpackedFrom.
 	UnpackedBytes int64 `json:"unpacked_bytes,omitempty"`
 	// UnpackedFrom: "containers-storage" (the local store reports it),
-	// "annotations" (the registry manifest's uncompressed-size layer
-	// annotations) or "estimate" (the compressed size times
-	// install.UnpackedEstimateRatio). Left out with UnpackedBytes.
+	// "annotations" (the uncompressed-size layer annotations of a registry
+	// manifest or an OCI layout's manifest) or "estimate" (the compressed
+	// size times install.UnpackedEstimateRatio). Left out with
+	// UnpackedBytes.
 	UnpackedFrom string `json:"unpacked_from,omitempty"`
 }
 
@@ -406,7 +407,7 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 			unknown("image.compressed_bytes", "the manifest lists no layer sizes (skopeo before 1.6 prints none)")
 		}
 		if img.UnpackedBytes == 0 {
-			unknown("image.unpacked_bytes", "only local containers-storage or a registry manifest gives the unpacked size; an OCI layout lists compressed sizes, and a registry manifest without layer sizes leaves nothing to estimate from")
+			unknown("image.unpacked_bytes", "the manifest lists neither the layers' uncompressed sizes nor every layer's compressed size, so there is nothing to estimate the unpacked size from")
 		}
 	}
 	if p.Source.Digest == planUnknownValue {

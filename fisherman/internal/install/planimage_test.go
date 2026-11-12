@@ -3,7 +3,11 @@ package install
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -144,4 +148,156 @@ func TestAnnotatedUnpackedBytesOverflow(t *testing.T) {
 	if n, from := m.registryUnpacked(math.MaxInt64); n != 0 || from != "" {
 		t.Errorf("an estimate that overflows: %d %q", n, from)
 	}
+}
+
+// planOCILayer is one layer descriptor of a planOCILayout: its compressed
+// size and, when not 0, its uncompressed-size annotation.
+type planOCILayer struct{ size, unpacked int64 }
+
+// writePlanOCILayout builds an OCI layout whose manifest lists layers, and
+// returns its path and the manifest digest. It writes the index, the
+// manifest and the configuration, never a layer blob: plan must not open
+// one. With platforms, index.json lists an arm64 manifest first, then the
+// host's.
+func writePlanOCILayout(t *testing.T, platforms bool, layers ...planOCILayer) (string, string) {
+	t.Helper()
+	layout := t.TempDir()
+	if err := os.WriteFile(filepath.Join(layout, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := []byte(`{"architecture":"` + runtime.GOARCH + `","os":"linux","config":{"Labels":{"containers.bootc":"1"}}}`)
+	configDigest := writeBlob(t, layout, config)
+	var descs []any
+	for i, l := range layers {
+		d := map[string]any{"mediaType": "application/vnd.oci.image.layer.v1.tar+zstd",
+			"digest": fmt.Sprintf("sha256:%064x", i+1), "size": l.size}
+		if l.unpacked != 0 {
+			d["annotations"] = map[string]string{UncompressedSizeAnnotation: strconv.FormatInt(l.unpacked, 10)}
+		}
+		descs = append(descs, d)
+	}
+	manifest, err := json.Marshal(map[string]any{"schemaVersion": 2, "mediaType": "application/vnd.oci.image.manifest.v1+json",
+		"config": map[string]any{"mediaType": "application/vnd.oci.image.config.v1+json", "digest": configDigest, "size": len(config)},
+		"layers": descs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestDigest := writeBlob(t, layout, manifest)
+	entries := []any{map[string]any{"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": manifestDigest, "size": len(manifest)}}
+	if platforms {
+		entries = []any{
+			map[string]any{"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": planTestArm, "size": 1,
+				"platform": map[string]string{"os": "linux", "architecture": "not-" + runtime.GOARCH}},
+			map[string]any{"mediaType": "application/vnd.oci.image.manifest.v1+json", "digest": manifestDigest, "size": len(manifest),
+				"platform": map[string]string{"os": runtime.GOOS, "architecture": runtime.GOARCH}},
+		}
+	}
+	index, err := json.Marshal(map[string]any{"schemaVersion": 2, "manifests": entries})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(layout, "index.json"), index, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return layout, manifestDigest
+}
+
+// An OCI layout is read from its files: the manifest the install selects,
+// its configuration and the layer descriptors. The unpacked size is the
+// layers' annotations when every layer has one, else the ×3 estimate, as
+// for a registry image. No command runs and no layer is opened.
+func TestInspectImageForPlanOCILayout(t *testing.T) {
+	calls := stubPlanInspect(t, nil)
+	const gib = int64(1) << 30
+	for _, c := range []struct {
+		name          string
+		platforms     bool
+		layers        []planOCILayer
+		compressed    int64
+		unpacked      int64
+		unpackedFrom  string
+		wantLayers    int
+		wantPlatform  string
+		wantDigestSet bool
+	}{
+		{"annotated", false, []planOCILayer{{2 * gib, 5 * gib}, {1 * gib, 2 * gib}}, 3 * gib, 7 * gib, "annotations", 2, "linux/" + runtime.GOARCH, true},
+		{"not annotated", false, []planOCILayer{{2 * gib, 0}, {1 * gib, 0}}, 3 * gib, 9 * gib, "estimate", 2, "linux/" + runtime.GOARCH, true},
+		{"partly annotated", false, []planOCILayer{{2 * gib, 5 * gib}, {1 * gib, 0}}, 3 * gib, 9 * gib, "estimate", 2, "linux/" + runtime.GOARCH, true},
+		{"multi-platform index", true, []planOCILayer{{4 * gib, 0}}, 4 * gib, 12 * gib, "estimate", 1, "linux/" + runtime.GOARCH, true},
+		{"a layer without a size", false, []planOCILayer{{2 * gib, 0}, {0, 0}}, 0, 0, "", 2, "linux/" + runtime.GOARCH, true},
+		{"annotated, a layer without a size", false, []planOCILayer{{2 * gib, 5 * gib}, {0, 1 * gib}}, 0, 6 * gib, "annotations", 2, "linux/" + runtime.GOARCH, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			layout, digest := writePlanOCILayout(t, c.platforms, c.layers...)
+			f := InspectImageForPlan("oci:"+layout, true)
+			if f.ReadFrom != "oci" || f.ManifestDigest != digest || f.Layers != c.wantLayers || f.Platform != c.wantPlatform ||
+				f.CompressedBytes != c.compressed || f.UnpackedBytes != c.unpacked || f.UnpackedFrom != c.unpackedFrom ||
+				f.PlatformDigest != "" {
+				t.Errorf("%+v", f)
+			}
+		})
+	}
+	if len(*calls) != 0 {
+		t.Errorf("reading an OCI layout ran %v", *calls)
+	}
+}
+
+// A layout plan cannot read leaves the facts unknown, with the reason.
+func TestInspectImageForPlanBrokenOCILayout(t *testing.T) {
+	stubPlanInspect(t, nil)
+	good, digest := writePlanOCILayout(t, false, planOCILayer{1 << 30, 0})
+	alg, hexpart, _ := strings.Cut(digest, ":")
+	for name, breakIt := range map[string]func(string) error{
+		"no oci-layout": func(l string) error { return os.Remove(filepath.Join(l, "oci-layout")) },
+		"wrong version": func(l string) error {
+			return os.WriteFile(filepath.Join(l, "oci-layout"), []byte(`{"imageLayoutVersion":"2"}`), 0o644)
+		},
+		"no index": func(l string) error { return os.Remove(filepath.Join(l, "index.json")) },
+		"empty index": func(l string) error {
+			return os.WriteFile(filepath.Join(l, "index.json"), []byte(`{"manifests":[]}`), 0o644)
+		},
+		"no manifest blob": func(l string) error { return os.Remove(filepath.Join(l, "blobs", alg, hexpart)) },
+		"bad digest": func(l string) error {
+			return os.WriteFile(filepath.Join(l, "index.json"), []byte(`{"manifests":[{"digest":"md5:abc"}]}`), 0o644)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			layout := copyDir(t, good)
+			if err := breakIt(layout); err != nil {
+				t.Fatal(err)
+			}
+			f := InspectImageForPlan("oci:"+layout, true)
+			if f.ReadFrom != "" || !strings.HasPrefix(f.Reason, "the OCI layout cannot be read: ") {
+				t.Errorf("%+v", f)
+			}
+		})
+	}
+}
+
+// copyDir copies the regular files and directories under src to a new
+// temporary directory and returns it.
+func copyDir(t *testing.T, src string) string {
+	t.Helper()
+	dst := t.TempDir()
+	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dst, rel), raw, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return dst
 }

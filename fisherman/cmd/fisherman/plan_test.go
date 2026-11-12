@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -310,6 +312,8 @@ func planDisks(t *testing.T) string {
 			t.Fatal(err)
 		}
 	}
+	planOCILayout(t, filepath.Join(dir, "oci-annotated"), []int64{2 << 30, 1 << 30}, []int64{5 << 30, 2 << 30})
+	planOCILayout(t, filepath.Join(dir, "oci-plain"), []int64{2 << 30, 1 << 30}, nil)
 	return dir
 }
 
@@ -374,6 +378,8 @@ var planCases = []struct {
 	{"read-image-registry-annotated", 0, false, false, true},
 	{"read-image-cached", 0, false, false, true},
 	{"read-image-local", 0, false, false, true},
+	{"read-image-oci", 0, false, false, true},
+	{"read-image-oci-estimate", 0, false, false, true},
 	{"read-image-too-big", 0, false, false, true},
 	{"read-image-offline", 0, false, false, true},
 	{"read-image-manual", 0, false, false, true},
@@ -1069,5 +1075,72 @@ func TestPlanManualDisks(t *testing.T) {
 		if !hasUnknown(res.Plan, f) {
 			t.Errorf("no unknown entry for %s", f)
 		}
+	}
+}
+
+// planOCILayout writes an OCI layout at dir for the --read-image fixtures:
+// oci-layout, index.json, one manifest whose layer descriptors have the
+// given compressed sizes and, for each entry of unpacked, the
+// uncompressed-size annotation, and the configuration (linux/amd64). It
+// writes no layer blob: plan never opens one. The content is fixed, so the
+// manifest digest in the goldens is too.
+func planOCILayout(t *testing.T, dir string, sizes, unpacked []int64) {
+	t.Helper()
+	blob := func(content []byte) string {
+		sum := sha256.Sum256(content)
+		hexsum := hex.EncodeToString(sum[:])
+		path := filepath.Join(dir, "blobs", "sha256", hexsum)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return "sha256:" + hexsum
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "oci-layout"), []byte(`{"imageLayoutVersion":"1.0.0"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	config := []byte(`{"architecture":"amd64","os":"linux","config":{"Labels":{"containers.bootc":"1"}}}`)
+	var layers []string
+	for i, n := range sizes {
+		ann := ""
+		if i < len(unpacked) {
+			ann = fmt.Sprintf(`,"annotations":{%q:"%d"}`, install.UncompressedSizeAnnotation, unpacked[i])
+		}
+		layers = append(layers, fmt.Sprintf(`{"mediaType":"application/vnd.oci.image.layer.v1.tar+zstd","digest":"sha256:%d%s","size":%d%s}`,
+			i, fixtureLayerDigestHex[1:], n, ann))
+	}
+	manifest := []byte(fmt.Sprintf(`{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json",`+
+		`"config":{"mediaType":"application/vnd.oci.image.config.v1+json","digest":%q,"size":%d},"layers":[%s]}`,
+		blob(config), len(config), strings.Join(layers, ",")))
+	index := fmt.Sprintf(`{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":%q,"size":%d}]}`,
+		blob(manifest), len(manifest))
+	if err := os.WriteFile(filepath.Join(dir, "index.json"), []byte(index), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// --read-image reads an OCI layout from its files: no skopeo, no podman,
+// no registry.
+func TestPlanReadImageOCIRunsNoCommand(t *testing.T) {
+	dir := planDisks(t)
+	g := guardCommands(t)
+	images := stubImages(t, g)
+	for _, name := range []string{"read-image-oci", "read-image-oci-estimate"} {
+		if _, code := runPlanFixture(t, dir, name, "--read-image"); code != 0 {
+			t.Fatalf("%s: exit %d", name, code)
+		}
+	}
+	for _, line := range g.seen {
+		if strings.HasPrefix(line, "skopeo") || strings.HasPrefix(line, "podman") {
+			t.Errorf("plan ran %q for an OCI layout", line)
+		}
+	}
+	if len(images.registry) != 0 {
+		t.Errorf("plan asked a registry: %v", images.registry)
 	}
 }

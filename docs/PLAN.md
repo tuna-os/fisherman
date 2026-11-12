@@ -99,13 +99,13 @@ entry for `image` says why.
 | Field | Meaning |
 |---|---|
 | `read_from` | `containers-storage` (a local copy: the one the install uses), `oci` (the OCI layout the recipe names), `registry` (the registry's manifest: the install pulls the image) or `none`. |
-| `manifest_digest` | The digest of the manifest the reference names: an image index for a multi-platform image in a registry, else the image manifest. For a local copy, the digest containers-storage records. |
+| `manifest_digest` | The digest of the manifest the reference names: an image index for a multi-platform image in a registry, else the image manifest. For a local copy, the digest containers-storage records; for an OCI layout, the manifest the install selects from its `index.json`. |
 | `platform_digest` | The image manifest for this host's platform, from the registry's raw manifest; the same as `manifest_digest` for a single-platform image. `unknown` for a local copy, or when the index lists no build for this host (the install refuses that image). |
 | `platform` | The `os/architecture` of the image configuration. |
 | `layers` | The number of layers. |
-| `compressed_bytes` | The sum of the layer sizes the manifest lists (skopeo's `LayersData`): what a pull downloads. Left out when a size is missing (skopeo before 1.6 prints none). |
-| `unpacked_bytes` | The unpacked size of the layers, from `unpacked_from` ([Size estimates](#size-estimates)). Left out for an OCI layout (its manifest lists compressed sizes only), and for a registry image whose manifest lists no layer sizes. |
-| `unpacked_from` | Where `unpacked_bytes` comes from: `containers-storage` (local containers-storage reports it: `podman image inspect`'s `Size`), `annotations` (a registry image whose every layer has the uncompressed-size annotation `io.containers.estargz.uncompressed-size`: their sum) or `estimate` (a registry image without them: `compressed_bytes` × 3, `install.UnpackedEstimateRatio`). Left out with `unpacked_bytes`. |
+| `compressed_bytes` | The sum of the layer sizes the manifest lists (skopeo's `LayersData`, or an OCI layout manifest's layer descriptors): what a pull downloads. Left out when a size is missing (skopeo before 1.6 prints none). |
+| `unpacked_bytes` | The unpacked size of the layers, from `unpacked_from` ([Size estimates](#size-estimates)). Left out when the manifest lists neither every layer's uncompressed-size annotation nor every layer's size. |
+| `unpacked_from` | Where `unpacked_bytes` comes from: `containers-storage` (local containers-storage reports it: `podman image inspect`'s `Size`), `annotations` (a registry image or an OCI layout whose every layer has the uncompressed-size annotation `io.containers.estargz.uncompressed-size`: their sum) or `estimate` (a registry image or an OCI layout without them: `compressed_bytes` × 3, `install.UnpackedEstimateRatio`). Left out with `unpacked_bytes`. |
 
 ### `plan.target`
 
@@ -279,9 +279,16 @@ plan](#binding-the-install-to-the-confirmed-plan)).
 `--read-image` reads the source image's manifest, configuration and store
 metadata, never a layer, and writes nothing:
 
-- `containers-storage:` and `oci:` sources are read locally only (`skopeo
-  inspect`, and `podman image inspect` for the unpacked size). Plan never
-  asks a registry for them, as the install never pulls them.
+- `containers-storage:` and `oci:` sources are read locally only. Plan
+  never asks a registry for them, as the install never pulls them. A
+  `containers-storage:` source is read with `skopeo inspect`, and `podman
+  image inspect` for the unpacked size. An `oci:` layout is read from its
+  files and runs no command: `oci-layout`, `index.json`, the manifest the
+  install selects from it (the only one, else the one for this host's
+  platform) and its configuration. No layer blob is opened; the sizes come
+  from the manifest's layer descriptors and their annotations, as for a
+  registry image. Everything after `oci:` is the layout's path, as the
+  install takes it.
 - A registry reference is looked up in local containers-storage first,
   the copy the install would use. Only when there is none does plan ask
   the registry: `skopeo inspect --no-tags docker://…` for the digest,
@@ -315,7 +322,8 @@ mean, and how far off they can be:
   much.
 - `image.unpacked_bytes` is what containers-storage reports for the
   unpacked layers (`unpacked_from` `containers-storage`) or, for an image
-  only a registry has, what its manifest gives without a pull: the sum of
+  only a registry has and for an OCI layout, what its manifest gives
+  without a pull or an unpack: the sum of
   the layers' uncompressed-size annotations (`annotations`, exact when the
   image was built with them), else **an estimate**: three times the
   compressed size (`estimate`). Three is the high end of what OS images
@@ -416,9 +424,9 @@ grants nothing.
 ## Not in this version
 
 The plan does not yet report the mounts of the installed system beyond the
-partitions, the unpacked size of an OCI layout source (only an estimate
-for a registry image whose layers do not record it), or the free space
-inside a kept manual root partition. A manual layout's disks are bound
+partitions or the free space inside a kept manual root partition. The
+unpacked size of a registry image or an OCI layout whose layers do not
+record it is an estimate. A manual layout's disks are bound
 by `planBinding`, not by `diskIdentity`. The install checks `diskIdentity` and
 `planBinding` in its pre-flight, not again right before it partitions. See
 tuna-os/fisherman#371.
