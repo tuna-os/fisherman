@@ -72,9 +72,15 @@ func TestStageTPM2Enrollment_StagesInTheBootedDeployment(t *testing.T) {
 			if s := deploytest.Strays(fx); len(s) != 0 {
 				t.Errorf("wrote %v into the physical sysroot", s)
 			}
-			want := "cryptsetup luksAddKey --batch-mode --key-file=- --key-slot 31 /dev/vda3 " + keyPath
-			if len(*calls) != 1 || (*calls)[0] != want {
-				t.Errorf("commands = %v\nwant [%s]", *calls, want)
+			// The single-use slot: a cheap KDF (its key is random), then
+			// "preferred", so the first-boot lookup by key never runs the
+			// user slot's memory-hard KDF (#421).
+			want := []string{
+				"cryptsetup luksAddKey --batch-mode --key-file=- --key-slot 31 --pbkdf pbkdf2 --pbkdf-force-iterations 1000 /dev/vda3 " + keyPath,
+				"cryptsetup config /dev/vda3 --key-slot 31 --priority prefer",
+			}
+			if len(*calls) != len(want) || (*calls)[0] != want[0] || (*calls)[1] != want[1] {
+				t.Errorf("commands = %v\nwant %v", *calls, want)
 			}
 		})
 	}

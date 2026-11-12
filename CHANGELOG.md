@@ -75,6 +75,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **The first-boot TPM2 unit removes its keyslot and key file on a VM with
+  little memory** (#409, #421): `cryptsetup luksRemoveKey` looked the
+  single-use key up through the keyslots, ran the user slot's memory-hard
+  KDF, outlived the 90 s stop timeout and drew the OOM killer. systemd
+  killed the step, so keyslot 31 and `/etc/fisherman/tpm2-enroll.key`
+  stayed (advisory `dakota-tpm2-luks`, run 43198929211). Slot 31 now uses
+  PBKDF2 with 1000 iterations (its key is 256 random bits) and the
+  `preferred` priority, so the enrolment and the removal match it first
+  (0.03 s against 1.5 s on a scratch image with a 1 GiB argon2 slot 0).
+  `cryptsetup -q luksKillSlot` by number alone left the slot on Dakota
+  (it read a passphrase from the unit's empty stdin), so it is only a
+  fallback. Each removal is bounded by `timeout 60` and
+  `TimeoutStopSec=180`, so the file removal always runs.
 - **A separate `/var` disk gets the Flatpaks** (#252 follow-up): on an
   ostree deployment with a `varDisk` or a manual `/var` partition, a recipe
   `flatpakVarPath` sent the
@@ -350,6 +363,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed system. A receipt for another image gave `mismatch`, and the CI
   host's own status gave `unavailable`. The advisory images keep the checks
   advisory.
+- **The #418 VM shapes gate** (#423): `centos-bootc-luks-user`,
+  `centos-bootc-var-disk` and `dakota-tpm2` are required entries, and the
+  arm64 unit tests are a need of `required-canaries`. `bootcrew-vm.yml` also
+  runs every night on dev, so these shapes gate the nightly as well as each
+  PR. `dakota-tpm2-luks` stays advisory.
 - **The VM matrix boots `tpm2-luks` and checks the enabled units** (#418,
   #421, #422): `dakota-tpm2-luks` installs with TPM2 and no passphrase
   against swtpm. The harness takes the recovery key from the install's

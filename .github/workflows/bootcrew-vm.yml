@@ -5,6 +5,12 @@ on:
     branches: [prod, dev]
   pull_request:
     branches: [prod, dev]
+  # Every night on dev (the default branch), so the required entries of
+  # tests/bootcrew-matrix.yaml, the #418 shapes among them, gate a nightly
+  # run as well as each PR (#423). bootcrew-nightly.yml is the full install
+  # of every image; it writes its own recipe and cannot run these shapes.
+  schedule:
+    - cron: '41 4 * * *'
 
 # Cancel in-flight runs on the same ref when a new push comes in. Saves
 # a lot of compute when you push twice in a row on the same PR. We do NOT
@@ -175,13 +181,11 @@ jobs:
   # .goreleaser.yml ships linux/arm64, and every other job here runs on
   # x86_64. There is no arm64 VM boot: every matrix digest is an x86_64
   # image, and the harness has no arm64 firmware (AAVMF) or arm64
-  # ssh-enabled images. ADVISORY: continue-on-error, and not in
-  # required-canaries' needs.
+  # ssh-enabled images. Gating (#423): required-canaries needs it.
   unit-tests-arm64:
-    name: advisory / arm64 unit tests
+    name: arm64 unit tests
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -207,14 +211,17 @@ jobs:
         run: go test -count=1 ./...
         working-directory: tui
 
-  # ── Required canaries: composefs (dakota) + ostree (centos-bootc). ────────
+  # ── Required entries: `required: true` in tests/bootcrew-matrix.yaml. ───
+  # The canaries dakota (composefs) and centos-bootc (ostree), and the #418
+  # shapes (#423).
   # Failure here fails the workflow. Treat these as the contract for what
   # fisherman must do on every PR.
   vm-boot-required:
     name: required / ${{ matrix.image.name }}
     needs: [setup, unit-tests, lint]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # 45, not 30: dakota-tpm2 (#418) boots twice after the install.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -243,7 +250,7 @@ jobs:
         with:
           # Same host package set as just ci-install-tools, including its
           # bootstrap dependencies; resolve/install once rather than twice.
-          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3 swtpm
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
@@ -274,14 +281,14 @@ jobs:
 
   # ── Single-check gate for branch protection. ─────────────────────────────
   # Add THIS check name ("required-canaries") to the protected-branch rules
-  # for prod/dev — it succeeds iff every required canary (dakota,
-  # centos-bootc) and the unit-test + lint jobs all passed. Using one gate
+  # for prod/dev — it succeeds iff every required matrix entry and the
+  # unit-test (x86_64 and arm64) + lint jobs all passed. Using one gate
   # avoids having to enumerate every matrix permutation in branch
   # protection, which would break the moment we add or rename an image.
   required-canaries:
     name: required-canaries
     if: always()
-    needs: [lint, unit-tests, vm-boot-required]
+    needs: [lint, unit-tests, unit-tests-arm64, vm-boot-required]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
@@ -289,13 +296,14 @@ jobs:
         run: |
           lint='${{ needs.lint.result }}'
           unit='${{ needs.unit-tests.result }}'
+          arm64='${{ needs.unit-tests-arm64.result }}'
           vm='${{ needs.vm-boot-required.result }}'
-          echo "lint=$lint  unit=$unit  vm=$vm"
+          echo "lint=$lint  unit=$unit  arm64=$arm64  vm=$vm"
           # vm-boot-required is a matrix; its aggregate result is "success"
           # only when every matrix leg succeeded. fail-fast: false ensures
           # all legs run so we get full signal here.
-          if [ "$lint" != "success" ] || [ "$unit" != "success" ] || [ "$vm" != "success" ]; then
-            echo "::error::required-canaries gate failed (lint=$lint unit=$unit vm-boot-required=$vm)"
+          if [ "$lint" != "success" ] || [ "$unit" != "success" ] || [ "$arm64" != "success" ] || [ "$vm" != "success" ]; then
+            echo "::error::required-canaries gate failed (lint=$lint unit=$unit arm64=$arm64 vm-boot-required=$vm)"
             exit 1
           fi
           echo "All required checks passed."

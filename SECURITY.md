@@ -61,7 +61,10 @@ images** and a **trusted caller**.
   `0600`, directory `0700`), inside the encrypted root. The first-boot unit
   (`fisherman-tpm2-enroll.service`, in the deployment's
   `/etc/systemd/system`) tries the enrolment at most three times in that one
-  boot. When it stops, it removes the keyslot and then the file. This runs in
+  boot. Slot 31 uses a cheap KDF, which its random key makes safe, and the
+  "preferred" priority, so a lookup by its key never runs the user slot's
+  memory-hard KDF. When the unit stops, it removes the keyslot and then the
+  file, each step bounded in time. This runs in
   `ExecStopPost=`, so it also runs when the enrolment fails, times out or the
   tool is missing. After that the file's old blocks unlock nothing, on any
   filesystem. There is no retry on a later boot. fisherman looks for

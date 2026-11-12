@@ -110,16 +110,36 @@ func EnrollTPM2(partition, passphrase string) error {
 // slot's key is the content of newKeyFile; passphrase unlocks an existing
 // slot and goes on stdin, so neither secret is in the process table. slot
 // pins the new keyslot's number, so it can be removed later by number.
+//
+// The key must be a random, high-entropy key (RandomPassphrase: 256 bits):
+// the slot uses a cheap KDF (PBKDF2, 1000 iterations), which only a key
+// that cannot be guessed makes safe. The slot is then marked "preferred",
+// so a lookup by key tries it before the other slots. Without both, a
+// lookup by this key (the first-boot enrolment, luksRemoveKey) runs the
+// user slot's memory-hard KDF first: on a VM with little memory that drew
+// the OOM killer and left the slot and its key file behind (#421).
 func AddKeyFile(partition, passphrase, newKeyFile string, slot int) error {
-	return runner.RunWithStdin(
+	if err := runner.RunWithStdin(
 		strings.NewReader(passphrase),
 		"cryptsetup", "luksAddKey",
 		"--batch-mode",
 		"--key-file=-",
 		"--key-slot", strconv.Itoa(slot),
+		"--pbkdf", "pbkdf2",
+		"--pbkdf-force-iterations", "1000",
 		partition,
 		newKeyFile,
-	)
+	); err != nil {
+		return err
+	}
+	if err := runner.Run("cryptsetup", "config", partition,
+		"--key-slot", strconv.Itoa(slot), "--priority", "prefer"); err != nil {
+		// Take the slot away again: a cheap slot that is not preferred is
+		// still safe, but the caller asked for one it can remove cheaply.
+		_ = RemoveKeyFile(partition, newKeyFile)
+		return fmt.Errorf("prefer keyslot %d: %w", slot, err)
+	}
+	return nil
 }
 
 // RemoveKeyFile removes the keyslot that the content of keyFile unlocks.
