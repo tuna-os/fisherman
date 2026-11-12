@@ -89,7 +89,13 @@ leaves the target disk as it was.
    inspect containers-storage:<destination>` (local) gives a sha256
    manifest digest and `linux/<the platform>`.
 8. **Install** from `containers-storage:<destination>` with `--target-imgref
-   <targetImgref>`, through the host's bootc (the direct local-source path).
+   <targetImgref>`. bootc runs from the copy's own container (`podman run
+   --privileged --pid=host` with the host's `/var/lib/containers`), as for
+   an image pulled from a registry, never on the host: with
+   `--source-imgref`, bootc v1.17.1's `SourceInfo::from_imageref` runs
+   `ostree --repo=/ostree/repo rev-parse --single`, which on a booted ostree
+   host, whose repo holds every deployment, fails with "Multiple commit
+   objects found". In the container `/ostree/repo` is the image's own.
    Afterwards the installed commit's `ostree.manifest-digest` must equal the
    copy's digest, or the install fails
    (`source_reuse_installed_digest_differs`).

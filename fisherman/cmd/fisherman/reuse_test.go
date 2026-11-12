@@ -318,3 +318,20 @@ func TestRequiredTools_SourceReuse(t *testing.T) {
 		t.Error("the default install must not require ostree")
 	}
 }
+
+// TestReuseInstallOptions: the install from the verified copy runs bootc in
+// the copy's container (the host's bootc fails on a booted ostree repo with
+// "Multiple commit objects found"), keeps the recipe's update reference, and
+// exposes no other image store.
+func TestReuseInstallOptions(t *testing.T) {
+	r := reuseTestRecipe()
+	src := "containers-storage:" + reuse.DestinationRepo + ":111111111111-0123456789abcdef"
+	opts := buildBootcInstallOptions(r, src, r.TargetImgref, "/mnt/t", "/var/fisherman-tmp", []string{"/var/lib/superiso-store"}, false, 3)
+	if opts.RunInSourceContainer {
+		t.Fatal("an ordinary install must not be forced into the container path")
+	}
+	reuseInstallOptions(&opts)
+	if !opts.RunInSourceContainer || opts.SourceImgref != src || opts.TargetImgref != r.TargetImgref || opts.AdditionalImageStores != nil {
+		t.Errorf("options %+v", opts)
+	}
+}

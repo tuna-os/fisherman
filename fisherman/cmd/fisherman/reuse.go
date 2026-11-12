@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/tuna-os/fisherman/internal/install"
 	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/progress"
@@ -166,4 +167,17 @@ func checkReusedInstall(target string, res *reuse.Result) (string, *recipe.Probl
 	p := reuseProblem(recipe.CodeSourceReuseInstalledDigestDiffs, fmt.Sprintf(
 		"source reuse: bootc installed %s, not the verified copy %s", got, res.DestinationDigest))
 	return "", &p
+}
+
+// reuseInstallOptions makes the install from a verified copy run bootc
+// from the copy's own container, with the host's containers-storage
+// mounted, as an install from a pulled registry image does. The host's
+// bootc cannot install it: on a booted ostree host /ostree/repo holds
+// several commits, and bootc's source detection for --source-imgref needs
+// exactly one (`ostree rev-parse --single`, "Multiple commit objects
+// found"). The copy's name is never the update reference: --target-imgref
+// stays the recipe's targetImgref.
+func reuseInstallOptions(opts *install.Options) {
+	opts.RunInSourceContainer = true
+	opts.AdditionalImageStores = nil
 }

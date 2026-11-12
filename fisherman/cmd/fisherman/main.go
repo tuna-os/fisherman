@@ -873,6 +873,9 @@ func main() {
 	}
 
 	opts := buildBootcInstallOptions(r, sourceImgref, targetImgref, activeTargetMount, scratchDir, imageStores, imageCheck.NeedsPull, imageCheck.LayerCount)
+	if reused != nil {
+		reuseInstallOptions(&opts)
+	}
 	if hasEncryption && !isManual {
 		// Without the UUID no loader entry can name the LUKS container.
 		// Stop before the image is deployed, not after "complete" (#410).
