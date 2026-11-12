@@ -9,20 +9,24 @@ import (
 	"testing"
 )
 
+// docTypes are the "Type" column values of docs/RECIPE.md for the kinds a
+// recipe field has.
+var docTypes = map[reflect.Kind]string{
+	reflect.String: "string",
+	reflect.Bool:   "boolean",
+	reflect.Struct: "object",
+}
+
 // docType is the "Type" column of docs/RECIPE.md for a Go field type.
 func docType(t reflect.Type) string {
 	for t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
-	switch t.Kind() {
-	case reflect.String:
-		return "string"
-	case reflect.Bool:
-		return "boolean"
-	case reflect.Struct:
-		return "object"
-	case reflect.Slice:
+	if t.Kind() == reflect.Slice {
 		return docType(t.Elem()) + " array"
+	}
+	if name, ok := docTypes[t.Kind()]; ok {
+		return name
 	}
 	return t.Kind().String()
 }
