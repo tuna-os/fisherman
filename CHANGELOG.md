@@ -216,6 +216,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ♻️ Refactoring
 
+- **The disk phase leaves `main()`** (part of #313): partitioning,
+  formatting the ESP and the ext4 `/boot`, LUKS, formatting and mounting the
+  root (or the manual layout), and the `/var` disk are now `diskPhase`
+  (`cmd/fisherman/disk_phase.go`). It takes the recipe, the step sequencer,
+  the mount point, the mapper name and its disk operations as arguments,
+  returns the partitions, root device, target mount, LUKS UUID and recovery
+  key the later steps read, and reports a failure as an error carrying the
+  failure code, which `main()` passes to the same `fatalCode` call. No
+  behaviour change: the same steps, messages, failure codes and teardown
+  registrations in the same order, and the same layout, LUKS parameters and
+  mount options. Golden tests pin the phase's full operation log for every
+  step-contract shape and every failure point, and the step contract test
+  replays the phase as part of `main()`.
 - **The recipe answers its own install-state questions** (#317):
   `recipe.Recipe` has `HasEncryption`, `HasTPM2`, `IsManualLayout`, `IsZFS`,
   `UsesSystemdBoot`, `UsesComposeFs`, `HasVarDisk`, `FormatsVarDisk`,

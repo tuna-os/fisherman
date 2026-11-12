@@ -6,7 +6,8 @@ package main
 //
 // main() cannot run an install in a test: it partitions, formats and
 // mounts as root. So TestMainAnnouncesThePlan replays main() instead. It
-// parses main.go, walks main()'s body and follows every `if` that has a
+// parses main.go, walks main()'s body (with the body of each step phase
+// main() calls, such as diskPhase, spliced in; see stepPhases) and follows every `if` that has a
 // seq.begin call inside, deciding the branch with the recipe's own
 // methods (r.IsManualLayout(), r.EncryptsRoot(), ...), the way main()
 // decides it. A step inside any other construct (a loop, a switch, a
@@ -59,7 +60,39 @@ func stepConsts(t *testing.T) map[string]string {
 	return out
 }
 
-// mainBody returns the body of main() in main.go.
+// stepPhases are the functions main() hands a run of its steps to, by the
+// file that declares them (#313). main() calls each one exactly once, as a
+// statement of its own body, passing its own r and seq; mainBody splices
+// the phase's body in at that call, so the replay below, and every test
+// that reads main()'s steps, sees the install as one sequence still.
+var stepPhases = map[string]string{
+	"diskPhase": "disk_phase.go",
+}
+
+// phaseCall is the name of the step phase a statement of main() calls
+// (`x, err := diskPhase(r, seq, ...)` or `diskPhase(r, seq, ...)`), or "".
+func phaseCall(s ast.Stmt) (string, *ast.CallExpr) {
+	var e ast.Expr
+	switch s := s.(type) {
+	case *ast.AssignStmt:
+		if len(s.Rhs) == 1 {
+			e = s.Rhs[0]
+		}
+	case *ast.ExprStmt:
+		e = s.X
+	}
+	call, ok := e.(*ast.CallExpr)
+	if !ok {
+		return "", nil
+	}
+	if id, ok := call.Fun.(*ast.Ident); ok && stepPhases[id.Name] != "" {
+		return id.Name, call
+	}
+	return "", nil
+}
+
+// mainBody returns the body of main() in main.go, with the body of each
+// step phase spliced in where main() calls it.
 func mainBody(t *testing.T) (*ast.BlockStmt, *token.FileSet) {
 	t.Helper()
 	fset := token.NewFileSet()
@@ -67,13 +100,78 @@ func mainBody(t *testing.T) (*ast.BlockStmt, *token.FileSet) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var main *ast.FuncDecl
 	for _, d := range f.Decls {
 		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "main" && fn.Recv == nil {
-			return fn.Body, fset
+			main = fn
 		}
 	}
-	t.Fatal("main.go has no func main")
-	return nil, nil
+	if main == nil {
+		t.Fatal("main.go has no func main")
+	}
+
+	phases := map[string]*ast.FuncDecl{}
+	for name, file := range stepPhases {
+		pf, err := parser.ParseFile(fset, file, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range pf.Decls {
+			if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == name && fn.Recv == nil {
+				phases[name] = fn
+			}
+		}
+		fn := phases[name]
+		if fn == nil {
+			t.Fatalf("%s declares no func %s", file, name)
+		}
+		// The replay decides the phase's branches with r's methods, so the
+		// phase must call its recipe r and its sequencer seq.
+		var params []string
+		for _, fld := range fn.Type.Params.List {
+			for _, id := range fld.Names {
+				params = append(params, id.Name)
+			}
+		}
+		if len(params) < 2 || params[0] != "r" || params[1] != "seq" {
+			t.Fatalf("%s: the first two parameters of %s are %v, want r and seq", file, name, params)
+		}
+	}
+
+	// Every call of a phase in main() must be one of its top-level
+	// statements, so splicing it in keeps the order and the conditions.
+	nested := map[string]int{}
+	ast.Inspect(main.Body, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			if id, ok := call.Fun.(*ast.Ident); ok && stepPhases[id.Name] != "" {
+				nested[id.Name]++
+			}
+		}
+		return true
+	})
+	var list []ast.Stmt
+	calls := map[string]int{}
+	for _, s := range main.Body.List {
+		name, call := phaseCall(s)
+		if name == "" {
+			list = append(list, s)
+			continue
+		}
+		for i, want := range []string{"r", "seq"} {
+			if id, ok := call.Args[i].(*ast.Ident); !ok || id.Name != want {
+				t.Fatalf("%s: main() calls %s without its own %s", fset.Position(call.Pos()), name, want)
+			}
+		}
+		calls[name]++
+		list = append(list, phases[name].Body.List...)
+	}
+	for name := range stepPhases {
+		if calls[name] != 1 || nested[name] != 1 {
+			t.Fatalf("main() calls %s %d times as a statement and %d times in all; want once, as a statement",
+				name, calls[name], nested[name])
+		}
+	}
+	return &ast.BlockStmt{Lbrace: main.Body.Lbrace, List: list, Rbrace: main.Body.Rbrace}, fset
 }
 
 // beginArg returns the argument of a seq.begin(...) call, or nil.
@@ -350,7 +448,7 @@ func TestStepVariantsCoverEveryStep(t *testing.T) {
 	}
 }
 
-// Only main() announces steps.
+// Only main() and the step phases it calls (stepPhases) announce steps.
 func TestOnlyMainAnnouncesSteps(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -367,11 +465,12 @@ func TestOnlyMainAnnouncesSteps(t *testing.T) {
 		}
 		for _, d := range f.Decls {
 			fn, ok := d.(*ast.FuncDecl)
-			if !ok || (file == "main.go" && fn.Name.Name == "main" && fn.Recv == nil) {
+			if !ok || (file == "main.go" && fn.Name.Name == "main" && fn.Recv == nil) ||
+				(fn.Recv == nil && stepPhases[fn.Name.Name] == file) {
 				continue
 			}
 			if containsBegin(fn) {
-				t.Errorf("%s: %s announces a step; only main() may, so TestMainAnnouncesThePlan sees it", file, fn.Name.Name)
+				t.Errorf("%s: %s announces a step; only main() and the phases in stepPhases may, so TestMainAnnouncesThePlan sees it", file, fn.Name.Name)
 			}
 			ast.Inspect(fn, func(n ast.Node) bool {
 				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "Step" {
