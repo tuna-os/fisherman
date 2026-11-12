@@ -114,7 +114,10 @@ esac
 
 # enabled_units_allowed SCOPE:UNIT: true when an allowlist names it.
 enabled_units_allowed() {
-  local entry
+  # The entries are patterns: split them, never expand them as paths
+  # (`local -` keeps set -f inside this function).
+  local - entry
+  set -f
   for entry in $ENABLED_UNITS_FISHERMAN $ENABLED_UNITS_HARNESS; do
     # shellcheck disable=SC2254
     case "$1" in $entry) return 0 ;; esac
@@ -123,8 +126,10 @@ enabled_units_allowed() {
 }
 
 fail=0
-installed=$(printf '%s' "$ENABLED_UNITS_GUEST" | ssh_root "sh -s installed ${ENABLED_UNITS_ROOT:-}" 2>/dev/null) || installed=""
-image=$(printf '%s' "$ENABLED_UNITS_GUEST" | ssh_root "sh -s image ${ENABLED_UNITS_ROOT:-}" 2>/dev/null) || image=""
+# A here-string, not a pipe: the status is ssh's alone, never a writer's
+# SIGPIPE under pipefail.
+installed=$(ssh_root "sh -s installed ${ENABLED_UNITS_ROOT:-}" 2>/dev/null <<<"$ENABLED_UNITS_GUEST") || installed=""
+image=$(ssh_root "sh -s image ${ENABLED_UNITS_ROOT:-}" 2>/dev/null <<<"$ENABLED_UNITS_GUEST") || image=""
 if [ -z "$installed" ]; then
   echo "❌ could not list the enabled units of the installed system"; exit 1
 fi
