@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **`plan --read-image`: the image's identity and size before a pull, and
+  whether it fits** (part of #371). The new flag reads the source image's
+  metadata, never a layer: a `containers-storage:` or `oci:` source and a
+  registry image already in local containers-storage from the store only
+  (`skopeo inspect`, `podman image inspect`), any other registry image from
+  its manifest (`skopeo inspect --no-tags` and `--raw`, once, no retry;
+  the only network read plan makes). The new `plan.image` has the manifest
+  and platform digests, the platform, the layer count, the compressed size
+  and, for a local copy, the unpacked size; `plan.source.digest` is now
+  filled from it. `plan.capacity.root_need_bytes` (the unpacked size),
+  `plan.scratch.need_bytes` (an upper estimate: compressed + unpacked) and
+  `plan.capacity.image_fit` (`enough`, `not_enough` from the root against
+  the unpacked size or the compressed lower bound, else `unknown`) compare
+  them with the root. It is a report: no new refusal. An unreachable or
+  refusing registry leaves them `unknown` with the reason. Without the flag
+  plan runs no image command, as before. Additive: protocol 1. Docs:
+  PLAN.md ("Reading the image", "Size estimates"), CLI.md.
 - **The plan reports the target disk's identity and capacity, and a recipe
   can bind the install to the planned disk** (part of #371).
   `plan.target.identity` has the serial, WWN, model, size and

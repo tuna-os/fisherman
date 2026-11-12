@@ -10,6 +10,12 @@
       "digest": "unknown",
       "pull": "unknown"
     },
+    "image": {
+      "read_from": "none",
+      "manifest_digest": "unknown",
+      "platform_digest": "unknown",
+      "platform": "unknown"
+    },
     "target": {
       "layout": "auto",
       "disk": "@DIR@/sda",
@@ -93,7 +99,8 @@
       "disk_minimum": "met",
       "reserved_bytes": 4298113024,
       "root_bytes": 495809748992,
-      "root_minimum": "unknown"
+      "root_minimum": "unknown",
+      "image_fit": "unknown"
     },
     "scratch": {
       "path": "/var/fisherman-tmp",
@@ -144,8 +151,12 @@
     ],
     "unknown": [
       {
+        "field": "image",
+        "reason": "plan reads the image only with --read-image"
+      },
+      {
         "field": "source.digest",
-        "reason": "the install reads the image identity when it pulls or opens the image; plan contacts no registry and opens no image"
+        "reason": "the install reads the image identity when it pulls or opens the image; plan reads it only with --read-image"
       },
       {
         "field": "source.pull",
@@ -156,12 +167,24 @@
         "reason": "on live media the install first binds the verified media input (probe media_input), which can replace the source; plan does not verify it"
       },
       {
+        "field": "capacity.root_need_bytes",
+        "reason": "the estimate is the image's unpacked size, which only local containers-storage reports"
+      },
+      {
         "field": "capacity.root_minimum",
-        "reason": "the root must hold the unpacked image and its updates; plan reads no image size, and fisherman sets no root minimum beyond the disk minimum"
+        "reason": "fisherman sets no root minimum beyond the disk minimum; root_need_bytes and image_fit compare the root with the image"
       },
       {
         "field": "scratch.bytes",
-        "reason": "the scratch space an install needs depends on the image size, known only after a pull or an image read"
+        "reason": "the exact scratch use depends on the path the install takes (a pull, an OCI export, a redirected store); scratch.need_bytes is an upper estimate"
+      },
+      {
+        "field": "scratch.need_bytes",
+        "reason": "the estimate needs the image's compressed and unpacked sizes (image.compressed_bytes, image.unpacked_bytes)"
+      },
+      {
+        "field": "capacity.image_fit",
+        "reason": "plan has no size of the image (see image)"
       }
     ]
   }

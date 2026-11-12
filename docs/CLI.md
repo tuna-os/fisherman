@@ -76,18 +76,20 @@ The recipe is a path or `-` for stdin; exactly one is required.
 ## `fisherman plan`
 
 ```text
-fisherman plan --json -
+fisherman plan --json [--read-image] -
 ```
 
 | Flag | Value | Default | What it does |
 |---|---|---|---|
 | `--json` | none | required | Print one JSON object on stdout. It is the only output format. |
+| `--read-image` | none | off | Also read the source image's digest, platform and sizes without a pull: from local containers-storage, else from the registry's manifest (once, no layer). The image's size is compared with the root (`plan.capacity.image_fit`). A registry that does not answer leaves them `unknown`. |
 
 The recipe comes only from stdin (`-`), never from a file: it can hold the
 LUKS passphrase. `plan` runs the checks of `validate --json` first. It
-needs no root. It does not partition, format, mount, unlock, enrol, pull
-or contact a registry, and its output holds no passphrase, password or
-recovery key. A value that only the install can resolve is `"unknown"`.
+needs no root. It does not partition, format, mount, unlock, enrol or
+pull, contacts no registry without `--read-image`, and its output holds no
+passphrase, password or recovery key. A value that only the install can
+resolve is `"unknown"`.
 
 | Exit | When |
 |---|---|

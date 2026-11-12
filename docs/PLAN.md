@@ -7,6 +7,7 @@ itself.
 
 ```sh
 generate-recipe | fisherman plan --json -
+generate-recipe | fisherman plan --json --read-image -   # also the image's identity and size
 ```
 
 The plan comes from the same code as the install:
@@ -24,12 +25,15 @@ The plan comes from the same code as the install:
 ## What `plan` does not do
 
 - It does not partition, format, mount, unlock, enrol a TPM, pull an
-  image, contact a registry or change the system. It needs no root. The
-  tests run it with a fake command runner that fails on any command that
-  is not read-only.
+  image or change the system. It needs no root. Without `--read-image` it
+  contacts no registry and runs no image command. The tests run it with a
+  fake command runner that fails on any command that is not read-only, and
+  with a fake registry: no test reaches the network.
 - It reads what `validate` reads: the target disk's probe facts (one
   `lsblk` call, which also gives its serial, WWN and model, and the
   `/dev/disk/by-id` links), the TPM and the live-media marker.
+- With `--read-image` it also reads the source image's metadata, never a
+  layer ([Reading the image](#reading-the-image)).
 - Its output holds no passphrase, user password or recovery key, and not
   the recipe. The validation messages are the ones `validate --json`
   prints, which hold no secret either. The tests plant sentinel secrets in
@@ -48,7 +52,7 @@ The plan comes from the same code as the install:
   "protocol_version": 1,
   "valid": true,
   "errors": [],
-  "plan": { "source": {}, "target": {}, "boot": {}, "encryption": {},
+  "plan": { "source": {}, "image": {}, "target": {}, "boot": {}, "encryption": {},
             "partitions": [], "var_disk": null, "destroys": [],
             "capacity": {}, "scratch": {}, "steps": [], "unknown": [] }
 }
@@ -73,8 +77,26 @@ entry in `plan.unknown` that names it and says why.
 | `kind` | `registry`, `containers-storage`, `oci`, `live` (the running live image, for an empty `image`) or `source-reuse` (this host's bootc store, [SOURCE-REUSE.md](SOURCE-REUSE.md)). |
 | `image` | The source image reference. For `live`, the running image that the host names, or `unknown`. |
 | `target_imgref` | The reference the installed system tracks for updates: `targetImgref`, else the source. |
-| `digest` | The source digest. Known only for `source-reuse`; else `unknown`. |
+| `digest` | The source digest: for `source-reuse` the recipe's, else `plan.image.manifest_digest` when `--read-image` read it; else `unknown`. |
 | `pull` | `none` when no registry is read (local, live and reused sources), else `unknown`: the install knows only when it checks the image cache. |
+
+### `plan.image`
+
+What `--read-image` read about the source image without a pull
+(`install.InspectImageForPlan`). Without the flag, for a `live` or
+`source-reuse` source, or when nothing answered, `read_from` is `none`, the
+strings are `unknown`, the numbers are left out, and one `plan.unknown`
+entry for `image` says why.
+
+| Field | Meaning |
+|---|---|
+| `read_from` | `containers-storage` (a local copy: the one the install uses), `oci` (the OCI layout the recipe names), `registry` (the registry's manifest: the install pulls the image) or `none`. |
+| `manifest_digest` | The digest of the manifest the reference names: an image index for a multi-platform image in a registry, else the image manifest. For a local copy, the digest containers-storage records. |
+| `platform_digest` | The image manifest for this host's platform, from the registry's raw manifest; the same as `manifest_digest` for a single-platform image. `unknown` for a local copy, or when the index lists no build for this host (the install refuses that image). |
+| `platform` | The `os/architecture` of the image configuration. |
+| `layers` | The number of layers. |
+| `compressed_bytes` | The sum of the layer sizes the manifest lists (skopeo's `LayersData`): what a pull downloads. Left out when a size is missing (skopeo before 1.6 prints none). |
+| `unpacked_bytes` | The unpacked size local containers-storage reports (`podman image inspect`'s `Size`). Left out for a registry or OCI source: their manifests list compressed sizes only. |
 
 ### `plan.target`
 
@@ -174,7 +196,9 @@ not read their sizes.
 | `disk_minimum` | `met`, `overridden` (the disk is smaller and the recipe overrides `too_small`), `not_applicable` (a loop device: an image for another machine) or `unknown`. |
 | `reserved_bytes` | The partitions before the root, plus 3 MiB for alignment and the GPT: sfdisk starts the first partition at 1 MiB, aligns each to 1 MiB and keeps the backup GPT at the end of the disk. |
 | `root_bytes` | The disk size less `reserved_bytes`: a lower bound for the root partition (or the ZFS pool). Left out when the disk size is unknown. |
-| `root_minimum` | Always `unknown`. The root must hold the unpacked image and its updates; plan reads no image size, and fisherman holds the root to no minimum beyond the disk's. |
+| `root_minimum` | Always `unknown`: fisherman holds the root to no minimum of its own beyond the disk's. `root_need_bytes` and `image_fit` compare the root with the image. |
+| `root_need_bytes` | The root one deployment of the image takes: `plan.image.unpacked_bytes` ([Size estimates](#size-estimates)). Left out when that is unknown. |
+| `image_fit` | `enough`, `not_enough` or `unknown`: whether `root_bytes` holds the image ([Size estimates](#size-estimates)). A report only: neither `validate` nor the install refuses a recipe on it. |
 
 ### `plan.scratch`
 
@@ -182,7 +206,8 @@ not read their sizes.
 |---|---|
 | `path` | The scratch directory for image layers: `/var/fisherman-tmp`, or a directory on the target when the host's `/var` is tmpfs or overlayfs. The install decides it with the same check (`varIsSpaceConstrained`). |
 | `on_target` | The scratch directory is on the target disk. |
-| `bytes` | The space it needs. Always `unknown`: it depends on the image size. |
+| `bytes` | Always `unknown`, kept for protocol 1: the exact use depends on the path the install takes. `need_bytes` is the estimate. |
+| `need_bytes` | An upper estimate of the scratch space: `plan.image.compressed_bytes` + `plan.image.unpacked_bytes` ([Size estimates](#size-estimates)). Left out when either is unknown. |
 
 ### `plan.steps`
 
@@ -204,6 +229,63 @@ steps but never adds or removes one, so the plan has no weights.
 | `field` | The plan field that is `unknown`, for example `source.digest` or `partitions[3].filesystem`. |
 | `reason` | Why the plan cannot know it. |
 
+## Reading the image
+
+`--read-image` reads the source image's manifest, configuration and store
+metadata, never a layer, and writes nothing:
+
+- `containers-storage:` and `oci:` sources are read locally only (`skopeo
+  inspect`, and `podman image inspect` for the unpacked size). Plan never
+  asks a registry for them, as the install never pulls them.
+- A registry reference is looked up in local containers-storage first,
+  the copy the install would use. Only when there is none does plan ask
+  the registry: `skopeo inspect --no-tags docker://…` for the digest,
+  platform and layer sizes, and `skopeo inspect --raw` for the platform
+  manifest. It asks once, with no retry. This is the only network read
+  `plan` makes.
+- An unreachable registry, a refused login, an unknown image or a
+  malformed answer leaves `plan.image` at `none`, with the reason in
+  words the install's image check uses (`the registry of … cannot be
+  reached (…)`). The plan is still valid: the install checks the image
+  again in its pre-flight and refuses it there.
+- The local store read is the store of the user plan runs as. Run plan
+  as the user the install runs as (root) for the store the install uses;
+  a rootless store can lack an image root's store has.
+
+A tag can move after the plan: the digest is what the registry or the
+store had when plan read it. To install exactly that image, put the
+digest in `image` (`registry/name@sha256:…`).
+
+## Size estimates
+
+The numbers are estimates for a confirmation page, not limits. What they
+mean, and how far off they can be:
+
+- `image.compressed_bytes` is exact for what it measures: the bytes of the
+  compressed layers in the manifest, the download of a pull. It is a
+  **lower bound** of the unpacked size: an OS image's layers (gzip or
+  zstd) unpack to more than they download, often two to three times as
+  much.
+- `image.unpacked_bytes` is what containers-storage reports for the
+  unpacked layers. A deployment on the root holds the same files, so
+  `capacity.root_need_bytes` is this number. The root can use less
+  (files the layers share, btrfs `compress=zstd:1`) or somewhat more
+  (filesystem overhead, the `/etc` and `/var` of the first boot). It is
+  one deployment: `bootc update` stages the next beside it, so a root
+  with room for about twice the unpacked size keeps updates working.
+- `scratch.need_bytes` is an **upper estimate**: the most the install
+  holds in scratch at once is an OCI copy of the compressed layers
+  (composefs, or a store redirected to the target) and an unpacked podman
+  store. A direct install from local storage uses far less.
+- `capacity.image_fit` is `not_enough` when `root_bytes` is smaller than
+  the unpacked size, or, when that is unknown, than the compressed size
+  (the lower bound). It is `enough` when `root_bytes` holds the unpacked
+  size and, when the scratch directory is on the target
+  (`scratch.on_target`), `scratch.need_bytes` as well (which includes
+  it). Otherwise it is `unknown`, with the reason in `plan.unknown`. A
+  registry image that is not in local containers-storage is therefore
+  never `enough`: its manifest has no unpacked size.
+
 ## Exit codes
 
 | Exit | When |
@@ -211,6 +293,9 @@ steps but never adds or removes one, so the plan has no weights.
 | 0 | The recipe is valid and the plan is on stdout. |
 | 1 | The recipe is invalid, unreadable or not JSON. |
 | 2 | Bad arguments: no `--json`, no `-`, a recipe path, or an unknown argument. |
+
+A registry that does not answer `--read-image` is not an error: the plan
+says `unknown` and plan exits 0.
 
 ## Binding the install to the planned disk
 
@@ -232,8 +317,10 @@ its other pre-flight checks, before its first disk step.
 
 ## Not in this version
 
-The plan does not yet report the scratch space an install needs, the root
-size an image needs, the image identity before a pull, or the mounts of the
-installed system beyond the partitions. The install checks `diskIdentity`
-in its pre-flight, not again right before it partitions, and it does not
-read a saved plan. See tuna-os/fisherman#371.
+The plan does not yet report the mounts of the installed system beyond the
+partitions, the unpacked size of an image that only a registry has, or the
+free space of a scratch directory on the host. It does not size a manual
+layout's partitions, so `image_fit` is reported for an automatic layout
+only. The install checks `diskIdentity` in its pre-flight, not again right
+before it partitions, and it does not read a saved plan. See
+tuna-os/fisherman#371.

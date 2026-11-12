@@ -1,0 +1,1 @@
+{"disk":"@DIR@/nvme0n1","filesystem":"xfs","image":"containers-storage:ghcr.io/example/local:stable","targetImgref":"ghcr.io/example/local:stable","hostname":"fixture","encryption":{"type":"none"}}

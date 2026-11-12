@@ -1602,10 +1602,10 @@ type rawIndex struct {
 	} `json:"manifests"`
 }
 
-// rawManifest reads the raw manifest ref names; ok is false when it cannot
-// be read or parsed.
-func rawManifest(ref string) (m rawIndex, ok bool) {
-	raw, err := SkopeoInspectFn("--raw", "docker://"+ref)
+// rawManifest reads the raw manifest ref names with inspect (`skopeo
+// inspect <args>`); ok is false when it cannot be read or parsed.
+func rawManifest(inspect func(args ...string) ([]byte, error), ref string) (m rawIndex, ok bool) {
+	raw, err := inspect("--raw", "docker://"+ref)
 	return m, err == nil && json.Unmarshal(raw, &m) == nil
 }
 
@@ -1613,8 +1613,8 @@ func rawManifest(ref string) (m rawIndex, ok bool) {
 // raw manifest ref names: the matching entry of an image index, or the
 // digest of the manifest itself. It is empty when the raw manifest cannot
 // be read; a missing entry for this host is a platform mismatch.
-func platformDigest(ref, manifestDigest string) (string, *SourceError) {
-	m, ok := rawManifest(ref)
+func platformDigest(inspect func(args ...string) ([]byte, error), ref, manifestDigest string) (string, *SourceError) {
+	m, ok := rawManifest(inspect, ref)
 	if !ok {
 		return "", nil
 	}
@@ -1699,7 +1699,7 @@ func CheckImage(image string) ImageCheck {
 	if check.Err = checkImageInfo(ref, "the registry", remote); check.Err != nil {
 		return check
 	}
-	check.Source.PlatformDigest, check.Err = platformDigest(ref, remote.Digest)
+	check.Source.PlatformDigest, check.Err = platformDigest(SkopeoInspectFn, ref, remote.Digest)
 	return check
 }
 
