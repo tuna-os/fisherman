@@ -4,12 +4,13 @@ package main
 // is the number of steps it then announces, in the planned order, for
 // every recipe variant.
 //
-// main() cannot run an install in a test: it partitions, formats and
-// mounts as root. So TestMainAnnouncesThePlan replays main() instead. It
-// parses main.go, walks main()'s body (with the body of each step phase
-// main() calls, such as diskPhase, spliced in; see stepPhases) and follows every `if` that has a
-// seq.begin call inside, deciding the branch with the recipe's own
-// methods (r.IsManualLayout(), r.EncryptsRoot(), ...), the way main()
+// An install cannot run in a test: it partitions, formats and mounts as
+// root. So TestMainAnnouncesThePlan replays it instead. It parses
+// orchestrator.go, walks the body of installer.run, the install main()
+// hands the recipe to (with the body of each step phase run calls, such
+// as diskPhase, spliced in; see stepPhases), and follows every `if` that
+// has a seq.begin call inside, deciding the branch with the recipe's own
+// methods (r.IsManualLayout(), r.EncryptsRoot(), ...), the way the install
 // decides it. A step inside any other construct (a loop, a switch, a
 // closure) or under any other condition fails the test, so a new step or
 // a new condition cannot get past it unmodelled.
@@ -60,11 +61,12 @@ func stepConsts(t *testing.T) map[string]string {
 	return out
 }
 
-// stepPhases are the functions main() hands a run of its steps to, by the
-// file that declares them (#313). main() calls each one exactly once, as a
-// statement of its own body, passing its own r and seq; mainBody splices
-// the phase's body in at that call, so the replay below, and every test
-// that reads main()'s steps, sees the install as one sequence still.
+// stepPhases are the functions the install hands a run of its steps to,
+// by the file that declares them (#313). installer.run calls each one
+// exactly once, as a statement of its own body, passing its own r and seq;
+// mainBody splices the phase's body in at that call, so the replay below,
+// and every test that reads the install's steps, sees the install as one
+// sequence still.
 var stepPhases = map[string]string{
 	"diskPhase":     "disk_phase.go",
 	"installPhase":  "install_phase.go",
@@ -72,7 +74,7 @@ var stepPhases = map[string]string{
 	"finalizePhase": "finalize_phase.go",
 }
 
-// phaseCall is the name of the step phase a statement of main() calls
+// phaseCall is the name of the step phase a statement of run calls
 // (`x, err := diskPhase(r, seq, ...)` or `diskPhase(r, seq, ...)`), or "".
 func phaseCall(s ast.Stmt) (string, *ast.CallExpr) {
 	var e ast.Expr
@@ -94,23 +96,45 @@ func phaseCall(s ast.Stmt) (string, *ast.CallExpr) {
 	return "", nil
 }
 
-// mainBody returns the body of main() in main.go, with the body of each
-// step phase spliced in where main() calls it.
+// The install's root: the method main() runs an install with, and the
+// file that declares it.
+const (
+	installRootFile = "orchestrator.go"
+	installRootType = "installer"
+	installRootFunc = "run"
+)
+
+// isInstallRoot reports whether fn is installer.run.
+func isInstallRoot(fn *ast.FuncDecl) bool {
+	if fn.Name.Name != installRootFunc || fn.Recv == nil || len(fn.Recv.List) != 1 {
+		return false
+	}
+	typ := fn.Recv.List[0].Type
+	if star, ok := typ.(*ast.StarExpr); ok {
+		typ = star.X
+	}
+	id, ok := typ.(*ast.Ident)
+	return ok && id.Name == installRootType
+}
+
+// mainBody returns the body of the install (installer.run in
+// orchestrator.go), with the body of each step phase spliced in where it
+// calls it.
 func mainBody(t *testing.T) (*ast.BlockStmt, *token.FileSet) {
 	t.Helper()
 	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, "main.go", nil, 0)
+	f, err := parser.ParseFile(fset, installRootFile, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var main *ast.FuncDecl
 	for _, d := range f.Decls {
-		if fn, ok := d.(*ast.FuncDecl); ok && fn.Name.Name == "main" && fn.Recv == nil {
+		if fn, ok := d.(*ast.FuncDecl); ok && isInstallRoot(fn) {
 			main = fn
 		}
 	}
 	if main == nil {
-		t.Fatal("main.go has no func main")
+		t.Fatalf("%s has no func (%s) %s", installRootFile, installRootType, installRootFunc)
 	}
 
 	phases := map[string]*ast.FuncDecl{}
@@ -141,7 +165,7 @@ func mainBody(t *testing.T) (*ast.BlockStmt, *token.FileSet) {
 		}
 	}
 
-	// Every call of a phase in main() must be one of its top-level
+	// Every call of a phase in run must be one of its top-level
 	// statements, so splicing it in keeps the order and the conditions.
 	nested := map[string]int{}
 	ast.Inspect(main.Body, func(n ast.Node) bool {
@@ -162,7 +186,7 @@ func mainBody(t *testing.T) (*ast.BlockStmt, *token.FileSet) {
 		}
 		for i, want := range []string{"r", "seq"} {
 			if id, ok := call.Args[i].(*ast.Ident); !ok || id.Name != want {
-				t.Fatalf("%s: main() calls %s without its own %s", fset.Position(call.Pos()), name, want)
+				t.Fatalf("%s: run calls %s without its own %s", fset.Position(call.Pos()), name, want)
 			}
 		}
 		calls[name]++
@@ -170,7 +194,7 @@ func mainBody(t *testing.T) (*ast.BlockStmt, *token.FileSet) {
 	}
 	for name := range stepPhases {
 		if calls[name] != 1 || nested[name] != 1 {
-			t.Fatalf("main() calls %s %d times as a statement and %d times in all; want once, as a statement",
+			t.Fatalf("run calls %s %d times as a statement and %d times in all; want once, as a statement",
 				name, calls[name], nested[name])
 		}
 	}
@@ -451,7 +475,8 @@ func TestStepVariantsCoverEveryStep(t *testing.T) {
 	}
 }
 
-// Only main() and the step phases it calls (stepPhases) announce steps.
+// Only the install (installer.run) and the step phases it calls
+// (stepPhases) announce steps; main() itself announces none.
 func TestOnlyMainAnnouncesSteps(t *testing.T) {
 	files, err := filepath.Glob("*.go")
 	if err != nil {
@@ -468,12 +493,12 @@ func TestOnlyMainAnnouncesSteps(t *testing.T) {
 		}
 		for _, d := range f.Decls {
 			fn, ok := d.(*ast.FuncDecl)
-			if !ok || (file == "main.go" && fn.Name.Name == "main" && fn.Recv == nil) ||
+			if !ok || (file == installRootFile && isInstallRoot(fn)) ||
 				(fn.Recv == nil && stepPhases[fn.Name.Name] == file) {
 				continue
 			}
 			if containsBegin(fn) {
-				t.Errorf("%s: %s announces a step; only main() and the phases in stepPhases may, so TestMainAnnouncesThePlan sees it", file, fn.Name.Name)
+				t.Errorf("%s: %s announces a step; only installer.run and the phases in stepPhases may, so TestMainAnnouncesThePlan sees it", file, fn.Name.Name)
 			}
 			ast.Inspect(fn, func(n ast.Node) bool {
 				if sel, ok := n.(*ast.SelectorExpr); ok && sel.Sel.Name == "Step" {

@@ -256,6 +256,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`cmd/fisherman/finalize_phase.go`). No behaviour change: the same order
   (success is claimed before teardown, `complete` is the last event), the
   same warnings and the same `finalize_failed` failure.
+- **`main()` is parse → run → exit** (#313): `main()` dispatches the
+  subcommands and hands an install to `installer.run`
+  (`cmd/fisherman/orchestrator.go`), which arms the cancel paths and runs
+  the phases in order, each owning its domain and its injected operations:
+  the pre-flight (`preflight_phase.go`: root, the install lock, the recipe,
+  the media input, every `validate` rule, host tools, kept filesystems,
+  source reuse, the image check, the SELinux workaround, the step plan, the
+  extras), the pre-partition host work (`prepartition_phase.go`: live audio
+  names, the Windows data migration), then the disk, install, post-install
+  and finalize phases. The mount point and mapper name are no longer
+  package-level variables that `main()` overwrites; the pre-flight returns
+  them. A phase failure, including a refused recipe (`fatalProblem`) and
+  one that cannot be loaded (`fatalLoad`), is reported by `failPhase` with
+  the event the inline call produced. No behaviour change: the same events,
+  step ids, bar positions, failure codes, messages and cleanup
+  registrations in the same order. The step contract test now replays
+  `installer.run`; golden and failure-injection tests cover the pre-flight
+  and pre-partition phases, and a pipeline test runs the whole install
+  with every phase recorded.
 - **The recipe answers its own install-state questions** (#317):
   `recipe.Recipe` has `HasEncryption`, `HasTPM2`, `IsManualLayout`, `IsZFS`,
   `UsesSystemdBoot`, `UsesComposeFs`, `HasVarDisk`, `FormatsVarDisk`,

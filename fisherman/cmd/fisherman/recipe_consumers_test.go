@@ -38,24 +38,26 @@ type fieldUse struct {
 }
 
 const (
-	mainGo          = "cmd/fisherman/main.go"
-	diskPhaseGo     = "cmd/fisherman/disk_phase.go"
-	installPhaseGo  = "cmd/fisherman/install_phase.go"
-	postPhaseGo     = "cmd/fisherman/post_phase.go"
-	finalizePhaseGo = "cmd/fisherman/finalize_phase.go"
+	mainGo              = "cmd/fisherman/main.go"
+	preflightPhaseGo    = "cmd/fisherman/preflight_phase.go"
+	prepartitionPhaseGo = "cmd/fisherman/prepartition_phase.go"
+	diskPhaseGo         = "cmd/fisherman/disk_phase.go"
+	installPhaseGo      = "cmd/fisherman/install_phase.go"
+	postPhaseGo         = "cmd/fisherman/post_phase.go"
+	finalizePhaseGo     = "cmd/fisherman/finalize_phase.go"
 )
 
 var recipeFieldUses = map[string]fieldUse{
-	"disk":            {files: []string{mainGo, diskPhaseGo, installPhaseGo}},
+	"disk":            {files: []string{prepartitionPhaseGo, diskPhaseGo, installPhaseGo}},
 	"filesystem":      {files: []string{diskPhaseGo, "internal/validation/chain.go"}},
 	"btrfsSubvolumes": {files: []string{diskPhaseGo}},
-	"encryption":      {files: []string{mainGo, postPhaseGo, diskPhaseGo}},
-	"encryption.type": {files: []string{mainGo, postPhaseGo, diskPhaseGo}},
+	"encryption":      {files: []string{preflightPhaseGo, postPhaseGo, diskPhaseGo}},
+	"encryption.type": {files: []string{postPhaseGo, diskPhaseGo}},
 	// Also registered as a secret (progress.RegisterSecret).
-	"encryption.passphrase": {files: []string{mainGo, postPhaseGo, diskPhaseGo}},
-	"image":                 {files: []string{mainGo, "cmd/fisherman/host_recipe.go"}},
-	"targetImgref":          {files: []string{mainGo, installPhaseGo, "cmd/fisherman/reuse.go"}},
-	"sourceReuse":           {files: []string{mainGo, "cmd/fisherman/reuse.go"}},
+	"encryption.passphrase": {files: []string{preflightPhaseGo, postPhaseGo, diskPhaseGo}},
+	"image":                 {files: []string{preflightPhaseGo, installPhaseGo, "cmd/fisherman/host_recipe.go"}},
+	"targetImgref":          {files: []string{preflightPhaseGo, installPhaseGo, "cmd/fisherman/reuse.go"}},
+	"sourceReuse":           {files: []string{preflightPhaseGo, "cmd/fisherman/reuse.go"}},
 	"sourceReuse.store": {files: []string{"internal/recipe/reuse.go"},
 		gate: `the only accepted value is "bootc", the store the reuse path always reads`},
 	"sourceReuse.digest":   {files: []string{"cmd/fisherman/reuse.go"}},
@@ -72,10 +74,10 @@ var recipeFieldUses = map[string]fieldUse{
 	"flatpakVarPath":           {files: []string{postPhaseGo}},
 	"hostname":                 {files: []string{postPhaseGo}},
 	"flatpaks":                 {files: []string{postPhaseGo}},
-	"user":                     {files: []string{mainGo, postPhaseGo}},
+	"user":                     {files: []string{preflightPhaseGo, postPhaseGo}},
 	"user.username":            {files: []string{postPhaseGo}},
 	"user.fullname":            {files: []string{postPhaseGo}},
-	"user.password":            {files: []string{mainGo, postPhaseGo}},
+	"user.password":            {files: []string{preflightPhaseGo, postPhaseGo}},
 	"user.groups":              {files: []string{postPhaseGo}},
 	"customMounts":             {files: []string{diskPhaseGo, "cmd/fisherman/mounts.go"}},
 	"customMounts[].partition": {files: []string{diskPhaseGo, "cmd/fisherman/mounts.go"}},
@@ -84,15 +86,15 @@ var recipeFieldUses = map[string]fieldUse{
 	"varDisk":                  {files: []string{diskPhaseGo, "cmd/fisherman/mounts.go"}},
 	"varDisk.disk":             {files: []string{diskPhaseGo, "cmd/fisherman/mounts.go"}},
 	"varDisk.keepExisting":     {files: []string{"internal/recipe/state.go", "cmd/fisherman/mounts.go"}},
-	"additionalImageStores":    {files: []string{mainGo, "cmd/fisherman/host_recipe.go"}},
-	"slurpWallpapers":          {files: []string{mainGo}},
-	"slurp":                    {files: []string{mainGo}},
-	"slurp.sourcePartition":    {files: []string{mainGo}},
-	"slurp.users":              {files: []string{mainGo}},
-	"slurp.users[].name":       {files: []string{mainGo}},
-	"slurp.users[].categories": {files: []string{mainGo}},
-	"targetMount":              {files: []string{mainGo}},
-	"luksMapperName":           {files: []string{mainGo}},
+	"additionalImageStores":    {files: []string{preflightPhaseGo, "cmd/fisherman/host_recipe.go"}},
+	"slurpWallpapers":          {files: []string{prepartitionPhaseGo}},
+	"slurp":                    {files: []string{prepartitionPhaseGo}},
+	"slurp.sourcePartition":    {files: []string{prepartitionPhaseGo}},
+	"slurp.users":              {files: []string{prepartitionPhaseGo}},
+	"slurp.users[].name":       {files: []string{prepartitionPhaseGo}},
+	"slurp.users[].categories": {files: []string{prepartitionPhaseGo}},
+	"targetMount":              {files: []string{preflightPhaseGo}},
+	"luksMapperName":           {files: []string{preflightPhaseGo}},
 	"distroID":                 {files: []string{installPhaseGo, postPhaseGo}},
 	"brewTap":                  {files: []string{postPhaseGo}},
 	"override": {files: []string{"internal/recipe/recipe.go"},
@@ -102,7 +104,7 @@ var recipeFieldUses = map[string]fieldUse{
 	"extras":                {files: []string{"cmd/fisherman/extras.go"}},
 	"extras.printServices":  {files: []string{postPhaseGo, "cmd/fisherman/extras.go"}},
 	"extras.oemSetup":       {files: []string{postPhaseGo, "cmd/fisherman/extras.go"}},
-	"extras.audioNames":     {files: []string{mainGo, postPhaseGo, "cmd/fisherman/extras.go"}},
+	"extras.audioNames":     {files: []string{prepartitionPhaseGo, postPhaseGo, "cmd/fisherman/extras.go"}},
 	"extras.bootSplash":     {files: []string{postPhaseGo, "cmd/fisherman/extras.go"}},
 	"experimental": {files: []string{"internal/recipe/recipe.go"},
 		gate: "the opt-in an experimental feature (zfs, bootc-store reuse) needs to be accepted"},
@@ -227,7 +229,7 @@ var optionsSources = map[string]string{
 	"SourceImgref":          "arg",
 	"TargetImgref":          "arg",
 	"SelinuxDisabled":       "selinuxDisabled",
-	"SelinuxShimPath":       "later: main() sets it from prepareSelinuxWorkaround",
+	"SelinuxShimPath":       "later: installPhase sets it from the pre-flight's prepareSelinuxWorkaround",
 	"UnifiedStorage":        "unifiedStorage",
 	"ComposeFsBackend":      "composeFsBackend",
 	"GenericImage":          "genericImage",
@@ -241,7 +243,7 @@ var optionsSources = map[string]string{
 	"ComposeFsOCIPath":      "later: install.BootcInstall sets the container-side OCI path",
 	"RunInSourceContainer":  "later: reuseInstallOptions sets it for a sourceReuse install",
 	"directLocalSource":     "later: install.BootcInstall sets it for a local containers-storage source",
-	"SourceRoot":            "later: main() sets it from establishSourceRoot (#363)",
+	"SourceRoot":            "later: installPhase sets it from the pre-flight's establishSourceRoot (#363)",
 }
 
 func TestBootcOptionsProjection(t *testing.T) {
