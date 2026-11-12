@@ -38,6 +38,7 @@
         "device": "@DIR@/sda3",
         "role": "root",
         "created": false,
+        "size_bytes": 107374182400,
         "action": "format",
         "filesystem": "btrfs",
         "mount": "/",
@@ -55,6 +56,7 @@
         "device": "@DIR@/sda2",
         "role": "boot",
         "created": false,
+        "size_bytes": 2147483648,
         "action": "format",
         "filesystem": "ext4",
         "mount": "/boot"
@@ -63,6 +65,7 @@
         "device": "@DIR@/sda1",
         "role": "efi",
         "created": false,
+        "size_bytes": 2147483648,
         "action": "preserve",
         "filesystem": "unknown",
         "mount": "/boot/efi"
@@ -83,12 +86,22 @@
         "effect": "format"
       }
     ],
-    "capacity": null,
+    "capacity": {
+      "min_disk_bytes": 53687091200,
+      "disk_minimum": "not_applicable",
+      "root_bytes": 107374182400,
+      "root_minimum": "unknown",
+      "root_need_bytes": 8589934592,
+      "image_fit": "enough"
+    },
     "scratch": {
       "path": "/var/fisherman-tmp",
       "on_target": false,
       "bytes": "unknown",
-      "need_bytes": 11811160064
+      "need_bytes": 11811160064,
+      "free_bytes": 21474836480,
+      "free_path": "/var",
+      "fit": "enough"
     },
     "steps": [
       {
@@ -131,12 +144,16 @@
         "reason": "on live media the install first binds the verified media input (probe media_input), which can replace the source; plan does not verify it"
       },
       {
-        "field": "capacity",
-        "reason": "a manual layout keeps the partitions it names; plan does not read their sizes"
+        "field": "partitions[1].size_bytes",
+        "reason": "lsblk reports no size for the partition"
       },
       {
         "field": "partitions[3].filesystem",
         "reason": "a kept partition is mounted with the filesystem it holds; plan does not read it"
+      },
+      {
+        "field": "capacity.root_minimum",
+        "reason": "fisherman sets no root minimum; root_need_bytes and image_fit compare the root with the image"
       },
       {
         "field": "scratch.bytes",

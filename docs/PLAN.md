@@ -31,7 +31,12 @@ The plan comes from the same code as the install:
   with a fake registry: no test reaches the network.
 - It reads what `validate` reads: the target disk's probe facts (one
   `lsblk` call, which also gives its serial, WWN and model, and the
-  `/dev/disk/by-id` links), the TPM and the live-media marker.
+  `/dev/disk/by-id` links), the TPM and the live-media marker. For a
+  manual layout it reads each named partition's size from the same
+  `lsblk` tree (one read-only call per partition). For scratch on the host
+  it reads the free space of the filesystem that would hold
+  `/var/fisherman-tmp` with `statfs`, at that directory or, when it does
+  not exist yet, at its nearest existing parent; it never creates it.
 - With `--read-image` it also reads the source image's metadata, never a
   layer ([Reading the image](#reading-the-image)).
 - Its output holds no passphrase, user password or recovery key, and not
@@ -156,7 +161,7 @@ One entry for each partition, in the order the install acts on it.
 | `gpt_name` | The GPT partition name. Automatic layout only. |
 | `gpt_type` | The sfdisk type: `uefi`, `linux` or a type GUID. Automatic layout only. |
 | `size` | The sfdisk size (`2GiB`), or `rest` for the rest of the disk. Automatic layout only. |
-| `size_bytes` | The size in bytes. For `rest`, `plan.capacity.root_bytes`; left out when the disk size is unknown. Automatic layout only. |
+| `size_bytes` | The size in bytes. For `rest`, `plan.capacity.root_bytes`; left out when the disk size is unknown. For a manual layout, the size lsblk reports for the partition (left out, with a `plan.unknown` entry, when lsblk does not report it, and for a mount with action `ignore`). |
 | `action` | `format` (the data is lost), `preserve` (mounted as it is), `swap` (mkswap, then swapon) or `ignore`. |
 | `filesystem` | The filesystem after the install. `unknown` for a preserved partition: the plan does not read it. |
 | `encryption` | `luks2` when the partition is a LUKS volume. |
@@ -187,18 +192,21 @@ Every device whose data the install destroys.
 
 ### `plan.capacity`
 
-Null for a manual layout: it keeps the partitions it names, and plan does
-not read their sizes.
+For an automatic layout, what the layout leaves for the root. For a manual
+layout, the size of the root partition it names, which lsblk reports.
+Earlier versions of protocol 1 printed null for a manual layout; a
+frontend reads `plan.target.layout`, not the null, to tell the layouts
+apart.
 
 | Field | Meaning |
 |---|---|
 | `min_disk_bytes` | The smallest disk fisherman installs to without `"too_small"` in `override`: 50 GiB (`probe.MinDiskBytes`, the check `disk_too_small`). |
-| `disk_minimum` | `met`, `overridden` (the disk is smaller and the recipe overrides `too_small`), `not_applicable` (a loop device: an image for another machine) or `unknown`. |
-| `reserved_bytes` | The partitions before the root, plus 3 MiB for alignment and the GPT: sfdisk starts the first partition at 1 MiB, aligns each to 1 MiB and keeps the backup GPT at the end of the disk. |
-| `root_bytes` | The disk size less `reserved_bytes`: a lower bound for the root partition (or the ZFS pool). Left out when the disk size is unknown. |
+| `disk_minimum` | `met`, `overridden` (the disk is smaller and the recipe overrides `too_small`), `not_applicable` (a loop device: an image for another machine; or a manual layout, which has no disk minimum) or `unknown`. |
+| `reserved_bytes` | The partitions before the root, plus 3 MiB for alignment and the GPT: sfdisk starts the first partition at 1 MiB, aligns each to 1 MiB and keeps the backup GPT at the end of the disk. Automatic layout only. |
+| `root_bytes` | Automatic layout: the disk size less `reserved_bytes`, a lower bound for the root partition (or the ZFS pool). Manual layout: the size of the partition mounted at `/`. Left out when that size is unknown. |
 | `root_minimum` | Always `unknown`: fisherman holds the root to no minimum of its own beyond the disk's. `root_need_bytes` and `image_fit` compare the root with the image. |
 | `root_need_bytes` | The root one deployment of the image takes: `plan.image.unpacked_bytes` ([Size estimates](#size-estimates)). Left out when that is unknown. |
-| `image_fit` | `enough`, `not_enough` or `unknown`: whether `root_bytes` holds the image ([Size estimates](#size-estimates)). A report only: neither `validate` nor the install refuses a recipe on it. |
+| `image_fit` | `enough`, `not_enough` or `unknown`: whether `root_bytes` holds the image ([Size estimates](#size-estimates)). For a manual layout whose root partition is kept (`fstype` `unformatted`), always `unknown`: plan does not read the free space inside it. A report only: neither `validate` nor the install refuses a recipe on it. |
 
 ### `plan.scratch`
 
@@ -208,6 +216,9 @@ not read their sizes.
 | `on_target` | The scratch directory is on the target disk. |
 | `bytes` | Always `unknown`, kept for protocol 1: the exact use depends on the path the install takes. `need_bytes` is the estimate. |
 | `need_bytes` | An upper estimate of the scratch space: `plan.image.compressed_bytes` + `plan.image.unpacked_bytes` ([Size estimates](#size-estimates)). Left out when either is unknown. |
+| `free_bytes` | Scratch on the host only: the free space (`statfs` `f_bavail` × `f_bsize`, what an unprivileged writer gets) of the filesystem that holds `path`. Left out for scratch on the target, when `statfs` fails, or when plan runs inside a Flatpak sandbox (whose `/var` is not the host's; frontends run fisherman on the host). |
+| `free_path` | The directory `free_bytes` was read at: `path`, or its nearest existing parent when `path` does not exist yet (the install creates it). Left out with `free_bytes`. |
+| `fit` | `enough`, `not_enough` or `unknown`: whether `free_bytes` holds the scratch the install may use ([Size estimates](#size-estimates)). Always `unknown` for scratch on the target: `plan.capacity.image_fit` includes it. A report only. |
 
 ### `plan.steps`
 
@@ -284,7 +295,17 @@ mean, and how far off they can be:
   (`scratch.on_target`), `scratch.need_bytes` as well (which includes
   it). Otherwise it is `unknown`, with the reason in `plan.unknown`. A
   registry image that is not in local containers-storage is therefore
-  never `enough`: its manifest has no unpacked size.
+  never `enough`: its manifest has no unpacked size. For a manual layout
+  `root_bytes` is the size of the root partition, compared the same way.
+- `scratch.fit` is `enough` when `scratch.free_bytes` holds
+  `scratch.need_bytes`, the upper estimate. It is `not_enough` only when
+  the install exports an OCI copy of the compressed layers into scratch
+  (a composefs install from a source that is not already an OCI layout)
+  and the free space is smaller than `image.compressed_bytes`. Otherwise it
+  is `unknown`: with less free space than the upper estimate the install
+  may still fit, as a direct install from local storage uses far less.
+  The free space is read when plan runs; whatever else writes to that
+  filesystem before the install changes it.
 
 ## Exit codes
 
@@ -318,9 +339,9 @@ its other pre-flight checks, before its first disk step.
 ## Not in this version
 
 The plan does not yet report the mounts of the installed system beyond the
-partitions, the unpacked size of an image that only a registry has, or the
-free space of a scratch directory on the host. It does not size a manual
-layout's partitions, so `image_fit` is reported for an automatic layout
-only. The install checks `diskIdentity` in its pre-flight, not again right
-before it partitions, and it does not read a saved plan. See
+partitions, the unpacked size of an image that only a registry has, the
+free space inside a kept manual root partition, the size of a `varDisk`,
+or the identity of a manual layout's disks (no `diskIdentity` binding for
+`customMounts`). The install checks `diskIdentity` in its pre-flight, not
+again right before it partitions, and it does not read a saved plan. See
 tuna-os/fisherman#371.

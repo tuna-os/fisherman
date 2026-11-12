@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **`plan` reports the host scratch's free space and a manual layout's
+  capacity** (part of #371). For scratch on the host, the new
+  `plan.scratch.free_bytes` and `free_path` are the free space (`statfs`)
+  of the filesystem that would hold `/var/fisherman-tmp`, read at it or,
+  before it exists, at its nearest existing parent (plan creates nothing),
+  and `plan.scratch.fit` compares it with `scratch.need_bytes` (`enough`,
+  `not_enough` only when a composefs OCI export of the compressed layers
+  does not fit, else `unknown`). A manual layout's partitions now have
+  `size_bytes` from the same read-only `lsblk` tree, and `plan.capacity`,
+  null before for a manual layout, compares the root partition with
+  `root_need_bytes` in `image_fit` (`unknown` for a kept root).
+  `reserved_bytes` is left out for a manual layout. A report only: no new
+  refusal. Additive: protocol 1. Docs: PLAN.md.
 - **`plan --read-image`: the image's identity and size before a pull, and
   whether it fits** (part of #371). The new flag reads the source image's
   metadata, never a layer: a `containers-storage:` or `oci:` source and a

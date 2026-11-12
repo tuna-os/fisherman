@@ -99,6 +99,52 @@ func (p *Prober) Target(path string) (Target, error) {
 	return t, nil
 }
 
+// Block is a block device a manual layout names (a customMounts
+// partition), as lsblk reports it: the same read-only lsblk call as Target,
+// searched through the whole tree, partitions and stacked devices included.
+type Block struct {
+	// Path is the path as the recipe gave it; Device is it with symlinks
+	// resolved.
+	Path, Device string
+	// Type is lsblk's TYPE ("part", "disk", "crypt", "lvm", ...).
+	Type      string
+	SizeBytes int64
+}
+
+// Block looks path up in the lsblk device tree. It writes nothing. An error
+// means the path does not resolve, lsblk failed, or lsblk does not report
+// the device (a regular file, a node that is not a block device).
+func (p *Prober) Block(path string) (Block, error) {
+	b := Block{Path: path, Device: path}
+	resolved, err := p.resolve(path)
+	if err != nil {
+		return b, err
+	}
+	b.Device = resolved
+	devs, err := p.lsblkTree()
+	if err != nil {
+		return b, err
+	}
+	if dev, ok := findBlock(devs, resolved); ok {
+		b.Type, b.SizeBytes = dev.Type, int64(dev.Size)
+		return b, nil
+	}
+	return b, fmt.Errorf("lsblk reports no block device %s", resolved)
+}
+
+// findBlock is the device named name anywhere in devs, depth first.
+func findBlock(devs []lsblkDevice, name string) (lsblkDevice, bool) {
+	for _, dev := range devs {
+		if dev.Name == name || dev.KName == name {
+			return dev, true
+		}
+		if d, ok := findBlock(dev.Children, name); ok {
+			return d, true
+		}
+	}
+	return lsblkDevice{}, false
+}
+
 // resolve follows the symlinks of path, a host path, and returns the node
 // it names as the host would name it.
 func (p *Prober) resolve(path string) (string, error) {

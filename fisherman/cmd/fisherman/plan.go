@@ -1,17 +1,21 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/tuna-os/fisherman/internal/disk"
 	"github.com/tuna-os/fisherman/internal/install"
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
+	"github.com/tuna-os/fisherman/internal/runner"
 )
 
 // planProtocolVersion is the schema version of the `plan --json` output.
@@ -105,16 +109,20 @@ type planIdentity struct {
 	Bound bool `json:"bound"`
 }
 
-// planCapacity is what the automatic layout leaves for the root, and the
-// minimum fisherman holds the disk to. Manual layouts have none: plan does
-// not read the size of the partitions they keep.
+// planCapacity is what the layout leaves for the root, and the minimum
+// fisherman holds the disk to: for an automatic layout the disk less the
+// partitions before the root, for a manual layout the size of the root
+// partition it names (lsblk, read-only).
 type planCapacity struct {
 	MinDiskBytes int64 `json:"min_disk_bytes"`
 	// DiskMinimum: "met", "overridden" (smaller, and "too_small" is in
-	// override), "not_applicable" (a loop device) or "unknown".
-	DiskMinimum   string `json:"disk_minimum"`
-	ReservedBytes int64  `json:"reserved_bytes"`
-	RootBytes     int64  `json:"root_bytes,omitempty"`
+	// override), "not_applicable" (a loop device, or a manual layout) or
+	// "unknown".
+	DiskMinimum string `json:"disk_minimum"`
+	// ReservedBytes: the automatic layout's partitions before the root and
+	// the alignment reserve. Left out for a manual layout.
+	ReservedBytes int64 `json:"reserved_bytes,omitempty"`
+	RootBytes     int64 `json:"root_bytes,omitempty"`
 	// RootMinimum: always "unknown": fisherman holds the root to no
 	// minimum of its own; root_need_bytes and image_fit compare it with
 	// the image.
@@ -181,6 +189,14 @@ type planScratch struct {
 	// image.compressed_bytes + image.unpacked_bytes. Left out when either
 	// is unknown.
 	NeedBytes int64 `json:"need_bytes,omitempty"`
+	// FreeBytes: the free space (statfs f_bavail) of the host filesystem
+	// that holds Path, read at FreePath: Path, or its nearest existing
+	// parent when it does not exist yet. Host scratch only; left out when
+	// unknown.
+	FreeBytes int64  `json:"free_bytes,omitempty"`
+	FreePath  string `json:"free_path,omitempty"`
+	// Fit: "enough", "not_enough" or "unknown" (planScratchFit).
+	Fit string `json:"fit"`
 }
 
 type planStep struct {
@@ -385,9 +401,15 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 	}
 
 	// ── Target and partitions ──
+	fitWhy := "" // why image_fit cannot be judged, before the sizes are compared
 	if r.IsManualLayout() {
 		p.Target = planTarget{Layout: "manual"}
-		unknown("capacity", "a manual layout keeps the partitions it names; plan does not read their sizes")
+		p.Capacity = &planCapacity{MinDiskBytes: probe.MinDiskBytes, DiskMinimum: "not_applicable",
+			RootMinimum: planUnknownValue, RootNeedBytes: img.UnpackedBytes, ImageFit: planUnknownValue}
+		if img.UnpackedBytes == 0 {
+			unknown("capacity.root_need_bytes", "the estimate is the image's unpacked size, which only local containers-storage reports")
+		}
+		rootPreserved, rootNamed := false, false
 		specs := make([]disk.MountSpec, 0, len(r.CustomMounts))
 		for _, cm := range r.CustomMounts {
 			specs = append(specs, disk.MountSpec{Partition: cm.Partition, Target: cm.Target, Fstype: cm.Fstype})
@@ -407,10 +429,31 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 			case disk.MountIgnore:
 				// Not touched: no filesystem, nothing destroyed.
 			}
+			if s.Action() != disk.MountIgnore {
+				if b, err := hostBlock(s.Partition); err == nil && b.SizeBytes > 0 {
+					pp.SizeBytes = b.SizeBytes
+				} else {
+					unknown(fmt.Sprintf("partitions[%d].size_bytes", i), "lsblk reports no size for the partition")
+				}
+			}
 			if s.Target == "/" {
 				pp.MountOptions = r.RootMountOptions()
+				p.Capacity.RootBytes = pp.SizeBytes
+				rootNamed, rootPreserved = true, s.Action() == disk.MountPreserve
 			}
 			p.Partitions = append(p.Partitions, pp)
+		}
+		if p.Capacity.RootBytes == 0 {
+			unknown("capacity.root_bytes", "the size of the root partition is unknown")
+		}
+		unknown("capacity.root_minimum", "fisherman sets no root minimum; root_need_bytes and image_fit compare the root with the image")
+		switch {
+		case !rootNamed:
+			fitWhy = "the manual layout names no root partition"
+		case rootPreserved:
+			fitWhy = "the root partition is kept with its contents; plan does not read its free space"
+		case p.Capacity.RootBytes == 0:
+			fitWhy = "the size of the root partition is unknown"
 		}
 	} else {
 		layout := autoLayout(r)
@@ -450,6 +493,7 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 			p.Capacity.RootBytes = t.SizeBytes - p.Capacity.ReservedBytes
 		} else {
 			unknown("capacity.root_bytes", "the target disk size is unknown, or no larger than the partitions before the root")
+			fitWhy = "the target disk size is unknown"
 		}
 		unknown("capacity.root_minimum", "fisherman sets no root minimum beyond the disk minimum; root_need_bytes and image_fit compare the root with the image")
 		for _, part := range parts {
@@ -510,9 +554,16 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 	} else {
 		unknown("scratch.need_bytes", "the estimate needs the image's compressed and unpacked sizes (image.compressed_bytes, image.unpacked_bytes)")
 	}
-	if p.Capacity != nil {
-		p.Capacity.ImageFit = planImageFit(p.Capacity, img, p.Scratch, p.Target.SizeBytes > 0, unknown)
+	if !p.Scratch.OnTarget {
+		if free, at, err := hostScratchFree(p.Scratch.Path); err == nil {
+			p.Scratch.FreeBytes, p.Scratch.FreePath = free, at
+		} else {
+			unknown("scratch.free_bytes", "plan could not read the free space of the filesystem that holds the scratch directory: "+err.Error())
+		}
 	}
+	exportsOCI := r.UsesComposeFs() && p.Source.Kind != "oci" // exportComposefsOCIIfNeeded
+	p.Scratch.Fit = planScratchFit(p.Scratch, img, exportsOCI, unknown)
+	p.Capacity.ImageFit = planImageFit(p.Capacity, img, p.Scratch, fitWhy, unknown)
 
 	// ── Steps ── The pull moves weight between steps, never a step.
 	for i, s := range planSteps(r, true) {
@@ -625,9 +676,15 @@ func planImageFacts(r *recipe.Recipe, kind string, readImage bool) (planImage, s
 // smaller than the image's compressed layers, a lower bound of its
 // unpacked size, or than the unpacked size itself. Else "unknown". It is a
 // report: neither validate nor the install refuses on it.
-func planImageFit(c *planCapacity, img planImage, s planScratch, sizeKnown bool, unknown func(field, reason string)) string {
-	if !sizeKnown || c.RootBytes == 0 {
-		unknown("capacity.image_fit", "the target disk size is unknown")
+//
+// sizeWhy, when not empty, is why the root cannot be compared at all (an
+// unknown disk size, a kept root partition).
+func planImageFit(c *planCapacity, img planImage, s planScratch, sizeWhy string, unknown func(field, reason string)) string {
+	if sizeWhy == "" && c.RootBytes == 0 {
+		sizeWhy = "the size of the root is unknown"
+	}
+	if sizeWhy != "" {
+		unknown("capacity.image_fit", sizeWhy)
 		return planUnknownValue
 	}
 	floor := img.CompressedBytes
@@ -654,6 +711,78 @@ func planImageFit(c *planCapacity, img planImage, s planScratch, sizeKnown bool,
 	}
 	unknown("capacity.image_fit", "the image's unpacked size is unknown (see image.unpacked_bytes), and the root is not smaller than its compressed layers")
 	return planUnknownValue
+}
+
+// planScratchFit compares the free space of a host scratch directory with
+// what the install may hold there. "enough": the free space holds the
+// upper estimate (scratch.need_bytes). "not_enough": the install exports
+// an OCI copy of the image's compressed layers into scratch (exportsOCI:
+// composefs, from a source that is not already an OCI layout), and the
+// free space is smaller than those layers. Else "unknown". Scratch on the
+// target is judged by capacity.image_fit. A report only: neither validate
+// nor the install refuses on it.
+func planScratchFit(s planScratch, img planImage, exportsOCI bool, unknown func(field, reason string)) string {
+	why := ""
+	switch {
+	case s.OnTarget:
+		why = "the scratch directory is on the target root; capacity.image_fit includes the scratch estimate"
+	case s.FreePath == "":
+		why = "the free space of the scratch filesystem is unknown"
+	case s.NeedBytes > 0 && s.FreeBytes >= s.NeedBytes:
+		return "enough"
+	case exportsOCI && img.CompressedBytes > 0 && s.FreeBytes < img.CompressedBytes:
+		return "not_enough"
+	case s.NeedBytes > 0:
+		why = "the free space is less than the upper estimate (scratch.need_bytes); the install may use less"
+	default:
+		why = "plan has no scratch estimate (see scratch.need_bytes)"
+	}
+	unknown("scratch.fit", why)
+	return planUnknownValue
+}
+
+// hostBlock is what lsblk reports about a manual layout's partition
+// (probe.Block): one read-only lsblk call. Tests replace it.
+var hostBlock = func(path string) (probe.Block, error) { return newProber().Block(path) }
+
+// hostScratchFree is the free space of the host filesystem that would hold
+// the scratch directory path, and the directory it was read at. Tests
+// replace it.
+var hostScratchFree = func(path string) (int64, string, error) {
+	if runner.InFlatpak() {
+		// statfs would read the sandbox's /var, not the host's.
+		return 0, path, errors.New("plan runs inside a Flatpak sandbox, where the host's /var is not its own")
+	}
+	return scratchFreeBytes(path)
+}
+
+// scratchFreeBytes is statfs's f_bavail × f_bsize for path or, when path
+// does not exist yet, its nearest existing parent: the filesystem the
+// install's MkdirAll would create it on. It only stats; it creates nothing.
+func scratchFreeBytes(path string) (int64, string, error) {
+	dir := filepath.Clean(path)
+	for {
+		fi, err := os.Stat(dir)
+		if err == nil {
+			if !fi.IsDir() {
+				return 0, dir, fmt.Errorf("%s is not a directory", dir)
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return 0, dir, err
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return 0, dir, err
+		}
+		dir = parent
+	}
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, dir, fmt.Errorf("statfs %s: %w", dir, err)
+	}
+	return int64(st.Bavail) * int64(st.Bsize), dir, nil //nolint:gosec // block counts fit in int64
 }
 
 // manualRole names what a customMounts target is.

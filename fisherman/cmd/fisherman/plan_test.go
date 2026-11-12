@@ -99,9 +99,11 @@ func guardCommands(t *testing.T) *commandGuard {
 	g := &commandGuard{t: t}
 	oldRun, oldOut, oldExec := runner.RunFn, runner.OutputFn, runner.DefaultExecutor
 	oldProber, oldBind, oldBootc, oldShim := newProber, bindMount, bootcInstall, prepareSelinuxWorkaround
-	oldVar, oldTarget := varIsSpaceConstrained, hostTarget
+	oldVar, oldTarget, oldBlock, oldFree := varIsSpaceConstrained, hostTarget, hostBlock, hostScratchFree
 	oldInstallExec, oldPlanInspect := install.Exec, install.PlanInspectFn
 	hostTarget = planHost(nil)
+	hostBlock = planBlocks
+	hostScratchFree = planScratchFree(planFixtureFreeBytes)
 	runner.RunFn = func(_ io.Reader, name string, args ...string) error { return g.check(name, args) }
 	runner.OutputFn = func(name string, args ...string) ([]byte, error) { return nil, g.check(name, args) }
 	runner.DefaultExecutor = guardedExecutor{g}
@@ -126,7 +128,7 @@ func guardCommands(t *testing.T) *commandGuard {
 		}
 		runner.RunFn, runner.OutputFn, runner.DefaultExecutor = oldRun, oldOut, oldExec
 		newProber, bindMount, bootcInstall, prepareSelinuxWorkaround = oldProber, oldBind, oldBootc, oldShim
-		varIsSpaceConstrained, hostTarget = oldVar, oldTarget
+		varIsSpaceConstrained, hostTarget, hostBlock, hostScratchFree = oldVar, oldTarget, oldBlock, oldFree
 		install.Exec, install.PlanInspectFn = oldInstallExec, oldPlanInspect
 	})
 	return g
@@ -247,11 +249,45 @@ func planHost(changed map[string]probe.Target) func(string) (probe.Target, error
 	}
 }
 
+// planFixturePartitions is what the stand-in lsblk reports about each
+// fixture partition a manual layout names, by base name. sda4 (swap) is
+// not reported: its size is unknown.
+var planFixturePartitions = map[string]int64{
+	"sda1": 2 << 30,
+	"sda2": 2 << 30,
+	"sda3": 100 << 30,
+	"sda5": 4 << 30,
+}
+
+// planBlocks is a hostBlock for the plan fixtures.
+func planBlocks(path string) (probe.Block, error) {
+	n, ok := planFixturePartitions[filepath.Base(path)]
+	if !ok {
+		return probe.Block{Path: path, Device: path}, errors.New("fixture: lsblk reports no block device " + path)
+	}
+	return probe.Block{Path: path, Device: path, Type: "part", SizeBytes: n}, nil
+}
+
+// planFixtureFreeBytes is the free space of the stand-in host's /var: 20 GiB.
+const planFixtureFreeBytes int64 = 20 << 30
+
+// planScratchFree is a hostScratchFree for the plan fixtures: /var holds
+// free bytes, and /var/fisherman-tmp does not exist yet, so the free space
+// is read at /var. No real statfs reaches a golden.
+func planScratchFree(free int64) func(string) (int64, string, error) {
+	return func(path string) (int64, string, error) {
+		if path != "/var/fisherman-tmp" {
+			return 0, path, errors.New("fixture: not the host scratch directory")
+		}
+		return free, "/var", nil
+	}
+}
+
 // planDisks creates the fixture "disks" the recipes name under @DIR@.
 func planDisks(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()
-	for _, n := range []string{"sda", "sdb", "nvme0n1", "loop0", "sda1", "sda2", "sda3", "sda4"} {
+	for _, n := range []string{"sda", "sdb", "nvme0n1", "loop0", "sda1", "sda2", "sda3", "sda4", "sda5"} {
 		if err := os.WriteFile(filepath.Join(dir, n), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -314,6 +350,8 @@ var planCases = []struct {
 	{"read-image-too-big", 0, false, false, true},
 	{"read-image-offline", 0, false, false, true},
 	{"read-image-manual", 0, false, false, true},
+	{"read-image-manual-small-root", 0, false, false, true},
+	{"read-image-manual-kept-root", 0, false, false, true},
 	{"live", 0, false, true, true},
 }
 
@@ -718,7 +756,11 @@ func TestPlanImageFit(t *testing.T) {
 				s.NeedBytes = c.img.CompressedBytes + c.img.UnpackedBytes
 			}
 			var reasons []string
-			got := planImageFit(&planCapacity{RootBytes: c.root}, c.img, s, c.sizeKnown, func(f, r string) { reasons = append(reasons, f) })
+			why := ""
+			if !c.sizeKnown {
+				why = "the target disk size is unknown"
+			}
+			got := planImageFit(&planCapacity{RootBytes: c.root}, c.img, s, why, func(f, r string) { reasons = append(reasons, f) })
 			if got != c.want {
 				t.Errorf("image_fit %q, want %q", got, c.want)
 			}
@@ -726,5 +768,178 @@ func TestPlanImageFit(t *testing.T) {
 				t.Errorf("image_fit %q with unknown entries %v", got, reasons)
 			}
 		})
+	}
+}
+
+// planScratchFit reports enough when the host's free space holds the
+// upper estimate, not_enough only when an OCI export of the compressed
+// layers alone does not fit, and leaves scratch on the target to
+// capacity.image_fit.
+func TestPlanScratchFit(t *testing.T) {
+	const gib = int64(1) << 30
+	img := planImage{CompressedBytes: 3 * gib, UnpackedBytes: 8 * gib}
+	host := func(free int64) planScratch {
+		return planScratch{Path: "/var/fisherman-tmp", NeedBytes: 11 * gib, FreeBytes: free, FreePath: "/var"}
+	}
+	for _, c := range []struct {
+		name       string
+		s          planScratch
+		img        planImage
+		exportsOCI bool
+		want       string
+	}{
+		{"on target", planScratch{OnTarget: true, NeedBytes: 11 * gib}, img, true, planUnknownValue},
+		{"free space unknown", planScratch{NeedBytes: 11 * gib}, img, true, planUnknownValue},
+		{"holds the estimate", host(20 * gib), img, false, "enough"},
+		{"holds the estimate exactly", host(11 * gib), img, true, "enough"},
+		{"less than the estimate", host(5 * gib), img, false, planUnknownValue},
+		{"less than the estimate, OCI export fits", host(5 * gib), img, true, planUnknownValue},
+		{"OCI export does not fit", host(2 * gib), img, true, "not_enough"},
+		{"no OCI export, little space", host(2 * gib), img, false, planUnknownValue},
+		{"no estimate", planScratch{FreeBytes: 20 * gib, FreePath: "/var"}, planImage{}, true, planUnknownValue},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			var fields []string
+			got := planScratchFit(c.s, c.img, c.exportsOCI, func(f, _ string) { fields = append(fields, f) })
+			if got != c.want {
+				t.Errorf("fit %q, want %q", got, c.want)
+			}
+			if (got == planUnknownValue) != (len(fields) == 1 && fields[0] == "scratch.fit") {
+				t.Errorf("fit %q with unknown entries %v", got, fields)
+			}
+		})
+	}
+}
+
+// The plan reads the host scratch's free space only when scratch is on
+// the host, and reports what it compares it with.
+func TestPlanScratchFree(t *testing.T) {
+	dir := planDisks(t)
+	composefs := `{"disk":"` + dir + `/sda","filesystem":"btrfs","bootloader":"systemd","composeFsBackend":true,` +
+		`"image":"ghcr.io/example/cached:stable","hostname":"fixture","encryption":{"type":"none"}}`
+	plan := func(t *testing.T) *installPlan {
+		t.Helper()
+		var out bytes.Buffer
+		if code := runPlan([]string{"--json", "--read-image", "-"}, strings.NewReader(composefs), &out, io.Discard); code != 0 {
+			t.Fatalf("exit %d:\n%s", code, out.String())
+		}
+		var res planResult
+		if err := json.Unmarshal(out.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		return res.Plan
+	}
+	unknownField := func(p *installPlan, field string) bool {
+		for _, u := range p.Unknown {
+			if u.Field == field {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("OCI export does not fit", func(t *testing.T) {
+		stubImages(t, guardCommands(t))
+		hostScratchFree = planScratchFree(1 << 30)
+		p := plan(t)
+		if p.Scratch.FreeBytes != 1<<30 || p.Scratch.FreePath != "/var" || p.Scratch.Fit != "not_enough" {
+			t.Errorf("scratch %+v", p.Scratch)
+		}
+	})
+	t.Run("holds the estimate", func(t *testing.T) {
+		stubImages(t, guardCommands(t))
+		p := plan(t)
+		if p.Scratch.FreeBytes != planFixtureFreeBytes || p.Scratch.Fit != "enough" || unknownField(p, "scratch.fit") {
+			t.Errorf("scratch %+v", p.Scratch)
+		}
+	})
+	t.Run("statfs fails", func(t *testing.T) {
+		stubImages(t, guardCommands(t))
+		hostScratchFree = func(string) (int64, string, error) { return 0, "/var", errors.New("statfs /var: permission denied") }
+		p := plan(t)
+		if p.Scratch.FreeBytes != 0 || p.Scratch.FreePath != "" || p.Scratch.Fit != planUnknownValue ||
+			!unknownField(p, "scratch.free_bytes") || !unknownField(p, "scratch.fit") {
+			t.Errorf("scratch %+v, unknown %v", p.Scratch, p.Unknown)
+		}
+	})
+	t.Run("scratch on the target", func(t *testing.T) {
+		stubImages(t, guardCommands(t))
+		varIsSpaceConstrained = func() bool { return true }
+		hostScratchFree = func(path string) (int64, string, error) {
+			t.Errorf("plan read the free space of %s for scratch on the target", path)
+			return 0, path, errors.New("unexpected")
+		}
+		p := plan(t)
+		if !p.Scratch.OnTarget || p.Scratch.FreeBytes != 0 || p.Scratch.Fit != planUnknownValue || unknownField(p, "scratch.free_bytes") {
+			t.Errorf("scratch %+v", p.Scratch)
+		}
+	})
+}
+
+// scratchFreeBytes reads the nearest existing parent of a scratch
+// directory that does not exist yet, and creates nothing.
+func TestScratchFreeBytesCreatesNothing(t *testing.T) {
+	base := t.TempDir()
+	missing := filepath.Join(base, "a", "b", "fisherman-tmp")
+	free, at, err := scratchFreeBytes(missing)
+	if err != nil || at != base || free <= 0 {
+		t.Errorf("scratchFreeBytes(%s) = %d, %q, %v; want the free space of %s", missing, free, at, err, base)
+	}
+	if _, err := os.Stat(filepath.Join(base, "a")); !os.IsNotExist(err) {
+		t.Errorf("scratchFreeBytes created %s/a (%v)", base, err)
+	}
+	if _, at, err := scratchFreeBytes(base); err != nil || at != base {
+		t.Errorf("an existing directory: %q, %v", at, err)
+	}
+	file := filepath.Join(base, "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := scratchFreeBytes(filepath.Join(file, "fisherman-tmp")); err == nil {
+		t.Error("a scratch path under a regular file has free space")
+	}
+}
+
+// The reads a manual layout's capacity adds go through the guarded prober
+// (lsblk only) and the real scratch statfs, which creates no directory.
+func TestPlanCapacityReadsAreReadOnly(t *testing.T) {
+	dir := planDisks(t)
+	g := guardCommands(t)
+	// The fixture partitions are real files, so the prober reads them at
+	// the host root; its commands still go through the guard.
+	hostBlock = func(path string) (probe.Block, error) {
+		pr := newProber()
+		pr.Root = "/"
+		return pr.Block(path)
+	}
+	hostScratchFree = scratchFreeBytes
+	_, statErr := os.Stat("/var/fisherman-tmp")
+	got, code := runPlanFixture(t, dir, "manual")
+	if code != 0 {
+		t.Fatalf("exit %d:\n%s", code, got)
+	}
+	if _, err := os.Stat("/var/fisherman-tmp"); os.IsNotExist(statErr) != os.IsNotExist(err) {
+		t.Errorf("plan changed whether /var/fisherman-tmp exists (%v, then %v)", statErr, err)
+	}
+	lsblk := 0
+	for _, line := range g.seen {
+		if strings.HasPrefix(line, "lsblk ") {
+			lsblk++
+		}
+	}
+	if lsblk == 0 {
+		t.Errorf("the partition sizes were not read through lsblk: %v", g.seen)
+	}
+	var res planResult
+	if err := json.Unmarshal([]byte(got), &res); err != nil {
+		t.Fatal(err)
+	}
+	for _, pp := range res.Plan.Partitions {
+		if pp.SizeBytes != 0 {
+			t.Errorf("%s: a size from a guarded lsblk that answered nothing: %d", pp.Device, pp.SizeBytes)
+		}
+	}
+	if res.Plan.Capacity == nil || res.Plan.Capacity.ImageFit != planUnknownValue {
+		t.Errorf("capacity %+v", res.Plan.Capacity)
 	}
 }

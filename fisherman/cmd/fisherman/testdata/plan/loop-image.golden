@@ -90,7 +90,10 @@
     "scratch": {
       "path": "/var/fisherman-tmp",
       "on_target": false,
-      "bytes": "unknown"
+      "bytes": "unknown",
+      "free_bytes": 21474836480,
+      "free_path": "/var",
+      "fit": "unknown"
     },
     "steps": [
       {
@@ -186,6 +189,10 @@
       {
         "field": "scratch.need_bytes",
         "reason": "the estimate needs the image's compressed and unpacked sizes (image.compressed_bytes, image.unpacked_bytes)"
+      },
+      {
+        "field": "scratch.fit",
+        "reason": "plan has no scratch estimate (see scratch.need_bytes)"
       },
       {
         "field": "capacity.image_fit",
