@@ -510,6 +510,27 @@ tpm_race() (  # a subshell: its ssh_root must not replace the shared one
   TPM2_WAIT_ITERS=5 run_check "$VMC/tpm2-enrolled.sh"
 )
 expect_exit "guest tpm2: token first, cleanup a moment later → pass (exit 0)" 0 tpm_race
+# A VM run under memory pressure: the first ssh calls fail. The check must
+# try again, and must not call a failed query "no LUKS device".
+tpm_ssh() (  # tpm_ssh FAILS ANSWER — the first FAILS queries fail, then ANSWER
+  n="$VMC_TMP/tpm-ssh"; echo 0 >"$n"
+  fails="$1" answer="$2"
+  ssh_root() {
+    case "$*" in
+      *crypto_LUKS*) c=$(cat "$n"); echo $((c + 1)) >"$n"
+                     [ "$c" -ge "$fails" ] || return 255
+                     [ -z "$answer" ] || echo "$answer" ;;
+      *luksDump*) printf '%b\n' "$ENROLLED" ;;
+      *ActiveState*) echo inactive ;;
+      *journalctl*) echo "enrolled" ;;
+      *) return 1 ;;
+    esac
+  }
+  TPM2_SSH_TRIES=4 TPM2_SSH_SLEEP=0 TPM2_WAIT_ITERS=1 run_check "$VMC/tpm2-enrolled.sh"
+)
+expect_exit "guest tpm2: ssh fails twice, then answers → pass (exit 0)" 0 tpm_ssh 2 /dev/sda3
+expect_exit "guest tpm2: ssh never answers → caught (exit 1)" 1 tpm_ssh 9 /dev/sda3
+expect_exit "guest tpm2: ssh answers, no LUKS device → caught (exit 1)" 1 tpm_ssh 0 ""
 
 var_guest() { FAKE_VAR="$1" run_check "$VMC/var-disk.sh"; }
 FSTAB_VAR='UUID=1 /var xfs defaults,nofail,x-systemd.device-timeout=30s,x-systemd.before=local-fs.target 0 0'

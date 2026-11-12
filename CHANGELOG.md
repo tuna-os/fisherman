@@ -181,6 +181,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 
+- **The TPM2 guest check said "no LUKS device" when ssh had failed**: a
+  `dakota-tpm2` run under memory pressure missed ssh's one-second connect
+  timeout, and `tpm2-enrolled.sh` read the empty answer as an unencrypted
+  guest. It now tries the query again while ssh fails, and says "the guest
+  did not answer over SSH" when it never does.
+
+- **The VM matrix covers a user, GRUB with LUKS, TPM2 and a /var disk**
+
 - **A recipe field that never reaches the install fails a test** (#289):
   `recipeFieldUses` (`cmd/fisherman/recipe_consumers_test.go`) lists every
   field of `recipe.Recipe`, nested ones included, with the files that pass
