@@ -1,0 +1,16 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "diskIdentity.serial",
+      "code": "disk_identity_mismatch",
+      "message": "disk /dev/null reports serial none, not \"S5Y1NJ0R123456\": it is not the disk the install was planned for"
+    },
+    {
+      "field": "diskIdentity.sizeBytes",
+      "code": "disk_identity_mismatch",
+      "message": "disk /dev/null is 53687091200 bytes, not 500107862016: it is not the disk the install was planned for"
+    }
+  ]
+}

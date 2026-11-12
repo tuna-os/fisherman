@@ -193,6 +193,33 @@ no `disk` verdict. The firmware check applies.
 non-root run before it reads the recipe: its `error` event has the code
 `not_root`.
 
+## Disk identity
+
+A frontend shows the user a disk, plans the install
+([PLAN.md](PLAN.md)), asks for confirmation, then sends the recipe. The
+device node can name another disk by then: a USB disk was swapped, or the
+kernel numbered the disks in another order after a replug. The optional
+recipe field `diskIdentity` binds the install to the disk the user
+confirmed:
+
+```json
+{"disk": "/dev/sdb", "diskIdentity": {"serial": "S5Y1NJ0R123456", "wwn": "0x5002538f4231abcd", "sizeBytes": 500107862016}}
+```
+
+Copy the values from `plan.target.identity` (`serial`, `wwn`,
+`size_bytes`), and leave out a field the plan reports as `unknown`. The full
+`validate` and the install compare each field that is set with what the
+device reports now, through the same `lsblk` call as the target checks
+(`probe.Target`): the serial and the WWN (without case) as `lsblk` reads them
+from udev, and the size in bytes. A field the device no longer reports (a
+serial that is gone) is a mismatch: the binding fails closed. Each field
+that differs is one `disk_identity_mismatch`. There is no override.
+
+The install runs the check in its pre-flight, with the other rules, before
+it touches a disk. A device that is not a whole disk, or that `lsblk` cannot
+judge, gets `disk_not_disk` or `disk_unverified` instead. `--partial` checks
+only the shape (`disk_identity_invalid`).
+
 ## Validating one page: `--partial`
 
 A frontend validates a page while it is filled in, before a whole recipe
@@ -229,6 +256,7 @@ A rule runs when its key is present:
 | `luksMapperName` | luksMapperName |
 | `additionalImageStores` | each entry's path syntax (not whether it exists) |
 | `override` | override |
+| `diskIdentity` | the shape of diskIdentity (`disk_identity_invalid`); `customMounts` counts as absent when the fragment has none. Never whether the device matches |
 | `experimental` | experimental |
 | `locale` | locale |
 | `keyboard` | keyboard layout (required when the object is present), variant, model |
@@ -277,6 +305,8 @@ holds both fields.
 | `disk` | an eligible target: a whole disk (symlinks resolved) that does not hold the running system, is writable and is at least 50 GiB. See [Target eligibility](#target-eligibility). Full mode only. | `disk_not_disk`, `disk_boot_disk`, `disk_read_only`, `disk_too_small`, `disk_unverified` |
 | (the machine) | booted through UEFI, unless the target is a loop device. Full mode only. | `firmware_not_uefi` |
 | `override` | each entry is `too_small` or `uefi` | `override_unsupported` |
+| `diskIdentity` | absent, or at least one of `serial`, `wwn` and `sizeBytes`, with a `sizeBytes` that is not negative, and not with `customMounts` | `disk_identity_invalid` |
+| `diskIdentity` | each field that is set matches what the device `disk` names reports now. See [Disk identity](#disk-identity). Full mode only. | `disk_identity_mismatch` |
 | `zfsPoolName` | empty is valid (`rpool`). Otherwise 1–63 characters: a letter first, then letters, digits, `_`, `-` and `.`; and not a name `zpool` reserves (`mirror*`, `raidz*`, `draid*`, `spare*`, `log`, `c0`–`c9…`). It is an argument of `zpool create`, so `-f` would be read as a flag. | `zfs_pool_name_invalid` |
 | `luksMapperName` | empty is valid (`fisherman-root`). Otherwise 1–63 characters: a letter or digit first, then letters, digits, `_`, `.`, `+` and `-`; not `control`. It names `/dev/mapper/<name>`, so `../sda` would point the install at another device node. | `luks_mapper_name_invalid` |
 | `additionalImageStores[i]` | an absolute path with no `..` component, no `:` or `,` and no control character. It is mounted into the bootc container as `-v <store>:<store>:ro`. | `additional_image_store_invalid` |
@@ -422,6 +452,8 @@ This section maps error codes to their causes and corrective actions. Each code 
 | `disk_unverified` | `disk` | `lsblk` failed, so fisherman cannot tell whether the disk is safe | Install `util-linux` on the host; read the message for the `lsblk` error |
 | `firmware_not_uefi` | (none) | The machine booted in BIOS (legacy) mode; fisherman installs UEFI boot loaders | Boot the installer in UEFI mode, or add `"uefi"` to `override` for a disk that another machine will boot |
 | `override_unsupported` | `override[i]` | The entry is not `too_small` or `uefi` | Remove it. The other target checks have no override |
+| `disk_identity_invalid` | `diskIdentity`, `diskIdentity.sizeBytes` | `diskIdentity` sets none of `serial`, `wwn` and `sizeBytes`, has a negative `sizeBytes`, or is given with `customMounts` | Copy the identity `fisherman plan --json` reports for the disk, or remove `diskIdentity` |
+| `disk_identity_mismatch` | `diskIdentity.serial`, `diskIdentity.wwn` or `diskIdentity.sizeBytes` | The device `disk` names now reports another serial, WWN or size than the recipe's `diskIdentity` (or reports none): it is not the disk the install was planned for. Full mode and the install only | Show the disk list again (`fisherman probe --json`), let the user confirm the disk, and plan again. There is no override |
 | `var_disk_not_disk` | `varDisk.disk` | The `/var` disk path is not a whole disk | Name the disk itself |
 | `var_disk_boot_disk` | `varDisk.disk` | The running system or the live medium is on the `/var` disk | Choose another disk |
 | `var_disk_read_only` | `varDisk.disk` | The `/var` disk is read-only | Remove the write protection, or choose another disk |

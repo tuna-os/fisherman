@@ -92,6 +92,12 @@ const (
 	CodeVarDiskBootDisk     = "var_disk_boot_disk"
 	CodeVarDiskReadOnly     = "var_disk_read_only"
 	CodeOverrideUnsupported = "override_unsupported"
+	// CodeDiskIdentityInvalid: diskIdentity sets no field, a negative
+	// size, or is given with customMounts (which names no disk).
+	CodeDiskIdentityInvalid = "disk_identity_invalid"
+	// CodeDiskIdentityMismatch: the device `disk` names no longer has the
+	// serial, WWN or size the recipe's diskIdentity holds. Full mode only.
+	CodeDiskIdentityMismatch = "disk_identity_mismatch"
 
 	CodeLocaleInvalid          = "locale_invalid"
 	CodeKeyboardLayoutRequired = "keyboard_layout_required"
@@ -829,6 +835,60 @@ type TargetFacts struct {
 	MinBytes  int64
 	// NotDisk, BootDisk, ReadOnly, TooSmall are probe's excluded reasons.
 	NotDisk, BootDisk, ReadOnly, TooSmall bool
+	// Serial and WWN are the identity the device reports now (probe's
+	// Target); empty when it reports none.
+	Serial, WWN string
+}
+
+// CheckDiskIdentity is the rule for the shape of diskIdentity, which needs
+// no machine. Whether the device matches is CheckTarget's.
+func CheckDiskIdentity(r *Recipe) []Problem {
+	id := r.DiskIdentity
+	if id == nil {
+		return nil
+	}
+	switch {
+	case r.IsManualLayout():
+		return []Problem{{"diskIdentity", CodeDiskIdentityInvalid,
+			"diskIdentity binds the disk of the automatic layout; customMounts names partitions, not a disk"}}
+	case id.SizeBytes < 0:
+		return []Problem{{"diskIdentity.sizeBytes", CodeDiskIdentityInvalid,
+			fmt.Sprintf("diskIdentity.sizeBytes is %d; it must be the disk size in bytes", id.SizeBytes)}}
+	case strings.TrimSpace(id.Serial) == "" && strings.TrimSpace(id.WWN) == "" && id.SizeBytes == 0:
+		return []Problem{{"diskIdentity", CodeDiskIdentityInvalid,
+			"diskIdentity sets none of serial, wwn and sizeBytes, so it binds nothing"}}
+	}
+	return nil
+}
+
+// checkDiskIdentityMatch compares the recipe's diskIdentity with what the
+// device reports now. A field the recipe sets and the device no longer
+// reports is a mismatch: a binding fails closed.
+func (r *Recipe) checkDiskIdentityMatch(f *TargetFacts) []Problem {
+	id := r.DiskIdentity
+	if id == nil || len(CheckDiskIdentity(r)) > 0 {
+		return nil
+	}
+	now := func(v string) string {
+		if v == "" {
+			return "none"
+		}
+		return fmt.Sprintf("%q", v)
+	}
+	var ps []Problem
+	if want := strings.TrimSpace(id.Serial); want != "" && want != f.Serial {
+		ps = append(ps, Problem{"diskIdentity.serial", CodeDiskIdentityMismatch,
+			fmt.Sprintf("disk %s reports serial %s, not %q: it is not the disk the install was planned for", r.Disk, now(f.Serial), want)})
+	}
+	if want := strings.TrimSpace(id.WWN); want != "" && !strings.EqualFold(want, f.WWN) {
+		ps = append(ps, Problem{"diskIdentity.wwn", CodeDiskIdentityMismatch,
+			fmt.Sprintf("disk %s reports WWN %s, not %q: it is not the disk the install was planned for", r.Disk, now(f.WWN), want)})
+	}
+	if id.SizeBytes != 0 && id.SizeBytes != f.SizeBytes {
+		ps = append(ps, Problem{"diskIdentity.sizeBytes", CodeDiskIdentityMismatch,
+			fmt.Sprintf("disk %s is %d bytes, not %d: it is not the disk the install was planned for", r.Disk, f.SizeBytes, id.SizeBytes)})
+	}
+	return ps
 }
 
 // CheckTarget applies the target-eligibility rules to `disk` and
@@ -840,6 +900,8 @@ type TargetFacts struct {
 //     live medium) is on, or read-only: always an error. An install there
 //     either destroys the system that is running it or fails after the
 //     partition table is gone.
+//   - a diskIdentity the device no longer matches: always an error
+//     (disk_identity_mismatch).
 //   - smaller than the minimum, or a machine that did not boot through
 //     UEFI: an error unless the recipe lists it in `override`. Neither
 //     applies to a loop device, which is an image for another machine.
@@ -873,6 +935,7 @@ func (r *Recipe) CheckTarget(disk, varDisk *TargetFacts, uefi bool) []Problem {
 					fmt.Sprintf("disk %s is %d bytes; the minimum is %d (add \"too_small\" to \"override\" to install anyway)",
 						r.Disk, disk.SizeBytes, disk.MinBytes)})
 			}
+			ps = append(ps, r.checkDiskIdentityMatch(disk)...)
 		}
 	}
 	if varDisk != nil && r.VarDisk != nil {

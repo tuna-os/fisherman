@@ -1,0 +1,11 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "diskIdentity",
+      "code": "disk_identity_invalid",
+      "message": "diskIdentity sets none of serial, wwn and sizeBytes, so it binds nothing"
+    }
+  ]
+}

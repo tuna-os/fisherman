@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **The plan reports the target disk's identity and capacity, and a recipe
+  can bind the install to the planned disk** (part of #371).
+  `plan.target.identity` has the serial, WWN, model, size and
+  `/dev/disk/by-id` links of the target disk, from the same read-only
+  `lsblk` call as the target checks (which now also asks for `SERIAL` and
+  `WWN`); `plan.target.stable_id` is the WWN, else the serial; a value the
+  disk does not report is `unknown` with a reason. The new
+  `plan.capacity` and each partition's `size_bytes` give the space the
+  automatic layout takes, a lower bound for the root and whether the disk
+  meets fisherman's 50 GiB minimum; the root an image needs stays
+  `unknown`. The new optional recipe field `diskIdentity`
+  (`serial`, `wwn`, `sizeBytes`) makes the full `validate`, `plan` and the
+  install's pre-flight refuse a device that no longer matches, with the new
+  code `disk_identity_mismatch`; a `diskIdentity` that binds nothing, has a
+  negative size or comes with `customMounts` is `disk_identity_invalid`
+  (also in `--partial`). Docs: PLAN.md, VALIDATE.md ("Disk identity"),
+  RECIPE.md, DIAGNOSTICS.md.
 - **`fisherman plan --json -`: a non-destructive install plan** (part of
   #371): a new command reads a recipe on stdin (never a file), runs the
   `validate --json` checks through the same function, and prints a

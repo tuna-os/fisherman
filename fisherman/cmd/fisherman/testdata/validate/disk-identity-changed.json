@@ -1,0 +1,2 @@
+{"disk": "/dev/null", "diskIdentity": {"serial": "S5Y1NJ0R123456", "sizeBytes": 500107862016}, "image": "ghcr.io/example/os:stable", "filesystem": "xfs", "hostname": "my-pc",
+ "encryption": {"type": "none"}}

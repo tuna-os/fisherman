@@ -15,6 +15,7 @@ var docTypes = map[reflect.Kind]string{
 	reflect.String: "string",
 	reflect.Bool:   "boolean",
 	reflect.Struct: "object",
+	reflect.Int64:  "integer",
 }
 
 // docType is the "Type" column of docs/RECIPE.md for a Go field type.

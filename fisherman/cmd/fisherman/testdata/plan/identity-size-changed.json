@@ -1,0 +1,1 @@
+{"disk":"@DIR@/nvme0n1","diskIdentity":{"sizeBytes":1024209543168},"filesystem":"xfs","image":"ghcr.io/example/os:stable","hostname":"fixture","encryption":{"type":"none"}}

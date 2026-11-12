@@ -4,10 +4,12 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/tuna-os/fisherman/internal/disk"
 	"github.com/tuna-os/fisherman/internal/install"
+	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
 )
@@ -43,6 +45,7 @@ type installPlan struct {
 	Partitions []planPartition `json:"partitions"`
 	VarDisk    *planVarDisk    `json:"var_disk"`
 	Destroys   []planDestroy   `json:"destroys"`
+	Capacity   *planCapacity   `json:"capacity"`
 	Scratch    planScratch     `json:"scratch"`
 	Steps      []planStep      `json:"steps"`
 	Unknown    []planUnknown   `json:"unknown"`
@@ -65,7 +68,38 @@ type planTarget struct {
 	Device    string `json:"device,omitempty"`
 	SizeBytes int64  `json:"size_bytes,omitempty"`
 	Loop      bool   `json:"loop,omitempty"`
-	StableID  string `json:"stable_id,omitempty"`
+	// StableID is the WWN, else the serial, else "unknown".
+	StableID string        `json:"stable_id,omitempty"`
+	Identity *planIdentity `json:"identity,omitempty"`
+}
+
+// planIdentity is what the target disk reports about itself (probe.Target),
+// read without a write: the values a frontend copies into the recipe's
+// diskIdentity to bind the install to this disk.
+type planIdentity struct {
+	Serial    string   `json:"serial"` // or "unknown"
+	WWN       string   `json:"wwn"`    // or "unknown"
+	Model     string   `json:"model"`  // or "unknown"
+	SizeBytes int64    `json:"size_bytes,omitempty"`
+	ByID      []string `json:"by_id"`
+	// Bound: the recipe has a diskIdentity, and this disk matches it (a
+	// recipe it does not match is invalid and has no plan).
+	Bound bool `json:"bound"`
+}
+
+// planCapacity is what the automatic layout leaves for the root, and the
+// minimum fisherman holds the disk to. Manual layouts have none: plan does
+// not read the size of the partitions they keep.
+type planCapacity struct {
+	MinDiskBytes int64 `json:"min_disk_bytes"`
+	// DiskMinimum: "met", "overridden" (smaller, and "too_small" is in
+	// override), "not_applicable" (a loop device) or "unknown".
+	DiskMinimum   string `json:"disk_minimum"`
+	ReservedBytes int64  `json:"reserved_bytes"`
+	RootBytes     int64  `json:"root_bytes,omitempty"`
+	// RootMinimum: always "unknown": the root must hold the unpacked
+	// image, whose size plan does not read.
+	RootMinimum string `json:"root_minimum"`
 }
 
 type planBoot struct {
@@ -90,7 +124,8 @@ type planPartition struct {
 	GPTName      string `json:"gpt_name,omitempty"`
 	GPTType      string `json:"gpt_type,omitempty"`
 	Size         string `json:"size,omitempty"` // sfdisk size, or "rest" of the disk
-	Action       string `json:"action"`         // disk.MountAction
+	SizeBytes    int64  `json:"size_bytes,omitempty"`
+	Action       string `json:"action"` // disk.MountAction
 	Filesystem   string `json:"filesystem,omitempty"`
 	Encryption   string `json:"encryption,omitempty"` // "luks2"
 	ZFSPool      string `json:"zfs_pool,omitempty"`
@@ -287,6 +322,7 @@ func buildPlan(r *recipe.Recipe) *installPlan {
 	// ── Target and partitions ──
 	if r.IsManualLayout() {
 		p.Target = planTarget{Layout: "manual"}
+		unknown("capacity", "a manual layout keeps the partitions it names; plan does not read their sizes")
 		specs := make([]disk.MountSpec, 0, len(r.CustomMounts))
 		for _, cm := range r.CustomMounts {
 			specs = append(specs, disk.MountSpec{Partition: cm.Partition, Target: cm.Target, Fstype: cm.Fstype})
@@ -314,20 +350,51 @@ func buildPlan(r *recipe.Recipe) *installPlan {
 	} else {
 		layout := autoLayout(r)
 		p.Boot.PartitionLayout = string(layout)
-		p.Target = planTarget{Layout: "auto", Disk: givenDisk, Device: r.Disk, StableID: planUnknownValue}
-		if t, err := hostTarget(r.Disk); err == nil {
+		p.Target = planTarget{Layout: "auto", Disk: givenDisk, Device: r.Disk}
+		t, terr := hostTarget(r.Disk)
+		if terr == nil {
 			p.Target.SizeBytes, p.Target.Loop = t.SizeBytes, t.Loop
 		} else {
 			unknown("target.size_bytes", "the probe could not read the target disk")
 		}
-		unknown("target.stable_id", "fisherman reads no disk serial or WWN yet; the install checks the device again before it writes, and a saved plan is no proof the disk is the same")
+		p.Target.Identity, p.Target.StableID = planTargetIdentity(r, t, terr, unknown)
 		p.Destroys = append(p.Destroys, planDestroy{r.Disk, "wipe_disk"})
 		parts, _ := disk.LayoutPartitions(layout)
+		p.Capacity = &planCapacity{MinDiskBytes: probe.MinDiskBytes, DiskMinimum: planUnknownValue,
+			ReservedBytes: planAlignmentBytes, RootMinimum: planUnknownValue}
+		switch {
+		case terr != nil:
+			unknown("capacity.disk_minimum", "the probe could not read the target disk")
+		case t.Loop:
+			p.Capacity.DiskMinimum = "not_applicable" // an image for another machine
+		case t.SizeBytes >= probe.MinDiskBytes:
+			p.Capacity.DiskMinimum = "met"
+		default:
+			p.Capacity.DiskMinimum = "overridden" // else validate refused it (disk_too_small)
+		}
+		for _, part := range parts {
+			if n, ok := sfdiskBytes(part.Size); ok {
+				p.Capacity.ReservedBytes += n
+			}
+		}
+		if terr == nil && t.SizeBytes > p.Capacity.ReservedBytes {
+			p.Capacity.RootBytes = t.SizeBytes - p.Capacity.ReservedBytes
+		} else {
+			unknown("capacity.root_bytes", "the target disk size is unknown, or no larger than the partitions before the root")
+		}
+		unknown("capacity.root_minimum", "the root must hold the unpacked image and its updates; plan reads no image size, and fisherman sets no root minimum beyond the disk minimum")
 		for _, part := range parts {
 			pp := planPartition{Number: part.Number, Device: disk.PartName(r.Disk, part.Number), Role: part.Role,
 				Created: true, GPTName: part.Name, GPTType: part.Type, Size: part.Size, Action: string(disk.MountFormat)}
+			if n, ok := sfdiskBytes(part.Size); ok {
+				pp.SizeBytes = n
+			}
 			if pp.Size == "" {
 				pp.Size = "rest"
+				pp.SizeBytes = p.Capacity.RootBytes
+				if pp.SizeBytes == 0 {
+					unknown(fmt.Sprintf("partitions[%d].size_bytes", len(p.Partitions)), "the target disk size is unknown")
+				}
 			}
 			switch part.Role {
 			case disk.RoleEFI:
@@ -375,6 +442,74 @@ func buildPlan(r *recipe.Recipe) *installPlan {
 		p.Steps = append(p.Steps, planStep{Number: i + 1, StepID: progress.StepID(s.name), Name: s.name})
 	}
 	return p
+}
+
+// planAlignmentBytes is what the automatic layout loses to alignment and
+// the GPT: sfdisk starts the first partition at 1 MiB, aligns each one to
+// 1 MiB, and keeps 33 sectors at the end of the disk for the backup GPT.
+// 3 MiB covers all of it, so root_bytes is a lower bound.
+const planAlignmentBytes int64 = 3 << 20
+
+// sfdiskBytes is the byte count of an sfdisk size ("2GiB"). ok is false for
+// "" (the rest of the disk) and for a size it cannot read.
+func sfdiskBytes(size string) (int64, bool) {
+	for _, u := range []struct {
+		suffix string
+		shift  uint
+	}{{"KiB", 10}, {"MiB", 20}, {"GiB", 30}, {"TiB", 40}} {
+		if num, found := strings.CutSuffix(size, u.suffix); found {
+			n, err := strconv.ParseInt(num, 10, 64)
+			if err != nil || n <= 0 || n > (1<<62)>>u.shift {
+				return 0, false
+			}
+			return n << u.shift, true
+		}
+	}
+	return 0, false
+}
+
+// planTargetIdentity is the identity the target disk reports (t, from the
+// same probe.Target call validate makes), and its stable ID: the WWN, else
+// the serial, else "unknown". Each value the disk does not report is
+// "unknown" with a reason.
+func planTargetIdentity(r *recipe.Recipe, t probe.Target, terr error, unknown func(field, reason string)) (*planIdentity, string) {
+	id := &planIdentity{Serial: t.Serial, WWN: t.WWN, Model: t.Model, SizeBytes: t.SizeBytes, ByID: t.ByID,
+		Bound: r.DiskIdentity != nil}
+	if id.ByID == nil {
+		id.ByID = []string{}
+	}
+	why := func(what string) string {
+		if terr != nil {
+			return "the probe could not read the target disk"
+		}
+		return "the disk reports no " + what + " (loop devices, most virtual disks and some USB bridges have none)"
+	}
+	if id.Serial == "" {
+		id.Serial = planUnknownValue
+		unknown("target.identity.serial", why("serial"))
+	}
+	if id.WWN == "" {
+		id.WWN = planUnknownValue
+		unknown("target.identity.wwn", why("WWN"))
+	}
+	if id.Model == "" {
+		id.Model = planUnknownValue
+		unknown("target.identity.model", why("model"))
+	}
+	if terr != nil {
+		unknown("target.identity.size_bytes", why("size"))
+	}
+	if len(id.ByID) == 0 {
+		unknown("target.identity.by_id", "udev made no /dev/disk/by-id link for the disk, or plan cannot read that directory")
+	}
+	switch {
+	case t.WWN != "":
+		return id, t.WWN
+	case t.Serial != "":
+		return id, t.Serial
+	}
+	unknown("target.stable_id", "the disk reports neither a WWN nor a serial; bind the install with diskIdentity.sizeBytes, and the install checks the device again before it writes")
+	return id, planUnknownValue
 }
 
 // manualRole names what a customMounts target is.

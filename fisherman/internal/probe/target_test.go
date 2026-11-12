@@ -131,3 +131,36 @@ func TestUEFI(t *testing.T) {
 		t.Error("UEFI() = true without /sys/firmware/efi")
 	}
 }
+
+// Target reports the identity a frontend can bind an install to: lsblk's
+// SERIAL, WWN and MODEL (trimmed) and the by-id links of the device. A disk
+// that reports none has empty fields, not guessed ones.
+func TestTargetIdentity(t *testing.T) {
+	p := targetProber(t)
+	got, err := p.Target("/dev/disk/by-id/ata-Samsung_SSD_870")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Target{Path: "/dev/disk/by-id/ata-Samsung_SSD_870", Device: "/dev/sda", SizeBytes: 500107862016,
+		Serial: "S5Y1NJ0R123456", WWN: "0x5002538F4231ABCD", Model: "Samsung SSD 870 EVO 500GB",
+		ByID: []string{"/dev/disk/by-id/ata-Samsung_SSD_870"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Target = %+v\nwant     %+v", got, want)
+	}
+
+	got, err = p.Target("/dev/nvme0n1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Serial != "" || got.WWN != "" || got.ByID != nil || got.Model != "WD_BLACK SN850X 1000GB" {
+		t.Errorf("a disk with no serial, WWN or link: %+v", got)
+	}
+
+	// An unreadable /dev/disk/by-id is no links, not an error.
+	if err := os.RemoveAll(filepath.Join(p.Root, "dev", "disk", "by-id")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := p.Target("/dev/sda"); err != nil || got.ByID != nil || got.Serial == "" {
+		t.Errorf("without by-id: %+v, %v", got, err)
+	}
+}
