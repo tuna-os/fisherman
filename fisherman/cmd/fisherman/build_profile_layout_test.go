@@ -187,14 +187,15 @@ func TestBuildProfile_AutoLayoutUnchanged(t *testing.T) {
 }
 
 // TestEmittedSteps_MatchesMainSource keeps emittedSteps honest: the steps
-// main.go passes to seq.begin, in source order, must be exactly the union
-// of what emittedSteps produces, in the same order.
+// the install (installer.run and its step phases) passes to seq.begin, in
+// source order, must be exactly the union of what emittedSteps produces,
+// in the same order.
 func TestEmittedSteps_MatchesMainSource(t *testing.T) {
 	inSource := mainBeginCalls(t)
 	manual := emittedSteps(layout{manual: true, vd: true})
 	auto := emittedSteps(layout{luks: true, tpm2: true, vd: true})
 	want := append([]string{manual[0]}, auto...)
 	if !reflect.DeepEqual(inSource, want) {
-		t.Errorf("seq.begin steps in main.go = %v\nwant %v (update emittedSteps and planShape together)", inSource, want)
+		t.Errorf("seq.begin steps in the install = %v\nwant %v (update emittedSteps and planShape together)", inSource, want)
 	}
 }
