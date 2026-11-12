@@ -98,6 +98,12 @@ const (
 	// CodeDiskIdentityMismatch: the device `disk` names no longer has the
 	// serial, WWN or size the recipe's diskIdentity holds. Full mode only.
 	CodeDiskIdentityMismatch = "disk_identity_mismatch"
+	// CodePlanBindingInvalid: planBinding.digest is not a sha256 digest.
+	CodePlanBindingInvalid = "plan_binding_invalid"
+	// CodePlanStale: the plan of the recipe on this machine now is not the
+	// plan planBinding.digest names (the one the user confirmed). Full mode
+	// and the install only.
+	CodePlanStale = "plan_stale"
 
 	CodeLocaleInvalid          = "locale_invalid"
 	CodeKeyboardLayoutRequired = "keyboard_layout_required"
@@ -859,6 +865,21 @@ func CheckDiskIdentity(r *Recipe) []Problem {
 			"diskIdentity sets none of serial, wwn and sizeBytes, so it binds nothing"}}
 	}
 	return nil
+}
+
+// planDigestPattern is the form of plan.binding.digest.
+var planDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// CheckPlanBinding is the rule for the shape of planBinding, which needs no
+// machine. Whether the plan still matches is the full validate's and the
+// install's (it needs the plan, which cmd/fisherman builds).
+func CheckPlanBinding(r *Recipe) []Problem {
+	b := r.PlanBinding
+	if b == nil || planDigestPattern.MatchString(b.Digest) {
+		return nil
+	}
+	return []Problem{{"planBinding.digest", CodePlanBindingInvalid,
+		"planBinding.digest must be the plan.binding.digest `fisherman plan --json` printed: sha256: and 64 lowercase hex digits"}}
 }
 
 // checkDiskIdentityMatch compares the recipe's diskIdentity with what the

@@ -147,6 +147,7 @@ a policy here.
 | `brewTap` | presence |
 | `override` | value |
 | `diskIdentity` | presence |
+| `planBinding` | presence |
 | `copyNetworkProfiles` | value |
 | `copyBluetoothPairings` | value |
 | `extras` | value |

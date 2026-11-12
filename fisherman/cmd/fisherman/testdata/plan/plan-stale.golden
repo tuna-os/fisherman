@@ -1,0 +1,12 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "planBinding.digest",
+      "code": "plan_stale",
+      "message": "this machine no longer matches the plan the user confirmed: the target disk, its partitions, what the install destroys or a capacity verdict changed since `fisherman plan --json` printed planBinding.digest; plan again and let the user confirm the new plan"
+    }
+  ],
+  "plan": null
+}

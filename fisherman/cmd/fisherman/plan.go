@@ -53,7 +53,10 @@ type installPlan struct {
 	Capacity   *planCapacity   `json:"capacity"`
 	Scratch    planScratch     `json:"scratch"`
 	Steps      []planStep      `json:"steps"`
-	Unknown    []planUnknown   `json:"unknown"`
+	// Binding is what a frontend copies into the recipe's planBinding to
+	// make the install refuse a machine that no longer matches this plan.
+	Binding planBinding   `json:"binding"`
+	Unknown []planUnknown `json:"unknown"`
 }
 
 type planSource struct {
@@ -80,8 +83,13 @@ type planImage struct {
 	Layers         int    `json:"layers,omitempty"`
 	// CompressedBytes: the sum of the layer sizes the manifest lists.
 	CompressedBytes int64 `json:"compressed_bytes,omitempty"`
-	// UnpackedBytes: the unpacked size local containers-storage reports.
+	// UnpackedBytes: the unpacked size, from UnpackedFrom.
 	UnpackedBytes int64 `json:"unpacked_bytes,omitempty"`
+	// UnpackedFrom: "containers-storage" (the local store reports it),
+	// "annotations" (the registry manifest's uncompressed-size layer
+	// annotations) or "estimate" (the compressed size times
+	// install.UnpackedEstimateRatio). Left out with UnpackedBytes.
+	UnpackedFrom string `json:"unpacked_from,omitempty"`
 }
 
 type planTarget struct {
@@ -223,6 +231,9 @@ passphrase. Schema: docs/PLAN.md.
 --read-image  also read the source image's manifest and size, without a
               pull: from local containers-storage, else from its registry
               (the only network read plan makes; it reads no layer)
+
+Copy plan.binding into the recipe's planBinding to make the install
+refuse a machine that no longer matches the plan (plan_stale).
 
 Exit 0 with a plan, 1 if the recipe is invalid, 2 on bad arguments.
 `
@@ -368,7 +379,7 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 			unknown("image.compressed_bytes", "the manifest lists no layer sizes (skopeo before 1.6 prints none)")
 		}
 		if img.UnpackedBytes == 0 {
-			unknown("image.unpacked_bytes", "only local containers-storage reports the unpacked size; a registry manifest and an OCI layout list compressed sizes")
+			unknown("image.unpacked_bytes", "only local containers-storage or a registry manifest gives the unpacked size; an OCI layout lists compressed sizes, and a registry manifest without layer sizes leaves nothing to estimate from")
 		}
 	}
 	if p.Source.Digest == planUnknownValue {
@@ -407,7 +418,7 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 		p.Capacity = &planCapacity{MinDiskBytes: probe.MinDiskBytes, DiskMinimum: "not_applicable",
 			RootMinimum: planUnknownValue, RootNeedBytes: img.UnpackedBytes, ImageFit: planUnknownValue}
 		if img.UnpackedBytes == 0 {
-			unknown("capacity.root_need_bytes", "the estimate is the image's unpacked size, which only local containers-storage reports")
+			unknown("capacity.root_need_bytes", "the estimate is the image's unpacked size, which is unknown (see image.unpacked_bytes)")
 		}
 		rootPreserved, rootNamed := false, false
 		specs := make([]disk.MountSpec, 0, len(r.CustomMounts))
@@ -472,7 +483,7 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 			ReservedBytes: planAlignmentBytes, RootMinimum: planUnknownValue, RootNeedBytes: img.UnpackedBytes,
 			ImageFit: planUnknownValue}
 		if img.UnpackedBytes == 0 {
-			unknown("capacity.root_need_bytes", "the estimate is the image's unpacked size, which only local containers-storage reports")
+			unknown("capacity.root_need_bytes", "the estimate is the image's unpacked size, which is unknown (see image.unpacked_bytes)")
 		}
 		switch {
 		case terr != nil:
@@ -569,6 +580,7 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 	for i, s := range planSteps(r, true) {
 		p.Steps = append(p.Steps, planStep{Number: i + 1, StepID: progress.StepID(s.name), Name: s.name})
 	}
+	p.Binding = bindingOf(p, readImage)
 	return p
 }
 
@@ -658,6 +670,7 @@ func planImageFacts(r *recipe.Recipe, kind string, readImage bool) (planImage, s
 		return img, f.Reason
 	}
 	img.ReadFrom, img.Layers, img.CompressedBytes, img.UnpackedBytes = f.ReadFrom, f.Layers, f.CompressedBytes, f.UnpackedBytes
+	img.UnpackedFrom = f.UnpackedFrom
 	if f.ManifestDigest != "" {
 		img.ManifestDigest = f.ManifestDigest
 	}
@@ -671,11 +684,12 @@ func planImageFacts(r *recipe.Recipe, kind string, readImage bool) (planImage, s
 }
 
 // planImageFit compares the root the automatic layout leaves with what the
-// image needs. "enough": the root holds the unpacked image, and the scratch
-// estimate too when scratch is on the target. "not_enough": the root is
-// smaller than the image's compressed layers, a lower bound of its
-// unpacked size, or than the unpacked size itself. Else "unknown". It is a
-// report: neither validate nor the install refuses on it.
+// image needs. "enough": the root holds the unpacked image (measured or
+// estimated), and the scratch estimate too when scratch is on the target.
+// "not_enough": the root is smaller than the image's compressed layers, a
+// lower bound of its unpacked size, or than a measured unpacked size; an
+// estimated one never makes it not_enough. Else "unknown". It is a report:
+// neither validate nor the install refuses on it.
 //
 // sizeWhy, when not empty, is why the root cannot be compared at all (an
 // unknown disk size, a kept root partition).
@@ -687,8 +701,9 @@ func planImageFit(c *planCapacity, img planImage, s planScratch, sizeWhy string,
 		unknown("capacity.image_fit", sizeWhy)
 		return planUnknownValue
 	}
+	estimated := img.UnpackedFrom == "estimate"
 	floor := img.CompressedBytes
-	if img.UnpackedBytes > 0 {
+	if img.UnpackedBytes > 0 && !estimated {
 		floor = img.UnpackedBytes
 	}
 	if floor > 0 && c.RootBytes < floor {
@@ -701,6 +716,10 @@ func planImageFit(c *planCapacity, img planImage, s planScratch, sizeWhy string,
 	if img.UnpackedBytes > 0 && need > 0 {
 		if c.RootBytes >= need {
 			return "enough"
+		}
+		if estimated && c.RootBytes < img.UnpackedBytes {
+			unknown("capacity.image_fit", "the root is larger than the image's compressed layers but smaller than the estimated unpacked size (image.unpacked_from estimate), which may be too high")
+			return planUnknownValue
 		}
 		unknown("capacity.image_fit", "the root holds the unpacked image but not the scratch estimate as well; the estimate is an upper bound, so it may still be enough")
 		return planUnknownValue

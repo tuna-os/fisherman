@@ -3,6 +3,7 @@ package install
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 
@@ -33,14 +34,33 @@ type ImageFacts struct {
 	// CompressedBytes is the sum of the layer sizes the host platform's
 	// manifest lists: what a pull downloads. 0 when a size is missing.
 	CompressedBytes int64
-	// UnpackedBytes is the size local containers-storage reports for the
-	// unpacked layers (podman's image Size). 0 when unknown: a registry
-	// manifest and an OCI layout list compressed sizes only.
+	// UnpackedBytes is the unpacked size of the layers: what local
+	// containers-storage reports (podman's image Size), the sum of the
+	// layers' uncompressed-size annotations a registry manifest lists, or,
+	// for a registry image without them, an estimate from the compressed
+	// size (UnpackedEstimateRatio). UnpackedFrom says which. 0 when
+	// unknown (an OCI layout, or no compressed size to estimate from).
 	UnpackedBytes int64
+	// UnpackedFrom is where UnpackedBytes comes from: "containers-storage",
+	// "annotations" or "estimate"; "" when it is unknown.
+	UnpackedFrom string
 	// Reason says why ReadFrom is "": the store has no copy and the
 	// registry was not asked, or did not answer.
 	Reason string
 }
+
+// UncompressedSizeAnnotation is the layer annotation that records a
+// layer's uncompressed size (containers/storage's estargz support writes
+// it). A registry manifest whose every layer has it gives the exact
+// unpacked size without a pull.
+const UncompressedSizeAnnotation = "io.containers.estargz.uncompressed-size"
+
+// UnpackedEstimateRatio is the factor plan applies to the compressed
+// layer sizes of a registry image whose manifest records no uncompressed
+// size: OS images (gzip or zstd layers) unpack to two to three times what
+// they download, so 3 errs on the side of needing more room. The result
+// is flagged "estimate" (UnpackedFrom).
+const UnpackedEstimateRatio = 3
 
 // PlanInspectFn runs a read-only image query (`skopeo inspect ...`,
 // `podman image inspect ...`) for `plan --read-image` and returns its
@@ -56,8 +76,39 @@ var PlanInspectFn = func(name string, args ...string) ([]byte, error) {
 type planImageInfo struct {
 	imageInfo
 	LayersData []struct {
-		Size int64 `json:"Size"`
+		Size        int64             `json:"Size"`
+		Annotations map[string]string `json:"Annotations"`
 	} `json:"LayersData"`
+}
+
+// annotatedUnpackedBytes is the sum of the layers' uncompressed-size
+// annotations, or 0 unless every layer has a valid one.
+func (m planImageInfo) annotatedUnpackedBytes() int64 {
+	if len(m.LayersData) == 0 || (len(m.Layers) != 0 && len(m.LayersData) != len(m.Layers)) {
+		return 0
+	}
+	var n int64
+	for _, l := range m.LayersData {
+		v, err := strconv.ParseInt(l.Annotations[UncompressedSizeAnnotation], 10, 64)
+		if err != nil || v <= 0 || n > math.MaxInt64-v {
+			return 0
+		}
+		n += v
+	}
+	return n
+}
+
+// registryUnpacked is the unpacked size of a registry image from its
+// manifest alone: the annotations when every layer has one, else the
+// compressed size times UnpackedEstimateRatio.
+func (m planImageInfo) registryUnpacked(compressed int64) (int64, string) {
+	if n := m.annotatedUnpackedBytes(); n > 0 {
+		return n, "annotations"
+	}
+	if compressed > 0 && compressed <= math.MaxInt64/UnpackedEstimateRatio {
+		return compressed * UnpackedEstimateRatio, "estimate"
+	}
+	return 0, ""
 }
 
 func (m planImageInfo) compressedBytes() int64 {
@@ -98,6 +149,9 @@ func inspectLocalForPlan(ref, readFrom string) (ImageFacts, bool) {
 		Layers: m.layers(), CompressedBytes: m.compressedBytes()}
 	if readFrom == "containers-storage" {
 		f.UnpackedBytes = localUnpackedBytes(strings.TrimPrefix(ref, "containers-storage:"))
+		if f.UnpackedBytes > 0 {
+			f.UnpackedFrom = "containers-storage"
+		}
 	}
 	return f, true
 }
@@ -152,6 +206,7 @@ func InspectImageForPlan(image string, registry bool) ImageFacts {
 	}
 	f := ImageFacts{ReadFrom: "registry", ManifestDigest: m.Digest, Platform: m.platform(),
 		Layers: m.layers(), CompressedBytes: m.compressedBytes()}
+	f.UnpackedBytes, f.UnpackedFrom = m.registryUnpacked(f.CompressedBytes)
 	f.PlatformDigest, _ = platformDigest(skopeoPlanInspect, ref, m.Digest)
 	return f
 }

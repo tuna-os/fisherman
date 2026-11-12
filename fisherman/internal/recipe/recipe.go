@@ -74,6 +74,13 @@ type Recipe struct {
 	// reports another value for any field that is set. See
 	// docs/VALIDATE.md, "Disk identity".
 	DiskIdentity *DiskIdentity `json:"diskIdentity,omitempty"`
+	// PlanBinding binds the install to the plan the user confirmed: the
+	// plan.binding `fisherman plan --json` printed. Absent: no binding.
+	// When set, the full validate and the install plan the recipe again
+	// and refuse it (plan_stale) if the target, the partitions or a
+	// capacity verdict changed. See docs/PLAN.md, "Binding the install to
+	// the confirmed plan".
+	PlanBinding *PlanBinding `json:"planBinding,omitempty"`
 	// AdditionalImageStores lists host paths to be exposed to the bootc
 	// container as containers/storage additionalimagestores. Each path is
 	// bind-mounted read-only into the container at the same location and added
@@ -312,6 +319,17 @@ type DiskIdentity struct {
 	SizeBytes int64  `json:"sizeBytes,omitempty"` // the size in bytes
 }
 
+// PlanBinding is the plan a recipe expects: plan.binding of `fisherman plan
+// --json`, with read_image spelt readImage.
+type PlanBinding struct {
+	// Digest is plan.binding.digest: sha256 of the parts of the plan that
+	// must not change (docs/PLAN.md).
+	Digest string `json:"digest"`
+	// ReadImage: the plan was made with --read-image, so the check reads
+	// the image's metadata too (never a layer).
+	ReadImage bool `json:"readImage,omitempty"`
+}
+
 // VarDiskSpec describes an optional separate disk to mount at /var.
 type VarDiskSpec struct {
 	Disk         string `json:"disk"`         // block device, e.g. "/dev/sdb"
@@ -479,6 +497,7 @@ func (r *Recipe) Problems() []Problem {
 	ps = append(ps, CheckAdditionalImageStores(r.AdditionalImageStores)...)
 	ps = append(ps, CheckOverride(r.Override)...)
 	ps = append(ps, CheckDiskIdentity(r)...)
+	ps = append(ps, CheckPlanBinding(r)...)
 	ps = append(ps, CheckExperimental(r.Experimental)...)
 	// Written into /etc files and, for the keymap, onto the kernel command
 	// line: refused before any disk step (#405).
