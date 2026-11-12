@@ -344,9 +344,16 @@ table says what the installed system has after the reboot.
 The install stops, after bootc ran, when it cannot keep that promise:
 `blkid` reports no UUID or type for the device, the resolved mountpoint is
 not below `/var` and is not a directory of the image, the image's fstab
-conflicts, or an ostree image discards `/etc` at every boot
-(`[etc] transient = true` in `prepare-root.conf`). These failures carry no
-code: only the installed image shows them.
+conflicts, an ostree image discards `/etc` at every boot
+(`[etc] transient = true` in `prepare-root.conf`), or bootc installed a
+composefs-native deployment and the recipe has a separate `/var` (a
+`varDisk`, or a `customMounts` entry for `/var`). The composefs initramfs
+mounts the deployment's own `var` at `/var`, so the separate disk would not
+be used, and the Flatpaks and the home would go to a disk that the first boot
+does not mount ([#252](https://github.com/tuna-os/fisherman/issues/252)).
+`var_disk_unsupported_composefs` refuses this before any disk work when the
+recipe says composefs. These failures carry no code: only the installed image
+shows them.
 
 Before any disk work, the install also checks each device that the recipe
 keeps as it is (`varDisk.keepExisting`, or a mounted `customMounts` entry

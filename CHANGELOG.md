@@ -39,6 +39,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **A separate `/var` on a composefs deployment no longer gets the
+  Flatpaks** (#252): `var_disk_unsupported_composefs` refuses a `varDisk` when
+  the recipe says composefs (`composeFsBackend`, or `filesystem: zfs`). After
+  bootc ran, the persistent-mounts step now also checks what bootc really
+  installed. On a composefs-native deployment with a `varDisk` or a manual
+  `/var` partition it fails (`persistent_mounts_failed`) before it points the
+  Flatpak copy and the user's home at that disk, which the composefs
+  initramfs hides behind the deployment's own `/var`. Before, they were
+  copied onto a disk that the first boot does not mount. Mounts below `/var`
+  are unchanged. Tests on the composefs deploy fixture and for
+  `validate --json --partial`.
 - **btrfs roots booted without the recipe's mount options on composefs**
   (#418): bootc 1.15.x writes the composefs boot entry from the root's own
   arguments, `composefs=` and `kargs.d`, and never reads `--karg`

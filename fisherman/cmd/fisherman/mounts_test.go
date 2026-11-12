@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tuna-os/fisherman/internal/deploy/deploytest"
 	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/recipe"
 	"github.com/tuna-os/fisherman/internal/runner"
@@ -442,5 +443,53 @@ func TestPersistMounts_MountFailure(t *testing.T) {
 	}
 	if got := readFstab(t, dep); got != "" {
 		t.Errorf("fstab = %q, want nothing written", got)
+	}
+}
+
+// #252: a separate /var on a deployment bootc installed composefs-native is
+// not used at boot (the initramfs bind-mounts the deployment's state var
+// over /var). The recipe rules refuse it when the recipe says composefs;
+// this is the case where the recipe did not, and the deployment shows it.
+// The step fails, and nothing is pointed at the disk: no fstab line, and
+// the resolver's Var (where the Flatpaks and the home go) stays the state
+// var the booted system mounts. Before, the disk became the resolver's Var
+// and the Flatpaks were copied onto a disk the first boot never mounts.
+func TestPersistMounts_VarDiskOnComposeFsDeploymentIsRefused(t *testing.T) {
+	fx := deploytest.ComposeFs(t)
+	fakeBlkid(t, map[string][2]string{"/dev/vdb": {"abcd-1234", "xfs"}, "/dev/vda3": {"h0me", "ext4"}})
+	runner.RunFn = (&fakeHostRunner{on: lsLikeHost(nil)}).run
+	t.Cleanup(func() {
+		runner.RunFn = runner.DefaultRun
+		post.SetBootedVar("")
+	})
+	dep, err := resolveDeployment(fx.Path)
+	if err != nil || !dep.ComposeFs || dep.VarDir != fx.Var {
+		t.Fatalf("deployment = %+v, %v; want the composefs fixture", dep, err)
+	}
+
+	for name, r := range map[string]*recipe.Recipe{
+		"varDisk":           {Disk: "/dev/vda", VarDisk: &recipe.VarDiskSpec{Disk: "/dev/vdb"}},
+		"manual /var entry": manualWith(recipe.CustomMount{Partition: "/dev/vdb", Target: "/var", Fstype: "xfs"}),
+	} {
+		err := persistMounts(r, fx.Path, func(p string) { t.Errorf("%s: unexpected new mount %s", name, p) })
+		if err == nil || !strings.Contains(err.Error(), "composefs-native") || !strings.Contains(err.Error(), "/issues/252") {
+			t.Errorf("%s: persistMounts = %v, want the #252 refusal", name, err)
+		}
+		if got := readFstab(t, dep); got != "" {
+			t.Errorf("%s: fstab = %q, want nothing written", name, got)
+		}
+		if d, err := post.ResolveDeployment(fx.Path); err != nil || d.Var != fx.Var {
+			t.Errorf("%s: the resolver's Var = %+v, %v; want the state var %s, not the ignored disk", name, d, err, fx.Var)
+		}
+	}
+
+	// A mount below /var is not hidden by the initramfs: it still works.
+	r := manualWith(recipe.CustomMount{Partition: "/dev/vda3", Target: "/var/home", Fstype: "ext4"})
+	var mounted []string
+	if err := persistMounts(r, fx.Path, func(p string) { mounted = append(mounted, p) }); err != nil {
+		t.Fatalf("/var/home on composefs: %v", err)
+	}
+	if want := []string{filepath.Join(fx.Var, "home")}; !reflect.DeepEqual(mounted, want) {
+		t.Errorf("/var/home on composefs mounted at %q, want %q", mounted, want)
 	}
 }

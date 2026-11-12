@@ -232,7 +232,7 @@ images:
   # ── #418: paths no entry covered. PR gate and nightly VM run only
   # (nightly: false keeps them out of bootcrew-nightly.yml, which writes its
   # own recipe). centos-bootc-luks-user, centos-bootc-var-disk and
-  # dakota-tpm2 are `required` (#423); dakota-tpm2-luks stays advisory.
+  # dakota-tpm2 are `required` (#423); the other entries stay advisory.
   #
   # Not covered, and why:
   # - ZFS: no image here ships the ZFS kernel module, and ZFS stays
