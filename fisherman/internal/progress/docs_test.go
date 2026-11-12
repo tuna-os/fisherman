@@ -153,3 +153,60 @@ func TestDocumentedStepIDs(t *testing.T) {
 		t.Errorf("TROUBLESHOOTING.md Steps lists step ids %v; the code has %v", got, want)
 	}
 }
+
+// constValues returns the string value of every constant whose name starts
+// with prefix in the package's non-test files.
+func constValues(t *testing.T, prefix string) []string {
+	t.Helper()
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	lit := regexp.MustCompile(`(?m)^\s*` + prefix + `\w*\s*=\s*"([a-z0-9_]+)"`)
+	seen := map[string]bool{}
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		src, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range lit.FindAllStringSubmatch(string(src), -1) {
+			seen[m[1]] = true
+		}
+	}
+	return sorted(seen)
+}
+
+// The failure codes of the `error` event are a contract frontends key copy
+// on (#369): one row each in JSON-PROGRESS-FORMAT.md, and none of them a
+// `fisherman validate` code, which share the field.
+func TestDocumentedFailureCodes(t *testing.T) {
+	codes := constValues(t, "Failure")
+	if len(codes) < 15 {
+		t.Fatalf("found only %v; the scan missed failure codes", codes)
+	}
+	table := section(t, readDoc(t, "JSON-PROGRESS-FORMAT.md"), "#### Failure codes")
+	if got := firstColumn(table); !equal(got, codes) {
+		t.Errorf("JSON-PROGRESS-FORMAT.md Failure codes lists %v; the code has %v", got, codes)
+	}
+	validate := map[string]bool{}
+	for _, c := range firstColumn(section(t, readDoc(t, "VALIDATE.md"), "## Error Code Reference")) {
+		validate[c] = true
+	}
+	if len(validate) < 50 {
+		t.Fatalf("read only %d validate codes", len(validate))
+	}
+	for _, c := range codes {
+		if validate[c] {
+			t.Errorf("failure code %q is also a validate code", c)
+		}
+	}
+	errorDoc := section(t, readDoc(t, "JSON-PROGRESS-FORMAT.md"), "### `error`")
+	for _, status := range constValues(t, "Cleanup") {
+		if !strings.Contains(errorDoc, "`"+status+"`") {
+			t.Errorf("JSON-PROGRESS-FORMAT.md does not document cleanup status %q", status)
+		}
+	}
+}

@@ -19,6 +19,9 @@ var startTime = time.Now()
 var (
 	mu  sync.Mutex
 	bar = NewTracker()
+	// lastStepID and stepStarted record the last step event (CurrentStep).
+	lastStepID  string
+	stepStarted bool
 )
 
 type stepEvent struct {
@@ -106,11 +109,17 @@ type receiptEvent struct {
 type errorEvent struct {
 	Type    string `json:"type"`
 	Message string `json:"message"`
-	// Code and Field are set when the failure is a recipe or preflight
-	// problem with a stable code (docs/VALIDATE.md): the same code and
-	// field `fisherman validate --json` reports for it.
+	// Code is the `fisherman validate --json` code of a recipe or
+	// preflight problem (docs/VALIDATE.md), else a runtime Failure* code.
+	// Field is the recipe field of a validate code.
 	Code  string `json:"code,omitempty"`
 	Field string `json:"field,omitempty"`
+	// StepID is the step that was running; DiskChanged whether any disk
+	// step had started; Cleanup what the teardown before the event did.
+	// Set by Fail.
+	StepID      string   `json:"step_id,omitempty"`
+	DiskChanged *bool    `json:"disk_changed,omitempty"`
+	Cleanup     *Cleanup `json:"cleanup,omitempty"`
 }
 
 // Step emits a JSON step-progress line to stdout.
@@ -120,6 +129,7 @@ type errorEvent struct {
 func Step(step, total int, name string, cumulativePct, weightPct int) {
 	mu.Lock()
 	defer mu.Unlock()
+	lastStepID, stepStarted = StepID(name), true
 	writeLocked(stepEvent{
 		Type:          "step",
 		Step:          step,

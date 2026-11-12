@@ -258,20 +258,76 @@ The install failed.
 
 **Fields:**
 - `type` — `"error"`
-- `message` — what failed (string)
-- `code` — optional. The stable problem code, when the failure is a recipe
-  rule or a preflight check: the code `fisherman validate --json` reports for
-  the same problem ([VALIDATE.md](VALIDATE.md#error-code-reference)). Key
-  copy on this, never on `message`. Absent for every other failure.
+- `message` — what failed (string), for people. At most 2048 bytes.
+- `code` — the stable code of the failure. For a recipe rule or a preflight
+  check it is the code `fisherman validate --json` reports for the same
+  problem ([VALIDATE.md](VALIDATE.md#error-code-reference)). For any other
+  failure it is one of the [failure codes](#failure-codes) below, which name
+  the operation that failed; `unknown` when there is none more precise. Key
+  copy on this, never on `message`. An older fisherman sent `code` only for
+  a validate problem.
 - `field` — optional. The recipe field the `code` is about (`hostname`,
-  `user.username`, `encrypton`). Absent when there is no `code`, or the code
-  is not about one field.
+  `user.username`, `encrypton`). Absent when the code is not about one field.
+- `step_id` — optional. The `step_id` of the last `step` event: the step that
+  was running. Absent before the first step.
+- `disk_changed` — `true` once a disk step has started: the disk may be
+  partly changed, and the install is not safe to retry as if nothing
+  happened. `false`: fisherman changed no disk.
+- `cleanup` — what the teardown before this event did:
+  - `status` — `ok` (everything the install held is released), `failed` (a
+    part failed: the target may still be mounted or unlocked) or `timed_out`
+    (the teardown did not end within its bound).
+  - `message` — optional, the teardown's error.
+
+  A cleanup failure never replaces `code`: the code stays the one of the
+  failure that ended the install. The message still ends with the cleanup
+  failure, as before.
 - `timestamp`, `elapsed_ms` — as above
+
+No field holds the recipe, a command line, the LUKS passphrase, the user
+password or the recovery key: fisherman replaces each of these three secrets
+with `[redacted]` wherever it occurs in `message`, `field` or
+`cleanup.message`, and in the stderr line. A secret shorter than 4 bytes is
+not replaced: it would match ordinary words.
 
 **Example:**
 ```json
-{"elapsed_ms":45123,"message":"partitioning disk: exit status 1","timestamp":"2026-10-07T19:06:15.234567Z","type":"error"}
+{"cleanup":{"status":"ok"},"code":"partition_failed","disk_changed":true,"elapsed_ms":45123,"message":"partitioning disk: exit status 1","step_id":"partition","timestamp":"2026-10-07T19:06:15.234567Z","type":"error"}
 ```
+
+#### Failure codes
+
+These codes name the operation that failed, not a cause: a pull failure is
+not always the network, a `cryptsetup` failure is not always a bad
+passphrase, an `sfdisk` failure is not always a busy disk. The `message`
+holds the tool's own reason. A code is never renamed or reused; new codes
+can appear. A consumer that does not know a code, or gets no code from an
+older fisherman, shows `message` and decides on the exit status.
+
+| Code | The operation that failed |
+|---|---|
+| `unknown` | none more precise |
+| `cancelled` | none: the install was cancelled (exit 130) |
+| `lock_failed` | taking the host-wide install lock (another install holding it is `install_already_running`) |
+| `local_source_unavailable` | reading the required local source: the live media's image, or an `oci:` or `containers-storage:` source |
+| `manual_layout_failed` | formatting or mounting a partition of a manual layout |
+| `partition_failed` | partitioning the disk |
+| `format_failed` | making a filesystem: the ESP, `/boot`, the root or the `/var` disk |
+| `luks_failed` | formatting or opening the LUKS container, or reading its UUID |
+| `zfs_failed` | creating or mounting the ZFS pool or its root dataset |
+| `mount_failed` | creating a mount point, mounting a filesystem, or the btrfs subvolumes |
+| `scratch_failed` | preparing the scratch directory |
+| `pull_failed` | pulling the image, after its retries |
+| `bootc_install_failed` | `bootc install`, for any reason but the pull |
+| `retag_failed` | the GPT retag of the root partition and the remount after it |
+| `persistent_mounts_failed` | writing the mounts of the installed system |
+| `hostname_failed` | writing the hostname |
+| `user_failed` | creating the user |
+| `luks_boot_args_failed` | writing the LUKS kernel arguments |
+| `finalize_failed` | finalizing the target filesystem |
+
+A code tells which part failed. It does not say that another attempt is safe:
+read `disk_changed`.
 
 Two paths emit this event: `fatal()` in `cmd/fisherman/main.go` (any
 failure, exit 1) and a cancel (exit 130). Both go through the same teardown in
@@ -285,16 +341,17 @@ The message is a short context prefix followed by the underlying error, for
 example `loading recipe: ...`, `invalid recipe: ...`,
 `missing required host tool: ...`, `LUKS format: ...` or `bootc install: ...`.
 
-A failure with a `code`:
+A recipe problem:
 
 ```json
-{"code":"recipe_unknown_field","elapsed_ms":2,"field":"encrypton","message":"loading recipe: unknown recipe field \"encrypton\": this fisherman does not know it, and would ignore it","timestamp":"2026-11-10T14:32:10.428842Z","type":"error"}
+{"cleanup":{"status":"ok"},"code":"recipe_unknown_field","disk_changed":false,"elapsed_ms":2,"field":"encrypton","message":"loading recipe: unknown recipe field \"encrypton\": this fisherman does not know it, and would ignore it","timestamp":"2026-11-10T14:32:10.428842Z","type":"error"}
 ```
 
 `error` can be the only event in the stream. Recipe loading, recipe
 validation and the host tool check all run before the first step. With the
 recipe on stdin (`fisherman -`), empty stdin is `loading recipe: recipe is
-empty`. An empty `image` on a host that did not boot from live media is
+empty` (`code` `recipe_malformed`, as `validate --json` says; a recipe file
+that cannot be read is `recipe_unreadable`). An empty `image` on a host that did not boot from live media is
 `invalid recipe: image is required: …` (`code` `image_required`). A recipe
 key fisherman does not know is `loading recipe: unknown recipe field …`
 (`code` `recipe_unknown_field`). A run that is not root is `cannot install:
@@ -611,7 +668,8 @@ grown over time:
   on `step` (#270); exit code 130 on cancel (#267); `code` and `field` on
   `error` (#404, #402); a closed stdout is a cancel with teardown, not a
   death by SIGPIPE (#403); the `source_reuse` event (#384); the `receipt`
-  event (#439).
+  event (#439); `code` on every `error` event, with the failure codes, and
+  `step_id`, `disk_changed` and `cleanup` on it (#369).
 
 New event types and fields may appear in any release. Consumers must ignore
 event types and fields they do not know.
