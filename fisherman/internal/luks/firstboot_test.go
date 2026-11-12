@@ -290,10 +290,19 @@ func TestEnrollUnit(t *testing.T) {
 	if len(stopPost) != 2 {
 		t.Fatalf("ExecStopPost lines = %v", stopPost)
 	}
-	// Slot first, then the file: the file authorises the slot removal.
-	if !strings.Contains(stopPost[0], "cryptsetup luksRemoveKey "+dev+" /etc/fisherman/tpm2-enroll.key") ||
-		!strings.Contains(stopPost[0], "systemd-cryptenroll --wipe-slot=31 "+dev) {
-		t.Errorf("first ExecStopPost must remove the keyslot: %s", stopPost[0])
+	// Slot first, by its number: luksKillSlot -q needs no key and runs no
+	// KDF, so it cannot outlive the stop timeout on a VM with little
+	// memory (luksRemoveKey did, and the file stayed). Each removal is
+	// bounded, so the file removal after it always runs.
+	if !strings.Contains(stopPost[0], "timeout 60 cryptsetup -q luksKillSlot "+dev+" 31") ||
+		!strings.Contains(stopPost[0], "timeout 60 systemd-cryptenroll --unlock-key-file=/etc/fisherman/tpm2-enroll.key --wipe-slot=31 "+dev) {
+		t.Errorf("first ExecStopPost must remove the keyslot by number, bounded: %s", stopPost[0])
+	}
+	if strings.Contains(stopPost[0], "luksRemoveKey") {
+		t.Errorf("luksRemoveKey looks the key up through the KDFs and can outlive the stop timeout: %s", stopPost[0])
+	}
+	if !strings.Contains(u, "\nTimeoutStopSec=180\n") {
+		t.Error("TimeoutStopSec must leave room for both bounded removals (2 × 60 s)")
 	}
 	if !strings.Contains(stopPost[1], "rm -f /etc/fisherman/tpm2-enroll.key") ||
 		!strings.Contains(stopPost[1], "multi-user.target.wants/"+luks.EnrollUnitName) {

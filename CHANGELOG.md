@@ -39,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **The first-boot TPM2 unit removes its keyslot and key file on a VM with
+  little memory** (#409, #421): `cryptsetup luksRemoveKey` looked the
+  single-use key up through the keyslots, ran the user slot's memory-hard
+  KDF, outlived the 90 s stop timeout and drew the OOM killer. systemd
+  killed the step, so keyslot 31 and `/etc/fisherman/tpm2-enroll.key`
+  stayed (advisory `dakota-tpm2-luks`, run 43198929211). The unit now
+  removes the slot by its number (`cryptsetup -q luksKillSlot`, no key and
+  no KDF), bounds each removal with `timeout 60` and sets
+  `TimeoutStopSec=180`, so the file removal always runs.
+
 - **A separate `/var` on a composefs deployment no longer gets the
   Flatpaks** (#252): `var_disk_unsupported_composefs` refuses a `varDisk` when
   the recipe says composefs (`composeFsBackend`, or `filesystem: zfs`). After
