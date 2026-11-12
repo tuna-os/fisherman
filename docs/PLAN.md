@@ -104,7 +104,8 @@ entry for `image` says why.
 | `platform` | The `os/architecture` of the image configuration. |
 | `layers` | The number of layers. |
 | `compressed_bytes` | The sum of the layer sizes the manifest lists (skopeo's `LayersData`): what a pull downloads. Left out when a size is missing (skopeo before 1.6 prints none). |
-| `unpacked_bytes` | The unpacked size local containers-storage reports (`podman image inspect`'s `Size`). Left out for a registry or OCI source: their manifests list compressed sizes only. |
+| `unpacked_bytes` | The unpacked size of the layers, from `unpacked_from` ([Size estimates](#size-estimates)). Left out for an OCI layout (its manifest lists compressed sizes only), and for a registry image whose manifest lists no layer sizes. |
+| `unpacked_from` | Where `unpacked_bytes` comes from: `containers-storage` (local containers-storage reports it: `podman image inspect`'s `Size`), `annotations` (a registry image whose every layer has the uncompressed-size annotation `io.containers.estargz.uncompressed-size`: their sum) or `estimate` (a registry image without them: `compressed_bytes` × 3, `install.UnpackedEstimateRatio`). Left out with `unpacked_bytes`. |
 
 ### `plan.target`
 
@@ -265,8 +266,9 @@ metadata, never a layer, and writes nothing:
 - A registry reference is looked up in local containers-storage first,
   the copy the install would use. Only when there is none does plan ask
   the registry: `skopeo inspect --no-tags docker://…` for the digest,
-  platform and layer sizes, and `skopeo inspect --raw` for the platform
-  manifest. It asks once, with no retry. This is the only network read
+  platform, layer sizes and layer annotations (the unpacked size when the
+  layers record it), and `skopeo inspect --raw` for the platform
+  manifest. Neither downloads a layer. It asks once, with no retry. This is the only network read
   `plan` makes. A recipe with a `planBinding` whose `readImage` is true
   is planned once more for the binding check, which reads the image too.
 - An unreachable registry, a refused login, an unknown image or a
@@ -293,8 +295,15 @@ mean, and how far off they can be:
   zstd) unpack to more than they download, often two to three times as
   much.
 - `image.unpacked_bytes` is what containers-storage reports for the
-  unpacked layers. A deployment on the root holds the same files, so
-  `capacity.root_need_bytes` is this number. The root can use less
+  unpacked layers (`unpacked_from` `containers-storage`) or, for an image
+  only a registry has, what its manifest gives without a pull: the sum of
+  the layers' uncompressed-size annotations (`annotations`, exact when the
+  image was built with them), else **an estimate**: three times the
+  compressed size (`estimate`). Three is the high end of what OS images
+  unpack to, so the estimate errs towards more room; an image that
+  compresses better than 3:1 can still need more. A deployment on the
+  root holds the same files, so `capacity.root_need_bytes` is this
+  number, an estimate included. The root can use less
   (files the layers share, btrfs `compress=zstd:1`) or somewhat more
   (filesystem overhead, the `/etc` and `/var` of the first boot). It is
   one deployment: `bootc update` stages the next beside it, so a root
@@ -304,13 +313,14 @@ mean, and how far off they can be:
   (composefs, or a store redirected to the target) and an unpacked podman
   store. A direct install from local storage uses far less.
 - `capacity.image_fit` is `not_enough` when `root_bytes` is smaller than
-  the unpacked size, or, when that is unknown, than the compressed size
-  (the lower bound). It is `enough` when `root_bytes` holds the unpacked
-  size and, when the scratch directory is on the target
+  the unpacked size, or, when that is unknown or an estimate, than the
+  compressed size (the lower bound): an estimate alone never makes it
+  `not_enough`. It is `enough` when `root_bytes` holds the unpacked size
+  (an estimate too) and, when the scratch directory is on the target
   (`scratch.on_target`), `scratch.need_bytes` as well (which includes
-  it). Otherwise it is `unknown`, with the reason in `plan.unknown`. A
-  registry image that is not in local containers-storage is therefore
-  never `enough`: its manifest has no unpacked size. For a manual layout
+  it). Otherwise it is `unknown`, with the reason in `plan.unknown`; for
+  a root between the compressed size and an estimated unpacked size, the
+  reason says so. For a manual layout
   `root_bytes` is the size of the root partition, compared the same way.
 - `scratch.fit` is `enough` when `scratch.free_bytes` holds
   `scratch.need_bytes`, the upper estimate. It is `not_enough` only when
@@ -380,8 +390,9 @@ grants nothing.
 ## Not in this version
 
 The plan does not yet report the mounts of the installed system beyond the
-partitions, the unpacked size of an image that only a registry has, the
-free space inside a kept manual root partition, the size of a `varDisk`,
+partitions, the unpacked size of an OCI layout source (only an estimate
+for a registry image whose layers do not record it), the free space
+inside a kept manual root partition, the size of a `varDisk`,
 or the identity of a manual layout's disks (no `diskIdentity` binding for
 `customMounts`; a `planBinding` binds a manual layout's partition paths and
 sizes, not the disks they are on). The install checks `diskIdentity` and

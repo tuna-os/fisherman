@@ -17,7 +17,8 @@
       "platform": "linux/amd64",
       "layers": 1,
       "compressed_bytes": 3221225472,
-      "unpacked_bytes": 9663676416
+      "unpacked_bytes": 9663676416,
+      "unpacked_from": "containers-storage"
     },
     "target": {
       "layout": "auto",

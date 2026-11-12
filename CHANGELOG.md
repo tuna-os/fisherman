@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **`plan --read-image` gives the unpacked size of an image only a
+  registry has** (part of #371). Without a pull, from the manifest skopeo
+  already reads: the sum of the layers' `io.containers.estargz.uncompressed-size`
+  annotations when every layer has one, else three times the compressed
+  size (`install.UnpackedEstimateRatio`). The new `plan.image.unpacked_from`
+  says which (`containers-storage`, `annotations` or `estimate`).
+  `capacity.root_need_bytes`, `scratch.need_bytes`, `capacity.image_fit`
+  and `scratch.fit` now judge registry images too; an estimate can make
+  `image_fit` `enough`, never `not_enough` (only the compressed lower bound
+  does). An OCI layout still has no unpacked size. Additive: protocol 1.
+  Docs: PLAN.md ("Size estimates").
+
 - **The install can be bound to the plan the user confirmed** (part of
   #371). `plan --json` prints the new `plan.binding` (`digest`, a SHA-256
   of the target disk, the partitions, what is destroyed and the capacity

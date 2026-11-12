@@ -171,7 +171,7 @@
       },
       {
         "field": "capacity.root_need_bytes",
-        "reason": "the estimate is the image's unpacked size, which only local containers-storage reports"
+        "reason": "the estimate is the image's unpacked size, which is unknown (see image.unpacked_bytes)"
       },
       {
         "field": "capacity.root_minimum",
