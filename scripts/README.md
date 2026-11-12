@@ -35,6 +35,27 @@ Boots a QEMU VM with the installed disk and verifies system state via SSH.
 ./boot-verify.sh 2222 /tmp/id_rsa 600 2G /dev/loop0 dakota hunter2
 ```
 
+**Optional, from the environment** (unset by default):
+- `BOOTCREW_EXTRA_DRIVE`: a second raw disk for the VM (a `varDisk`)
+- `BOOTCREW_SWTPM_STATE`: a state directory under `/tmp`; the VM gets a
+  swtpm TPM 2.0 whose state lasts across boots
+- `BOOTCREW_GUEST_CHECKS`: space-separated scripts from `vm-checks/`, run
+  once SSH answers; one that fails fails the boot check
+
+### `matrix-recipe.py`
+Writes the recipe for one `tests/bootcrew-matrix.yaml` entry
+(`matrix-recipe.py <entry-json> <disk> [<var-disk>]`). The docstring lists
+the entry fields it reads. `just bootcrew-ci-test` and
+`tests/check-validation.sh` both use it.
+
+### `vm-checks/`
+Guest checks for the optional matrix fields (#418): `user.sh` (the recipe's
+user signs in, owns its home, is in `wheel` and has the recipe's password),
+`var-disk.sh` (`/var` is the `varDisk`) and `tpm2-enrolled.sh` (the
+first-boot TPM2 enrolment left a `systemd-tpm2` token and removed its
+single-use keyslot and key). `tests/check-validation.sh` checks that each
+one catches its bug.
+
 ### `store-reuse-vm.sh` and `store-reuse-lib.sh`
 The advisory offline VM profile for the bootc store reuse (#384 phase 2,
 [`docs/SOURCE-REUSE.md`](../docs/SOURCE-REUSE.md)), run by the

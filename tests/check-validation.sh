@@ -354,6 +354,176 @@ expect_exit "store reuse: event fields are read (copy_ms)" 0 \
   test "$(reuse_field "$SR/ev" verified measured.copy_ms)" = 1200
 rm -rf "$SR"
 
+# ── matrix recipes (scripts/matrix-recipe.py, #418) ─────────────────────
+#
+# Every matrix entry, as the harness turns it into a recipe, must pass the
+# recipe rules that need no machine (`fisherman validate --json --partial`):
+# a varDisk with LUKS or on composefs, or ZFS without the opt-in, is refused
+# before any VM boots. Needs python3 with PyYAML and a fisherman binary
+# (FISHERMAN_BIN, else built with go); skipped with a notice without them.
+MATRIX_FILE="$(dirname "$0")/bootcrew-matrix.yaml"
+FM_BIN="${FISHERMAN_BIN:-}"
+if [ -z "$FM_BIN" ] && command -v go >/dev/null 2>&1; then
+  FM_BIN=$(mktemp)
+  (cd "$(dirname "$0")/../fisherman" && go build -o "$FM_BIN" ./cmd/fisherman) || FM_BIN=""
+fi
+check_matrix_recipes() {
+  python3 - "$1" "$2" "$(dirname "$0")/../scripts/matrix-recipe.py" <<'PY'
+import importlib.util, json, subprocess, sys, yaml
+matrix, fisherman, script = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("matrix_recipe", script)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+bad = 0
+for entry in yaml.safe_load(open(matrix))["images"]:
+    r = mod.recipe(entry, "/dev/loop0", "/dev/loop1")
+    out = subprocess.run([fisherman, "validate", "--json", "--partial", "-"],
+                         input=json.dumps(r).encode(), capture_output=True)
+    errors = json.loads(out.stdout or b"{}").get("errors", [{"code": "no output"}])
+    if out.returncode != 0 or errors:
+        bad = 1
+        print("%s: %s" % (entry.get("name"), [e.get("code") for e in errors]), file=sys.stderr)
+sys.exit(bad)
+PY
+}
+if [ -n "$FM_BIN" ] && python3 -c 'import yaml' 2>/dev/null; then
+  expect_exit "matrix: every entry's recipe passes validate --partial (exit 0)" 0 \
+    check_matrix_recipes "$MATRIX_FILE" "$FM_BIN"
+  MATRIX_BAD_RECIPE=$(mktemp)
+  cat > "$MATRIX_BAD_RECIPE" <<'YAML'
+images:
+  - name: luks-with-var-disk
+    filesystem: xfs
+    luks: true
+    luks_passphrase: x
+    var_disk: true
+YAML
+  expect_exit "matrix: a varDisk with LUKS → caught (exit 1)" 1 \
+    check_matrix_recipes "$MATRIX_BAD_RECIPE" "$FM_BIN"
+  rm -f "$MATRIX_BAD_RECIPE"
+  [ -z "${FISHERMAN_BIN:-}" ] && rm -f "$FM_BIN"
+else
+  echo "  SKIP  matrix recipes: needs python3 with PyYAML and go (or FISHERMAN_BIN)"
+fi
+
+# ── guest checks (scripts/vm-checks/, #418) ────────────────────────────
+#
+# boot-verify.sh sources these once SSH answers. Here a function stands in
+# for ssh_root and a script for the ssh client: each check must pass on a
+# good guest and catch the bug it exists for.
+VMC="$(dirname "$0")/../scripts/vm-checks"
+VMC_TMP=$(mktemp -d)
+# run_check SCRIPT: source SCRIPT in a subshell, as boot-verify.sh does.
+# shellcheck disable=SC1090
+run_check() { ( source "$1" ); }
+
+GOOD_HASH=$(openssl passwd -6 -salt fishsalt 'bootcrew-user-test' 2>/dev/null || true)
+OTHER_HASH=$(openssl passwd -6 -salt fishsalt 'another-password' 2>/dev/null || true)
+# yescrypt ($y$), what CentOS Stream 10's chpasswd writes on an ostree target.
+yescrypt() {  # yescrypt PASSWORD — a $y$ hash of PASSWORD, or nothing
+  python3 - "$1" <<'PY' 2>/dev/null || true
+import ctypes, ctypes.util, sys
+lib = ctypes.CDLL(ctypes.util.find_library("crypt") or "libcrypt.so.1")
+lib.crypt.restype = lib.crypt_gensalt.restype = ctypes.c_char_p
+lib.crypt.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+lib.crypt_gensalt.argtypes = [ctypes.c_char_p, ctypes.c_ulong, ctypes.c_char_p, ctypes.c_int]
+print(lib.crypt(sys.argv[1].encode(), lib.crypt_gensalt(b"$y$", 0, None, 0)).decode())
+PY
+}
+YESCRYPT_HASH=$(yescrypt 'bootcrew-user-test')
+YESCRYPT_OTHER=$(yescrypt 'another-password')
+cat >"$VMC_TMP/ssh" <<'SH'
+#!/bin/sh
+# The user session: whatever FAKE_USER_SESSION says.
+printf '%b\n' "$FAKE_USER_SESSION"
+SH
+chmod +x "$VMC_TMP/ssh"
+user_guest() {  # user_guest SESSION SHADOW_HASH — then run user.sh
+  FAKE_USER_SESSION="$1" FAKE_SHADOW="$2" SSH_BIN="$VMC_TMP/ssh" SSH_KEY=/dev/null SSH_PORT=1 \
+    BOOTCREW_USER=bootcrew BOOTCREW_USER_PASSWORD=bootcrew-user-test run_check "$VMC/user.sh"
+}
+ssh_root() {
+  case "$*" in
+    *"getent group wheel"*) echo "wheel:x:10:bootcrew" ;;
+    *"getent shadow"*) echo "$FAKE_SHADOW" ;;
+    *crypto_LUKS*) echo "/dev/sda3" ;;
+    *luksDump*) printf '%b\n' "$FAKE_LUKSDUMP" ;;
+    *journalctl*) echo "enrolled" ;;
+    *"ActiveState"*) echo "${FAKE_UNIT_STATE:-inactive}" ;;
+    *tpm2-enroll.key*) [ "${FAKE_KEY_LEFT:-0}" = 1 ] ;;
+    *findmnt*) printf '%b\n' "$FAKE_VAR" ;;
+    *) return 1 ;;
+  esac
+}
+GOOD_SESSION='bootcrew\nhome-ok\ngroups: bootcrew wheel'
+if [ -n "$GOOD_HASH" ]; then
+  expect_exit "guest user: signs in, owns its home, recipe password → pass (exit 0)" 0 \
+    user_guest "$GOOD_SESSION" "$GOOD_HASH"
+  expect_exit "guest user: another password → caught (exit 1)" 1 \
+    user_guest "$GOOD_SESSION" "$OTHER_HASH"
+  # ssh prints a warning before the session (seen in the first VM run).
+  expect_exit "guest user: a warning line before the session → pass (exit 0)" 0 \
+    user_guest "Warning: Permanently added '[127.0.0.1]:2222' (ED25519) to the list of known hosts.\\n$GOOD_SESSION" "$GOOD_HASH"
+  expect_exit "guest user: locked account (!) → caught (exit 1)" 1 \
+    user_guest "$GOOD_SESSION" '!'
+  expect_exit "guest user: cannot sign in → caught (exit 1)" 1 \
+    user_guest 'Permission denied (publickey)' "$GOOD_HASH"
+  expect_exit "guest user: no home it owns → caught (exit 1)" 1 \
+    user_guest 'bootcrew\ngroups: bootcrew wheel' "$GOOD_HASH"
+  expect_exit "guest user: not in wheel → caught (exit 1)" 1 \
+    user_guest 'bootcrew\nhome-ok\ngroups: bootcrew' "$GOOD_HASH"
+else
+  echo "  SKIP  guest user checks: openssl not found"
+fi
+case "$YESCRYPT_HASH" in
+  '$y$'*)
+    expect_exit "guest user: yescrypt hash of the recipe password → pass (exit 0)" 0 \
+      user_guest "$GOOD_SESSION" "$YESCRYPT_HASH"
+    expect_exit "guest user: yescrypt hash of another password → caught (exit 1)" 1 \
+      user_guest "$GOOD_SESSION" "$YESCRYPT_OTHER" ;;
+  *) echo "  SKIP  guest user yescrypt checks: no libcrypt yescrypt" ;;
+esac
+
+tpm_guest() { FAKE_LUKSDUMP="$1" FAKE_KEY_LEFT="$2" TPM2_WAIT_ITERS=1 run_check "$VMC/tpm2-enrolled.sh"; }
+ENROLLED='Keyslots:\n  0: luks2\n  1: luks2\nTokens:\n  0: systemd-tpm2'
+expect_exit "guest tpm2: token, slot 31 and key gone → pass (exit 0)" 0 tpm_guest "$ENROLLED" 0
+expect_exit "guest tpm2: no systemd-tpm2 token → caught (exit 1)" 1 \
+  tpm_guest 'Keyslots:\n  0: luks2\n  31: luks2' 0
+expect_exit "guest tpm2: single-use slot 31 left → caught (exit 1)" 1 \
+  tpm_guest "$ENROLLED\nKeyslots:\n  31: luks2" 0
+expect_exit "guest tpm2: key file left → caught (exit 1)" 1 tpm_guest "$ENROLLED" 1
+# The race the first VM run hit: the token is there while ExecStopPost has
+# not yet removed slot 31 and the key file. The check must wait for the unit.
+tpm_race() (  # a subshell: its ssh_root must not replace the shared one
+  n="$VMC_TMP/tpm-race"; echo 0 >"$n"
+  ssh_root() {
+    case "$*" in
+      *crypto_LUKS*) echo "/dev/sda3" ;;
+      *ActiveState*) c=$(cat "$n"); echo $((c + 1)) >"$n"
+                     if [ "$c" -lt 2 ]; then echo activating; else echo inactive; fi ;;
+      *luksDump*) if [ "$(cat "$n")" -lt 2 ]; then printf '%b\n' "$ENROLLED\nKeyslots:\n  31: luks2"; else printf '%b\n' "$ENROLLED"; fi ;;
+      *journalctl*) echo "enrolled" ;;
+      *tpm2-enroll.key*) [ "$(cat "$n")" -lt 2 ] ;;
+      *) return 1 ;;
+    esac
+  }
+  TPM2_WAIT_ITERS=5 run_check "$VMC/tpm2-enrolled.sh"
+)
+expect_exit "guest tpm2: token first, cleanup a moment later → pass (exit 0)" 0 tpm_race
+
+var_guest() { FAKE_VAR="$1" run_check "$VMC/var-disk.sh"; }
+FSTAB_VAR='UUID=1 /var xfs defaults,nofail,x-systemd.device-timeout=30s,x-systemd.before=local-fs.target 0 0'
+expect_exit "guest varDisk: /var is the xfs disk labelled var → pass (exit 0)" 0 \
+  var_guest "/dev/sdb xfs var\n/var\n$FSTAB_VAR"
+expect_exit "guest varDisk: /var is on the root → caught (exit 1)" 1 \
+  var_guest "/dev/mapper/root[/ostree/deploy/default/var] xfs root\n/var\n$FSTAB_VAR"
+expect_exit "guest varDisk: /var/home elsewhere → caught (exit 1)" 1 \
+  var_guest "/dev/sdb xfs var\n/var/home\n$FSTAB_VAR"
+expect_exit "guest varDisk: no fstab line → caught (exit 1)" 1 \
+  var_guest "/dev/sdb xfs var\n/var"
+unset -f ssh_root
+rm -rf "$VMC_TMP"
+
 # ── summary ────────────────────────────────────────────────────────────────
 
 echo ""
