@@ -521,6 +521,166 @@ expect_exit "guest varDisk: /var/home elsewhere → caught (exit 1)" 1 \
   var_guest "/dev/sdb xfs var\n/var/home\n$FSTAB_VAR"
 expect_exit "guest varDisk: no fstab line → caught (exit 1)" 1 \
   var_guest "/dev/sdb xfs var\n/var"
+
+# btrfs-subvolumes.sh: the guest answers with FAKE_BTRFS (printf %b).
+btrfs_guest() (
+  ssh_root() { printf '%b\n' "$FAKE_BTRFS"; }
+  FAKE_BTRFS="$1" run_check "$VMC/btrfs-subvolumes.sh"
+)
+BT_ROOT='root: /sysroot /dev/vda2[/@] btrfs ro,relatime,compress=zstd:1,ssd,space_cache=v2,subvolid=256,subvol=/@'
+BT_VAR='var: /dev/vda2[/@/state/os/default/var]'
+BT_CMD='cmdline: BOOT_IMAGE=/vmlinuz rw rootflags=subvol=@,compress=zstd:1 console=ttyS0'
+BT_LIST='subvol: ID 256 gen 12 top level 5 path @\nsubvol: ID 257 gen 13 top level 256 path @/state/os/default/var/lib/machines\nlisted: yes'
+expect_exit "guest btrfs: @ mounted with the recipe's options, only @ on top → pass (exit 0)" 0 \
+  btrfs_guest "$BT_ROOT\n$BT_VAR\n$BT_CMD\n$BT_LIST"
+expect_exit "guest btrfs: no btrfs tool in the image → pass, list not checked (exit 0)" 0 \
+  btrfs_guest "$BT_ROOT\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: /sysroot not a mount point, /var on @ → pass (exit 0)" 0 \
+  btrfs_guest "root: /var /dev/vda2[/@/state/os/default/var] btrfs rw,compress=zstd:1,subvolid=256,subvol=/@\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: root at the top level (no subvolume) → caught (exit 1)" 1 \
+  btrfs_guest "root: /sysroot /dev/vda2 btrfs rw,compress=zstd:1,subvolid=5,subvol=/\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: another subvolume (@root) → caught (exit 1)" 1 \
+  btrfs_guest "root: /sysroot /dev/vda2[/@root] btrfs rw,compress=zstd:1,subvolid=256,subvol=/@root\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: no zstd compression → caught (exit 1)" 1 \
+  btrfs_guest "root: /sysroot /dev/vda2[/@] btrfs rw,subvolid=256,subvol=/@\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: not btrfs at all → caught (exit 1)" 1 \
+  btrfs_guest "root: /sysroot /dev/vda2 ext4 rw,relatime\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: no rootflags on the command line → caught (exit 1)" 1 \
+  btrfs_guest "$BT_ROOT\n$BT_VAR\ncmdline: BOOT_IMAGE=/vmlinuz rw\n$BT_LIST"
+expect_exit "guest btrfs: /var outside @ → caught (exit 1)" 1 \
+  btrfs_guest "$BT_ROOT\nvar: /dev/vda2[/state/os/default/var]\n$BT_CMD\n$BT_LIST"
+expect_exit "guest btrfs: @home and @snapshots on top (#416) → caught (exit 1)" 1 \
+  btrfs_guest "$BT_ROOT\n$BT_VAR\n$BT_CMD\nsubvol: ID 256 gen 12 top level 5 path @\nsubvol: ID 258 gen 12 top level 5 path @home\nsubvol: ID 259 gen 12 top level 5 path @snapshots\nlisted: yes"
+
+# The harness mounts @ to reach the system (scripts/find-tools.sh).
+# shellcheck source=../scripts/find-tools.sh
+source "$(dirname "$0")/../scripts/find-tools.sh"
+mkdir -p "$VMC_TMP/top-sub/@" "$VMC_TMP/top-flat/state/deploy" "$VMC_TMP/top-ostree/@" "$VMC_TMP/top-ostree/ostree"
+expect_exit "btrfs root: top level holds only @ → mount @ (exit 0)" 0 \
+  test "$(btrfs_root_subvol "$VMC_TMP/top-sub")" = "@"
+expect_exit "btrfs root: the system at the top level → no subvolume (exit 1)" 1 \
+  btrfs_root_subvol "$VMC_TMP/top-flat"
+expect_exit "btrfs root: an @ dir next to an ostree tree → no subvolume (exit 1)" 1 \
+  btrfs_root_subvol "$VMC_TMP/top-ostree"
+
+# capabilities.sh (#383): the report taken in the installing VM, held to
+# the installed system. caps_json writes a probe output; each argument
+# after the file is a Python assignment applied to its capabilities.
+CAPS_DIGEST="sha256:$(printf 'a%.0s' $(seq 1 64))"
+caps_json() {  # caps_json FILE KIND [PY-STATEMENT...] — KIND: match | other
+  python3 -I - "$CAPS_DIGEST" "$@" <<'PY'
+import json, sys
+digest, path, kind, edits = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+src = ["native_inspection", "install_configuration", "finalization", "deployment_mount", "bootc_image_storage"]
+if kind == "match":
+    c = {"version": 1,
+         "live_host": {"backend": "ostree", "bootc_version": "1.17.1", "digest": digest},
+         "source": {"selected": True, "digest": digest, "digest_from": "reference", "transport": "registry"},
+         "execution_root": {"context": "live-host", "established": True, "reason": "digest_match",
+                            "backend": "ostree", "bootc_version": "1.17.1"},
+         "features": {"native_inspection": {"status": "supported", "reason": "observed", "context": "source-root"},
+                      "install_configuration": {"status": "supported", "reason": "observed", "context": "source-root"},
+                      "finalization": {"status": "unknown", "reason": "not_qualified", "context": "source-root"},
+                      "deployment_mount": {"status": "unknown", "reason": "not_qualified", "context": "source-root"},
+                      "bootc_image_storage": {"status": "unknown", "reason": "not_qualified", "context": "source-root"}},
+         "install_defaults": {"observed": True, "root_filesystem": "xfs", "block_setups": ["direct"], "bootloader": "grub"},
+         "image": {"observed": True, "kernel_version": "6.12.0-100.el10.x86_64", "kernel_unified": False}}
+else:
+    c = {"version": 1,
+         "live_host": {"backend": "ostree", "bootc_version": "1.17.1", "digest": digest},
+         "source": {"selected": True, "digest": "sha256:" + "e" * 64, "digest_from": "reference"},
+         "execution_root": {"context": "none", "established": False, "reason": "digest_mismatch",
+                            "backend": "", "bootc_version": ""},
+         "features": {n: {"status": "unknown", "reason": "source_root_unavailable", "context": "none"} for n in src},
+         "install_defaults": {"observed": False, "block_setups": []},
+         "image": {"observed": False}}
+c["features"]["unified_storage"] = {"status": "unsupported", "reason": "fisherman_refuses", "context": "fisherman"}
+for e in edits:
+    exec(e, {"c": c})
+json.dump({"protocol_version": 1, "capabilities": c}, open(path, "w"))
+PY
+}
+CAPS_STATUS_OSTREE='{"status":{"booted":{"image":{"imageDigest":"x"},"ostree":{"checksum":"abc"}}}}'
+CAPS_STATUS_CFS='{"status":{"booted":{"image":{"imageDigest":"x"},"composefs":{"verity":"abc"}}}}'
+caps_guest() (  # caps_guest PROBE OTHER [GUEST-BOOTC [KERNEL [BOOTLOADER [STATUS]]]]
+  ssh_root() {
+    echo "bootc: ${G_BOOTC}"; echo "kernel: ${G_KERNEL}"; echo "bootloader: ${G_LOADER}"; echo "status: ${G_STATUS}"
+  }
+  G_BOOTC="${3:-bootc 1.17.1}" G_KERNEL="${4:-6.12.0-100.el10.x86_64}" G_LOADER="${5:-grub}" \
+    G_STATUS="${6:-$CAPS_STATUS_OSTREE}" CAPS_PROBE="$1" CAPS_PROBE_OTHER="$2" \
+    CAPS_LIVE_BOOTC="bootc 1.17.1" CAPS_SOURCE_DIGEST="$CAPS_DIGEST" CAPS_EXPECT_BACKEND=ostree \
+    run_check "$VMC/capabilities.sh"
+)
+C="$VMC_TMP/caps"
+mkdir -p "$C"
+caps_json "$C/good" match
+caps_json "$C/other" other
+expect_exit "guest caps: the report matches the installing and installed bootc → pass (exit 0)" 0 \
+  caps_guest "$C/good" "$C/other"
+caps_json "$C/cmd-absent" match 'c["features"]["native_inspection"] = {"status": "unsupported", "reason": "command_absent", "context": "source-root"}' \
+  'c["image"] = {"observed": False}'
+expect_exit "guest caps: an older bootc without container inspect → pass (exit 0)" 0 \
+  caps_guest "$C/cmd-absent" "$C/other"
+caps_json "$C/no-loader" match 'c["install_defaults"]["bootloader"] = ""'
+expect_exit "guest caps: print-configuration names no bootloader → pass (exit 0)" 0 \
+  caps_guest "$C/no-loader" "$C/other"
+caps_json "$C/unrooted" match 'c["execution_root"].update(established=False, reason="digest_mismatch", context="none")'
+expect_exit "guest caps: no established execution root → caught (exit 1)" 1 \
+  caps_guest "$C/unrooted" "$C/other"
+expect_exit "guest caps: the installed system has another bootc → caught (exit 1)" 1 \
+  caps_guest "$C/good" "$C/other" "bootc 1.16.0"
+caps_json "$C/oldver" match 'c["execution_root"]["bootc_version"] = "1.16.0"'
+expect_exit "guest caps: the report names another bootc version → caught (exit 1)" 1 \
+  caps_guest "$C/oldver" "$C/other"
+caps_json "$C/cfs" match 'c["execution_root"]["backend"] = "composefs"' 'c["live_host"]["backend"] = "composefs"'
+expect_exit "guest caps: the report says composefs, the install is ostree → caught (exit 1)" 1 \
+  caps_guest "$C/cfs" "$C/other"
+expect_exit "guest caps: the installed system is composefs → caught (exit 1)" 1 \
+  caps_guest "$C/good" "$C/other" "bootc 1.17.1" "6.12.0-100.el10.x86_64" grub "$CAPS_STATUS_CFS"
+caps_json "$C/sdboot" match 'c["install_defaults"]["bootloader"] = "systemd"'
+expect_exit "guest caps: print-configuration says systemd, GRUB installed → caught (exit 1)" 1 \
+  caps_guest "$C/sdboot" "$C/other"
+expect_exit "guest caps: container inspect names another kernel → caught (exit 1)" 1 \
+  caps_guest "$C/good" "$C/other" "bootc 1.17.1" "6.11.0-1.el10.x86_64"
+caps_json "$C/fromnone" match 'c["features"]["install_configuration"] = {"status": "supported", "reason": "observed", "context": "none"}'
+expect_exit "guest caps: a feature answered outside the source root → caught (exit 1)" 1 \
+  caps_guest "$C/fromnone" "$C/other"
+caps_json "$C/helpsupported" match 'c["features"]["finalization"] = {"status": "supported", "reason": "command_present", "context": "source-root"}'
+expect_exit "guest caps: supported from a help text, not observed → caught (exit 1)" 1 \
+  caps_guest "$C/helpsupported" "$C/other"
+caps_json "$C/wrongsrc" match 'c["source"]["digest"] = "sha256:" + "b" * 64'
+expect_exit "guest caps: the report is for another source digest → caught (exit 1)" 1 \
+  caps_guest "$C/wrongsrc" "$C/other"
+# Negative case: the host's bootc answered for a digest the host did not boot.
+caps_json "$C/other-leak" other 'c["execution_root"].update(established=True, reason="digest_match", context="live-host", bootc_version="1.17.1")'
+expect_exit "guest caps: another digest gets the host's execution root → caught (exit 1)" 1 \
+  caps_guest "$C/good" "$C/other-leak"
+caps_json "$C/other-defaults" other 'c["install_defaults"] = {"observed": True, "bootloader": "grub", "block_setups": []}' \
+  'c["features"]["install_configuration"] = {"status": "supported", "reason": "observed", "context": "source-root"}'
+expect_exit "guest caps: another digest reports the host's defaults → caught (exit 1)" 1 \
+  caps_guest "$C/good" "$C/other-defaults"
+# The probe's own golden output (internal/probe/testdata/golden): a
+# digest-pinned source on a matching host, and an unrelated host. Keeps the
+# check on the shape the Go code really emits.
+GOLDEN="$(dirname "$0")/../fisherman/internal/probe/testdata/golden"
+jq '{capabilities: .}' "$GOLDEN/caps-pinned-reference.json" >"$C/golden-match"
+jq '{capabilities: .}' "$GOLDEN/caps-unrelated-live-host.json" >"$C/golden-other"
+golden_guest() (
+  ssh_root() {
+    echo "bootc: bootc 1.17.1"; echo "kernel: 6.12.0-55.el10.x86_64"; echo "bootloader: grub"
+    echo "status: $CAPS_STATUS_OSTREE"
+  }
+  CAPS_PROBE="$C/golden-match" CAPS_PROBE_OTHER="$1" CAPS_LIVE_BOOTC="bootc 1.17.1" \
+    CAPS_SOURCE_DIGEST="sha256:$(printf '1%.0s' $(seq 1 64))" CAPS_EXPECT_BACKEND=ostree \
+    run_check "$VMC/capabilities.sh"
+)
+expect_exit "guest caps: the probe's golden pinned-reference and unrelated-host output → pass (exit 0)" 0 \
+  golden_guest "$C/golden-other"
+expect_exit "guest caps: golden pinned-reference as the negative case → caught (exit 1)" 1 \
+  golden_guest "$C/golden-match"
+echo 'probe: bootc status failed' >"$C/not-json"
+expect_exit "guest caps: no capability report → caught (exit 1)" 1 \
+  caps_guest "$C/not-json" "$C/other"
 unset -f ssh_root
 rm -rf "$VMC_TMP"
 

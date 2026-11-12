@@ -17,7 +17,10 @@
 #      scratch; then the install from the VM's own bootc store onto disk B.
 #   4. Disk B boots (boot-verify.sh, receipt checks required) and must boot
 #      the verified copy, follow the original update reference and be the
-#      item's platform.
+#      item's platform. The capability report taken in step 3 must match
+#      the bootc, backend, bootloader and kernel that disk B shows, and a
+#      report for a digest the VM did not boot must answer nothing (#383,
+#      scripts/vm-checks/capabilities.sh).
 #   5. The job summary compares copy time, scratch and disk with step 1.
 #
 # PROFILE_JSON: {"name", "ssh_image_name", "filesystem", "vm_memory",
@@ -38,6 +41,8 @@ SSH_NAME=$(jq -r '.ssh_image_name // .name' <<<"$PROFILE")
 FILESYSTEM=$(jq -r '.filesystem // "xfs"' <<<"$PROFILE")
 VM_MEMORY=$(jq -r '.vm_memory // "4G"' <<<"$PROFILE")
 VM_TIMEOUT=$(jq -r '.vm_timeout // 3000' <<<"$PROFILE")
+# The reuse refuses composefs, so a profile is ostree unless it says otherwise.
+BACKEND=$([ "$(jq -r '.composefs_backend // false' <<<"$PROFILE")" = true ] && echo composefs || echo ostree)
 IMAGE="ghcr.io/tuna-os/fisherman/${SSH_NAME}:ssh-enabled"
 FM="${FISHERMAN_BIN:-/tmp/fisherman}"
 SSH_KEY=/tmp/bootcrew-ssh/id_rsa
@@ -174,6 +179,18 @@ ssh_vm "mkdir -p $G && cat > $G/fisherman && chmod 0755 $G/fisherman" <"$FM"
 ssh_vm "$G/fisherman probe --json" >"$ART/probe-a.json" || true
 jq '.bootc_store' "$ART/probe-a.json" >"$ART/bootc-store-a.json" 2>/dev/null || true
 
+# The capability report (#383), taken where the install runs: for the booted
+# image pinned by its digest, and for the same name pinned by a digest this
+# host did not boot (the negative case). scripts/vm-checks/capabilities.sh
+# holds both to the installed system after step 4.
+CAPS_REF="${TARGET_REF%%@*}"
+ssh_vm "$G/fisherman probe --json --source $CAPS_REF@$SOURCE_DIGEST --target-imgref $TARGET_REF" \
+  >"$ART/probe-caps.json" 2>"$ART/probe-caps.err" || true
+ssh_vm "$G/fisherman probe --json --source $CAPS_REF@sha256:$(printf 'e%.0s' $(seq 1 64)) --target-imgref $TARGET_REF" \
+  >"$ART/probe-caps-other.json" 2>"$ART/probe-caps-other.err" || true
+ssh_vm "bootc --version" 2>/dev/null | head -n 1 >"$ART/bootc-version-a.txt" || true
+jq '.capabilities.execution_root' "$ART/probe-caps.json" 2>/dev/null || echo "⚠️  no capability report"
+
 recipe() { # recipe DIGEST
   cat <<EOF
 {"disk": "/dev/disk/by-id/virtio-fmreuse", "filesystem": "$FILESYSTEM", "encryption": {"type": "none"},
@@ -294,10 +311,14 @@ if [ "$REUSE_STATUS" = 0 ]; then
   bash "$SCRIPT_DIR/enable-ssh-installed.sh" "$LOOP" false "${SSH_KEY}.pub"
   patch_bls "$LOOP"
   if ARTIFACTS_DIR="$ART/boot-b" BOOTCREW_RECEIPT_REQUIRED=1 FISHERMAN_BIN="$FM" \
+    BOOTCREW_GUEST_CHECKS="$SCRIPT_DIR/vm-checks/capabilities.sh" \
+    CAPS_PROBE="$ART/probe-caps.json" CAPS_PROBE_OTHER="$ART/probe-caps-other.json" \
+    CAPS_LIVE_BOOTC="$(cat "$ART/bootc-version-a.txt" 2>/dev/null)" CAPS_SOURCE_DIGEST="$SOURCE_DIGEST" \
+    CAPS_EXPECT_BACKEND="$BACKEND" \
     bash "$SCRIPT_DIR/boot-verify.sh" 2222 "$SSH_KEY" 900 2G "$LOOP" "$NAME-b" ""; then
     BOOT_OK=yes
   else
-    note_fail "disk B did not boot and verify its receipt (boot-verify.sh)"
+    note_fail "disk B did not boot, verify its receipt, or pass the capability check (boot-verify.sh)"
   fi
   RECEIPT_DIR=$(find "$ART/boot-b" -maxdepth 1 -type d -name 'receipt-*' 2>/dev/null | head -1 || true)
   if [ -n "$RECEIPT_DIR" ] && store_reuse_identity "$ART/reuse-events.ndjson" "$RECEIPT_DIR/install-receipt.json" \

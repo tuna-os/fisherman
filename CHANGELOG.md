@@ -86,6 +86,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 
+- **The capability report is checked against the bootc that installs**
+  (#383): the advisory store reuse VM profile takes
+  `fisherman probe --json --source <booted ref>@<booted digest>` inside the
+  VM that installs, before it installs that image from its own bootc store.
+  The new guest check `scripts/vm-checks/capabilities.sh` then holds the
+  report to the installed system: an established `digest_match` root, one
+  bootc version in the report, the installing VM and the installed system,
+  the recipe's backend, the `print-configuration` bootloader (when it names
+  one) and the `container inspect` kernel. The negative case, the same name
+  pinned by a digest the VM did not boot, must be `digest_mismatch` with no
+  answer from the VM's bootc. `tests/check-validation.sh` proves each check
+  catches its bug, also on the probe's own golden output.
+- **A VM entry for `btrfsSubvolumes`** (#418): `dakota-btrfs-subvolumes`
+  (advisory, PR gate) installs with `"btrfsSubvolumes": true`. The guest
+  check `scripts/vm-checks/btrfs-subvolumes.sh` requires the root on the `@`
+  subvolume with `subvol=/@,compress=zstd:1`, the same `rootflags` on the
+  kernel command line, `/var` inside `@`, and `@` as the only top-level
+  subvolume (#416). The harness scripts that write into the installed root
+  now mount `@` when the top level holds only it.
 - **The VM matrix covers a user, GRUB with LUKS, TPM2 and a /var disk**
   (#418), as advisory PR-gate entries: `centos-bootc-luks-user` (GRUB,
   ostree, XFS, LUKS and a `user` that must sign in with the recipe's
