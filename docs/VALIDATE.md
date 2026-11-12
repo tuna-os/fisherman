@@ -221,6 +221,37 @@ partition table; that second check fails with nothing written. A device that is 
 judge, gets `disk_not_disk` or `disk_unverified` instead. `--partial` checks
 only the shape (`disk_identity_invalid`).
 
+## Saved plan
+
+A frontend shows the user the plan of the recipe (`fisherman plan --json`,
+[PLAN.md](PLAN.md)) and asks for confirmation. To make the install refuse a
+machine that no longer gives that plan, it copies `plan.binding` into the
+recipe field `planBinding` (`read_image` spelt `readImage`):
+
+```json
+{"disk": "/dev/sdb", "planBinding": {"digest": "sha256:9f2c…", "readImage": true}}
+```
+
+The full `validate` and the install's pre-flight then plan the recipe
+again, with the same code as `plan` (with `--read-image` only when
+`readImage` is true), and compare the digest. A different digest is one
+`plan_stale`: the target disk (its device node, size, serial, WWN or
+model), the partition table, the action, filesystem or size of a
+partition, the `/var` disk, what the install destroys, the scratch
+directory, or a capacity verdict (`disk_minimum`, `root_bytes`,
+`root_need_bytes`, `image_fit`, `scratch.fit`) changed. A change for the
+better counts too: the user confirmed the old plan. There is no override;
+plan again and let the user confirm the new plan.
+
+The check runs last, only when every other rule passes: an invalid recipe
+has no plan. It reads what `plan` reads and writes nothing. With
+`readImage` it reads the image's metadata, so `validate` can then read a
+registry (once, no retry), which it does for no other rule. Run `plan` as
+the user the install runs as (root): a rootless containers-storage can
+hold another copy of the image, or none, and give other sizes. A binding
+is not a permission: the install runs every other check as well.
+`--partial` checks only the shape (`plan_binding_invalid`).
+
 ## Validating one page: `--partial`
 
 A frontend validates a page while it is filled in, before a whole recipe
@@ -258,6 +289,7 @@ A rule runs when its key is present:
 | `additionalImageStores` | each entry's path syntax (not whether it exists) |
 | `override` | override |
 | `diskIdentity` | the shape of diskIdentity (`disk_identity_invalid`); `customMounts` counts as absent when the fragment has none. Never whether the device matches |
+| `planBinding` | the shape of planBinding.digest (`plan_binding_invalid`). Never whether the plan still matches |
 | `experimental` | experimental |
 | `locale` | locale |
 | `keyboard` | keyboard layout (required when the object is present), variant, model |
@@ -308,6 +340,8 @@ holds both fields.
 | `override` | each entry is `too_small` or `uefi` | `override_unsupported` |
 | `diskIdentity` | absent, or at least one of `serial`, `wwn` and `sizeBytes`, with a `sizeBytes` that is not negative, and not with `customMounts` | `disk_identity_invalid` |
 | `diskIdentity` | each field that is set matches what the device `disk` names reports now. See [Disk identity](#disk-identity). Full mode only. | `disk_identity_mismatch` |
+| `planBinding.digest` | absent, or `sha256:` and 64 lowercase hex digits | `plan_binding_invalid` |
+| `planBinding.digest` | the plan of the recipe on this machine now has this digest. Checked after every other rule passes. See [Saved plan](#saved-plan). Full mode only. | `plan_stale` |
 | `zfsPoolName` | empty is valid (`rpool`). Otherwise 1–63 characters: a letter first, then letters, digits, `_`, `-` and `.`; and not a name `zpool` reserves (`mirror*`, `raidz*`, `draid*`, `spare*`, `log`, `c0`–`c9…`). It is an argument of `zpool create`, so `-f` would be read as a flag. | `zfs_pool_name_invalid` |
 | `luksMapperName` | empty is valid (`fisherman-root`). Otherwise 1–63 characters: a letter or digit first, then letters, digits, `_`, `.`, `+` and `-`; not `control`. It names `/dev/mapper/<name>`, so `../sda` would point the install at another device node. | `luks_mapper_name_invalid` |
 | `additionalImageStores[i]` | an absolute path with no `..` component, no `:` or `,` and no control character. It is mounted into the bootc container as `-v <store>:<store>:ro`. | `additional_image_store_invalid` |
@@ -455,6 +489,8 @@ This section maps error codes to their causes and corrective actions. Each code 
 | `override_unsupported` | `override[i]` | The entry is not `too_small` or `uefi` | Remove it. The other target checks have no override |
 | `disk_identity_invalid` | `diskIdentity`, `diskIdentity.sizeBytes` | `diskIdentity` sets none of `serial`, `wwn` and `sizeBytes`, has a negative `sizeBytes`, or is given with `customMounts` | Copy the identity `fisherman plan --json` reports for the disk, or remove `diskIdentity` |
 | `disk_identity_mismatch` | `diskIdentity.serial`, `diskIdentity.wwn` or `diskIdentity.sizeBytes` | The device `disk` names now reports another serial, WWN or size than the recipe's `diskIdentity` (or reports none): it is not the disk the install was planned for. Full mode and the install only | Show the disk list again (`fisherman probe --json`), let the user confirm the disk, and plan again. There is no override |
+| `plan_binding_invalid` | `planBinding.digest` | `planBinding.digest` is not `sha256:` and 64 lowercase hex digits | Copy `plan.binding` of `fisherman plan --json`, or remove `planBinding` |
+| `plan_stale` | `planBinding.digest` | The plan of the recipe on this machine now is not the plan the user confirmed: the target disk, its partitions, what the install destroys or a capacity verdict changed ([Saved plan](#saved-plan)). Full mode and the install only | Plan again, show the new plan and let the user confirm it. There is no override |
 | `var_disk_not_disk` | `varDisk.disk` | The `/var` disk path is not a whole disk | Name the disk itself |
 | `var_disk_boot_disk` | `varDisk.disk` | The running system or the live medium is on the `/var` disk | Choose another disk |
 | `var_disk_read_only` | `varDisk.disk` | The `/var` disk is read-only | Remove the write protection, or choose another disk |

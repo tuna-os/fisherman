@@ -1,0 +1,11 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "planBinding.digest",
+      "code": "plan_binding_invalid",
+      "message": "planBinding.digest must be the plan.binding.digest `fisherman plan --json` printed: sha256: and 64 lowercase hex digits"
+    }
+  ]
+}

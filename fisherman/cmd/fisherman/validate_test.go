@@ -51,6 +51,7 @@ func TestValidateJSONGolden(t *testing.T) {
 		{"partial-mounts", true, 1},
 		{"disk-identity-changed", false, 1},
 		{"partial-disk-identity", true, 1},
+		{"partial-plan-binding", true, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

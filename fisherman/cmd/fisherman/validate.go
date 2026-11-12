@@ -55,6 +55,10 @@ func installProblemsWith(r *recipe.Recipe, imageErr error) []recipe.Problem {
 	ps = append(ps, storeProblems(r, ps)...)
 	ps = append(ps, reuseProblems(r, ps)...)
 	ps = append(ps, targetProblems(r)...)
+	if len(ps) == 0 {
+		// Last: it plans the recipe, and only a valid recipe has a plan.
+		ps = planBindingProblems(r)
+	}
 	return ps
 }
 
@@ -250,6 +254,10 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	if has("diskIdentity") {
 		// Its shape only; whether the device matches is full mode.
 		ps = append(ps, recipe.CheckDiskIdentity(&r)...)
+	}
+	if has("planBinding") {
+		// Its shape only; whether the plan still matches is full mode.
+		ps = append(ps, recipe.CheckPlanBinding(&r)...)
 	}
 	if has("experimental") {
 		ps = append(ps, recipe.CheckExperimental(r.Experimental)...)

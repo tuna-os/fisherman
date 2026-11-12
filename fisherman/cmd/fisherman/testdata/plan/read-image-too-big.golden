@@ -16,7 +16,9 @@
       "platform_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
       "platform": "linux/amd64",
       "layers": 2,
-      "compressed_bytes": 6442450944
+      "compressed_bytes": 6442450944,
+      "unpacked_bytes": 19327352832,
+      "unpacked_from": "estimate"
     },
     "target": {
       "layout": "auto",
@@ -87,12 +89,14 @@
       "reserved_bytes": 2150629376,
       "root_bytes": 6439305216,
       "root_minimum": "unknown",
+      "root_need_bytes": 19327352832,
       "image_fit": "not_enough"
     },
     "scratch": {
       "path": "/var/fisherman-tmp",
       "on_target": false,
       "bytes": "unknown",
+      "need_bytes": 25769803776,
       "free_bytes": 21474836480,
       "free_path": "/var",
       "fit": "unknown"
@@ -139,11 +143,11 @@
         "name": "Finalizing installation"
       }
     ],
+    "binding": {
+      "digest": "@PLAN_DIGEST@",
+      "read_image": true
+    },
     "unknown": [
-      {
-        "field": "image.unpacked_bytes",
-        "reason": "only local containers-storage reports the unpacked size; a registry manifest and an OCI layout list compressed sizes"
-      },
       {
         "field": "source.pull",
         "reason": "whether the image is in a local store or must be pulled is known only when the install checks the image cache"
@@ -173,10 +177,6 @@
         "reason": "the disk reports neither a WWN nor a serial; bind the install with diskIdentity.sizeBytes, and the install checks the device again before it writes"
       },
       {
-        "field": "capacity.root_need_bytes",
-        "reason": "the estimate is the image's unpacked size, which only local containers-storage reports"
-      },
-      {
         "field": "capacity.root_minimum",
         "reason": "fisherman sets no root minimum beyond the disk minimum; root_need_bytes and image_fit compare the root with the image"
       },
@@ -185,12 +185,8 @@
         "reason": "the exact scratch use depends on the path the install takes (a pull, an OCI export, a redirected store); scratch.need_bytes is an upper estimate"
       },
       {
-        "field": "scratch.need_bytes",
-        "reason": "the estimate needs the image's compressed and unpacked sizes (image.compressed_bytes, image.unpacked_bytes)"
-      },
-      {
         "field": "scratch.fit",
-        "reason": "plan has no scratch estimate (see scratch.need_bytes)"
+        "reason": "the free space is less than the upper estimate (scratch.need_bytes); the install may use less"
       }
     ]
   }

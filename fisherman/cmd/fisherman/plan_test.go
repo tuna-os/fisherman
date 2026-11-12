@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -139,22 +140,33 @@ func guardCommands(t *testing.T) *commandGuard {
 // podman image inspect) and a registry (skopeo inspect docker://...), which
 // never touches the network.
 const (
-	fixtureIndexDigest    = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
-	fixtureAmd64Digest    = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-	fixtureArm64Digest    = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
-	fixtureCachedDigest   = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
-	fixtureLocalDigest    = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
-	fixtureBigDigest      = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
-	fixtureLayerDigestHex = "7777777777777777777777777777777777777777777777777777777777777777"
+	fixtureIndexDigest     = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	fixtureAmd64Digest     = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+	fixtureArm64Digest     = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+	fixtureCachedDigest    = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+	fixtureLocalDigest     = "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+	fixtureBigDigest       = "sha256:6666666666666666666666666666666666666666666666666666666666666666"
+	fixtureAnnotatedDigest = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+	fixtureLayerDigestHex  = "7777777777777777777777777777777777777777777777777777777777777777"
 )
 
 // fixtureInspect is `skopeo inspect` output with the given layer sizes.
 func fixtureInspect(digest string, sizes ...int64) string {
+	return fixtureInspectAnnotated(digest, nil, sizes...)
+}
+
+// fixtureInspectAnnotated is fixtureInspect with each layer's
+// uncompressed-size annotation from unpacked (none past its end).
+func fixtureInspectAnnotated(digest string, unpacked []int64, sizes ...int64) string {
 	var layers, data []string
 	for i, n := range sizes {
 		d := fmt.Sprintf("\"sha256:%d%s\"", i, fixtureLayerDigestHex[1:])
 		layers = append(layers, d)
-		data = append(data, fmt.Sprintf(`{"MIMEType":"application/vnd.oci.image.layer.v1.tar+zstd","Digest":%s,"Size":%d,"Annotations":null}`, d, n))
+		ann := "null"
+		if i < len(unpacked) {
+			ann = fmt.Sprintf(`{%q:"%d"}`, install.UncompressedSizeAnnotation, unpacked[i])
+		}
+		data = append(data, fmt.Sprintf(`{"MIMEType":"application/vnd.oci.image.layer.v1.tar+zstd","Digest":%s,"Size":%d,"Annotations":%s}`, d, n, ann))
 	}
 	return fmt.Sprintf(`{"Name":"fixture","Digest":%q,"RepoTags":[],"Created":"2026-11-01T00:00:00Z","Architecture":"amd64","Os":"linux",`+
 		`"Labels":{"containers.bootc":"1"},"Layers":[%s],"LayersData":[%s]}`, digest, strings.Join(layers, ","), strings.Join(data, ","))
@@ -210,6 +222,10 @@ func stubImages(t *testing.T, g *commandGuard) *fakeImages {
 		"podman image inspect --format {{.Size}} ghcr.io/example/local:stable":  {out: fmt.Sprintf("%d\n", 9*gib)},
 		"skopeo inspect --no-tags docker://ghcr.io/example/big:stable":          {out: fixtureInspect(fixtureBigDigest, 4*gib, 2*gib)},
 		"skopeo inspect --raw docker://ghcr.io/example/big:stable":              {out: `{"schemaVersion":2,"layers":[]}`},
+		// A registry image whose layers record their uncompressed size.
+		"skopeo inspect --no-tags docker://ghcr.io/example/annotated:stable": {out: fixtureInspectAnnotated(fixtureAnnotatedDigest,
+			[]int64{5 * gib, 2 * gib}, 2*gib, 1*gib)},
+		"skopeo inspect --raw docker://ghcr.io/example/annotated:stable": {out: `{"schemaVersion":2,"layers":[]}`},
 		"skopeo inspect --no-tags docker://ghcr.io/example/offline:stable": {err: &exec.ExitError{ProcessState: &os.ProcessState{},
 			Stderr: []byte("time=\"2026-11-12T00:00:00Z\" level=fatal msg=\"Error parsing image name: pinging container registry ghcr.io: dial tcp: lookup ghcr.io: no such host\"\n")}},
 	}}
@@ -312,8 +328,14 @@ func runPlanFixture(t *testing.T, dir, name string, extra ...string) (string, in
 	}
 	got := strings.ReplaceAll(out.String(), dir, "@DIR@")
 	got = strings.ReplaceAll(got, disk.LinuxRootPartType(), "@LINUX_ROOT_TYPE@")
+	// The digest covers the device paths, which hold the temporary
+	// directory; TestPlanBinding* pin what it covers.
+	got = planDigestInOutput.ReplaceAllString(got, `$1"@PLAN_DIGEST@"`)
 	return got, code
 }
+
+// planDigestInOutput is plan.binding.digest as writeJSON prints it.
+var planDigestInOutput = regexp.MustCompile(`("binding": \{\s+"digest": )"sha256:[0-9a-f]{64}"`)
 
 var planCases = []struct {
 	name string
@@ -341,10 +363,13 @@ var planCases = []struct {
 	{"identity-serial-changed", 1, false, false, false},
 	{"identity-size-changed", 1, false, false, false},
 	{"identity-invalid", 1, false, false, false},
+	{"plan-stale", 1, false, false, false},
+	{"plan-binding-invalid", 1, false, false, false},
 	{"invalid", 1, false, false, false},
 	{"unknown-field", 1, false, false, false},
 	{"malformed", 1, false, false, false},
 	{"read-image-registry", 0, false, false, true},
+	{"read-image-registry-annotated", 0, false, false, true},
 	{"read-image-cached", 0, false, false, true},
 	{"read-image-local", 0, false, false, true},
 	{"read-image-too-big", 0, false, false, true},
@@ -421,7 +446,7 @@ func TestPlanJSONGolden(t *testing.T) {
 			} else if images != nil {
 				// A registry is asked only for a registry source that local
 				// containers-storage does not have.
-				wantRegistry := c.name == "read-image-registry" || c.name == "read-image-too-big" || c.name == "read-image-offline"
+				wantRegistry := strings.HasPrefix(c.name, "read-image-registry") || c.name == "read-image-too-big" || c.name == "read-image-offline"
 				if (len(images.registry) > 0) != wantRegistry {
 					t.Errorf("registry reads %v; want any: %v", images.registry, wantRegistry)
 				}
@@ -749,6 +774,13 @@ func TestPlanImageFit(t *testing.T) {
 		{"scratch on target fits", 12 * gib, true, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 8 * gib}, true, "enough"},
 		{"scratch on target may not fit", 10 * gib, true, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 8 * gib}, true, planUnknownValue},
 		{"scratch on target, no compressed size", 40 * gib, true, planImage{UnpackedBytes: 8 * gib}, true, planUnknownValue},
+		// An estimated unpacked size makes it enough, never not_enough:
+		// only the compressed lower bound does.
+		{"estimate fits", 40 * gib, true, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 9 * gib, UnpackedFrom: "estimate"}, false, "enough"},
+		{"estimate does not fit", 6 * gib, true, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 9 * gib, UnpackedFrom: "estimate"}, false, planUnknownValue},
+		{"estimate, below the compressed size", 2 * gib, true, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 9 * gib, UnpackedFrom: "estimate"}, false, "not_enough"},
+		{"estimate and scratch on target fit", 12 * gib, true, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 9 * gib, UnpackedFrom: "estimate"}, true, "enough"},
+		{"annotations do not fit", 6 * gib, true, planImage{CompressedBytes: 3 * gib, UnpackedBytes: 8 * gib, UnpackedFrom: "annotations"}, false, "not_enough"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := planScratch{OnTarget: c.onTarget}
