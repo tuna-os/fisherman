@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -312,8 +313,14 @@ func runPlanFixture(t *testing.T, dir, name string, extra ...string) (string, in
 	}
 	got := strings.ReplaceAll(out.String(), dir, "@DIR@")
 	got = strings.ReplaceAll(got, disk.LinuxRootPartType(), "@LINUX_ROOT_TYPE@")
+	// The digest covers the device paths, which hold the temporary
+	// directory; TestPlanBinding* pin what it covers.
+	got = planDigestInOutput.ReplaceAllString(got, `$1"@PLAN_DIGEST@"`)
 	return got, code
 }
+
+// planDigestInOutput is plan.binding.digest as writeJSON prints it.
+var planDigestInOutput = regexp.MustCompile(`("binding": \{\s+"digest": )"sha256:[0-9a-f]{64}"`)
 
 var planCases = []struct {
 	name string
@@ -341,6 +348,8 @@ var planCases = []struct {
 	{"identity-serial-changed", 1, false, false, false},
 	{"identity-size-changed", 1, false, false, false},
 	{"identity-invalid", 1, false, false, false},
+	{"plan-stale", 1, false, false, false},
+	{"plan-binding-invalid", 1, false, false, false},
 	{"invalid", 1, false, false, false},
 	{"unknown-field", 1, false, false, false},
 	{"malformed", 1, false, false, false},

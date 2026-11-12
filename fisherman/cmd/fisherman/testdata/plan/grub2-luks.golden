@@ -155,6 +155,10 @@
         "name": "Finalizing installation"
       }
     ],
+    "binding": {
+      "digest": "@PLAN_DIGEST@",
+      "read_image": false
+    },
     "unknown": [
       {
         "field": "image",

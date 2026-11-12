@@ -154,6 +154,10 @@
         "name": "Finalizing installation"
       }
     ],
+    "binding": {
+      "digest": "@PLAN_DIGEST@",
+      "read_image": true
+    },
     "unknown": [
       {
         "field": "image.unpacked_bytes",

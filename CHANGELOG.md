@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **The install can be bound to the plan the user confirmed** (part of
+  #371). `plan --json` prints the new `plan.binding` (`digest`, a SHA-256
+  of the target disk, the partitions, what is destroyed and the capacity
+  verdicts, and `read_image`). A frontend copies it into the new optional
+  recipe field `planBinding` (`digest`, `readImage`); the full `validate`,
+  `plan` and the install's pre-flight then plan the recipe again (reading
+  the image only with `readImage`) and refuse it with the new code
+  `plan_stale` when the machine no longer gives that plan. A digest of the
+  wrong form is `plan_binding_invalid` (also in `--partial`). The recipe
+  stays on stdin. Additive: plan and validate protocol 1. Docs: PLAN.md
+  ("Binding the install to the confirmed plan"), VALIDATE.md ("Saved
+  plan"), RECIPE.md, DIAGNOSTICS.md.
+
 - **`plan` reports the host scratch's free space and a manual layout's
   capacity** (part of #371). For scratch on the host, the new
   `plan.scratch.free_bytes` and `free_path` are the free space (`statfs`)

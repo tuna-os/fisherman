@@ -53,7 +53,10 @@ type installPlan struct {
 	Capacity   *planCapacity   `json:"capacity"`
 	Scratch    planScratch     `json:"scratch"`
 	Steps      []planStep      `json:"steps"`
-	Unknown    []planUnknown   `json:"unknown"`
+	// Binding is what a frontend copies into the recipe's planBinding to
+	// make the install refuse a machine that no longer matches this plan.
+	Binding planBinding   `json:"binding"`
+	Unknown []planUnknown `json:"unknown"`
 }
 
 type planSource struct {
@@ -223,6 +226,9 @@ passphrase. Schema: docs/PLAN.md.
 --read-image  also read the source image's manifest and size, without a
               pull: from local containers-storage, else from its registry
               (the only network read plan makes; it reads no layer)
+
+Copy plan.binding into the recipe's planBinding to make the install
+refuse a machine that no longer matches the plan (plan_stale).
 
 Exit 0 with a plan, 1 if the recipe is invalid, 2 on bad arguments.
 `
@@ -569,6 +575,7 @@ func buildPlan(r *recipe.Recipe, readImage bool) *installPlan {
 	for i, s := range planSteps(r, true) {
 		p.Steps = append(p.Steps, planStep{Number: i + 1, StepID: progress.StepID(s.name), Name: s.name})
 	}
+	p.Binding = bindingOf(p, readImage)
 	return p
 }
 

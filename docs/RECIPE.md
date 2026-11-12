@@ -53,6 +53,9 @@ otherwise.
 | `diskIdentity.serial` | string | no | not checked | The disk's serial (lsblk `SERIAL`). |
 | `diskIdentity.wwn` | string | no | not checked | The disk's World Wide Name (lsblk `WWN`), compared without case. |
 | `diskIdentity.sizeBytes` | integer | no | not checked | The disk size in bytes. |
+| `planBinding` | object | no | the install is not bound to a plan | Binds the install to the plan the user confirmed: copy `plan.binding` of `fisherman plan --json` ([PLAN.md](PLAN.md#binding-the-install-to-the-confirmed-plan)). The full validate and the install plan the recipe again and refuse it (`plan_stale`) when the target disk, its partitions, what the install destroys or a capacity verdict changed. A `digest` that is not `sha256:` and 64 lowercase hex digits is `plan_binding_invalid`. See [VALIDATE.md](VALIDATE.md#saved-plan). |
+| `planBinding.digest` | string | yes | refused (`plan_binding_invalid`) | `plan.binding.digest`. |
+| `planBinding.readImage` | boolean | no | `false`: the check reads no image | `plan.binding.read_image`: the plan was made with `--read-image`, so the check reads the image's metadata too (a registry read for an image only a registry has). |
 
 ### Encryption
 
