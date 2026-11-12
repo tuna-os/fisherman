@@ -319,6 +319,24 @@ bootcrew-ci-test IMAGE_JSON:
       INSTALL_ENV+=(BOOTC_INSTALLER_FAKE_TPM=1)
       ;;
   esac
+  # tpm2-luks has no passphrase: fisherman makes a random one and emits it
+  # once, as the recovery_key event. The first boot has no TPM2 token yet,
+  # so the harness needs that key to unlock it. capture-recovery-key.py
+  # writes it to a 0600 file under /tmp (never the artifacts) and prints the
+  # event with the key redacted. Other entries' output passes through cat.
+  RECOVERY_KEY_FILE=""
+  if [ "$ENCRYPTION_TYPE" = "tpm2-luks" ]; then
+    RECOVERY_KEY_FILE=$(mktemp)
+  fi
+  progress_filter() {
+    if [ -n "$RECOVERY_KEY_FILE" ]; then
+      python3 scripts/capture-recovery-key.py "$RECOVERY_KEY_FILE"
+    else
+      cat
+    fi
+  }
+  # pipefail for the install only: fisherman's status, not the filter's.
+  set -o pipefail
 
   python3 scripts/matrix-recipe.py "$IMAGE_JSON" "$LOOPDEV" "$VARDEV" > {{ CI_ARTIFACTS }}/recipe.json
   jq 'if .encryption.passphrase then .encryption.passphrase = "<redacted>" else . end
@@ -347,9 +365,20 @@ bootcrew-ci-test IMAGE_JSON:
       systemd-run --scope --quiet --collect \
       --property="MemoryMax=$INSTALL_MEMORY_MAX" \
       --property="MemorySwapMax=0" \
-      /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
+      /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json | progress_filter
   else
-    sudo env "${INSTALL_ENV[@]}" /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
+    sudo env "${INSTALL_ENV[@]}" /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json | progress_filter
+  fi
+  set +o pipefail
+  if [ -n "$RECOVERY_KEY_FILE" ]; then
+    LUKS_PASSPHRASE=$(cat "$RECOVERY_KEY_FILE")
+    rm -f "$RECOVERY_KEY_FILE"
+    if [ -z "$LUKS_PASSPHRASE" ]; then
+      echo "❌ tpm2-luks: the install emitted no recovery_key event"
+      exit 1
+    fi
+    [ -n "${GITHUB_ACTIONS:-}" ] && echo "::add-mask::$LUKS_PASSPHRASE"
+    echo "tpm2-luks: captured the recovery key (${#LUKS_PASSPHRASE} characters); the first boot types it"
   fi
 
   # The registry image has password authentication disabled. Inject this
@@ -410,6 +439,9 @@ bootcrew-ci-test IMAGE_JSON:
   
   # Guest checks for the optional parts (scripts/vm-checks/).
   CHECKS=""
+  # enabled_units (#422): no unit enabled that the image did not enable.
+  [ "$(echo "$IMAGE_JSON" | jq -r '.enabled_units // false')" = "true" ] \
+    && CHECKS="$CHECKS scripts/vm-checks/enabled-units.sh"
   [ -n "$BOOTCREW_USER" ] && CHECKS="$CHECKS scripts/vm-checks/user.sh"
   [ -n "$VARDEV" ] && CHECKS="$CHECKS scripts/vm-checks/var-disk.sh"
   [ -n "$SWTPM_STATE" ] && CHECKS="$CHECKS scripts/vm-checks/tpm2-enrolled.sh"
@@ -428,7 +460,7 @@ bootcrew-ci-test IMAGE_JSON:
     echo ""
     echo "=== Second boot: TPM2 unlock, no passphrase ==="
     BOOTCREW_EXTRA_DRIVE="$VARDEV" BOOTCREW_SWTPM_STATE="$SWTPM_STATE" \
-      BOOTCREW_GUEST_CHECKS="scripts/vm-checks/tpm2-enrolled.sh" \
+      BOOTCREW_GUEST_CHECKS="scripts/vm-checks/tpm2-enrolled.sh scripts/vm-checks/no-passphrase-prompt.sh" \
       bash scripts/boot-verify.sh "2222" "/tmp/bootcrew-ssh/id_rsa" "$VM_TIMEOUT" "2G" "$LOOPDEV" "${IMAGE_NAME}-tpm2-unlock" ""
   fi
   

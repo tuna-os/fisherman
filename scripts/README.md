@@ -116,6 +116,26 @@ Takes a container image and adds sshd + SSH public key authentication.
 ./prepare-ssh-image.sh quay.io/centos-bootc/centos-bootc:c10s /tmp/ssh/id_rsa.pub
 ```
 
+### `vm-checks/enabled-units.sh` and `vm-checks/no-passphrase-prompt.sh`
+`enabled-units.sh` (#422, matrix field `enabled_units`) lists the units the
+booted system enables (`systemctl list-unit-files --state=enabled`, system
+and user scope, the `*.wants`/`*.requires`/`*.upholds` links under
+`/etc/systemd`, and the `enable` lines of presets there) and the units the
+image enables (the same lists, read from the image's `/etc` at `/usr/etc`
+after its own presets are applied, as systemd does on the first boot). A
+unit only the installed system enables fails the check, unless the
+allowlist in the script names it: fisherman's receipt collector, its TPM2
+enrolment unit, the OEM user unit, and the harness's ssh. ostree entries
+only. `no-passphrase-prompt.sh` runs on the second boot of a `tpm2-*`
+entry and fails if the serial log shows a LUKS passphrase prompt.
+
+### `capture-recovery-key.py`
+`fisherman recipe.json | capture-recovery-key.py <key-file>`: passes the
+progress output through, writes the key of the `recovery_key` event to
+`<key-file>` (mode 0600) and prints the event with the key redacted. The
+`tpm2-luks` entry uses it: its first boot has no TPM2 token yet and needs
+the recovery key typed.
+
 ### `verify-installation.sh`
 Verifies that fisherman created a valid systemd-boot or GRUB partition layout with the expected content.
 
