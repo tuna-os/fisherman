@@ -800,7 +800,8 @@ func TestBootcInstall_NonComposefsDirectSkipsOCIExport(t *testing.T) {
 }
 
 // TestBootcInstall_LocalSourceInstallsDirectly is the installer GUI's live-ISO
-// shape: a local containers-storage: source for a non-composefs image. It must
+// shape: a local containers-storage: source for a non-composefs image, on a
+// host that booted that image (an established source execution root). It must
 // run the host's bootc against the live store -- no OCI export and no podman,
 // which on an 8 GiB Utah live ISO was OOM-killed.
 func TestBootcInstall_LocalSourceInstallsDirectly(t *testing.T) {
@@ -829,6 +830,8 @@ func TestBootcInstall_LocalSourceInstallsDirectly(t *testing.T) {
 		Target:       tmpDir + "/target",
 		ScratchDir:   tmpDir,
 		Bootloader:   "grub2",
+		// The live ISO booted the image its store holds (#363).
+		SourceRoot: install.SourceRoot{Established: true, Reason: "digest_match", Backend: "ostree"},
 	})
 	if err != nil {
 		t.Fatalf("BootcInstall() error = %v", err)
