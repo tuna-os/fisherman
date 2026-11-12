@@ -1,6 +1,7 @@
 #!/bin/bash
 # Enable SSH in the installed bootc system
 # Usage: enable-ssh-installed.sh <LOOPDEV> <COMPOSEFS> <SSH_PUBKEY_FILE> [LUKS_PASSPHRASE]
+# Env: BOOTCREW_USER also authorises the key for that user.
 
 set -e
 
@@ -278,6 +279,15 @@ if sudo test -d "$ROOTFS/etc/ssh"; then
       "$ROOTFS/etc/ssh/sshd_config.d" "$ROOTFS/etc/ssh/sshd_config.d/10-fisherman-ci.conf" 2>/dev/null || true
   fi
   echo "  sshd drop-in -> ${ROOTFS#"$MOUNT_DIR"}/etc/ssh/sshd_config.d/10-fisherman-ci.conf"
+  # BOOTCREW_USER (env, optional): the account the recipe's `user` block
+  # created. The same key lets it sign in (scripts/vm-checks/user.sh). sshd
+  # reads a user's AuthorizedKeysFile as that user, so the file is 0644, not
+  # root's 0600; root still owns it, which StrictModes accepts.
+  if [ -n "${BOOTCREW_USER:-}" ]; then
+    install_authorized_keys "$ROOTFS/etc/ssh/authorized_keys.d/$BOOTCREW_USER" "system_u:object_r:etc_t:s0"
+    sudo chmod 644 "$ROOTFS/etc/ssh/authorized_keys.d/$BOOTCREW_USER"
+    sudo chmod 755 "$ROOTFS/etc/ssh/authorized_keys.d"
+  fi
 else
   echo "WARNING: no etc/ssh in deployment — skipping sshd_config.d drop-in"
 fi

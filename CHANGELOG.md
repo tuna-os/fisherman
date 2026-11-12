@@ -70,6 +70,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 
+- **The VM matrix covers a user, GRUB with LUKS, TPM2 and a /var disk**
+  (#418), as advisory PR-gate entries: `centos-bootc-luks-user` (GRUB,
+  ostree, XFS, LUKS and a `user` that must sign in with the recipe's
+  password), `centos-bootc-var-disk` (`/var` must be the `varDisk` on the
+  booted system) and `dakota-tpm2` (`tpm2-luks-passphrase` against swtpm:
+  the first boot unlocks with the passphrase and enrolls, the second boot
+  types nothing). `scripts/matrix-recipe.py` writes each entry's recipe,
+  and `tests/check-validation.sh` runs every one through
+  `fisherman validate --json --partial` and holds the new guest checks
+  (`scripts/vm-checks/`) to the bugs they catch. A new advisory job builds
+  and unit-tests fisherman and the TUI on arm64. Not covered, with the
+  reasons in `tests/bootcrew-matrix.yaml`: ZFS, a manual layout, an arm64
+  boot, and `tpm2-luks` without a passphrase.
 - **The installation receipt checks are required on the required canaries**
   (#385): `required / dakota` (composefs, systemd-boot) and
   `required / centos-bootc` (ostree, GRUB) now run `scripts/boot-verify.sh`
