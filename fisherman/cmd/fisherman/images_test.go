@@ -98,7 +98,8 @@ func TestRunImages_QueryDetail(t *testing.T) {
 	for _, want := range []string{
 		"Name: Yellowfin",
 		"Image: ghcr.io/tuna-os/yellowfin:stable",
-		"Needs user creation: no",
+		// Yellowfin leaves needs_user_creation unset: the contract's default.
+		"Needs user creation: yes",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("plain detail missing %q\n--- output ---\n%s", want, out)
@@ -183,7 +184,8 @@ func TestPrintNodeDetail_PlainDefaultMarker(t *testing.T) {
 		"Path: Bluefin › Stable",
 		"Name: Stable",
 		"Image: ghcr.io/tuna-os/bluefin:stable [default]",
-		"Needs user creation: no",
+		// Unset on this leaf: the contract's default.
+		"Needs user creation: yes",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("plain detail missing %q\n--- output ---\n%s", want, out)
@@ -239,7 +241,7 @@ func TestPrintNodeDetail_ColoredDefaultsFallback(t *testing.T) {
 		"image:   ghcr.io/tuna-os/yellowfin:stable",
 		"boot:    grub2 (default)",
 		"fs:      xfs (default)",
-		"needs user creation: no",
+		"needs user creation: yes",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("defaults fallback missing %q\n--- output ---\n%s", want, out)
