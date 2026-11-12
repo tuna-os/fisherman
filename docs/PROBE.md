@@ -463,6 +463,19 @@ proof; until a qualified profile exists for a source, they stay `unknown`. The
 `bootc_store` inventory does not change this: it lists what the live host
 stores, not what the source's bootc can do.
 
+#### Checked against a real install
+
+The advisory store reuse VM profile (`scripts/store-reuse-vm.sh`,
+[`SOURCE-REUSE.md`](SOURCE-REUSE.md#the-offline-vm-profile-advisory)) takes
+the report inside the VM that installs, for the booted image pinned by its
+digest, and installs that image from the VM's own bootc store. The guest
+check `scripts/vm-checks/capabilities.sh` then compares the report with the
+installed system: the execution root, the bootc version, the backend, the
+`print-configuration` bootloader and the `container inspect` kernel. The same
+probe for a digest the VM did not boot must answer nothing from the VM's
+bootc. It is advisory, and it does not qualify `deployment_mount`,
+`bootc_image_storage` or `finalization`.
+
 Fixtures: `fisherman/internal/probe/testdata/golden/caps-*.json` pin the
 object for no source, a matching OSTree root with a current bootc, a
 matching composefs root, an older bootc, an unrelated live host with a
