@@ -141,8 +141,8 @@ func TestResolve_InheritsAncestorFields(t *testing.T) {
 	if !res.ComposeFsBackend {
 		t.Error("ComposeFsBackend = false, want inherited true")
 	}
-	if res.NeedsUserCreation {
-		t.Error("NeedsUserCreation = true, want false (unset)")
+	if !res.NeedsUserCreation {
+		t.Error("NeedsUserCreation = false, want true (unset: the catalog contract's default)")
 	}
 	if res.Desc != "leaf desc" {
 		t.Errorf("Desc = %q, want %q", res.Desc, "leaf desc")
@@ -156,6 +156,21 @@ func TestResolve_ExplicitBoolOverridesAncestor(t *testing.T) {
 	res := leafResult(c, "Root", "Child", "Leaf").Resolve(c)
 	if res.ComposeFsBackend {
 		t.Error("ComposeFsBackend = true, want explicit false to override ancestor")
+	}
+}
+
+func TestResolve_NeedsUserCreationFalseIsKept(t *testing.T) {
+	// An image that makes its own first account says so; the default
+	// (true) must not override it, on the leaf or from an ancestor.
+	c := fixtureCatalog()
+	c.Images[0].Children[0].Children[0].NeedsUserCreation = boolp(false)
+	if leafResult(c, "Root", "Child", "Leaf").Resolve(c).NeedsUserCreation {
+		t.Error("leaf needs_user_creation=false: got true")
+	}
+	c = fixtureCatalog()
+	c.Images[0].NeedsUserCreation = boolp(false)
+	if leafResult(c, "Root", "Child", "Leaf").Resolve(c).NeedsUserCreation {
+		t.Error("ancestor needs_user_creation=false: got true")
 	}
 }
 

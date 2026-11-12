@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **`needs_user_creation` defaults to true in the image catalog resolver**
+  (tuna-os/bootc-installer#288): a leaf that does not set it now asks for
+  the first account, as bootc-installer's catalog contract and all five
+  frontends already do; an explicit `false` on the leaf or an ancestor is
+  kept. `fisherman images` showed "Needs user creation: no" for the 69
+  catalog leaves that leave it unset.
+
+### 🐛 Fixes
+
 - **`bootc_store` matched no real image on amd64** (#384): bootc status
   spells the architecture as OCI does (`amd64`, `arm64`); the probe compared
   it with this machine's kernel spelling (`x86_64`, `aarch64`), so every

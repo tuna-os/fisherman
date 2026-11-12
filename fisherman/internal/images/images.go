@@ -106,6 +106,10 @@ func (r *NodeResult) Resolve(catalog *Catalog) ResolvedNode {
 		Desc:        r.Node.Desc,
 		Subtitle:    r.Node.Subtitle,
 		SearchExtra: r.Node.SearchExtra,
+		// The installer creates the first account unless the catalog says
+		// the image makes its own: the default of bootc-installer's catalog
+		// contract (shared/catalog/README.md, "The account"; #288 there).
+		NeedsUserCreation: true,
 	}
 	for _, n := range all {
 		if n.Registry != "" {
