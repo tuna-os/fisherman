@@ -71,6 +71,10 @@ images:
     vm_boot: true  # ostree backend verification
     required: true # ostree + grub2 canary
     build_ssh_image: true
+    # #422: the booted system enables no unit the image did not enable
+    # (scripts/vm-checks/enabled-units.sh). It passed as an advisory entry
+    # on a booted guest before it moved here.
+    enabled_units: true
 
   - name: yellowfin-gnome50
     image: ghcr.io/tuna-os/yellowfin@sha256:c4d3a42f6defa62c4c28b86b09eeb08748b78922d6df26fc5f3107dbcbd9d1c0 # gnome50
@@ -288,24 +292,6 @@ images:
     flatpaks: []
     encryption: tpm2-luks
     vm_timeout: 800
-    nightly: false
-    vm_boot: true
-
-  # #422 done-when: "a centos-bootc install enables no service the image did
-  # not enable". The required centos-bootc canary plus
-  # scripts/vm-checks/enabled-units.sh, as a separate ADVISORY entry: the
-  # check has run against fakes and against the pinned image's unit tree
-  # outside a VM, not yet on a booted guest. Once it is green for a while,
-  # move `enabled_units: true` to the centos-bootc entry and drop this one.
-  - name: centos-bootc-enabled-units
-    image: quay.io/centos-bootc/centos-bootc@sha256:9aedf2d189b85c498697f9b83112c893b084d359268da7dd6d5d848478d260de # c10s
-    ssh_image_name: centos-bootc
-    filesystem: xfs
-    composefs_backend: false
-    unified_storage: false
-    selinux_disabled: false
-    flatpaks: []
-    enabled_units: true
     nightly: false
     vm_boot: true
 
