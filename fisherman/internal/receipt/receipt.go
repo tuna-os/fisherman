@@ -334,10 +334,15 @@ func OstreeManifestDigest(d *deploy.Deployment, out func(name string, args ...st
 // first boot, so it is not staged.
 var ErrTransientEtc = errors.New("the image's /etc is transient; the first-boot collector is not staged")
 
+// ErrCollector means the receipt is written, but staging the first-boot
+// collector in /etc failed. Write wraps the cause with it.
+var ErrCollector = errors.New("the first-boot collector is not staged")
+
 // Write stores the receipt in the installed system's /var and stages the
 // first-boot collector in the deployment's /etc. d comes from the
 // deployment resolver (post.ResolveDeployment). On ErrTransientEtc the
-// receipt is written and the unit is not.
+// receipt is written and the unit is not; on ErrCollector the receipt is
+// written and the unit is missing or not enabled.
 func Write(d *deploy.Deployment, r Receipt) error {
 	if d == nil {
 		return errors.New("receipt: no deployment")
@@ -356,20 +361,20 @@ func Write(d *deploy.Deployment, r Receipt) error {
 		return ErrTransientEtc
 	}
 	if err := writeFile(d.Etc, strings.TrimPrefix(ScriptPath, "/etc/"), []byte(CollectorScript(r.InstallID)), 0o644); err != nil {
-		return fmt.Errorf("write collector: %w", err)
+		return fmt.Errorf("%w: write collector: %w", ErrCollector, err)
 	}
 	if err := writeFile(d.Etc, "systemd/system/"+UnitName, []byte(CollectorUnit()), 0o644); err != nil {
-		return fmt.Errorf("write unit: %w", err)
+		return fmt.Errorf("%w: write unit: %w", ErrCollector, err)
 	}
 	// Enable through a wants link: systemctl cannot enable offline.
 	wants := filepath.Join(d.Etc, "systemd", "system", "multi-user.target.wants")
 	if err := mkdirLabeled(d.Etc, "systemd/system/multi-user.target.wants"); err != nil {
-		return fmt.Errorf("enable unit: %w", err)
+		return fmt.Errorf("%w: enable unit: %w", ErrCollector, err)
 	}
 	link := filepath.Join(wants, UnitName)
 	_ = os.Remove(link)
 	if err := os.Symlink("/etc/systemd/system/"+UnitName, link); err != nil {
-		return fmt.Errorf("enable unit: %w", err)
+		return fmt.Errorf("%w: enable unit: %w", ErrCollector, err)
 	}
 	deploy.InheritLabel(link)
 	return nil
