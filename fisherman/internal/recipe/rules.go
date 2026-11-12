@@ -130,6 +130,21 @@ const (
 	CodeNotRoot               = "not_root"
 	CodeHostToolMissing       = "host_tool_missing"
 	CodeInstallAlreadyRunning = "install_already_running"
+	// CodeSelinuxWorkaroundUnavailable: the install needs the SELinux label
+	// workaround (the target disables SELinux, the host enforces it) and
+	// the host cannot build it.
+	CodeSelinuxWorkaroundUnavailable = "selinux_workaround_unavailable"
+
+	// Install-only: the image source check before the first disk step
+	// (install.CheckImage). It reads the registry or local
+	// containers-storage, which validate does not.
+	CodeImageNotFound           = "image_not_found"
+	CodeImageSourceUnauthorized = "image_source_unauthorized"
+	CodeImageSourceUnreachable  = "image_source_unreachable"
+	CodeImageInspectFailed      = "image_inspect_failed"
+	CodeImageInspectMalformed   = "image_inspect_malformed"
+	CodeImagePlatformMismatch   = "image_platform_mismatch"
+	CodeImageNotBootc           = "image_not_bootc"
 )
 
 // Filesystems is the set of root filesystems the auto-partition path can

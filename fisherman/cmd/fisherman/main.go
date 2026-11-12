@@ -44,6 +44,10 @@ var bindMount = disk.BindMount
 // bootcInstall is install.BootcInstall by default; tests replace it.
 var bootcInstall = install.BootcInstall
 
+// prepareSelinuxWorkaround is install.PrepareSelinuxWorkaround by default;
+// tests replace it.
+var prepareSelinuxWorkaround = install.PrepareSelinuxWorkaround
+
 type stepProfile struct {
 	cumulativePct int
 	weightPct     int
@@ -479,7 +483,9 @@ func main() {
 		imageCheck.Offline = true
 		progress.Info("Offline: using embedded media image " + mediaInput.OCILayoutPath)
 	} else if reused != nil {
-		// The verified copy, read locally; never a registry.
+		// The verified copy, read locally; never a registry. Its identity
+		// is checked by digest against the booted deployment
+		// (acquireSourceReuse), so only its presence matters here.
 		imageCheck = install.CheckImage(sourceImgref)
 		if imageCheck.NeedsPull {
 			fatalProblem("source reuse", reuseProblem(recipe.CodeSourceReuseVerifyFailed,
@@ -494,6 +500,13 @@ func main() {
 		if strings.HasPrefix(r.Image, "containers-storage:") && imageCheck.NeedsPull {
 			fatal("required local source is absent or unreadable; refusing installation")
 		}
+		// A source that is known to fail, or is not a bootc image for this
+		// host, is refused here: the pull and bootc would refuse it only
+		// after the disk is wiped (#364).
+		if e := imageCheck.Err; e != nil {
+			fatalProblem("image source", recipe.Problem{Code: e.Code, Field: "image", Message: e.Message})
+		}
+		progress.Info(sourceIdentityLine(imageCheck.Source))
 		if imageCheck.NeedsPull {
 			progress.Info(fmt.Sprintf("Image pull required (%d layers)", imageCheck.LayerCount))
 		} else if imageCheck.Offline {
@@ -501,6 +514,26 @@ func main() {
 		} else {
 			progress.Info("Image found in local cache, no pull needed")
 		}
+	}
+
+	// ── Pre-flight: SELinux label workaround ───────────────────────────────
+	// A target with SELinux disabled, installed from the image's container
+	// on a host that enforces SELinux, needs a preload library that drops the
+	// image's security.selinux labels (install.SelinuxWorkaroundRequired).
+	// It is built here, before any disk step, so a host that cannot build it
+	// is refused with the disk untouched. Every other install needs no
+	// compiler.
+	shimOpts := buildBootcInstallOptions(r, sourceImgref, "", "", "", imageStores, imageCheck.NeedsPull, imageCheck.LayerCount)
+	if reused != nil {
+		reuseInstallOptions(&shimOpts)
+	}
+	selinuxShim, shimDir, shimErr := prepareSelinuxWorkaround(shimOpts)
+	if shimErr != nil {
+		fatalProblem("cannot prepare the install", recipe.Problem{Code: recipe.CodeSelinuxWorkaroundUnavailable, Message: shimErr.Error()})
+	}
+	if shimDir != "" {
+		cleanup.AddPostRemoval(shimDir)
+		progress.Info("SELinux: the target disables SELinux and this host enforces a policy; the label workaround is ready")
 	}
 
 	hasVarDisk := r.VarDisk != nil
@@ -876,6 +909,7 @@ func main() {
 	if reused != nil {
 		reuseInstallOptions(&opts)
 	}
+	opts.SelinuxShimPath = selinuxShim
 	if hasEncryption && !isManual {
 		// Without the UUID no loader entry can name the LUKS container.
 		// Stop before the image is deployed, not after "complete" (#410).
@@ -1230,6 +1264,25 @@ func main() {
 	progress.Info(applyBootNext(r, bootID, hostIsLive))
 
 	progress.Complete("Installation complete!", bootID)
+}
+
+// sourceIdentityLine says what the pre-flight resolved the install source
+// to. It is the source only: the installed system follows targetImgref.
+func sourceIdentityLine(src install.ImageSource) string {
+	line := "Source image " + src.Ref
+	if src.ManifestDigest != "" {
+		line += ": manifest " + src.ManifestDigest
+	}
+	if src.PlatformDigest != "" && src.PlatformDigest != src.ManifestDigest {
+		line += ", platform manifest " + src.PlatformDigest
+	}
+	if src.Platform != "" {
+		line += " (" + src.Platform + ")"
+	}
+	if src.Cached {
+		line += ", from local containers-storage"
+	}
+	return line + "; a pull can still fail after this check, and a tag can move"
 }
 
 func buildBootcInstallOptions(
