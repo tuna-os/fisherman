@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **`fisherman diagnostics`: a local support bundle** (#375): a new command
+  writes one JSON file of allowlisted facts about an install: versions, the
+  probe's facts, the recipe's effective options (never the recipe), the
+  progress timeline with the runtime failure code and cleanup outcome, and
+  the mounts and LUKS mapper still open under the target and scratch
+  directory. It never holds a passphrase, recovery key, password, password
+  hash or token; messages are redacted, unknown fields and events are only
+  counted, and host, user and device identifiers are masked unless
+  `--include-identifiers`. The file is new, mode 0600, created with
+  `O_EXCL|O_NOFOLLOW`, bounded in size, and removed on a write error;
+  `--stdout` prints it for review. The command only reads, and an install
+  never runs it. Sentinel tests plant secrets in every input. See
+  `docs/DIAGNOSTICS.md`.
+
 - **Runtime failure codes on the `error` event** (#369): every `error` event
   now has a `code`. It is the validate code for a recipe or preflight
   problem, as before, and otherwise one of the documented failure codes for
@@ -79,6 +93,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sourceReuse` its own rules judge both fields, as before.
 
 ### 📝 Documentation
+
+- **Getting help uses the support bundle**: TROUBLESHOOTING.md now points to
+  `fisherman diagnostics` instead of collecting and cleaning files by hand.
 
 - **TROUBLESHOOTING.md and VALIDATE.md match the code** (#419): the probe
   fields (`disks[]`, `system.ram_bytes`, `system.cpu_threads`/`cpu_cores`,
