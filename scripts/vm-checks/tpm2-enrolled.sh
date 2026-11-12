@@ -15,12 +15,20 @@ if [ -z "$dev" ]; then
 fi
 echo "  LUKS device: $dev"
 # The unit runs early, but give it a minute: it retries while the TPM
-# device appears.
+# device appears. Wait for the unit to be done, not only for the token:
+# the token appears the moment systemd-cryptenroll returns, and the
+# single-use keyslot and key file go after that, in ExecStopPost (the
+# first VM run read the header in between and saw both still there).
+state=""
 for _ in $(seq 1 "${TPM2_WAIT_ITERS:-30}"); do
   dump=$(ssh_root "cryptsetup luksDump $dev" 2>/dev/null || true)
-  echo "$dump" | grep -q 'systemd-tpm2' && break
+  state=$(ssh_root "systemctl show -p ActiveState --value fisherman-tpm2-enroll.service" 2>/dev/null || true)
+  if echo "$dump" | grep -q 'systemd-tpm2'; then
+    case "$state" in inactive|failed) break ;; esac
+  fi
   sleep 2
 done
+echo "  fisherman-tpm2-enroll.service: ${state:-unknown}"
 ssh_root "journalctl -b -u fisherman-tpm2-enroll.service --no-pager" 2>/dev/null | tail -20 | sed 's/^/  /' || true
 if echo "$dump" | grep -q 'systemd-tpm2'; then
   echo "✅ the LUKS header has a systemd-tpm2 token"

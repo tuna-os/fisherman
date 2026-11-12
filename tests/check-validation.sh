@@ -449,6 +449,7 @@ ssh_root() {
     *crypto_LUKS*) echo "/dev/sda3" ;;
     *luksDump*) printf '%b\n' "$FAKE_LUKSDUMP" ;;
     *journalctl*) echo "enrolled" ;;
+    *"ActiveState"*) echo "${FAKE_UNIT_STATE:-inactive}" ;;
     *tpm2-enroll.key*) [ "${FAKE_KEY_LEFT:-0}" = 1 ] ;;
     *findmnt*) printf '%b\n' "$FAKE_VAR" ;;
     *) return 1 ;;
@@ -491,6 +492,24 @@ expect_exit "guest tpm2: no systemd-tpm2 token → caught (exit 1)" 1 \
 expect_exit "guest tpm2: single-use slot 31 left → caught (exit 1)" 1 \
   tpm_guest "$ENROLLED\nKeyslots:\n  31: luks2" 0
 expect_exit "guest tpm2: key file left → caught (exit 1)" 1 tpm_guest "$ENROLLED" 1
+# The race the first VM run hit: the token is there while ExecStopPost has
+# not yet removed slot 31 and the key file. The check must wait for the unit.
+tpm_race() (  # a subshell: its ssh_root must not replace the shared one
+  n="$VMC_TMP/tpm-race"; echo 0 >"$n"
+  ssh_root() {
+    case "$*" in
+      *crypto_LUKS*) echo "/dev/sda3" ;;
+      *ActiveState*) c=$(cat "$n"); echo $((c + 1)) >"$n"
+                     if [ "$c" -lt 2 ]; then echo activating; else echo inactive; fi ;;
+      *luksDump*) if [ "$(cat "$n")" -lt 2 ]; then printf '%b\n' "$ENROLLED\nKeyslots:\n  31: luks2"; else printf '%b\n' "$ENROLLED"; fi ;;
+      *journalctl*) echo "enrolled" ;;
+      *tpm2-enroll.key*) [ "$(cat "$n")" -lt 2 ] ;;
+      *) return 1 ;;
+    esac
+  }
+  TPM2_WAIT_ITERS=5 run_check "$VMC/tpm2-enrolled.sh"
+)
+expect_exit "guest tpm2: token first, cleanup a moment later → pass (exit 0)" 0 tpm_race
 
 var_guest() { FAKE_VAR="$1" run_check "$VMC/var-disk.sh"; }
 FSTAB_VAR='UUID=1 /var xfs defaults,nofail,x-systemd.device-timeout=30s,x-systemd.before=local-fs.target 0 0'
