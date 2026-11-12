@@ -166,7 +166,7 @@ func (v *RecipeProblemsValidator) Validate() error {
 		return fmt.Errorf("recipe is nil")
 	}
 	problems := v.recipe.Problems()
-	if recipe.NeedsTPM2(v.recipe.Encryption.Type) {
+	if v.recipe.HasTPM2() {
 		problems = append(problems, v.recipe.CheckTPM(v.tpm2Usable)...)
 	}
 	if len(problems) > 0 {
@@ -238,7 +238,7 @@ func RequiredTools(r *recipe.Recipe) []ToolRequirement {
 		}
 	}
 
-	if len(r.CustomMounts) > 0 {
+	if r.IsManualLayout() {
 		for _, cm := range r.CustomMounts {
 			if cm.Target == "swap" {
 				// disk.ApplyCustomLayout formats and activates swap only
@@ -290,14 +290,14 @@ func RequiredTools(r *recipe.Recipe) []ToolRequirement {
 	}
 	// A /var disk that is not kept is wiped and formatted XFS
 	// (disk.PrepareVarDisk).
-	if r.VarDisk != nil && !r.VarDisk.KeepExisting {
+	if r.FormatsVarDisk() {
 		need("wipefs", "util-linux")
 		need("mkfs.xfs", "xfsprogs")
 	}
 	// blkid gives the UUID and the filesystem type of every fstab line the
 	// install writes (a /var disk, a data or swap entry of a manual
 	// layout), and checks a device that is kept as it is.
-	needBlkid := r.VarDisk != nil
+	needBlkid := r.HasVarDisk()
 	for _, cm := range r.CustomMounts {
 		switch recipe.ClassifyCustomMount(cm.Target) {
 		case recipe.MountIgnored:

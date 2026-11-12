@@ -46,7 +46,7 @@ func installProblems(r *recipe.Recipe) []recipe.Problem {
 // the install has it already (verified media input counts as live media).
 func installProblemsWith(r *recipe.Recipe, imageErr error) []recipe.Problem {
 	ps := r.Problems()
-	if recipe.NeedsTPM2(r.Encryption.Type) {
+	if r.HasTPM2() {
 		ps = append(ps, r.CheckTPM(tpm2Usable())...)
 	}
 	if imageErr != nil {
@@ -135,10 +135,10 @@ func targetFacts(path string) *recipe.TargetFacts {
 // with this machine's answers.
 func targetProblems(r *recipe.Recipe) []recipe.Problem {
 	var disk, varDisk *recipe.TargetFacts
-	if len(r.CustomMounts) == 0 {
+	if !r.IsManualLayout() {
 		disk = targetFacts(r.Disk)
 	}
-	if r.VarDisk != nil {
+	if r.HasVarDisk() {
 		varDisk = targetFacts(r.VarDisk.Disk)
 	}
 	return r.CheckTarget(disk, varDisk, hostUEFI())
@@ -148,7 +148,7 @@ func targetProblems(r *recipe.Recipe) []recipe.Problem {
 // device nodes, after validation has passed. disk.PartName builds partition
 // names from the path, so a /dev/disk/by-id/… symlink must not reach it.
 func resolveTargets(r *recipe.Recipe) {
-	if len(r.CustomMounts) == 0 && r.Disk != "" {
+	if !r.IsManualLayout() && r.Disk != "" {
 		r.Disk = resolveDevice(r.Disk)
 	}
 	if r.VarDisk != nil && r.VarDisk.Disk != "" {

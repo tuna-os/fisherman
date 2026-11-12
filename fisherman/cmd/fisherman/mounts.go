@@ -152,7 +152,7 @@ func transientEtc(root string) bool {
 // `fisherman validate`.
 func keptFilesystemProblems(r *recipe.Recipe) []recipe.Problem {
 	var ps []recipe.Problem
-	if r.VarDisk != nil && r.VarDisk.KeepExisting {
+	if r.HasVarDisk() && r.VarDisk.KeepExisting {
 		if err := disk.CheckKeptFilesystem(r.VarDisk.Disk, disk.FSType(r.VarDisk.Disk), true); err != nil {
 			ps = append(ps, recipe.Problem{Field: "varDisk.disk", Code: recipe.CodeKeptFilesystemUnusable,
 				Message: "varDisk.keepExisting: " + err.Error()})
@@ -189,7 +189,7 @@ func planPersistentMounts(r *recipe.Recipe, dep deployment) ([]persistentMount, 
 		plan = append(plan, m)
 		return nil
 	}
-	if r.VarDisk != nil {
+	if r.HasVarDisk() {
 		if err := add("varDisk", r.VarDisk.Disk, "/var", varOptions); err != nil {
 			return nil, err
 		}
@@ -347,7 +347,7 @@ func mountDataInDeployment(target string, plan []persistentMount, mounted func(p
 // needsPersistentMounts reports whether the recipe has a mount fisherman
 // must make persistent.
 func needsPersistentMounts(r *recipe.Recipe) bool {
-	if r.VarDisk != nil {
+	if r.HasVarDisk() {
 		return true
 	}
 	for _, cm := range r.CustomMounts {

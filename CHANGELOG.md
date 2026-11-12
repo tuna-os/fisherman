@@ -116,6 +116,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `main.commit`/`main.date`, which do not exist, and its archives, like the
   meson install (`<datadir>/fisherman/data/`), now ship `data/images.json`.
 
+### ♻️ Refactoring
+
+- **The recipe answers its own install-state questions** (#317):
+  `recipe.Recipe` has `HasEncryption`, `HasTPM2`, `IsManualLayout`, `IsZFS`,
+  `UsesSystemdBoot`, `UsesComposeFs`, `HasVarDisk`, `FormatsVarDisk`,
+  `EncryptsRoot` and `EnrollsTPM2` (`internal/recipe/state.go`). The install
+  path, `validate` and the host-tool chain call them in place of the
+  booleans `main()` computed and passed around. No behaviour change.
+- **One step plan, announced by a sequencer** (#316): `planSteps`
+  (`cmd/fisherman/steps.go`) builds the ordered step list and its weights
+  from the recipe, and `total_steps` is its length. `main()` announces each
+  step with `seq.begin`, which supplies the step number, the total and the
+  bar position: no manual index any more. A step out of plan is logged as a
+  warning at the finalize step. `TestMainAnnouncesThePlan` replays `main()`
+  for each recipe variant (plain, LUKS, TPM2, manual layout, ZFS, btrfs
+  subvolumes, systemd-boot, source reuse, a `/var` disk) and fails when the
+  steps it announces differ from the plan. The events are unchanged.
+
 ### 🔧 CI
 
 - **GoReleaser is pinned** (#344): `release-publish.yml` runs GoReleaser
@@ -123,7 +141,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 
-- **The VM matrix covers a user, GRUB with LUKS, TPM2 and a /var disk**
+- **A recipe field that never reaches the install fails a test** (#289):
+  `recipeFieldUses` (`cmd/fisherman/recipe_consumers_test.go`) lists every
+  field of `recipe.Recipe`, nested ones included, with the files that pass
+  it on to the install, or the reason it only accepts or refuses the recipe.
+  The test fails on a field without an entry, an entry for a field that is
+  gone, and a listed file that no longer reads the field. A second test
+  holds the `install.Options` projection (`buildBootcInstallOptions`) to a
+  source table: each option comes from a named recipe field, an argument, or
+  a later step, and follows its recipe field.
+, GRUB with LUKS, TPM2 and a /var disk**
   (#418), as advisory PR-gate entries: `centos-bootc-luks-user` (GRUB,
   ostree, XFS, LUKS and a `user` that must sign in with the recipe's
   password), `centos-bootc-var-disk` (`/var` must be the `varDisk` on the
