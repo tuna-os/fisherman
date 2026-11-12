@@ -1252,8 +1252,12 @@ func validSHA256Digest(digest string) bool {
 	return true
 }
 
-// CheckImage compares the remote and local (containers-storage) image digests
-// to determine whether a pull is required. It also returns the remote layer count.
+// CheckImage decides whether the install must pull the image. It does not
+// compare digests: an image that containers-storage already has is used as
+// it is (NeedsPull=false), whatever the registry now has, because the
+// installer deploys the image it was given and `bootc update` brings later
+// ones. The registry is asked for the manifest only to learn the layer
+// count of a pull.
 //
 // If the remote registry is unreachable (offline), CheckImage falls back to
 // checking local containers-storage: if the image is present locally it is used

@@ -349,10 +349,12 @@ func (r *Recipe) Validate() error {
 
 // Problems runs every recipe rule (rules.go) plus the existence checks for
 // the disk, the customMounts partitions and the varDisk, and returns every
-// problem found, in a stable order: the layout first, then sourceReuse, imageType,
-// bootloader, encryption, varDisk, hostname, user, distroID, brewTap,
-// slurp, targetMount, flatpakVarPath, zfsPoolName, luksMapperName,
-// additionalImageStores and override. It does not check the
+// problem found, in a stable order: the layout first, then unifiedStorage,
+// sourceReuse, imageType, image and targetImgref, bootloader, encryption,
+// varDisk, hostname, user, distroID, brewTap, slurp, targetMount,
+// flatpakVarPath, zfsPoolName, luksMapperName, additionalImageStores,
+// override, experimental, locale, keyboard and timezone (docs/VALIDATE.md
+// lists the same order). It does not check the
 // TPM or whether the disk is an eligible target, which need the machine; see
 // CheckTPM and CheckTarget.
 func (r *Recipe) Problems() []Problem {
@@ -420,6 +422,7 @@ func (r *Recipe) Problems() []Problem {
 	ps = append(ps, CheckUnifiedStorage(r.UnifiedStorage)...)
 	ps = append(ps, CheckSourceReuse(r)...)
 	ps = append(ps, CheckImageType(r.ImageType)...)
+	ps = append(ps, CheckImageRefs(r)...)
 	ps = append(ps, CheckBootloader(r.Bootloader)...)
 	ps = append(ps, CheckEncryption(r.Encryption)...)
 	ps = append(ps, CheckVarDiskEncryption(r)...)

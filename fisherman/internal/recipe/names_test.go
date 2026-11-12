@@ -118,3 +118,39 @@ func TestCheckCustomMountsLayout(t *testing.T) {
 		t.Errorf("Problems() = %v, want %v", got, want)
 	}
 }
+
+// tuna-os/fisherman#414: image and targetImgref reached skopeo, podman and
+// bootc's --target-imgref unchecked, after the disk was partitioned.
+func TestCheckImageRefs(t *testing.T) {
+	for _, ok := range []string{"", "ghcr.io/example/os:stable", "docker://quay.io/a/b@sha256:" + strings.Repeat("a", 64),
+		"containers-storage:localhost/x", "oci:/run/media/oci", "x"} {
+		r := &Recipe{Image: ok, TargetImgref: ok}
+		if ps := CheckImageRefs(r); ps != nil {
+			t.Errorf("CheckImageRefs(%q) = %v, want valid", ok, ps)
+		}
+	}
+	for _, bad := range []string{"-v", "--privileged", " ", "a b", "ghcr.io/x\nghcr.io/y", "x\t", "x\x00", "x y", "x "} {
+		got := codes(CheckImageRefs(&Recipe{Image: bad, TargetImgref: bad}))
+		want := []string{"image:" + CodeImageInvalid, "targetImgref:" + CodeTargetImgrefInvalid}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("CheckImageRefs(%q) = %v, want %v", bad, got, want)
+		}
+	}
+	// With sourceReuse the sourceReuse rules judge both fields: one
+	// problem per field, not two.
+	r := &Recipe{Image: "-v", TargetImgref: "a b", SourceReuse: &SourceReuse{}}
+	if ps := CheckImageRefs(r); ps != nil {
+		t.Errorf("CheckImageRefs with sourceReuse = %v, want nil", ps)
+	}
+	// Problems runs it.
+	r = &Recipe{Disk: "/dev/null", Filesystem: "xfs", Hostname: "h", Image: "ghcr.io/x\n", TargetImgref: "-x"}
+	got := map[string]bool{}
+	for _, p := range r.Problems() {
+		got[p.Field+":"+p.Code] = true
+	}
+	for _, want := range []string{"image:" + CodeImageInvalid, "targetImgref:" + CodeTargetImgrefInvalid} {
+		if !got[want] {
+			t.Errorf("Problems() did not report %s: %v", want, got)
+		}
+	}
+}

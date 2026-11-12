@@ -314,3 +314,30 @@ func TestInstallProblemsImageStores(t *testing.T) {
 		t.Errorf("partialProblems = %v, want %v", got, wantPartial)
 	}
 }
+
+// tuna-os/fisherman#414: --partial applies the reference rule to image and
+// targetImgref, and leaves both to the sourceReuse rules when the fragment
+// has sourceReuse.
+func TestPartialProblemsImageRefs(t *testing.T) {
+	ps, err := partialProblems([]byte(`{"image":"ghcr.io/x\nghcr.io/y","targetImgref":"-v"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"image:image_invalid", "targetImgref:target_imgref_invalid"}
+	if got := problemCodes(ps); !reflect.DeepEqual(got, want) {
+		t.Errorf("partialProblems = %v, want %v", got, want)
+	}
+	ps, err = partialProblems([]byte(`{"targetImgref":"ghcr.io/example/os:stable"}`))
+	if err != nil || len(ps) != 0 {
+		t.Errorf("valid targetImgref: %v, %v", ps, err)
+	}
+	ps, err = partialProblems([]byte(`{"sourceReuse":{},"targetImgref":"a b"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range ps {
+		if p.Code == "target_imgref_invalid" {
+			t.Errorf("sourceReuse fragment got the generic rule too: %v", ps)
+		}
+	}
+}

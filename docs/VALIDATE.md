@@ -58,11 +58,25 @@ a TPM type on a machine without a usable TPM 2.0).
 }
 ```
 
-Order: unknown keys (sorted by path), then the layout (disk or customMounts,
-filesystem and its combinations), then `imageType`, `bootloader`, `encryption`, `varDisk`, `hostname`,
-`user.username`, the other fields, the TPM check, `image`, and target
-eligibility (`disk`, `varDisk.disk`, the firmware) last. Each field reports at most one
-problem from its own rule (the first it breaks).
+Order: unknown keys (sorted by path), then the order of `Recipe.Problems()`
+in `fisherman/internal/recipe/recipe.go`:
+
+1. the layout: `customMounts` (each entry, then the layout rules and
+   encryption with a manual layout), or `disk`, `filesystem`, its
+   combinations and the `zfs` opt-in;
+2. `unifiedStorage`, `sourceReuse`, `imageType`, `image` and `targetImgref`
+   (reference syntax), `bootloader`, `encryption`, `varDisk` with
+   encryption, then `varDisk` itself;
+3. `hostname`, `user.username`, `distroID`, `brewTap`, `slurp`,
+   `targetMount`, `flatpakVarPath`, `zfsPoolName`, `luksMapperName`,
+   `additionalImageStores`, `override`, `experimental`, `locale`,
+   `keyboard`, `timezone`.
+
+Then the checks that read the machine, in the order of `installProblems` in
+`fisherman/cmd/fisherman/validate.go`: the TPM, `image` (live media), whether
+each `additionalImageStores` entry exists, the `sourceReuse` host checks, and
+target eligibility (`disk`, `varDisk.disk`, the firmware) last. Each field
+reports at most one problem from its own rule (the first it breaks).
 
 ### Example
 
@@ -201,6 +215,7 @@ A rule runs when its key is present:
 | `encryption` | encryption type, passphrase |
 | `bootloader` | bootloader |
 | `imageType` | imageType |
+| `image`, `targetImgref` | the reference syntax of each one present. Not with `sourceReuse` in the same fragment: its rules judge both |
 | `customMounts` | each entry's target (not whether its partition exists), and the persistence rules: a target named once, a partition path named once (paths are compared as text; the full mode also follows symlinks), a data mount the installed system can mount again. `composeFsBackend` counts as false when absent |
 | `varDisk` | its combinations with `encryption.type`, `composeFsBackend` and `filesystem: zfs` (absent ones count as none / false). Not the disk itself |
 | `targetMount` | targetMount |
@@ -277,6 +292,7 @@ holds both fields.
 | `varDisk` | not set on a composefs-native target (`composeFsBackend`, or `filesystem: zfs`, which forces composefs). The initramfs mounts the deployment's own `/var` there, so the separate disk would not be used ([#252](https://github.com/tuna-os/fisherman/issues/252)). | `var_disk_unsupported_composefs` |
 | `varDisk` | not set with an encrypted `encryption.type`. fisherman has no LUKS step for the `/var` disk: `/var`, and `/var/home` on it, would be plain text beside an encrypted root ([#406](https://github.com/tuna-os/fisherman/issues/406)). | `var_disk_encryption_unsupported` |
 | `image` | non-empty unless this host booted from live media (probe's `live.is_live`), where empty means "install the running live image", or the recipe has `sourceReuse` (whose `image` must be empty). Full mode only. | `image_required` |
+| `image`, `targetImgref` | empty is not judged here. Otherwise no whitespace or control character (a newline included), and no `-` first. `image` is an argument of `skopeo`, `podman` and `bootc`, `targetImgref` of `bootc --target-imgref`; both are read after the disk is partitioned. With `sourceReuse` the `source_reuse_*` rules judge both instead. | `image_invalid`, `target_imgref_invalid` |
 | `imageType` | `""` or `bootc` | `image_type_unsupported` |
 | `bootloader` | `""`, `grub2` or `systemd` | `bootloader_unsupported` |
 | (whole recipe) | readable, valid JSON | `recipe_unreadable`, `recipe_malformed` |
@@ -480,6 +496,8 @@ does not have is not linked, and the log says so.
 | Code | Field | Cause | Fix |
 |---|---|---|---|
 | `image_required` | `image` | Image is required on non-live systems but is empty | Provide a container image URL |
+| `image_invalid` | `image` | The image reference has a space, a newline or another control character, or starts with `-` (a flag to `podman`) | Use a reference such as `ghcr.io/example/os:stable` |
+| `target_imgref_invalid` | `targetImgref` | The update reference has a space, a newline or another control character, or starts with `-` | Use a reference such as `ghcr.io/example/os:stable`, or leave the field out |
 | `image_type_unsupported` | `imageType` | Image type is not empty or `bootc` | Leave empty or use `bootc` |
 | `distro_id_invalid` | `distroID` | distroID contains invalid characters or format | Use 1–63 lowercase letters, digits, and `-`, starting with a lowercase letter |
 
@@ -497,7 +515,7 @@ does not have is not linked, and the log says so.
 | Code | Field | Cause | Fix |
 |---|---|---|---|
 | `bootloader_unsupported` | `bootloader` | Bootloader is not empty, `grub2`, or `systemd` | Use one of: empty (auto), `grub2`, or `systemd` |
-| `slurp_unsupported` | `slurp` | User-data migration (slurp) without durable rescue storage is not supported | Specify a `slurpRescueStore` disk, or remove the `slurp` field |
+| `slurp_unsupported` | `slurp` | A requested user-data migration (`slurp`) is refused: fisherman has no durable rescue store for the copy yet, so no recipe field can make it valid | Remove the `slurp` field. `slurpWallpapers` is not affected |
 | `brew_tap_invalid` | `brewTap` | Homebrew tap format is invalid | Use `owner/name` format, with each part containing only letters, digits, `.`, `_`, and `-` |
 
 ### Source reuse

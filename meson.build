@@ -22,3 +22,8 @@ if go.found()
 else
   warning('go not found — fisherman binary will not be built')
 endif
+
+# The image catalog, where images.FindPaths looks for an installed
+# fisherman: <datadir>/fisherman/data/images.json (/usr/share, or /app/share
+# in a Flatpak).
+install_data('data/images.json', install_dir: get_option('datadir') / 'fisherman' / 'data')
