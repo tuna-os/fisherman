@@ -193,11 +193,21 @@ fields.
    untouched; an install cancelled (SIGTERM) during the copy exits 130 and
    leaves no copy, no `/var/tmp` bind, no scratch and a blank disk B; then
    the install from the VM's own bootc store onto disk B, after which
-   nothing is left behind either;
+   nothing is left behind either. Before that install, the profile takes
+   the capability report (`fisherman probe --json --source`, docs/PROBE.md)
+   for the booted image pinned by its digest, and for the same name pinned
+   by a digest the VM did not boot;
 4. disk B boots through `boot-verify.sh` with the receipt checks required,
    and `store_reuse_identity` (`scripts/store-reuse-lib.sh`) checks that it
    booted the verified copy, which the receipt also expects, follows the
-   original update reference and is the item's platform;
+   original update reference and is the item's platform. The guest check
+   `scripts/vm-checks/capabilities.sh` (#383) holds the capability report to
+   disk B: an established `digest_match` root; one bootc version in the
+   report, in the installing VM and on disk B (the install ran bootc from
+   the copy of that image); the recipe's backend; the bootloader that
+   `print-configuration` names, if any; the kernel that `container inspect`
+   names. The report for the other digest must be `digest_mismatch` with
+   every source feature `source_root_unavailable`;
 5. the job summary compares install time and installed-root size with step
    1, and reports the copy time, the scratch and store estimates, the
    measured peak scratch, the store the copy held and the change of the VM's

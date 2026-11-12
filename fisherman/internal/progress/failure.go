@@ -36,6 +36,7 @@ const (
 	FailureHostnameFailed         = "hostname_failed"
 	FailureUserFailed             = "user_failed"
 	FailureLUKSBootArgsFailed     = "luks_boot_args_failed"
+	FailureRootFlagsFailed        = "root_flags_failed"
 	FailureFinalizeFailed         = "finalize_failed"
 )
 
