@@ -314,6 +314,13 @@ func RequiredTools(r *recipe.Recipe) []ToolRequirement {
 	}
 	need("skopeo", "skopeo")
 	need("podman", "podman")
+	// The source reuse (#384) runs the host's bootc for the copy and
+	// ostree to check the image's ref. The install from the copy runs the
+	// copy's own bootc, in its container (podman, above).
+	if r.SourceReuse != nil {
+		need("bootc", "bootc")
+		need("ostree", "ostree")
+	}
 	return tools
 }
 

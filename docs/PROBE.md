@@ -291,7 +291,7 @@ capabilities
     image           string   the ref the host booted ("" when it booted no bootc image)
     digest          string   the manifest digest the host booted, "sha256:<64 hex>"; "" when unknown
     identity_reason string   present only when digest is "": "not_bootc_booted" or "digest_missing"
-    platform        string   the architecture bootc status reports ("x86_64"); "" when unknown
+    platform        string   the architecture bootc status reports, in the kernel's spelling ("x86_64": bootc says "amd64"); "" when unknown
     backend         string   "ostree", "composefs", or "" when bootc does not say
     bootc_version   string   the same as bootc.version
   source                     the selected installation source
@@ -478,7 +478,7 @@ bootc_store
     digest          string   the manifest digest, "sha256:<64 hex>": the immutable identity; "" when unknown
     digest_from     string   present only with a digest: "bootc_status" or "bootc_store_index"
     digest_reason   string   present only without one: "digest_missing", "malformed", "ambiguous" or "not_reported"
-    platform        string   the architecture bootc reports ("x86_64"); "" when unknown
+    platform        string   the architecture bootc reports, in the kernel's spelling ("x86_64": bootc says "amd64"); "" when unknown
     platform_reason string   present only without one: "not_reported" or "malformed"
     matches_machine bool     ref, digest and platform are known, and platform is machine_platform
     mismatch_reason string   present only when false: "ref_unavailable", "identity_unknown", "platform_unknown" or "platform_mismatch"
@@ -552,20 +552,16 @@ replaced by `""` with `credentials_redacted`; one that does not match the
 hex>` and architectures a short token. The list is capped at 1024 entries,
 the inventory at 256 items and the boot entries at 16.
 
-#### Reuse is not implemented
+#### Reuse
 
-Phase 2 of #384 (install from bootc-owned storage through `bootc image
-copy-to-storage`, behind an explicit recipe opt-in) is not in this release,
-and no recipe field asks for it. A fake-command test cannot qualify it:
-
-- `copy-to-storage` re-exports the image from ostree. Whether the export
-  has the manifest digest of the original image is unmeasured, so the
-  identity check after the transfer has no known-good answer yet.
-- It needs root on the live host, refuses a read-only sysroot (live media),
-  and writes to the host's default containers-storage, which on live media
-  is RAM. The scratch and disk cost against the current path is unmeasured.
-
-Both need the disposable offline VM profile the issue names.
+Phase 2 of #384, installing from bootc-owned storage through `bootc image
+copy-to-storage`, is the recipe's explicit, experimental `sourceReuse`
+([SOURCE-REUSE.md](SOURCE-REUSE.md)). The probe still never runs it, and
+nothing here changes: an item a recipe can name is one with `storage`
+`"ostree"`, `availability` `"deployed"` and `matches_machine` `true`, on a
+host whose `bootc_store.available` is true and which is not live media.
+`bootc_image_storage` stays `unknown`/`not_qualified`: it is about the
+target's store, and the reuse is qualified only by an advisory VM profile.
 
 Fixtures: `fisherman/internal/probe/testdata/golden/store-*.json` pin the
 object for non-bootc live media, a host without bootc, a failed and a

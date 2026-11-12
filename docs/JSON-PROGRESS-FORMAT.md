@@ -112,8 +112,40 @@ Other examples: `Image pull required (71 layers)`,
 `EFI boot entry for installed system: Boot0001`.
 
 Several `info` events can arrive before the first `step` event. The image
-cache check, live-session audio setup and Windows data migration all run
+cache check, a `sourceReuse` copy (with its [`source_reuse`](#source_reuse)
+events), live-session audio setup and Windows data migration all run
 before partitioning.
+
+### `source_reuse`
+
+Progress of a `sourceReuse` acquisition ([SOURCE-REUSE.md](SOURCE-REUSE.md),
+#384): the copy of an image the live host's bootc keeps into
+containers-storage, before the first `step`. Only a recipe with
+`sourceReuse` produces these.
+
+**Fields:**
+- `type` — `"source_reuse"`
+- `version` — `1`; bumped only when a field is removed or renamed or its meaning changes
+- `phase` — `planned`, `copying`, `verified`, `failed` or `released` (string)
+- `digest` — the item's manifest digest, as the recipe names it (string)
+- `platform` — the item's architecture, bootc's spelling (string)
+- `source` — the reference given to `bootc image copy-to-storage --source` (string, credential-free; from `planned` on)
+- `destination` — `containers-storage:localhost/fisherman-reuse:<tag>`, the copy fisherman created (string; from `planned` on)
+- `destination_digest` — the copy's manifest digest (`verified`). bootc re-serialises the layers, so it is not `digest`; the installed system boots this one
+- `estimate` — `planned` (and `failed` after the estimate): `scratch_bytes`, `store_bytes`, `required_bytes` (with the 1 GiB margin), `scratch_free_bytes`, `store_free_bytes`, `same_filesystem`, `files`, `estimate_ms`
+- `measured` — `verified`: `copy_ms`, `scratch_peak_bytes` and `store_peak_bytes` (the largest drop in free space sampled during the copy), `store_bytes` (what the copy still holds), `verify_ms`
+- `code`, `reason` — `failed`: the `source_reuse_*` code of the `error` event that follows, and a finer reason (`ref_moved`, `insufficient_space`, `disk_exhausted`, …); `released`: `reason` is `removed` or `remove_failed`
+- `timestamp`, `elapsed_ms` — as above
+
+**Example:**
+```json
+{"destination":"containers-storage:localhost/fisherman-reuse:111111111111-0123456789abcdef","digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","elapsed_ms":61210,"estimate":{"estimate_ms":4210,"files":51234,"required_bytes":8053063680,"same_filesystem":true,"scratch_bytes":3221225472,"scratch_free_bytes":60129542144,"store_bytes":3758096384,"store_free_bytes":60129542144},"phase":"planned","platform":"x86_64","source":"docker://ghcr.io/example/os:stable","timestamp":"2026-11-11T10:05:30.123456Z","type":"source_reuse","version":1}
+```
+
+`released` comes from the teardown, after `complete` is decided and before
+it is written on success, or before the `error` event on a failure or
+cancel. A frontend may ignore the whole event type; the `info` lines say the
+same in English.
 
 ### `recovery_key`
 
@@ -571,7 +603,8 @@ grown over time:
 - Unreleased: `overall_pct` on `step`, `substep` and `complete`, and `step_id`
   on `step` (#270); exit code 130 on cancel (#267); `code` and `field` on
   `error` (#404, #402); a closed stdout is a cancel with teardown, not a
-  death by SIGPIPE (#403); the `receipt` event (#439).
+  death by SIGPIPE (#403); the `source_reuse` event (#384); the `receipt`
+  event (#439).
 
 New event types and fields may appear in any release. Consumers must ignore
 event types and fields they do not know.

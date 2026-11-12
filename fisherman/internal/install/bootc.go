@@ -170,6 +170,17 @@ type Options struct {
 	// Used to persist rootflags (e.g. Btrfs compression).
 	KernelArguments []string
 
+	// RunInSourceContainer makes BootcInstall run bootc from the source
+	// image's own container (bootcViaContainer) even when the source is in
+	// local containers-storage and the host has bootc. The source reuse copy
+	// (#384) needs it: bootc's SourceInfo::from_imageref (v1.17.1,
+	// crates/lib/src/install.rs) runs `ostree --repo=/ostree/repo rev-parse
+	// --single` whenever /ostree/repo exists, which fails with "Multiple
+	// commit objects found" on a booted ostree host, whose repo holds every
+	// deployment. Inside the image's container /ostree/repo is the image's
+	// own, with one commit, and bootc takes the source from the container.
+	RunInSourceContainer bool
+
 	// directLocalSource is set by BootcInstall when a local
 	// containers-storage: SourceImgref is installed with the host's bootc
 	// instead of inside a podman container (see useDirectForLocalSource).
@@ -379,7 +390,7 @@ func appendImageStoreArgs(podmanArgs []string, scratch string, opts Options) ([]
 // If opts.SourceImgref is empty (live-ISO mode), bootc is called directly —
 // bootc auto-detects the running container image as the install source.
 func BootcInstall(opts Options) error {
-	if opts.SourceImgref != "" && !useDirectForLocalSource(opts) {
+	if opts.SourceImgref != "" && (opts.RunInSourceContainer || !useDirectForLocalSource(opts)) {
 		return bootcViaContainer(opts)
 	}
 	opts.directLocalSource = opts.SourceImgref != ""

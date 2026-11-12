@@ -44,6 +44,15 @@ func TestCheckHalted_RefusesPipelineAllowsTeardown(t *testing.T) {
 		{"zpool", "create", "-f", "rpool", "/dev/sda2"},
 		{"zpool", "set", "cachefile=none", "rpool"},
 		{"zpool"},
+		// Only the removal of the source reuse copy runs (#384): no
+		// copy, no pull, no other image, no force.
+		{"bootc", "image", "copy-to-storage", "--source", "docker://x/y:1", "--target", "localhost/fisherman-reuse:111111111111-0123456789abcdef"},
+		{"podman", "pull", "ghcr.io/x:1"},
+		{"podman", "rmi", "--ignore", "ghcr.io/example/os:stable"},
+		{"podman", "rmi", "--ignore", "localhost/fisherman-reuse"},
+		{"podman", "rmi", "--ignore", "localhost/fisherman-reuse:../x"},
+		{"podman", "rmi", "-f", "localhost/fisherman-reuse:111111111111-0123456789abcdef"},
+		{"podman", "image", "prune", "-a"},
 	}
 	for _, c := range refused {
 		if err := checkHalted(c[0], c[1:]); !errors.Is(err, ErrHalted) {
@@ -66,6 +75,8 @@ func TestCheckHalted_RefusesPipelineAllowsTeardown(t *testing.T) {
 		// The export of the pool the install imported (#413).
 		{"zpool", "export", "rpool"},
 		{"zpool", "export", "-f", "rpool"},
+		// The removal of the source reuse copy (#384).
+		{"podman", "rmi", "--ignore", "localhost/fisherman-reuse:111111111111-0123456789abcdef"},
 	}
 	for _, c := range allowed {
 		if err := checkHalted(c[0], c[1:]); err != nil {

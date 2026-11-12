@@ -196,6 +196,7 @@ A rule runs when its key is present:
 | `distroID` | distroID |
 | `brewTap` | brewTap |
 | `unifiedStorage` | unifiedStorage |
+| `sourceReuse` | the static sourceReuse rules: `store`, `digest`, `platform`, the `bootc_store_reuse` opt-in in `experimental` and the composefs refusal (absent ones count as no opt-in / false), and `image` and `targetImgref` only when the fragment has them. Never the host: whether this host has the item is full mode ([Source reuse](#source-reuse)) |
 | `filesystem` | filesystem, its combinations with `btrfsSubvolumes`, `composeFsBackend` and `encryption.type` (absent ones count as false / none), and the `zfs` opt-in in `experimental` (absent counts as no opt-in) |
 | `encryption` | encryption type, passphrase |
 | `bootloader` | bootloader |
@@ -242,7 +243,8 @@ holds both fields.
 | `timezone` | empty or absent is valid (the image's zone is kept). Otherwise an IANA zone name of at most 64 characters: parts of letters, digits, `_`, `+` and `-`, joined by `/`, with a letter first (`Europe/Berlin`, `Etc/GMT+1`, `UTC`). | `timezone_invalid` |
 | `filesystem` (auto layout) | one of `xfs`, `ext4`, `btrfs`, `zfs` (`recipe.Filesystems`) | `filesystem_unsupported` |
 | `filesystem` (auto layout) | `zfs` needs `"experimental": ["zfs"]`. No VM test installs ZFS and boots it, so the recipe must say that it accepts that. | `zfs_experimental` |
-| `experimental` | each entry is `zfs` | `experimental_unsupported` |
+| `experimental` | each entry is `zfs` or `bootc_store_reuse` | `experimental_unsupported` |
+| `sourceReuse` | absent, or an explicit request to install from an image the host's bootc keeps. See [Source reuse](#source-reuse) and [SOURCE-REUSE.md](SOURCE-REUSE.md). | `source_reuse_*` |
 | `btrfsSubvolumes` | needs `filesystem: btrfs` | `btrfs_subvolumes_require_btrfs` |
 | `composeFsBackend` | needs fs-verity, so not XFS | `composefs_requires_fsverity` |
 | `unifiedStorage` | `false` or absent. `true` asks for bootc's `--experimental-unified-storage`, which fisherman does not pass (it runs bootc in a container, where that storage does not resolve). The install used to finish without it and report success. It is not `composeFsBackend` and not `additionalImageStores`; both are supported. `fisherman probe --json` reports the same answer as `capabilities.features.unified_storage` (`unsupported`, `fisherman_refuses`; see docs/PROBE.md). | `unified_storage_unsupported` |
@@ -274,7 +276,7 @@ holds both fields.
 | `varDisk.disk` | a whole disk that does not hold the running system and is writable. Full mode only. | `var_disk_not_disk`, `var_disk_boot_disk`, `var_disk_read_only`, `var_disk_unverified` |
 | `varDisk` | not set on a composefs-native target (`composeFsBackend`, or `filesystem: zfs`, which forces composefs). The initramfs mounts the deployment's own `/var` there, so the separate disk would not be used ([#252](https://github.com/tuna-os/fisherman/issues/252)). | `var_disk_unsupported_composefs` |
 | `varDisk` | not set with an encrypted `encryption.type`. fisherman has no LUKS step for the `/var` disk: `/var`, and `/var/home` on it, would be plain text beside an encrypted root ([#406](https://github.com/tuna-os/fisherman/issues/406)). | `var_disk_encryption_unsupported` |
-| `image` | non-empty unless this host booted from live media (probe's `live.is_live`), where empty means "install the running live image". Full mode only. | `image_required` |
+| `image` | non-empty unless this host booted from live media (probe's `live.is_live`), where empty means "install the running live image", or the recipe has `sourceReuse` (whose `image` must be empty). Full mode only. | `image_required` |
 | `imageType` | `""` or `bootc` | `image_type_unsupported` |
 | `bootloader` | `""`, `grub2` or `systemd` | `bootloader_unsupported` |
 | (whole recipe) | readable, valid JSON | `recipe_unreadable`, `recipe_malformed` |
@@ -437,7 +439,7 @@ does not have is not linked, and the log says so.
 |---|---|---|---|
 | `filesystem_unsupported` | `filesystem` | Filesystem is not one of `xfs`, `ext4`, `btrfs`, or `zfs` | Choose a supported filesystem |
 | `zfs_experimental` | `filesystem` | Filesystem is `zfs` and the recipe does not list `zfs` in `experimental`. ZFS is experimental: no VM test covers it | Add `"experimental": ["zfs"]` to the recipe (in `--partial` mode, to the same fragment as `filesystem`), or choose `xfs`, `ext4` or `btrfs`. A frontend should show ZFS as experimental and send the field only after the user chose it |
-| `experimental_unsupported` | `experimental[i]` | The entry is not a feature fisherman calls experimental | Use `zfs`, or remove the entry |
+| `experimental_unsupported` | `experimental[i]` | The entry is not a feature fisherman calls experimental | Use `zfs` or `bootc_store_reuse`, or remove the entry |
 | `btrfs_subvolumes_require_btrfs` | `btrfsSubvolumes` | `btrfsSubvolumes` requires `filesystem: btrfs` | Either remove `btrfsSubvolumes` or change filesystem to `btrfs` |
 | `composefs_requires_fsverity` | `composeFsBackend` | composefs backend requires fs-verity support, which XFS does not provide | Change filesystem to `ext4`, `btrfs`, or `zfs`; or disable `composeFsBackend` |
 | `custom_mount_fstype_unsupported` | `customMounts[i].fstype` | Custom mount filesystem type is not supported | Use one of: `fat32`, `ext3`, `ext4`, `xfs`, `btrfs`, `swap`, `unformatted`, or empty |
@@ -498,6 +500,44 @@ does not have is not linked, and the log says so.
 | `slurp_unsupported` | `slurp` | User-data migration (slurp) without durable rescue storage is not supported | Specify a `slurpRescueStore` disk, or remove the `slurp` field |
 | `brew_tap_invalid` | `brewTap` | Homebrew tap format is invalid | Use `owner/name` format, with each part containing only letters, digits, `.`, `_`, and `-` |
 
+### Source reuse
+
+`sourceReuse` installs from an image the live host's bootc already keeps,
+named by its manifest digest ([SOURCE-REUSE.md](SOURCE-REUSE.md), #384).
+The static codes are recipe rules (also in `--partial`); the host codes need
+the machine and come from full mode and the install, which read only `bootc
+status --json`, the live-media signals and bootc's store index file; the
+install-only codes come from the copy itself, which only the install runs.
+
+| Code | Field | Cause | Fix |
+|---|---|---|---|
+| `source_reuse_experimental` | `sourceReuse` | `experimental` does not list `bootc_store_reuse`. Only an advisory VM profile installs this way | Add `"experimental": ["bootc_store_reuse"]`, or remove `sourceReuse` |
+| `source_reuse_store_unsupported` | `sourceReuse.store` | `store` is not `bootc` | Use `bootc` |
+| `source_reuse_digest_invalid` | `sourceReuse.digest` | Not `sha256:` and 64 lowercase hex digits | Use `bootc_store.items[].digest` from `fisherman probe --json` |
+| `source_reuse_platform_invalid` | `sourceReuse.platform` | Not a short architecture token | Use `bootc_store.items[].platform` (`x86_64`, `aarch64`) |
+| `source_reuse_image_conflict` | `image` | `image` is set as well | Leave `image` empty: the reused item is the source |
+| `source_reuse_target_imgref_required` | `targetImgref` | No `targetImgref` | Name the registry reference the installed system follows for updates |
+| `source_reuse_target_imgref_invalid` | `targetImgref` | A `containers-storage:`, `oci:`, `oci-archive:`, `dir:` or `localhost` reference, one with credentials, or not a reference | Use a registry reference such as `ghcr.io/example/os:stable` |
+| `source_reuse_backend_unsupported` | `sourceReuse` | `composeFsBackend` is true, or `filesystem` is `zfs` (which forces it). Only ostree-backend installs are qualified | Install an ostree-backend image, or remove `sourceReuse` |
+| `source_reuse_host_not_bootc` | `sourceReuse` | Full mode: `bootc_store.available` is false here (no bootc, `bootc status` failed or was malformed, or the host did not boot a bootc image, as in a container) | Run on a bootc-booted host, or remove `sourceReuse` |
+| `source_reuse_live_media` | `sourceReuse` | Full mode: the host booted from live media. bootc refuses `copy-to-storage` on a read-only sysroot | Use the live media's own source paths |
+| `source_reuse_backend_not_qualified` | `sourceReuse` | Full mode: the host's booted entry is not ostree (composefs) | Remove `sourceReuse` |
+| `source_reuse_item_not_found` | `sourceReuse` | Full mode: no ostree deployment of this host has the digest. Logically bound images and names only `bootc image list` reports are not sources | Pick an item with `storage` `ostree` and `availability` `deployed` |
+| `source_reuse_item_unverified` | `sourceReuse` | Full mode: the deployment has the digest, but its reference is redacted or invalid, its platform or ostree commit is not reported, or its transport is not `registry`, `containers-storage`, `oci` or `oci-archive` | Pick an item whose `matches_machine` is true |
+| `source_reuse_platform_mismatch` | `sourceReuse` | Full mode: the item is not the recipe's platform, or not this machine's | Use the item's platform; install on a machine of that architecture |
+| `source_reuse_sandboxed` | `sourceReuse` | Install only: fisherman runs inside a Flatpak sandbox; the copy walks `/sysroot` and binds `/var/tmp` on the host itself | Run fisherman on the host (`flatpak-spawn --host pkexec fisherman -`) |
+| `source_reuse_command_unsupported` | `sourceReuse` | Install only: bootc has no `image copy-to-storage`, or none that takes `--source` and `--target` | Update bootc on the host |
+| `source_reuse_source_unavailable` | `sourceReuse` | Install only: the image's ostree ref cannot be read in `/sysroot/ostree/repo` | Check the host's ostree repository |
+| `source_reuse_source_moved` | `sourceReuse` | Install only: the ref no longer points at the deployment's commit (a staged or cached update took the name) | Reboot into, or pick, the deployment the ref names |
+| `source_reuse_estimate_failed` | `sourceReuse` | Install only: the deployment's checkout cannot be walked for the estimate | Check `/sysroot/ostree/deploy` |
+| `source_reuse_insufficient_space` | `sourceReuse` | Install only: the scratch, the copy and a 1 GiB margin do not fit in `/var/fisherman-tmp` and containers-storage | Free space on the host's `/var` |
+| `source_reuse_destination_exists` | `sourceReuse` | Install only: containers-storage already has the destination name | Remove the stale `localhost/fisherman-reuse:` image |
+| `source_reuse_transfer_failed` | `sourceReuse` | Install only: `bootc image copy-to-storage`, or its `/var/tmp` bind, failed | See the install log |
+| `source_reuse_disk_exhausted` | `sourceReuse` | Install only: the copy failed with the disk (nearly) full | Free space on the host's `/var` |
+| `source_reuse_verify_failed` | `sourceReuse` | Install only: the copy cannot be inspected, its output is malformed, or it has no sha256 digest | See the install log |
+| `source_reuse_identity_mismatch` | `sourceReuse` | Install only: the source moved during the copy, the deployment changed, or the copy is another platform | Retry once the host is not updating |
+| `source_reuse_installed_digest_differs` | `sourceReuse` | Install only: bootc installed an image other than the verified copy | Report it: this is a bug |
+
 ### Install only
 
 The install reports these in its `error` event
@@ -522,7 +562,7 @@ it in the installed image. A manual layout needs no `sfdisk`: it needs the
 entry. A `varDisk` that is not kept needs `wipefs` and `mkfs.xfs`. A
 `varDisk`, a data or swap entry, and a boot entry that is kept need `blkid`.
 Every install needs
-`skopeo` and `podman`. fisherman looks for them where they run: on the host,
+`skopeo` and `podman`; a `sourceReuse` install also needs `bootc` and `ostree`. fisherman looks for them where they run: on the host,
 through `flatpak-spawn --host` inside a Flatpak sandbox.
 
 ### Interpreting Errors in JSON

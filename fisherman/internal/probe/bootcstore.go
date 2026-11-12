@@ -193,17 +193,28 @@ type BootcStoreItem struct {
 }
 
 // machineArch is this machine's architecture in bootc's spelling.
+// NormalizeArch spells an architecture the way the probe reports it, the
+// kernel's spelling ("x86_64", "aarch64"). bootc status reports the image's
+// OCI architecture ("amd64", "arm64"), so the two never compared equal on a
+// real host and every item read as platform_differs (#384, found by the
+// store-reuse VM profile). Unknown tokens pass through unchanged.
+func NormalizeArch(a string) string {
+	switch a {
+	case "amd64", "x86-64":
+		return "x86_64"
+	case "arm64":
+		return "aarch64"
+	case "powerpc64le":
+		return "ppc64le"
+	}
+	return a
+}
+
 func (p *Prober) machineArch() string {
 	if p.Arch != "" {
 		return p.Arch
 	}
-	switch runtime.GOARCH {
-	case "amd64":
-		return "x86_64"
-	case "arm64":
-		return "aarch64"
-	}
-	return runtime.GOARCH
+	return NormalizeArch(runtime.GOARCH)
 }
 
 func (p *Prober) euid() int {

@@ -18,8 +18,11 @@ var ErrImageRequired = errors.New(`image is required: this system did not boot f
 //
 // live is the host's answer, from probe's live-media detection; Validate
 // stays free of host reads, so the CLI makes this second call.
+//
+// A recipe with sourceReuse has no image on purpose: the source is the
+// reused store item (CheckSourceReuse).
 func (r *Recipe) ValidateImage(live bool) error {
-	if strings.TrimSpace(r.Image) != "" || live {
+	if strings.TrimSpace(r.Image) != "" || live || r.SourceReuse != nil {
 		return nil
 	}
 	return ErrImageRequired

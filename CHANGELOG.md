@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Fixes
+
+- **`bootc_store` matched no real image on amd64** (#384): bootc status
+  spells the architecture as OCI does (`amd64`, `arm64`); the probe compared
+  it with this machine's kernel spelling (`x86_64`, `aarch64`), so every
+  item read `platform_differs` and `matches_machine` was never true outside
+  fixtures. The probe now reports every architecture in the kernel's
+  spelling (`probe.NormalizeArch`), and `sourceReuse.platform` accepts
+  either. Found by the first run of the store-reuse VM profile.
+
 ### 🧪 Testing
 
 - **The installation receipt checks are required on the required canaries**
@@ -19,6 +29,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   advisory.
 
 ### ✨ Features
+
+- **Install from the live host's bootc store: `sourceReuse`** (#384,
+  phase 2): an explicit, experimental recipe field (`"experimental":
+  ["bootc_store_reuse"]`) that names an image the host's bootc keeps by its
+  manifest digest and platform. On an installed, bootc-booted ostree host
+  the install checks that the image's ostree ref still points at the
+  deployment, estimates scratch and disk and refuses when they will not fit,
+  runs `bootc image copy-to-storage --source <ref> --target
+  localhost/fisherman-reuse:<tag>` with `/var/tmp` on its own scratch,
+  verifies the copy (source unmoved, deployment unchanged, sha256 digest,
+  platform), installs from it with the recipe's `targetImgref` as the update
+  reference, checks the installed digest against the copy, and removes the
+  copy, the bind and the scratch on success, failure and cancel. Every
+  command passes a strict allowlist: no `set-unified`, pull, `image cmd`,
+  GC or credentials. Never part of probe, validate or a recipe without the
+  field. 26 stable `source_reuse_*` codes (docs/VALIDATE.md), the
+  `source_reuse` progress event (docs/JSON-PROGRESS-FORMAT.md), and an
+  advisory offline VM profile in `bootcrew-vm.yml` that installs a VM from
+  its own store onto a second disk with no registry reachable, boots the
+  result and checks its identity. docs/SOURCE-REUSE.md.
 
 - **`receipt` progress event** (#439): after it writes the installation
   receipt, the install emits `{"type":"receipt","version":1,"written":…,

@@ -64,7 +64,28 @@ func checkHalted(name string, args []string) error {
 	if name == "zpool" && len(args) > 0 && args[0] == "export" {
 		return nil
 	}
+	// The source reuse copy (#384) is removed on the way out: only
+	// `podman rmi --ignore` of fisherman's own destination name.
+	if name == "podman" && len(args) == 3 && args[0] == "rmi" && args[1] == "--ignore" && isReuseDestination(args[2]) {
+		return nil
+	}
 	return fmt.Errorf("%s: %w", name, ErrHalted)
+}
+
+// isReuseDestination reports whether ref is a source reuse copy's name:
+// localhost/fisherman-reuse:<hex and dashes>.
+func isReuseDestination(ref string) bool {
+	tag, ok := strings.CutPrefix(ref, "localhost/fisherman-reuse:")
+	if !ok || tag == "" {
+		return false
+	}
+	for _, c := range tag {
+		hex := c >= '0' && c <= '9' || c >= 'a' && c <= 'f'
+		if !hex && c != '-' {
+			return false
+		}
+	}
+	return true
 }
 
 // isThawOnly reports whether fsfreeze args ask for a thaw and nothing else.

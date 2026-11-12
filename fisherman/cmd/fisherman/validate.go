@@ -53,6 +53,7 @@ func installProblemsWith(r *recipe.Recipe, imageErr error) []recipe.Problem {
 		ps = append(ps, recipe.Problem{Field: "image", Code: recipe.CodeImageRequired, Message: imageErr.Error()})
 	}
 	ps = append(ps, storeProblems(r, ps)...)
+	ps = append(ps, reuseProblems(r, ps)...)
 	ps = append(ps, targetProblems(r)...)
 	return ps
 }
@@ -178,6 +179,10 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 	}
 	if has("unifiedStorage") {
 		ps = append(ps, recipe.CheckUnifiedStorage(r.UnifiedStorage)...)
+	}
+	if has("sourceReuse") {
+		// Static rules only; whether the host has the item is full mode.
+		ps = append(ps, recipe.CheckSourceReusePartial(&r, has("image"), has("targetImgref"))...)
 	}
 	if has("imageType") {
 		ps = append(ps, recipe.CheckImageType(r.ImageType)...)
@@ -308,7 +313,10 @@ func runValidate(args []string) {
 		path = "recipe on stdin"
 	}
 	image := r.Image
-	if image == "" {
+	switch {
+	case r.SourceReuse != nil:
+		image = "(this host's bootc store, " + r.SourceReuse.Digest + "; updates from " + r.TargetImgref + ")"
+	case image == "":
 		image = strings.TrimSpace("(the running live image "+live.LiveImage) + ")"
 	}
 	stores, _ := resolveImageStores(r)

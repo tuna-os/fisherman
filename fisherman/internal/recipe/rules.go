@@ -669,7 +669,7 @@ func CheckExperimental(experimental []string) []Problem {
 	for i, e := range experimental {
 		if !contains(Experimentals, e) {
 			return []Problem{{fmt.Sprintf("experimental[%d]", i), CodeExperimentalUnsupported,
-				fmt.Sprintf("experimental accepts only \"zfs\", got %q", e)}}
+				fmt.Sprintf("experimental accepts only %s, got %q", quoteList(Experimentals), e)}}
 		}
 	}
 	return nil
@@ -857,6 +857,15 @@ func isDigit(r rune) bool { return r >= '0' && r <= '9' }
 
 func isASCIIAlnum(r rune) bool {
 	return isLower(r) || (r >= 'A' && r <= 'Z') || isDigit(r)
+}
+
+// quoteList renders values as "a", "b" for a message.
+func quoteList(values []string) string {
+	q := make([]string, len(values))
+	for i, v := range values {
+		q[i] = fmt.Sprintf("%q", v)
+	}
+	return strings.Join(q, ", ")
 }
 
 func contains(list []string, s string) bool {

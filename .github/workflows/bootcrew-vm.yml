@@ -77,6 +77,7 @@ jobs:
     outputs:
       matrix_required: ${{ steps.read-matrix.outputs.matrix_required }}
       matrix_advisory: ${{ steps.read-matrix.outputs.matrix_advisory }}
+      matrix_store_reuse: ${{ steps.read-matrix.outputs.matrix_store_reuse }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Parse image matrix (split required vs advisory)
@@ -92,6 +93,8 @@ jobs:
           advisory = [img for img in vm_boot if not img.get('required')]
           print(f"matrix_required={json.dumps(required)}")
           print(f"matrix_advisory={json.dumps(advisory)}")
+          # The store reuse profiles (#384) are advisory, whatever they say.
+          print(f"matrix_store_reuse={json.dumps(data.get('store_reuse') or [])}")
           EOF
           echo "--- parsed matrix ---"
           cat "$GITHUB_OUTPUT"
@@ -292,6 +295,63 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: boot-artifacts-${{ matrix.image.name }}
+          path: |
+            ${{ github.workspace }}/artifacts/**
+            /tmp/boot-*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ── Advisory: bootc store reuse, offline VM profile (#384 phase 2). ─────
+  # A VM booted from an installed bootc image, with no registry reachable,
+  # installs itself onto a second disk from its own bootc store (recipe
+  # sourceReuse, `bootc image copy-to-storage`), then that disk boots and its
+  # identity is checked against the verified copy and the receipt. Copy
+  # time, scratch and disk against the ordinary registry install go to the
+  # job summary. ADVISORY: continue-on-error, and deliberately not in
+  # required-canaries' needs. tests/bootcrew-matrix.yaml `store_reuse`,
+  # scripts/store-reuse-vm.sh, docs/SOURCE-REUSE.md.
+  store-reuse-advisory:
+    name: advisory / store-reuse / ${{ matrix.profile.name }}
+    needs: [setup, unit-tests, lint]
+    if: ${{ needs.setup.outputs.matrix_store_reuse != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJson(needs.setup.outputs.matrix_store_reuse) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache.
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@3f13feab2962a87273d379ebc36ea159527e6cc9 # v1.3.2
+        with:
+          tool-cache: true
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: fisherman/go.mod
+          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+      - name: Setup CI environment
+        uses: ./.github/actions/setup-host-tools
+        with:
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
+      - name: Generate SSH keys
+        run: just setup-ssh-keys
+      - name: Build fisherman
+        run: just build
+      - name: Run the store reuse profile
+        env:
+          ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+          PROFILE_JSON: ${{ toJson(matrix.profile) }}
+        run: |
+          mkdir -p "$ARTIFACTS_DIR"
+          bash scripts/store-reuse-vm.sh "$PROFILE_JSON"
+      - name: Upload store reuse artifacts (always)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: store-reuse-${{ matrix.profile.name }}
           path: |
             ${{ github.workspace }}/artifacts/**
             /tmp/boot-*.log
