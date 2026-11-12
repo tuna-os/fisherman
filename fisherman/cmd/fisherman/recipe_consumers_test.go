@@ -37,16 +37,19 @@ type fieldUse struct {
 	gate string
 }
 
-const mainGo = "cmd/fisherman/main.go"
+const (
+	mainGo      = "cmd/fisherman/main.go"
+	diskPhaseGo = "cmd/fisherman/disk_phase.go"
+)
 
 var recipeFieldUses = map[string]fieldUse{
-	"disk":            {files: []string{mainGo}},
-	"filesystem":      {files: []string{mainGo, "internal/validation/chain.go"}},
-	"btrfsSubvolumes": {files: []string{mainGo}},
-	"encryption":      {files: []string{mainGo}},
-	"encryption.type": {files: []string{mainGo}},
+	"disk":            {files: []string{mainGo, diskPhaseGo}},
+	"filesystem":      {files: []string{diskPhaseGo, "internal/validation/chain.go"}},
+	"btrfsSubvolumes": {files: []string{diskPhaseGo}},
+	"encryption":      {files: []string{mainGo, diskPhaseGo}},
+	"encryption.type": {files: []string{mainGo, diskPhaseGo}},
 	// Also registered as a secret (progress.RegisterSecret).
-	"encryption.passphrase": {files: []string{mainGo}},
+	"encryption.passphrase": {files: []string{mainGo, diskPhaseGo}},
 	"image":                 {files: []string{mainGo, "cmd/fisherman/host_recipe.go"}},
 	"targetImgref":          {files: []string{mainGo, "cmd/fisherman/reuse.go"}},
 	"sourceReuse":           {files: []string{mainGo, "cmd/fisherman/reuse.go"}},
@@ -71,12 +74,12 @@ var recipeFieldUses = map[string]fieldUse{
 	"user.fullname":            {files: []string{mainGo}},
 	"user.password":            {files: []string{mainGo}},
 	"user.groups":              {files: []string{mainGo}},
-	"customMounts":             {files: []string{mainGo, "cmd/fisherman/mounts.go"}},
-	"customMounts[].partition": {files: []string{mainGo, "cmd/fisherman/mounts.go"}},
-	"customMounts[].target":    {files: []string{mainGo, "cmd/fisherman/mounts.go"}},
-	"customMounts[].fstype":    {files: []string{mainGo, "cmd/fisherman/mounts.go"}},
-	"varDisk":                  {files: []string{mainGo, "cmd/fisherman/mounts.go"}},
-	"varDisk.disk":             {files: []string{mainGo, "cmd/fisherman/mounts.go"}},
+	"customMounts":             {files: []string{diskPhaseGo, "cmd/fisherman/mounts.go"}},
+	"customMounts[].partition": {files: []string{diskPhaseGo, "cmd/fisherman/mounts.go"}},
+	"customMounts[].target":    {files: []string{diskPhaseGo, "cmd/fisherman/mounts.go"}},
+	"customMounts[].fstype":    {files: []string{diskPhaseGo, "cmd/fisherman/mounts.go"}},
+	"varDisk":                  {files: []string{diskPhaseGo, "cmd/fisherman/mounts.go"}},
+	"varDisk.disk":             {files: []string{diskPhaseGo, "cmd/fisherman/mounts.go"}},
 	"varDisk.keepExisting":     {files: []string{"internal/recipe/state.go", "cmd/fisherman/mounts.go"}},
 	"additionalImageStores":    {files: []string{mainGo, "cmd/fisherman/host_recipe.go"}},
 	"slurpWallpapers":          {files: []string{mainGo}},
