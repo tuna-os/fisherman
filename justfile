@@ -445,6 +445,8 @@ bootcrew-ci-test IMAGE_JSON:
   [ -n "$BOOTCREW_USER" ] && CHECKS="$CHECKS scripts/vm-checks/user.sh"
   [ -n "$VARDEV" ] && CHECKS="$CHECKS scripts/vm-checks/var-disk.sh"
   [ -n "$SWTPM_STATE" ] && CHECKS="$CHECKS scripts/vm-checks/tpm2-enrolled.sh"
+  [ "$(echo "$IMAGE_JSON" | jq -r '.btrfs_subvolumes // false')" = "true" ] \
+    && CHECKS="$CHECKS scripts/vm-checks/btrfs-subvolumes.sh"
 
   # Boot VM and verify bootc status (pass LUKS passphrase for unlock).
   echo ""

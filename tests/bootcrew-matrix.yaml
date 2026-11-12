@@ -32,7 +32,9 @@
 #          and have the recipe's password (scripts/vm-checks/user.sh)
 #   var_disk: true — a second disk as `varDisk`; /var must be it on the
 #          booted system (scripts/vm-checks/var-disk.sh)
-#   btrfs_subvolumes: true — "btrfsSubvolumes": true
+#   btrfs_subvolumes: true — "btrfsSubvolumes": true; the booted system
+#          must mount the @ subvolume as the recipe says
+#          (scripts/vm-checks/btrfs-subvolumes.sh)
 #   enabled_units: true — the booted system enables no unit the image did
 #          not enable, except fisherman's own and the harness's ssh
 #          (scripts/vm-checks/enabled-units.sh has the allowlist). ostree
@@ -323,6 +325,26 @@ images:
     encryption: tpm2-luks-passphrase
     luks_passphrase: "bootcrew-luks-test"
     vm_timeout: 800
+    nightly: false
+    vm_boot: true
+
+  # btrfsSubvolumes: the root in an @ subvolume, mounted with
+  # rootflags=subvol=@,compress=zstd:1. The guest must mount @ as the recipe
+  # says and have no other top-level subvolume
+  # (scripts/vm-checks/btrfs-subvolumes.sh). dakota's kernel has btrfs
+  # (dakota-luks-btrfs boots), and GPT auto-discovery finds the root, so
+  # only rootflags select the subvolume. Unencrypted, so a failure here is
+  # the subvolume, not LUKS.
+  - name: dakota-btrfs-subvolumes
+    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    ssh_image_name: dakota
+    filesystem: btrfs
+    composefs_backend: true
+    bootloader: systemd
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    btrfs_subvolumes: true
     nightly: false
     vm_boot: true
 

@@ -555,3 +555,223 @@ func TestAcquire_VarTmpMode(t *testing.T) {
 		t.Errorf("the directory bound over /var/tmp is %v, want drwxrwxrwt", mode)
 	}
 }
+
+// bindTracker is the /var/tmp mount table the session changes: our bind is
+// on or off, and an umount without it would unmount the host's own
+// /var/tmp. It also checks that the scratch, the bind's source, is still
+// there whenever the bind is undone.
+type bindTracker struct {
+	mu        sync.Mutex
+	bound     bool
+	mounts    int
+	umounts   int
+	hostUmnt  int // umount /var/tmp with our bind not in place
+	lateUmnt  int // umount after the scratch was removed
+	failUmnts int // umounts still to fail
+}
+
+func trackBind(h *fakeHost) *bindTracker {
+	b := &bindTracker{}
+	h.handlers["mount --bind "+filepath.Join(scratch, "var-tmp")+" "+VarTmp] = func() ([]byte, error) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		b.mounts++
+		b.bound = true
+		return nil, nil
+	}
+	h.handlers["umount "+VarTmp] = func() ([]byte, error) {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.failUmnts > 0 {
+			b.failUmnts--
+			return nil, exitErr(h.t, 32)
+		}
+		b.umounts++
+		if !b.bound {
+			b.hostUmnt++
+		}
+		if _, err := os.Stat(filepath.Join(h.root, scratch)); err != nil {
+			b.lateUmnt++
+		}
+		b.bound = false
+		return nil, nil
+	}
+	return b
+}
+
+// check: one mount, one umount of it, nothing of the host's, and the
+// scratch removed only after the bind went.
+func (b *bindTracker) check(t *testing.T, h *fakeHost) {
+	t.Helper()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.bound || b.mounts != 1 || b.umounts != 1 || b.hostUmnt != 0 || b.lateUmnt != 0 {
+		t.Errorf("bind: still bound %v, %d mounts, %d umounts, %d of the host's /var/tmp, %d after the scratch went; calls %v",
+			b.bound, b.mounts, b.umounts, b.hostUmnt, b.lateUmnt, h.calls)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, scratch)); !os.IsNotExist(err) {
+		t.Errorf("scratch left behind: %v", err)
+	}
+}
+
+func withReleaseHook(t *testing.T, fn func()) {
+	t.Helper()
+	releaseHook = fn
+	t.Cleanup(func() { releaseHook = nil })
+}
+
+// The VM run's order (43186222564): the cancel kills the copy, the copy
+// returns and goes to unbind while Release has just begun. The copy's
+// unbind must still run, and Release must not remove the scratch under a
+// bind nor unmount twice.
+func TestRelease_CopyUnbindsDuringRelease(t *testing.T) {
+	h := newFakeHost(t)
+	b := trackBind(h)
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	h.handlers["bootc image copy-to-storage --source "+srcRef+" --target "+dest] = func() ([]byte, error) {
+		close(started)
+		<-finish
+		return nil, exitErr(t, 143)
+	}
+	s := New(h.env(), testDigest, "x86_64", scratch)
+	errc := make(chan error, 1)
+	go func() {
+		_, err := s.Acquire([]probe.ReuseCandidate{candidate()})
+		errc <- err
+	}()
+	<-started
+	var acquireErr error
+	withReleaseHook(t, func() {
+		close(finish)       // the terminator's SIGTERM ends the copy
+		acquireErr = <-errc // and the copy's own unbind runs to its end
+	})
+	if err := s.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if f := failureOf(t, acquireErr); f.Code != recipe.CodeSourceReuseTransferFailed {
+		t.Errorf("code %s", f.Code)
+	}
+	b.check(t, h)
+}
+
+// The cancel lands while the bind is being made: Release waits for it and
+// undoes it; the copy never starts.
+func TestRelease_DuringBind(t *testing.T) {
+	h := newFakeHost(t)
+	b := trackBind(h)
+	mountKey := "mount --bind " + filepath.Join(scratch, "var-tmp") + " " + VarTmp
+	inner := h.handlers[mountKey]
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	h.handlers[mountKey] = func() ([]byte, error) {
+		close(started)
+		<-finish
+		return inner()
+	}
+	s := New(h.env(), testDigest, "x86_64", scratch)
+	errc := make(chan error, 1)
+	go func() {
+		_, err := s.Acquire([]probe.ReuseCandidate{candidate()})
+		errc <- err
+	}()
+	<-started
+	withReleaseHook(t, func() {
+		close(finish)
+		<-errc // the copy finds the session released after its bind
+	})
+	if err := s.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	if h.ran("bootc image copy-to-storage --source") {
+		t.Errorf("the copy ran after the release: %v", h.calls)
+	}
+	b.check(t, h)
+}
+
+// The copy finished: its own unbind is the only one.
+func TestRelease_AfterCopyFinished(t *testing.T) {
+	h := newFakeHost(t)
+	b := trackBind(h)
+	s := New(h.env(), testDigest, "x86_64", scratch)
+	if _, err := s.Acquire([]probe.ReuseCandidate{candidate()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	b.check(t, h)
+}
+
+// The copy failed and so did its unbind: Release unbinds, once.
+func TestRelease_RetriesAFailedCopyUnbind(t *testing.T) {
+	h := newFakeHost(t)
+	b := trackBind(h)
+	b.failUmnts = 1
+	h.handlers["bootc image copy-to-storage --source "+srcRef+" --target "+dest] = func() ([]byte, error) {
+		return nil, exitErr(t, 1)
+	}
+	s := New(h.env(), testDigest, "x86_64", scratch)
+	if _, err := s.Acquire([]probe.ReuseCandidate{candidate()}); err == nil {
+		t.Fatal("a failed copy must fail")
+	}
+	if err := s.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	b.check(t, h)
+}
+
+// Release cannot unbind: the scratch stays (removing it would leave
+// /var/tmp on a deleted directory), and the error says so.
+func TestRelease_KeepsScratchUnderAStuckBind(t *testing.T) {
+	h := newFakeHost(t)
+	b := trackBind(h)
+	started := make(chan struct{})
+	finish := make(chan struct{})
+	h.handlers["bootc image copy-to-storage --source "+srcRef+" --target "+dest] = func() ([]byte, error) {
+		close(started)
+		<-finish
+		return nil, exitErr(t, 143)
+	}
+	s := New(h.env(), testDigest, "x86_64", scratch)
+	errc := make(chan error, 1)
+	go func() {
+		_, err := s.Acquire([]probe.ReuseCandidate{candidate()})
+		errc <- err
+	}()
+	<-started
+	b.mu.Lock()
+	b.failUmnts = 2 // the copy's and Release's
+	b.mu.Unlock()
+	withReleaseHook(t, func() { close(finish); <-errc })
+	err := s.Release()
+	if err == nil || !strings.Contains(err.Error(), "still bound") {
+		t.Fatalf("Release: %v, want the stuck bind reported", err)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, scratch)); err != nil {
+		t.Errorf("the scratch under the bind was removed: %v", err)
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.hostUmnt != 0 || !b.bound {
+		t.Errorf("tracker %+v", b)
+	}
+}
+
+// Released before the copy: no bind at all.
+func TestRelease_BeforeBind(t *testing.T) {
+	h := newFakeHost(t)
+	b := trackBind(h)
+	s := New(h.env(), testDigest, "x86_64", scratch)
+	if err := s.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Acquire([]probe.ReuseCandidate{candidate()}); err == nil {
+		t.Fatal("Acquire after Release must fail")
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.mounts != 0 || b.umounts != 0 {
+		t.Errorf("tracker %+v; calls %v", b, h.calls)
+	}
+}

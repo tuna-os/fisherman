@@ -132,6 +132,15 @@ if [ -n "$LUKS_PASSPHRASE" ]; then
 else
   sudo "$MOUNT_BIN" "$ROOT_PART" "$ROOT_DIR"
 fi
+# A btrfsSubvolumes install keeps the system in @ (find-tools.sh).
+ROOT_SRC="$ROOT_PART"
+[ "$LUKS_OPENED" -eq 1 ] && ROOT_SRC="/dev/mapper/$LUKS_MAPPER"
+if [ "$(sudo blkid -s TYPE -o value "$ROOT_SRC" 2>/dev/null || true)" = btrfs ] \
+  && SUBVOL=$(btrfs_root_subvol "$ROOT_DIR"); then
+  echo "btrfs: the system is in subvolume $SUBVOL; mounting it"
+  $SUDO_BIN umount "$ROOT_DIR"
+  sudo "$MOUNT_BIN" -o "subvol=$SUBVOL" "$ROOT_SRC" "$ROOT_DIR"
+fi
 
 # Debug: show root structure
 echo "--- Root directory structure ---"

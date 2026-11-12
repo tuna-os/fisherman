@@ -39,6 +39,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **btrfs roots booted without the recipe's mount options on composefs**
+  (#418): bootc 1.15.x writes the composefs boot entry from the root's own
+  arguments, `composefs=` and `kargs.d`, and never reads `--karg`
+  (`setup_composefs_bls_boot`; newer bootc reads it). fisherman's
+  `rootflags=subvol=@,compress=zstd:1` (or `compress=zstd:1` without
+  subvolumes) was dropped, the entry had bootc's own
+  `rootflags=subvol=/@` (or `subvol=/`), and the installed system mounted
+  its root uncompressed. Found by the new `dakota-btrfs-subvolumes` VM entry;
+  `dakota-luks-btrfs` had the same entry (`rootflags=subvol=/`). fisherman
+  now replaces bootc's `rootflags=` in every BLS entry with the recipe's
+  and reads each entry back (`post.RequireRootFlags`). Where bootc honours
+  `--karg` (ostree), the entry had both, and one `rootflags=` remains. A
+  failure is the new `error` code `root_flags_failed`. An image that boots a
+  unified kernel image has no entry to change, and the log says so.
+
+- **A cancel during the source reuse copy could leave `/var/tmp` bound to
+  a deleted directory** (#384): a cancel stops the copy's `bootc` and runs
+  the teardown, and the copy's own unbind and `Release` raced for the
+  bind. When the copy took it first, the session was already released, so
+  its `umount` was refused. `Release` then saw no bind, skipped the unbind
+  and removed the scratch. `/var/tmp` stayed on the deleted
+  `source-reuse/var-tmp`, and the next install failed with "cannot bind ...
+  over /var/tmp" (store-reuse VM run 43186222564). The bind, the copy's
+  unbind and `Release`'s unbind now run one at a time. One `umount` undoes
+  one `mount`, even after `Release` has begun, and `Release` waits for a
+  bind in flight. Neither unmounts `/var/tmp` a second time. If the bind
+  cannot be undone, `Release` keeps the scratch and reports it, so it does
+  not remove it from under the bind.
 - **The host's bootc installed a local source it did not boot** (#363): an
   install from a local `containers-storage:` source took the direct path
   (the host's bootc, no podman) whenever the host had a bootc. bootc reads
@@ -180,6 +208,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `v2.20.1`, not `latest`.
 
 ### 🧪 Testing
+
+- **The capability report is checked against the bootc that installs**
+  (#383): the advisory store reuse VM profile takes
+  `fisherman probe --json --source <booted ref>@<booted digest>` inside the
+  VM that installs, before it installs that image from its own bootc store.
+  The new guest check `scripts/vm-checks/capabilities.sh` then holds the
+  report to the installed system: an established `digest_match` root, one
+  bootc version in the report, the installing VM and the installed system,
+  the recipe's backend, the `print-configuration` bootloader (when it names
+  one) and the `container inspect` kernel. The negative case, the same name
+  pinned by a digest the VM did not boot, must be `digest_mismatch` with no
+  answer from the VM's bootc. `tests/check-validation.sh` proves each check
+  catches its bug, also on the probe's own golden output.
+- **A VM entry for `btrfsSubvolumes`** (#418): `dakota-btrfs-subvolumes`
+  (advisory, PR gate) installs with `"btrfsSubvolumes": true`. The guest
+  check `scripts/vm-checks/btrfs-subvolumes.sh` requires the root on the `@`
+  subvolume with `subvol=/@,compress=zstd:1`, the same `rootflags` on the
+  kernel command line, `/var` inside `@`, and `@` as the only top-level
+  subvolume (#416). The harness scripts that write into the installed root
+  now mount `@` when the top level holds only it.
+
+- **The TPM2 guest check said "no LUKS device" when ssh had failed**: a
+  `dakota-tpm2` run under memory pressure missed ssh's one-second connect
+  timeout, and `tpm2-enrolled.sh` read the empty answer as an unencrypted
+  guest. It now tries the query again while ssh fails, and says "the guest
+  did not answer over SSH" when it never does.
+
+- **The VM matrix covers a user, GRUB with LUKS, TPM2 and a /var disk**
 
 - **A recipe field that never reaches the install fails a test** (#289):
   `recipeFieldUses` (`cmd/fisherman/recipe_consumers_test.go`) lists every
