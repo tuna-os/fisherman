@@ -210,8 +210,9 @@ func TestStdinRecipeCLI(t *testing.T) {
 		wantError string // in the install's {"type":"error"} event, or validate's stderr
 		wantEvent string // the error event's "code", when the failure has one
 	}{
-		{"install: invalid JSON", "-", `{"disk":`, 1, "loading recipe: parsing recipe", ""},
-		{"install: empty stdin", "-", "", 1, "loading recipe: recipe is empty", ""},
+		// #369: the same code `validate --json` gives the recipe.
+		{"install: invalid JSON", "-", `{"disk":`, 1, "loading recipe: parsing recipe", recipe.CodeRecipeMalformed},
+		{"install: empty stdin", "-", "", 1, "loading recipe: recipe is empty", recipe.CodeRecipeMalformed},
 		{"install: empty image, not live", "-", string(noImage), 1, "invalid recipe: image is required", recipe.CodeImageRequired},
 		// tuna-os/fisherman#404: a misspelt "encryption" used to install unencrypted.
 		{"install: unknown field", "-", misspelt, 1, `loading recipe: unknown recipe field "encrypton"`, recipe.CodeRecipeUnknownField},
@@ -262,6 +263,14 @@ func TestStdinRecipeCLI(t *testing.T) {
 			}
 			if code, _ := last["code"].(string); code != tt.wantEvent {
 				t.Errorf("error event code = %q, want %q\nstdout:\n%s", code, tt.wantEvent, stdout.String())
+			}
+			// Refused before the first step: nothing on any disk changed, and
+			// the teardown had nothing to fail on.
+			if last["disk_changed"] != false || last["step_id"] != nil {
+				t.Errorf("disk_changed = %v, step_id = %v; want false and none", last["disk_changed"], last["step_id"])
+			}
+			if c, _ := last["cleanup"].(map[string]any); c["status"] != "ok" {
+				t.Errorf("cleanup = %v, want status ok", last["cleanup"])
 			}
 		})
 	}

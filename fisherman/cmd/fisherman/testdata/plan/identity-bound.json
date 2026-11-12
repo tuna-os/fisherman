@@ -1,0 +1,1 @@
+{"disk":"@DIR@/sda","diskIdentity":{"serial":"FIXTURE-SDA-SERIAL","wwn":"0x5000C500A1B2C3D4","sizeBytes":500107862016},"filesystem":"xfs","image":"ghcr.io/example/os:stable","hostname":"fixture","encryption":{"type":"luks-passphrase","passphrase":"SENTINEL-LUKS-PASSPHRASE"}}

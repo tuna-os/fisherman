@@ -67,6 +67,13 @@ type Recipe struct {
 	// When set, fisherman formats (or mounts as-is) this disk before running
 	// bootc, then adds a /var entry to the installed system's fstab.
 	VarDisk *VarDiskSpec `json:"varDisk,omitempty"`
+	// DiskIdentity binds the install to the device the frontend planned on:
+	// the serial, WWN and size `fisherman plan --json` reported for `disk`.
+	// Absent: no binding. When set, validate and the install refuse the
+	// recipe (disk_identity_mismatch) if the device `disk` names now
+	// reports another value for any field that is set. See
+	// docs/VALIDATE.md, "Disk identity".
+	DiskIdentity *DiskIdentity `json:"diskIdentity,omitempty"`
 	// AdditionalImageStores lists host paths to be exposed to the bootc
 	// container as containers/storage additionalimagestores. Each path is
 	// bind-mounted read-only into the container at the same location and added
@@ -255,7 +262,7 @@ func (r *Recipe) Overridden(check string) bool {
 // when mounting root during installation and recorded as persistent rootflags
 // for post-reboot boots.
 func (r *Recipe) RootMountOptions() string {
-	if len(r.CustomMounts) > 0 {
+	if r.IsManualLayout() {
 		for _, cm := range r.CustomMounts {
 			if cm.Target == "/" {
 				if cm.Fstype == "btrfs" {
@@ -295,6 +302,14 @@ type SlurpSpec struct {
 type SlurpUserSpec struct {
 	Name       string   `json:"name"`
 	Categories []string `json:"categories"`
+}
+
+// DiskIdentity is the identity a recipe expects `disk` to have. An empty
+// string or a zero size is not checked; at least one field must be set.
+type DiskIdentity struct {
+	Serial    string `json:"serial,omitempty"`    // lsblk SERIAL, as plan reports it
+	WWN       string `json:"wwn,omitempty"`       // lsblk WWN; compared without case
+	SizeBytes int64  `json:"sizeBytes,omitempty"` // the size in bytes
 }
 
 // VarDiskSpec describes an optional separate disk to mount at /var.
@@ -349,15 +364,17 @@ func (r *Recipe) Validate() error {
 
 // Problems runs every recipe rule (rules.go) plus the existence checks for
 // the disk, the customMounts partitions and the varDisk, and returns every
-// problem found, in a stable order: the layout first, then sourceReuse, imageType,
-// bootloader, encryption, varDisk, hostname, user, distroID, brewTap,
-// slurp, targetMount, flatpakVarPath, zfsPoolName, luksMapperName,
-// additionalImageStores and override. It does not check the
+// problem found, in a stable order: the layout first, then unifiedStorage,
+// sourceReuse, imageType, image and targetImgref, bootloader, encryption,
+// varDisk, hostname, user, distroID, brewTap, slurp, targetMount,
+// flatpakVarPath, zfsPoolName, luksMapperName, additionalImageStores,
+// override, experimental, locale, keyboard and timezone (docs/VALIDATE.md
+// lists the same order). It does not check the
 // TPM or whether the disk is an eligible target, which need the machine; see
 // CheckTPM and CheckTarget.
 func (r *Recipe) Problems() []Problem {
 	var ps []Problem
-	if len(r.CustomMounts) > 0 {
+	if r.IsManualLayout() {
 		// Manual layout: validate each mount spec instead of the auto-partition fields.
 		hasRoot := false
 		for i, cm := range r.CustomMounts {
@@ -401,7 +418,7 @@ func (r *Recipe) Problems() []Problem {
 		// UNENCRYPTED while the caller believes otherwise — a security-boundary
 		// failure, so fail closed here rather than silently downgrade.
 		// (Same shape as the ZFS+LUKS rejection.)
-		if r.Encryption.Type != "" && r.Encryption.Type != "none" {
+		if r.HasEncryption() {
 			ps = append(ps, Problem{"encryption.type", CodeEncryptionUnsupportedOnManual,
 				fmt.Sprintf("encryption %q is not supported with customMounts: "+
 					"manual layouts do not run luksFormat, so the install would complete "+
@@ -420,6 +437,7 @@ func (r *Recipe) Problems() []Problem {
 	ps = append(ps, CheckUnifiedStorage(r.UnifiedStorage)...)
 	ps = append(ps, CheckSourceReuse(r)...)
 	ps = append(ps, CheckImageType(r.ImageType)...)
+	ps = append(ps, CheckImageRefs(r)...)
 	ps = append(ps, CheckBootloader(r.Bootloader)...)
 	ps = append(ps, CheckEncryption(r.Encryption)...)
 	ps = append(ps, CheckVarDiskEncryption(r)...)
@@ -460,6 +478,7 @@ func (r *Recipe) Problems() []Problem {
 	ps = append(ps, CheckLuksMapperName(r.LuksMapperName)...)
 	ps = append(ps, CheckAdditionalImageStores(r.AdditionalImageStores)...)
 	ps = append(ps, CheckOverride(r.Override)...)
+	ps = append(ps, CheckDiskIdentity(r)...)
 	ps = append(ps, CheckExperimental(r.Experimental)...)
 	// Written into /etc files and, for the keymap, onto the kernel command
 	// line: refused before any disk step (#405).

@@ -1,6 +1,7 @@
 #!/bin/bash
 # Enable SSH in the installed bootc system
 # Usage: enable-ssh-installed.sh <LOOPDEV> <COMPOSEFS> <SSH_PUBKEY_FILE> [LUKS_PASSPHRASE]
+# Env: BOOTCREW_USER also authorises the key for that user.
 
 set -e
 
@@ -10,6 +11,9 @@ SSH_PUBKEY_FILE="${3:?SSH_PUBKEY_FILE required}"
 LUKS_PASSPHRASE="${4:-}"  # optional; if set, opens the LUKS root container before mounting
 
 echo "Enabling SSH in installed system..."
+
+# shellcheck source=./find-tools.sh
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/find-tools.sh"
 
 # Find and mount the root partition.
 #
@@ -76,6 +80,17 @@ sudo mount "$MOUNT_SRC" "$MOUNT_DIR" || {
   echo "WARNING: Could not mount root partition $MOUNT_SRC"
   exit 1
 }
+# A btrfsSubvolumes install keeps the system in @: mount that, as the
+# installed system's rootflags do, so the layouts below are found.
+if [ "$(sudo blkid -s TYPE -o value "$MOUNT_SRC" 2>/dev/null || true)" = btrfs ] \
+  && SUBVOL=$(btrfs_root_subvol "$MOUNT_DIR"); then
+  echo "btrfs: the system is in subvolume $SUBVOL; mounting it"
+  sudo umount "$MOUNT_DIR"
+  sudo mount -o "subvol=$SUBVOL" "$MOUNT_SRC" "$MOUNT_DIR" || {
+    echo "WARNING: Could not mount subvolume $SUBVOL of $MOUNT_SRC"
+    exit 1
+  }
+fi
 
 # Determine the rootfs directory based on storage type, and — separately —
 # the stateroot var: the directory the booted system mounts over /var.
@@ -278,6 +293,15 @@ if sudo test -d "$ROOTFS/etc/ssh"; then
       "$ROOTFS/etc/ssh/sshd_config.d" "$ROOTFS/etc/ssh/sshd_config.d/10-fisherman-ci.conf" 2>/dev/null || true
   fi
   echo "  sshd drop-in -> ${ROOTFS#"$MOUNT_DIR"}/etc/ssh/sshd_config.d/10-fisherman-ci.conf"
+  # BOOTCREW_USER (env, optional): the account the recipe's `user` block
+  # created. The same key lets it sign in (scripts/vm-checks/user.sh). sshd
+  # reads a user's AuthorizedKeysFile as that user, so the file is 0644, not
+  # root's 0600; root still owns it, which StrictModes accepts.
+  if [ -n "${BOOTCREW_USER:-}" ]; then
+    install_authorized_keys "$ROOTFS/etc/ssh/authorized_keys.d/$BOOTCREW_USER" "system_u:object_r:etc_t:s0"
+    sudo chmod 644 "$ROOTFS/etc/ssh/authorized_keys.d/$BOOTCREW_USER"
+    sudo chmod 755 "$ROOTFS/etc/ssh/authorized_keys.d"
+  fi
 else
   echo "WARNING: no etc/ssh in deployment — skipping sshd_config.d drop-in"
 fi

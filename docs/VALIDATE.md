@@ -58,16 +58,30 @@ a TPM type on a machine without a usable TPM 2.0).
 }
 ```
 
-Order: unknown keys (sorted by path), then the layout (disk or customMounts,
-filesystem and its combinations), then `imageType`, `bootloader`, `encryption`, `varDisk`, `hostname`,
-`user.username`, the other fields, the TPM check, `image`, and target
-eligibility (`disk`, `varDisk.disk`, the firmware) last. Each field reports at most one
-problem from its own rule (the first it breaks).
+Order: unknown keys (sorted by path), then the order of `Recipe.Problems()`
+in `fisherman/internal/recipe/recipe.go`:
+
+1. the layout: `customMounts` (each entry, then the layout rules and
+   encryption with a manual layout), or `disk`, `filesystem`, its
+   combinations and the `zfs` opt-in;
+2. `unifiedStorage`, `sourceReuse`, `imageType`, `image` and `targetImgref`
+   (reference syntax), `bootloader`, `encryption`, `varDisk` with
+   encryption, then `varDisk` itself;
+3. `hostname`, `user.username`, `distroID`, `brewTap`, `slurp`,
+   `targetMount`, `flatpakVarPath`, `zfsPoolName`, `luksMapperName`,
+   `additionalImageStores`, `override`, `experimental`, `locale`,
+   `keyboard`, `timezone`.
+
+Then the checks that read the machine, in the order of `installProblems` in
+`fisherman/cmd/fisherman/validate.go`: the TPM, `image` (live media), whether
+each `additionalImageStores` entry exists, the `sourceReuse` host checks, and
+target eligibility (`disk`, `varDisk.disk`, the firmware) last. Each field
+reports at most one problem from its own rule (the first it breaks).
 
 ### Example
 
 ```console
-$ fisherman validate --json recipe.json
+$ echo '{"hostname":"my_pc","user":{"username":"Alice"}}' | fisherman validate --json --partial -
 {
   "protocol_version": 1,
   "valid": false,
@@ -88,6 +102,11 @@ $ fisherman validate --json recipe.json
 
 More, byte for byte, in
 `fisherman/cmd/fisherman/testdata/validate/*.golden` (inputs beside them).
+
+Every complete output in this document is real: `TestValidateDocExamples`
+(`fisherman/cmd/fisherman/validate_doc_test.go`) runs the command on the
+line above it and compares the output byte for byte. An elided output
+(`...`) is held to each `field` and `code` pair that it shows.
 
 ## Unknown keys
 
@@ -174,6 +193,33 @@ no `disk` verdict. The firmware check applies.
 non-root run before it reads the recipe: its `error` event has the code
 `not_root`.
 
+## Disk identity
+
+A frontend shows the user a disk, plans the install
+([PLAN.md](PLAN.md)), asks for confirmation, then sends the recipe. The
+device node can name another disk by then: a USB disk was swapped, or the
+kernel numbered the disks in another order after a replug. The optional
+recipe field `diskIdentity` binds the install to the disk the user
+confirmed:
+
+```json
+{"disk": "/dev/sdb", "diskIdentity": {"serial": "S5Y1NJ0R123456", "wwn": "0x5002538f4231abcd", "sizeBytes": 500107862016}}
+```
+
+Copy the values from `plan.target.identity` (`serial`, `wwn`,
+`size_bytes`), and leave out a field the plan reports as `unknown`. The full
+`validate` and the install compare each field that is set with what the
+device reports now, through the same `lsblk` call as the target checks
+(`probe.Target`): the serial and the WWN (without case) as `lsblk` reads them
+from udev, and the size in bytes. A field the device no longer reports (a
+serial that is gone) is a mismatch: the binding fails closed. Each field
+that differs is one `disk_identity_mismatch`. There is no override.
+
+The install runs the check in its pre-flight, with the other rules, before
+it touches a disk. A device that is not a whole disk, or that `lsblk` cannot
+judge, gets `disk_not_disk` or `disk_unverified` instead. `--partial` checks
+only the shape (`disk_identity_invalid`).
+
 ## Validating one page: `--partial`
 
 A frontend validates a page while it is filled in, before a whole recipe
@@ -201,6 +247,7 @@ A rule runs when its key is present:
 | `encryption` | encryption type, passphrase |
 | `bootloader` | bootloader |
 | `imageType` | imageType |
+| `image`, `targetImgref` | the reference syntax of each one present. Not with `sourceReuse` in the same fragment: its rules judge both |
 | `customMounts` | each entry's target (not whether its partition exists), and the persistence rules: a target named once, a partition path named once (paths are compared as text; the full mode also follows symlinks), a data mount the installed system can mount again. `composeFsBackend` counts as false when absent |
 | `varDisk` | its combinations with `encryption.type`, `composeFsBackend` and `filesystem: zfs` (absent ones count as none / false). Not the disk itself |
 | `targetMount` | targetMount |
@@ -209,6 +256,7 @@ A rule runs when its key is present:
 | `luksMapperName` | luksMapperName |
 | `additionalImageStores` | each entry's path syntax (not whether it exists) |
 | `override` | override |
+| `diskIdentity` | the shape of diskIdentity (`disk_identity_invalid`); `customMounts` counts as absent when the fragment has none. Never whether the device matches |
 | `experimental` | experimental |
 | `locale` | locale |
 | `keyboard` | keyboard layout (required when the object is present), variant, model |
@@ -257,6 +305,8 @@ holds both fields.
 | `disk` | an eligible target: a whole disk (symlinks resolved) that does not hold the running system, is writable and is at least 50 GiB. See [Target eligibility](#target-eligibility). Full mode only. | `disk_not_disk`, `disk_boot_disk`, `disk_read_only`, `disk_too_small`, `disk_unverified` |
 | (the machine) | booted through UEFI, unless the target is a loop device. Full mode only. | `firmware_not_uefi` |
 | `override` | each entry is `too_small` or `uefi` | `override_unsupported` |
+| `diskIdentity` | absent, or at least one of `serial`, `wwn` and `sizeBytes`, with a `sizeBytes` that is not negative, and not with `customMounts` | `disk_identity_invalid` |
+| `diskIdentity` | each field that is set matches what the device `disk` names reports now. See [Disk identity](#disk-identity). Full mode only. | `disk_identity_mismatch` |
 | `zfsPoolName` | empty is valid (`rpool`). Otherwise 1–63 characters: a letter first, then letters, digits, `_`, `-` and `.`; and not a name `zpool` reserves (`mirror*`, `raidz*`, `draid*`, `spare*`, `log`, `c0`–`c9…`). It is an argument of `zpool create`, so `-f` would be read as a flag. | `zfs_pool_name_invalid` |
 | `luksMapperName` | empty is valid (`fisherman-root`). Otherwise 1–63 characters: a letter or digit first, then letters, digits, `_`, `.`, `+` and `-`; not `control`. It names `/dev/mapper/<name>`, so `../sda` would point the install at another device node. | `luks_mapper_name_invalid` |
 | `additionalImageStores[i]` | an absolute path with no `..` component, no `:` or `,` and no control character. It is mounted into the bootc container as `-v <store>:<store>:ro`. | `additional_image_store_invalid` |
@@ -277,6 +327,7 @@ holds both fields.
 | `varDisk` | not set on a composefs-native target (`composeFsBackend`, or `filesystem: zfs`, which forces composefs). The initramfs mounts the deployment's own `/var` there, so the separate disk would not be used ([#252](https://github.com/tuna-os/fisherman/issues/252)). | `var_disk_unsupported_composefs` |
 | `varDisk` | not set with an encrypted `encryption.type`. fisherman has no LUKS step for the `/var` disk: `/var`, and `/var/home` on it, would be plain text beside an encrypted root ([#406](https://github.com/tuna-os/fisherman/issues/406)). | `var_disk_encryption_unsupported` |
 | `image` | non-empty unless this host booted from live media (probe's `live.is_live`), where empty means "install the running live image", or the recipe has `sourceReuse` (whose `image` must be empty). Full mode only. | `image_required` |
+| `image`, `targetImgref` | empty is not judged here. Otherwise no whitespace or control character (a newline included), and no `-` first. `image` is an argument of `skopeo`, `podman` and `bootc`, `targetImgref` of `bootc --target-imgref`; both are read after the disk is partitioned. With `sourceReuse` the `source_reuse_*` rules judge both instead. | `image_invalid`, `target_imgref_invalid` |
 | `imageType` | `""` or `bootc` | `image_type_unsupported` |
 | `bootloader` | `""`, `grub2` or `systemd` | `bootloader_unsupported` |
 | (whole recipe) | readable, valid JSON | `recipe_unreadable`, `recipe_malformed` |
@@ -323,9 +374,16 @@ table says what the installed system has after the reboot.
 The install stops, after bootc ran, when it cannot keep that promise:
 `blkid` reports no UUID or type for the device, the resolved mountpoint is
 not below `/var` and is not a directory of the image, the image's fstab
-conflicts, or an ostree image discards `/etc` at every boot
-(`[etc] transient = true` in `prepare-root.conf`). These failures carry no
-code: only the installed image shows them.
+conflicts, an ostree image discards `/etc` at every boot
+(`[etc] transient = true` in `prepare-root.conf`), or bootc installed a
+composefs-native deployment and the recipe has a separate `/var` (a
+`varDisk`, or a `customMounts` entry for `/var`). The composefs initramfs
+mounts the deployment's own `var` at `/var`, so the separate disk would not
+be used, and the Flatpaks and the home would go to a disk that the first boot
+does not mount ([#252](https://github.com/tuna-os/fisherman/issues/252)).
+`var_disk_unsupported_composefs` refuses this before any disk work when the
+recipe says composefs. These failures carry no code: only the installed image
+shows them.
 
 Before any disk work, the install also checks each device that the recipe
 keeps as it is (`varDisk.keepExisting`, or a mounted `customMounts` entry
@@ -394,6 +452,8 @@ This section maps error codes to their causes and corrective actions. Each code 
 | `disk_unverified` | `disk` | `lsblk` failed, so fisherman cannot tell whether the disk is safe | Install `util-linux` on the host; read the message for the `lsblk` error |
 | `firmware_not_uefi` | (none) | The machine booted in BIOS (legacy) mode; fisherman installs UEFI boot loaders | Boot the installer in UEFI mode, or add `"uefi"` to `override` for a disk that another machine will boot |
 | `override_unsupported` | `override[i]` | The entry is not `too_small` or `uefi` | Remove it. The other target checks have no override |
+| `disk_identity_invalid` | `diskIdentity`, `diskIdentity.sizeBytes` | `diskIdentity` sets none of `serial`, `wwn` and `sizeBytes`, has a negative `sizeBytes`, or is given with `customMounts` | Copy the identity `fisherman plan --json` reports for the disk, or remove `diskIdentity` |
+| `disk_identity_mismatch` | `diskIdentity.serial`, `diskIdentity.wwn` or `diskIdentity.sizeBytes` | The device `disk` names now reports another serial, WWN or size than the recipe's `diskIdentity` (or reports none): it is not the disk the install was planned for. Full mode and the install only | Show the disk list again (`fisherman probe --json`), let the user confirm the disk, and plan again. There is no override |
 | `var_disk_not_disk` | `varDisk.disk` | The `/var` disk path is not a whole disk | Name the disk itself |
 | `var_disk_boot_disk` | `varDisk.disk` | The running system or the live medium is on the `/var` disk | Choose another disk |
 | `var_disk_read_only` | `varDisk.disk` | The `/var` disk is read-only | Remove the write protection, or choose another disk |
@@ -480,6 +540,8 @@ does not have is not linked, and the log says so.
 | Code | Field | Cause | Fix |
 |---|---|---|---|
 | `image_required` | `image` | Image is required on non-live systems but is empty | Provide a container image URL |
+| `image_invalid` | `image` | The image reference has a space, a newline or another control character, or starts with `-` (a flag to `podman`) | Use a reference such as `ghcr.io/example/os:stable` |
+| `target_imgref_invalid` | `targetImgref` | The update reference has a space, a newline or another control character, or starts with `-` | Use a reference such as `ghcr.io/example/os:stable`, or leave the field out |
 | `image_type_unsupported` | `imageType` | Image type is not empty or `bootc` | Leave empty or use `bootc` |
 | `distro_id_invalid` | `distroID` | distroID contains invalid characters or format | Use 1–63 lowercase letters, digits, and `-`, starting with a lowercase letter |
 
@@ -497,7 +559,7 @@ does not have is not linked, and the log says so.
 | Code | Field | Cause | Fix |
 |---|---|---|---|
 | `bootloader_unsupported` | `bootloader` | Bootloader is not empty, `grub2`, or `systemd` | Use one of: empty (auto), `grub2`, or `systemd` |
-| `slurp_unsupported` | `slurp` | User-data migration (slurp) without durable rescue storage is not supported | Specify a `slurpRescueStore` disk, or remove the `slurp` field |
+| `slurp_unsupported` | `slurp` | A requested user-data migration (`slurp`) is refused: fisherman has no durable rescue store for the copy yet, so no recipe field can make it valid | Remove the `slurp` field. `slurpWallpapers` is not affected |
 | `brew_tap_invalid` | `brewTap` | Homebrew tap format is invalid | Use `owner/name` format, with each part containing only letters, digits, `.`, `_`, and `-` |
 
 ### Source reuse
@@ -549,6 +611,14 @@ does: it needs no root.
 | `not_root` | (none) | The install did not run as root | Run fisherman through `pkexec` or `sudo` |
 | `install_already_running` | (none) | Another fisherman install holds the host-wide install lock (`/run/lock/fisherman-install.lock`). Two installs on one host share the scratch directory, so the second is refused before it reads its recipe. The message names the other process | Wait for the other install, or cancel it. A lock file left by a dead process does not block: the kernel drops the lock with the process |
 | `host_tool_missing` | (none) | A program the install of this recipe runs is not on the host. The message names it and its package | Install the package on the host |
+| `selinux_workaround_unavailable` | (none) | The recipe disables SELinux on the target (`selinuxDisabled`), this host has SELinux active, and bootc runs in the image's container. The host's policy then rejects the image's label types, so the install needs a small preload library that drops `security.selinux` writes, and it cannot build it. Reported before any disk is changed. An install that does not meet all three conditions needs no compiler | Install a C compiler (`cc`) and the C library headers on the host, or install from a host without SELinux active |
+| `image_not_found` | `image` | The registry does not have the image: the repository or the tag is unknown (`manifest unknown`, `name unknown`), and local containers-storage has no copy | Check the name and the tag |
+| `image_source_unauthorized` | `image` | The registry refused access (401, 403, `denied`), and local containers-storage has no copy. A registry also answers so for a repository that does not exist | Log in on the host (`podman login`), or check the name |
+| `image_source_unreachable` | `image` | The registry did not answer after three attempts (no network, a DNS or TLS failure, a 429 or 5xx answer), and local containers-storage has no copy | Connect to the network, or pull the image on the host first |
+| `image_inspect_failed` | `image` | `skopeo inspect` failed for another reason, and local containers-storage has no copy. The message holds skopeo's reason | See the message |
+| `image_inspect_malformed` | `image` | The registry's answer has no usable `sha256` manifest digest, and local containers-storage has no copy | See the install log; report it if the registry is a standard one |
+| `image_platform_mismatch` | `image` | The image (the registry's, or the cached copy) is for another OS or architecture, or its index lists no build for this host | Choose the image built for this architecture |
+| `image_not_bootc` | `image` | The image (the registry's, the cached copy, or a `containers-storage:` source) has neither the `containers.bootc=1` nor the `ostree.bootable` label: it is an ordinary container, which bootc refuses | Choose a bootc image |
 | `kept_filesystem_unusable` | `varDisk.disk`, `customMounts[i].partition` | The recipe keeps this device as it is, and `blkid` finds no filesystem on it that can be mounted (none, a LUKS or LVM volume, swap, or for `/var` a filesystem with no POSIX owners). Reported before any disk is changed | Format the device (`keepExisting: false`, or a real `fstype`), or name the device that holds the filesystem |
 
 The host-tool list comes from the recipe. The auto layout needs `sfdisk`,
@@ -565,19 +635,31 @@ Every install needs
 `skopeo` and `podman`; a `sourceReuse` install also needs `bootc` and `ostree`. fisherman looks for them where they run: on the host,
 through `flatpak-spawn --host` inside a Flatpak sandbox.
 
+The image check reads manifests and image configurations only, never the
+layers. An image in local containers-storage is used as it is: the
+registry need not answer. An image that is not cached must be in the
+registry, readable, a bootc image and built for this host. The check
+cannot promise the pull that follows: the network can fail, and a tag can
+move to another image, after it. The install log names what the check saw
+(`Source image …: manifest …, platform manifest …`); that is the install
+source only, and the installed system follows `targetImgref`. A source
+with the `oci:` transport, or media that the live host binds, has its own
+checks.
+
 ### Interpreting Errors in JSON
 
 When calling `fisherman validate --json`, errors are returned as:
 
-```json
+```console
+$ echo '{"encryption":{"type":"luks-passphrase"}}' | fisherman validate --json --partial -
 {
   "protocol_version": 1,
   "valid": false,
   "errors": [
     {
-      "field": "hostname",
-      "code": "hostname_invalid_char",
-      "message": "hostname \"my_pc\" contains '_'; use only letters, digits, hyphens and dots"
+      "field": "encryption.passphrase",
+      "code": "encryption_passphrase_required",
+      "message": "encryption.passphrase required for luks-passphrase"
     }
   ]
 }

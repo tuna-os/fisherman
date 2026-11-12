@@ -1,8 +1,10 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,7 +13,6 @@ import (
 
 	"github.com/tuna-os/fisherman/internal/disk"
 	"github.com/tuna-os/fisherman/internal/install"
-	"github.com/tuna-os/fisherman/internal/luks"
 	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/progress"
@@ -44,69 +45,9 @@ var bindMount = disk.BindMount
 // bootcInstall is install.BootcInstall by default; tests replace it.
 var bootcInstall = install.BootcInstall
 
-type stepProfile struct {
-	cumulativePct int
-	weightPct     int
-}
-
-// buildProfile returns per-step weight profiles based on timing data from a
-// yellowfin gnome-hwe loop-device install (264s uncached, ~111s cached).
-// Weights sum to 100. cumulativePct is the bar position at step start.
-//
-// main() reads the profile by index, one slot per progress.Step call, so the
-// slots must follow exactly the steps main() emits for this recipe. A manual
-// layout (customMounts) emits a single "Preparing disk" step in place of
-// partition/EFI/LUKS/root/mount, which takes their combined weight, and never
-// emits LUKS setup or TPM2 enrolment (both need the auto-partitioned root).
-func buildProfile(needsPull, isManual, hasLUKS, hasTPM2enrolment, hasVarDiskFormat bool) []stepProfile {
-	if isManual {
-		hasLUKS, hasTPM2enrolment = false, false
-	}
-	osWeight := 87
-	flatpakWeight := 11
-	if !needsPull {
-		osWeight = 68
-		flatpakWeight = 29
-	}
-	if hasLUKS {
-		osWeight--
-	}
-	if hasTPM2enrolment {
-		osWeight--
-	}
-
-	var weights []int
-	if isManual {
-		weights = []int{1} // prepare disk = partition + EFI + root + mount
-	} else {
-		weights = []int{0, 1} // partition, format EFI
-		if hasLUKS {
-			weights = append(weights, 1) // LUKS setup
-		}
-		weights = append(weights, 0, 0) // format root, mount
-	}
-	if hasVarDiskFormat {
-		weights = append(weights, 0) // format /var disk (fast)
-	}
-	weights = append(weights, osWeight) // install OS
-	if hasTPM2enrolment {
-		weights = append(weights, 1) // TPM2 enrolment
-	}
-	weights = append(weights, flatpakWeight, 0) // flatpaks, configure
-	sum := 0
-	for _, w := range weights {
-		sum += w
-	}
-	weights = append(weights, 100-sum) // finalize
-
-	profile := make([]stepProfile, len(weights))
-	cumulative := 0
-	for i, w := range weights {
-		profile[i] = stepProfile{cumulative, w}
-		cumulative += w
-	}
-	return profile
-}
+// prepareSelinuxWorkaround is install.PrepareSelinuxWorkaround by default;
+// tests replace it.
+var prepareSelinuxWorkaround = install.PrepareSelinuxWorkaround
 
 // fatal ends the install: it stops child processes, tears down every mount
 // and LUKS mapping registered on cleanup, emits one {"type":"error"} event
@@ -125,14 +66,41 @@ func fatalProblem(prefix string, p recipe.Problem) {
 }
 
 // fatalLoad reports a recipe that could not be loaded. A strict-parse
-// problem (an unknown field) keeps its code.
+// problem (an unknown field) keeps its code. Any other failure gets the
+// code `fisherman validate --json` gives it: recipe_malformed for empty
+// or invalid JSON, recipe_unreadable for a recipe that cannot be read.
 func fatalLoad(err error) {
 	var p recipe.Problem
 	if errors.As(err, &p) {
 		fatalProblem("loading recipe", p)
 		return
 	}
-	fatal("loading recipe: %v", err)
+	code := recipe.CodeRecipeUnreadable
+	var syntax *json.SyntaxError
+	var typeErr *json.UnmarshalTypeError
+	if errors.Is(err, recipe.ErrEmptyRecipe) || errors.Is(err, io.ErrUnexpectedEOF) || errors.As(err, &syntax) || errors.As(err, &typeErr) {
+		code = recipe.CodeRecipeMalformed
+	}
+	msg := fmt.Sprintf("loading recipe: %v", err)
+	term.failProblem(msg, recipe.Problem{Code: code, Message: msg})
+}
+
+// bootcFailureCode is the failure code of a bootcInstall error: pull_failed
+// for the image pull (install.PullError, through any wrapping), else
+// bootc_install_failed.
+func bootcFailureCode(err error) string {
+	var pull *install.PullError
+	if errors.As(err, &pull) {
+		return progress.FailurePullFailed
+	}
+	return progress.FailureBootcInstallFailed
+}
+
+// fatalCode is fatal for a runtime failure: the error event carries code,
+// one of the progress.Failure* codes, so a frontend need not read the
+// message to tell which operation failed.
+func fatalCode(code, format string, args ...any) {
+	term.failCode(fmt.Sprintf(format, args...), code)
 }
 
 // teardown releases everything the install registered: a filesystem the
@@ -170,6 +138,11 @@ func isSpaceConstrained(path string) bool {
 	)
 	return st.Type == tmpfsMagic || st.Type == overlayMagic
 }
+
+// varIsSpaceConstrained reports whether the host's /var is too small for
+// scratch I/O, so scratch goes on the target disk. The install and `plan`
+// ask it; tests replace it.
+var varIsSpaceConstrained = func() bool { return isSpaceConstrained("/var") }
 
 func prepareScratchDir(activeTargetMount string, liveISO bool) (string, error) {
 	scratchDir := "/var/fisherman-tmp"
@@ -245,11 +218,16 @@ Usage:
   fisherman validate <recipe.json> validate a recipe without installing ("-" reads stdin)
   fisherman validate --json [--partial] <recipe.json|->
                                    every problem as JSON (docs/VALIDATE.md)
+  fisherman plan --json -          what an install of the recipe on stdin would do, as
+                                   JSON; writes nothing, pulls nothing (docs/PLAN.md)
   fisherman images [<query>]       list or search the image catalog
   fisherman scan <disk>            scan disk for Windows data available to migrate
   fisherman probe --json           print disks, TPM, RAM/CPU/UEFI, live and offline facts
   fisherman verify --json          on the installed system: compare the installation
                                    receipt with the booted image (docs/RECEIPT.md)
+  fisherman diagnostics --output-dir <dir> [--recipe <f>] [--progress-log <f>] [--probe]
+                                   write a local support bundle of allowlisted facts,
+                                   no secrets (docs/DIAGNOSTICS.md)
   fisherman version                print version information
   fisherman help                   show this help
 
@@ -262,6 +240,7 @@ Examples:
   fisherman - < /tmp/recipe.json
   fisherman validate /tmp/recipe.json
   echo '{"hostname":"my-pc"}' | fisherman validate --json --partial -
+  fisherman plan --json - < /tmp/recipe.json
   fisherman images
   fisherman images Bluefin
   fisherman images "GNOME 50"
@@ -314,6 +293,10 @@ func main() {
 		os.Exit(runProbe(os.Args[2:], os.Stdout, os.Stderr))
 	case "verify":
 		os.Exit(runVerify(os.Args[2:], os.Stdout, os.Stderr))
+	case "plan":
+		os.Exit(runPlan(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
+	case "diagnostics":
+		os.Exit(runDiagnostics(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "scan":
 		if len(os.Args) < 3 {
 			fmt.Fprintf(os.Stderr, "Usage: fisherman scan <disk>\n")
@@ -358,13 +341,16 @@ func main() {
 			fatalProblem("cannot install", recipe.Problem{Code: recipe.CodeInstallAlreadyRunning,
 				Message: err.Error() + "; wait for it to finish, or cancel it, then start this install again"})
 		}
-		fatal("cannot take the install lock %s: %v", installLockPath, err)
+		fatalCode(progress.FailureLockFailed, "cannot take the install lock %s: %v", installLockPath, err)
 	}
 
 	r, err := loadRecipe(os.Args[1])
 	if err != nil {
 		fatalLoad(err)
 	}
+	// No error event or failure line may carry these.
+	progress.RegisterSecret(r.Encryption.Passphrase)
+	progress.RegisterSecret(r.User.Password)
 
 	// Resolve and verify host-owned media before live probing (bootc status),
 	// store discovery or CheckImage can inspect a stale cache or the registry.
@@ -374,7 +360,7 @@ func main() {
 	if r.SourceReuse == nil {
 		mediaInput, err = resolveMediaInput(r)
 		if err != nil {
-			fatal("required local source is absent or unreadable; refusing installation: %v", err)
+			fatalCode(progress.FailureLocalSourceUnavailable, "required local source is absent or unreadable; refusing installation: %v", err)
 		}
 	}
 	sourceImgref := r.Image
@@ -448,11 +434,6 @@ func main() {
 		sourceImgref = reused.SourceImgref
 	}
 
-	hasEncryption := r.Encryption.Type != "" && r.Encryption.Type != "none"
-	hasTPM2 := r.Encryption.Type == "tpm2-luks" || r.Encryption.Type == "tpm2-luks-passphrase"
-	isManual := len(r.CustomMounts) > 0
-	isSystemdBoot := r.Bootloader == "systemd" || r.Filesystem == "zfs"
-
 	if r.Image == "" && reused == nil {
 		// Only reachable on live media (checkImageSource).
 		msg := fmt.Sprintf("Live media (%s): installing the running image", live.DetectedBy)
@@ -479,7 +460,9 @@ func main() {
 		imageCheck.Offline = true
 		progress.Info("Offline: using embedded media image " + mediaInput.OCILayoutPath)
 	} else if reused != nil {
-		// The verified copy, read locally; never a registry.
+		// The verified copy, read locally; never a registry. Its identity
+		// is checked by digest against the booted deployment
+		// (acquireSourceReuse), so only its presence matters here.
 		imageCheck = install.CheckImage(sourceImgref)
 		if imageCheck.NeedsPull {
 			fatalProblem("source reuse", reuseProblem(recipe.CodeSourceReuseVerifyFailed,
@@ -489,28 +472,57 @@ func main() {
 		progress.Info("Checking image cache...")
 		imageCheck = install.CheckImage(r.Image)
 		if install.IsOCISource(r.Image) && imageCheck.NeedsPull {
-			fatal("required local source is absent or unreadable; refusing installation")
+			fatalCode(progress.FailureLocalSourceUnavailable, "required local source is absent or unreadable; refusing installation")
 		}
 		if strings.HasPrefix(r.Image, "containers-storage:") && imageCheck.NeedsPull {
-			fatal("required local source is absent or unreadable; refusing installation")
+			fatalCode(progress.FailureLocalSourceUnavailable, "required local source is absent or unreadable; refusing installation")
 		}
+		// A source that is known to fail, or is not a bootc image for this
+		// host, is refused here: the pull and bootc would refuse it only
+		// after the disk is wiped (#364).
+		if e := imageCheck.Err; e != nil {
+			fatalProblem("image source", recipe.Problem{Code: e.Code, Field: "image", Message: e.Message})
+		}
+		progress.Info(sourceIdentityLine(imageCheck.Source))
 		if imageCheck.NeedsPull {
 			progress.Info(fmt.Sprintf("Image pull required (%d layers)", imageCheck.LayerCount))
 		} else if imageCheck.Offline {
 			progress.Info("Offline: registry unreachable, using locally cached image")
 		} else {
-			progress.Info("Image already up to date in local cache")
+			progress.Info("Image found in local cache, no pull needed")
 		}
 	}
 
-	hasVarDisk := r.VarDisk != nil
-	profile := buildProfile(imageCheck.NeedsPull, isManual, hasEncryption, hasTPM2, hasVarDisk && !r.VarDisk.KeepExisting)
-	pi := 0 // profile index, incremented at each progress.Step call
+	// ── Pre-flight: SELinux label workaround ───────────────────────────────
+	// A target with SELinux disabled, installed from the image's container
+	// on a host that enforces SELinux, needs a preload library that drops the
+	// image's security.selinux labels (install.SelinuxWorkaroundRequired).
+	// It is built here, before any disk step, so a host that cannot build it
+	// is refused with the disk untouched. Every other install needs no
+	// compiler.
+	shimOpts := buildBootcInstallOptions(r, sourceImgref, "", "", "", imageStores, imageCheck.NeedsPull, imageCheck.LayerCount)
+	if reused != nil {
+		reuseInstallOptions(&shimOpts)
+	}
+	// ── Pre-flight: source execution root (#363) ──────────────────────────
+	// The host's bootc may install a local source directly only when the
+	// host booted that source; establish it once, before any disk step.
+	shimOpts.SourceRoot = establishSourceRoot(shimOpts, imageStores)
+	if line := install.LocalSourceContextLine(shimOpts); line != "" {
+		progress.Info(line)
+	}
+	selinuxShim, shimDir, shimErr := prepareSelinuxWorkaround(shimOpts)
+	if shimErr != nil {
+		fatalProblem("cannot prepare the install", recipe.Problem{Code: recipe.CodeSelinuxWorkaroundUnavailable, Message: shimErr.Error()})
+	}
+	if shimDir != "" {
+		cleanup.AddPostRemoval(shimDir)
+		progress.Info("SELinux: the target disables SELinux and this host enforces a policy; the label workaround is ready")
+	}
 
-	// The profile has one slot per emitted step, so it is also the step count
-	// the GUI shows up front.
-	totalSteps := len(profile)
-	step := 1
+	// The step plan for this recipe (steps.go). The sequencer announces
+	// each step with its number, the plan's total and its bar position.
+	seq := newStepSequencer(planSteps(r, imageCheck.NeedsPull))
 
 	// ── Desktop extras ───────────────────────────────────────────────────
 	// Print services, the OEM brew unit, friendly audio names and the boot
@@ -545,7 +557,7 @@ func main() {
 	var wallpaperResult *slurp.WallpaperResult
 	var dataResult *slurp.DataSlurpResult
 
-	if r.Slurp != nil && !isManual {
+	if r.Slurp != nil && !r.IsManualLayout() {
 		// Full data slurp: user selected specific categories in the GUI
 		progress.Info("Migrating Windows user data before partitioning...")
 		cfg := &slurp.SlurpConfig{
@@ -563,7 +575,7 @@ func main() {
 		} else {
 			dataResult = result
 		}
-	} else if r.SlurpWallpapers && !isManual {
+	} else if r.SlurpWallpapers && !r.IsManualLayout() {
 		// Wallpaper-only easter egg (no explicit slurp config)
 		progress.Info("Checking for Windows wallpapers to migrate...")
 		ntfsPartitions, err := slurp.DetectNTFS(r.Disk)
@@ -588,229 +600,19 @@ func main() {
 		}
 	}
 
-	var activeTargetMount string
-	var activeEfiPart string
-	var activeRootPart string  // only used for TPM2 enrolment, empty in manual mode
-	var activeLuksUUID string  // LUKS partition UUID for boot entry injection; empty if no encryption
-	var luksRecoveryKey string // random passphrase for tpm2-luks (emitted as recovery key)
-
-	if isManual {
-		// ── Step 1 (manual): Format and mount user-specified partitions ────────
-		progress.Step(step, totalSteps, "Preparing disk", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
-
-		specs := make([]disk.MountSpec, 0, len(r.CustomMounts))
-		for _, cm := range r.CustomMounts {
-			specs = append(specs, disk.MountSpec{
-				Partition: cm.Partition,
-				Target:    cm.Target,
-				Fstype:    cm.Fstype,
-			})
-		}
-
-		// Each mount and the swap are registered for teardown the moment
-		// they are acquired, not when ApplyCustomLayout returns: it can fail
-		// on the second or third partition, or be cancelled half-way, with
-		// the root already mounted (#362).
-		var applyErr error
-		activeTargetMount, activeEfiPart, _, applyErr = disk.ApplyCustomLayoutWith(specs, targetMount,
-			disk.LayoutHooks{Mounted: cleanup.AddMount, SwapOn: swaps.Add})
-		if applyErr != nil {
-			fatal("manual disk layout: %v", applyErr)
-		}
-	} else {
-		// ── Step 1: Partition disk ────────────────────────────────────────────
-		progress.Step(step, totalSteps, "Partitioning disk", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
-
-		if r.Filesystem == "zfs" {
-			if err := disk.PartitionZFS(r.Disk); err != nil {
-				fatal("partitioning disk for ZFS: %v", err)
-			}
-		} else if isSystemdBoot {
-			// systemd-boot always uses a 2-partition layout regardless of encryption.
-			// LUKS (if requested) wraps p2 (root); the 1 GiB FAT32 ESP stays unencrypted.
-			if err := disk.PartitionSystemdBoot(r.Disk); err != nil {
-				fatal("partitioning disk: %v", err)
-			}
-		} else if hasEncryption {
-			if err := disk.PartitionEncrypted(r.Disk); err != nil {
-				fatal("partitioning disk: %v", err)
-			}
-		} else {
-			if err := disk.Partition(r.Disk); err != nil {
-				fatal("partitioning disk: %v", err)
-			}
-		}
-
-		var efiPart, bootPart, rootPart string
-		if isSystemdBoot {
-			// 2-partition layout: p1=EFI (1 GiB FAT32), p2=root (or ZFS pool).
-			// No separate ext4 /boot needed — systemd-boot reads directly from
-			// the FAT32 ESP. LUKS (if any) wraps p2.
-			efiPart = disk.PartName(r.Disk, 1)
-			rootPart = disk.PartName(r.Disk, 2)
-		} else {
-			// 3-partition layout: p1=EFI, p2=/boot (ext4), p3=root.
-			// The separate ext4 /boot keeps GRUB away from modern XFS features.
-			efiPart = disk.PartName(r.Disk, 1)
-			bootPart = disk.PartName(r.Disk, 2)
-			rootPart = disk.PartName(r.Disk, 3)
-		}
-		rootDev := rootPart // may be replaced by /dev/mapper/fisherman-root if LUKS
-		activeRootPart = rootPart
-		poolName := disk.PoolName(r.ZFSPoolName) // only used when r.Filesystem == "zfs"
-
-		// ── Step 2: Format EFI ───────────────────────────────────────────────
-		progress.Step(step, totalSteps, "Formatting EFI partition", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
-
-		if err := disk.FormatEFI(efiPart); err != nil {
-			fatal("formatting EFI: %v", err)
-		}
-		// grub2 installs need a separate ext4 /boot so GRUB never has to parse
-		// XFS (GRUB's built-in XFS driver lacks support for modern XFS features).
-		// systemd-boot reads the FAT32 ESP directly, so no separate /boot needed.
-		if !isSystemdBoot {
-			if err := disk.FormatBoot(bootPart); err != nil {
-				fatal("formatting /boot: %v", err)
-			}
-		}
-
-		// ── Step 3: Disk encryption (optional) ──────────────────────────────
-		if hasEncryption {
-			progress.Step(step, totalSteps, "Setting up disk encryption", profile[pi].cumulativePct, profile[pi].weightPct)
-			pi++
-			step++
-
-			var passphrase string
-			switch r.Encryption.Type {
-			case "luks-passphrase", "tpm2-luks-passphrase":
-				passphrase = r.Encryption.Passphrase
-			case "tpm2-luks":
-				passphrase = luks.RandomPassphrase()
-				luksRecoveryKey = passphrase // emitted later so user can write it down
-				progress.Info("TPM2-LUKS: generated random recovery passphrase; TPM2 will be enrolled after install")
-			}
-
-			// A previous interrupted run may have left the mapper open. Close it
-			// before formatting so luksFormat and luksOpen succeed cleanly.
-			if _, err := os.Stat(luks.MapperPath(luksMapper)); err == nil {
-				progress.Info(fmt.Sprintf("Closing stale mapper %s from previous run", luksMapper))
-				_ = luks.Close(luksMapper)
-			}
-
-			if err := luks.Format(rootPart, passphrase); err != nil {
-				fatal("LUKS format: %v", err)
-			}
-			if err := luks.Open(rootPart, passphrase, luksMapper); err != nil {
-				fatal("LUKS open: %v", err)
-			}
-			cleanup.SetLUKS(luksMapper)
-			rootDev = luks.MapperPath(luksMapper)
-			activeLuksUUID = luks.UUID(rootPart)
-		}
-
-		// ── Step 4: Format root filesystem ──────────────────────────────────
-		progress.Step(step, totalSteps, "Formatting root filesystem", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
-
-		if r.Filesystem == "zfs" {
-			if err := disk.CreateZFSPool(poolName, rootPart, targetMount); err != nil {
-				fatal("creating ZFS pool: %v", err)
-			}
-			// From here the pool is imported on this host. Teardown exports
-			// it, on success and on every failure (#413).
-			cleanup.SetZFSPool(poolName)
-			if err := disk.CreateZFSRootDataset(poolName); err != nil {
-				fatal("creating ZFS root dataset: %v", err)
-			}
-		} else {
-			if err := disk.FormatRoot(rootDev, r.Filesystem); err != nil {
-				fatal("formatting root filesystem: %v", err)
-			}
-		}
-
-		// ── Step 5: Mount filesystem ─────────────────────────────────────────
-		progress.Step(step, totalSteps, "Mounting filesystem", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
-
-		if err := os.MkdirAll(targetMount, 0o755); err != nil {
-			fatal("creating mount point %s: %v", targetMount, err)
-		}
-
-		if r.Filesystem == "zfs" {
-			// Pool is already imported with -R altroot; root dataset is already
-			// mounted. Ensure the mount point exists and call MountZFSRoot in
-			// case the automount didn't fire (e.g. in a container environment).
-			if err := disk.MountZFSRoot(poolName, targetMount); err != nil {
-				fatal("mounting ZFS root: %v", err)
-			}
-		} else if r.BtrfsSubvolumes {
-			if err := disk.SetupBtrfsSubvolumes(rootDev, targetMount); err != nil {
-				fatal("setting up btrfs subvolumes: %v", err)
-			}
-		} else {
-			mountOpts := ""
-			if r.Filesystem == "btrfs" {
-				mountOpts = "compress=zstd:1"
-			}
-			if err := disk.MountType(rootDev, targetMount, r.Filesystem, mountOpts); err != nil {
-				fatal("mounting root: %v", err)
-			}
-		}
-		cleanup.AddMount(targetMount)
-
-		// Mount the unencrypted /boot partition before the EFI partition.
-		// bootupctl reads /boot's block device UUID from the raw partition.
-		// Not needed for systemd-boot installs (no separate /boot partition).
-		if !isSystemdBoot {
-			if err := disk.MountBoot(targetMount, bootPart); err != nil {
-				fatal("mounting /boot: %v", err)
-			}
-			cleanup.AddMount(targetMount + "/boot")
-		}
-
-		// Mount the EFI partition at /boot/efi inside the target.
-		if err := disk.MountEFI(targetMount, efiPart); err != nil {
-			fatal("mounting EFI: %v", err)
-		}
-		cleanup.AddMount(targetMount + "/boot/efi")
-
-		activeTargetMount = targetMount
-		activeEfiPart = efiPart
+	// ── Steps 1-5 and the /var disk: the disk phase (disk_phase.go) ──────────
+	// Partition, format, LUKS, mount (or the manual layout), then the /var
+	// disk. Every resource is registered on cleanup as it is acquired; a
+	// failure ends the install here with the phase's failure code.
+	dp, err := diskPhase(r, seq, targetMount, luksMapper, liveDiskOps())
+	if err != nil {
+		failPhase(err)
 	}
-
-	// ── Step 5.5: Mount /var disk (optional) ─────────────────────────────────
-	// Must happen before bootc install so bootc populates /var on the right disk.
-	if hasVarDisk {
-		varDir := filepath.Join(activeTargetMount, "var")
-		if err := os.MkdirAll(varDir, 0o755); err != nil {
-			fatal("creating /var mount point: %v", err)
-		}
-		if !r.VarDisk.KeepExisting {
-			progress.Step(step, totalSteps, "Formatting data disk (/var)", profile[pi].cumulativePct, profile[pi].weightPct)
-			pi++
-			step++
-			// Release the disk (mounts, swap, LVM, old signatures), then
-			// format it: see disk.PrepareVarDisk (#406).
-			if err := disk.PrepareVarDisk(r.VarDisk.Disk); err != nil {
-				fatal("formatting /var disk: %v", err)
-			}
-		} else {
-			progress.Info(fmt.Sprintf("Keeping existing data on /var disk %s", r.VarDisk.Disk))
-		}
-		if err := disk.Mount(r.VarDisk.Disk, varDir, ""); err != nil {
-			fatal("mounting /var disk: %v", err)
-		}
-		cleanup.AddMount(varDir)
-		progress.Info(fmt.Sprintf("Mounted /var disk %s at /var", r.VarDisk.Disk))
-	}
+	activeTargetMount := dp.targetMount
+	activeEfiPart := dp.efiPart
+	activeRootPart := dp.rootPart     // only used for TPM2 enrolment, empty in manual mode
+	activeLuksUUID := dp.luksUUID     // LUKS partition UUID for boot entry injection; empty if no encryption
+	luksRecoveryKey := dp.recoveryKey // random passphrase for tpm2-luks (emitted as recovery key)
 
 	// Bind-mount a host-side scratch directory at /var/tmp so bootc has
 	// disk-backed space for layer blobs. We deliberately use a path OUTSIDE
@@ -824,10 +626,10 @@ func main() {
 	// target disk instead. A self-bind mount makes bootc's empty-rootdir
 	// check see a mount point (which it tolerates) rather than a plain
 	// directory (which it rejects).
-	liveISO := isSpaceConstrained("/var") && activeTargetMount != ""
+	liveISO := varIsSpaceConstrained() && activeTargetMount != ""
 	scratchDir, err := prepareScratchDir(activeTargetMount, liveISO)
 	if err != nil {
-		fatal("preparing scratch dir: %v", err)
+		fatalCode(progress.FailureScratchFailed, "preparing scratch dir: %v", err)
 	}
 	// The bootc container receives scratch at /var/tmp. Its launcher also
 	// redirects host-side OCI staging while podman creates the container:
@@ -845,9 +647,7 @@ func main() {
 	}
 
 	// ── Step 6: Install OS ────────────────────────────────────────────────────
-	progress.Step(step, totalSteps, "Installing OS", profile[pi].cumulativePct, profile[pi].weightPct)
-	pi++
-	step++
+	seq.begin(stepInstallOS)
 
 	// Only pass --target-imgref when it is non-empty and differs from the source.
 	targetImgref := r.TargetImgref
@@ -876,20 +676,22 @@ func main() {
 	if reused != nil {
 		reuseInstallOptions(&opts)
 	}
-	if hasEncryption && !isManual {
+	opts.SelinuxShimPath = selinuxShim
+	opts.SourceRoot = shimOpts.SourceRoot
+	if r.EncryptsRoot() {
 		// Without the UUID no loader entry can name the LUKS container.
 		// Stop before the image is deployed, not after "complete" (#410).
 		if activeLuksUUID == "" {
-			fatal("LUKS: could not read the UUID of the encrypted root partition %s", activeRootPart)
+			fatalCode(progress.FailureLUKSFailed, "LUKS: could not read the UUID of the encrypted root partition %s", activeRootPart)
 		}
 		// Where nothing else finds the root, bootc writes the argument
 		// into the entries it creates, the way rootflags gets there.
-		if luksNeedsKarg(isSystemdBoot, r.ComposeFsBackend) {
+		if luksNeedsKarg(r.UsesSystemdBoot(), r.ComposeFsBackend) {
 			opts.KernelArguments = append(opts.KernelArguments, post.LuksKarg(activeLuksUUID))
 		}
 	}
 	if err := bootcInstall(opts); err != nil {
-		fatal("bootc install: %v", err)
+		fatalCode(bootcFailureCode(err), "bootc install: %v", err)
 	}
 	if reused != nil {
 		msg, p := checkReusedInstall(activeTargetMount, reused)
@@ -910,7 +712,7 @@ func main() {
 	// bootloader at all. Nothing about that bootctl behaviour depends on
 	// encryption, and the call is idempotent and warning-only, so it runs for
 	// every systemd-boot composefs install.
-	if !isManual && isSystemdBoot && r.ComposeFsBackend {
+	if !r.IsManualLayout() && r.UsesSystemdBoot() && r.ComposeFsBackend {
 		if err := install.InstallSystemdBoot(activeTargetMount); err != nil {
 			progress.Info(fmt.Sprintf("Warning: could not ensure systemd-boot EFI binary: %v", err))
 		}
@@ -921,7 +723,7 @@ func main() {
 	// or a disk moved to another machine falls through to PXE (#233). Fill
 	// that gap from the vendor directory. Never on a manual layout: that ESP
 	// may be shared, and its EFI/BOOT belongs to whoever set it up.
-	if !isManual && !isSystemdBoot {
+	if !r.IsManualLayout() && !r.UsesSystemdBoot() {
 		if err := install.InstallGrubFallback(activeTargetMount, r.DistroID); err != nil {
 			progress.Info(fmt.Sprintf("Warning: could not ensure the UEFI fallback loader: %v", err))
 		}
@@ -946,7 +748,7 @@ func main() {
 	// raced that re-add ("mount /dev/loop0p2 ...: exit status 32", dakota CI).
 	// A failed read falls through to the write, as before.
 	retagRoot := false
-	if !isManual && isSystemdBoot && !hasEncryption && r.ComposeFsBackend {
+	if !r.IsManualLayout() && r.UsesSystemdBoot() && !r.HasEncryption() && r.ComposeFsBackend {
 		var curType string
 		retagRoot, curType = disk.PartitionTypeNeedsRewrite(r.Disk, 2, disk.LinuxRootPartType())
 		if !retagRoot {
@@ -968,7 +770,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "warning: could not fully clean partition references: %v\n", err)
 		}
 		if err := disk.SetPartitionType(r.Disk, 2, disk.LinuxRootPartType()); err != nil {
-			fatal("retagging root partition: %v", err)
+			fatalCode(progress.FailureRetagFailed, "retagging root partition: %v", err)
 		}
 		// Remount root so finalization and post-install writes can proceed.
 		// udisksctl unmount (used by UnmountPartition above) removes the
@@ -976,7 +778,7 @@ func main() {
 		// MountTmpfs/BindMount — does not create its target, so recreate it
 		// or the plain `mount` syscall below fails with ENOENT.
 		if err := os.MkdirAll(activeTargetMount, 0o755); err != nil {
-			fatal("recreating target mountpoint before remount: %v", err)
+			fatalCode(progress.FailureRetagFailed, "recreating target mountpoint before remount: %v", err)
 		}
 		// The sfdisk write makes the kernel re-read the table, so the node
 		// can be missing or mid-re-add here: settle, wait (bounded) for it to
@@ -984,14 +786,14 @@ func main() {
 		// failing is fatal.
 		rootPart := disk.PartName(r.Disk, 2)
 		if err := disk.WaitForPartitionNode(rootPart, disk.DefaultPartitionNodeTimeout); err != nil {
-			fatal("remounting root partition after retagging: %v", err)
+			fatalCode(progress.FailureRetagFailed, "remounting root partition after retagging: %v", err)
 		}
 		// With the same options as the first mount (and as the installed
 		// system's rootflags): on btrfs a bare mount is the top-level
 		// subvolume, not @, and has no compression. Every later step would
 		// then look for the deployment in the wrong tree (#416).
 		if err := disk.MountWithRetry(rootPart, activeTargetMount, r.RootMountOptions(), disk.DefaultMountAttempts, disk.DefaultMountBackoff); err != nil {
-			fatal("remounting root partition after retagging: %v", err)
+			fatalCode(progress.FailureRetagFailed, "remounting root partition after retagging: %v", err)
 		}
 		// Remount EFI so that Plymouth/LUKS arg writes land on the real ESP
 		// instead of the empty /boot/efi directory in the XFS root.
@@ -1008,7 +810,7 @@ func main() {
 	// those steps write, and writes the fstab lines. See mounts.go (#406,
 	// #372).
 	if err := persistMounts(r, activeTargetMount, cleanup.AddMount); err != nil {
-		fatal("persistent mounts: %v", err)
+		fatalCode(progress.FailurePersistentMountsFailed, "persistent mounts: %v", err)
 	}
 
 	// ── TPM2 enrolment ────────────────────────────────────────────────────────
@@ -1016,10 +818,8 @@ func main() {
 	// the system boots without a passphrase prompt. The difference:
 	//   tpm2-luks:            random passphrase (recovery key) + TPM2
 	//   tpm2-luks-passphrase: user passphrase (fallback) + TPM2
-	if hasTPM2 && activeRootPart != "" {
-		progress.Step(step, totalSteps, "Enrolling TPM2 auto-unlock", profile[pi].cumulativePct, profile[pi].weightPct)
-		pi++
-		step++
+	if r.EnrollsTPM2() {
+		seq.begin(stepEnrollTPM2)
 
 		unlockPassphrase := r.Encryption.Passphrase
 		if r.Encryption.Type == "tpm2-luks" {
@@ -1035,9 +835,7 @@ func main() {
 	}
 
 	// ── Step 7: Copy system flatpaks ──────────────────────────────────────────
-	progress.Step(step, totalSteps, "Copying system Flatpaks", profile[pi].cumulativePct, profile[pi].weightPct)
-	pi++
-	step++
+	seq.begin(stepFlatpaks)
 
 	if err := post.CopyFlatpaks(activeTargetMount, r.Flatpaks, r.FlatpakVarPath); err != nil {
 		// Non-fatal — the system will work without pre-installed flatpaks.
@@ -1045,13 +843,11 @@ func main() {
 	}
 
 	// ── Step 8: Post-install configuration ───────────────────────────────────
-	progress.Step(step, totalSteps, "Configuring installed system", profile[pi].cumulativePct, profile[pi].weightPct)
-	pi++
-	step++
+	seq.begin(stepConfigure)
 
 	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
 	if err := post.WriteHostname(activeTargetMount, r.Hostname); err != nil {
-		fatal("writing hostname: %v", err)
+		fatalCode(progress.FailureHostnameFailed, "writing hostname: %v", err)
 	}
 
 	// Create a user account if the recipe requests one (e.g. Bazzite has no OOBE).
@@ -1063,13 +859,13 @@ func main() {
 			Password: r.User.Password,
 			Groups:   r.User.Groups,
 		}); err != nil {
-			fatal("creating user: %v", err)
+			fatalCode(progress.FailureUserFailed, "creating user: %v", err)
 		}
 	}
 
 	// Language, keyboard layout and time zone, when the recipe has them. For
 	// an encrypted install the keymap also goes to the initrd. Non-fatal.
-	applyLocale(activeTargetMount, r, hasEncryption && !isManual)
+	applyLocale(activeTargetMount, r, r.EncryptsRoot())
 
 	// rhgb and quiet in every BLS loader entry, for the graphical boot
 	// splash: only for an image that asks (extras.bootSplash). Another
@@ -1085,6 +881,17 @@ func main() {
 		}
 	}
 
+	// Every BLS entry must mount the root with the recipe's options
+	// (rootflags=subvol=@,compress=zstd:1 for btrfsSubvolumes): bootc 1.15.x
+	// drops --karg on the composefs path and writes only its own
+	// rootflags=subvol=<mount's subvol>. Before the LUKS check, which wants
+	// rd.luks.name last.
+	if msg, err := ensureRootFlags(activeTargetMount, r.RootMountOptions()); err != nil {
+		fatalCode(progress.FailureRootFlagsFailed, "root mount options: %v", err)
+	} else if msg != "" {
+		progress.Info(msg)
+	}
+
 	// Every BLS entry must carry rd.luks.name=<UUID>=root so the initrd
 	// unlocks the LUKS container and maps it to /dev/mapper/root before
 	// mounting the root filesystem. bootc install to-filesystem only sees the
@@ -1092,9 +899,9 @@ func main() {
 	// above asks it to, and this checks every entry and patches what is
 	// missing. Fatal unless GPT auto-discovery finds the root (#410).
 	if activeLuksUUID != "" {
-		msg, err := ensureLuksBoot(activeTargetMount, activeLuksUUID, luksNeedsKarg(isSystemdBoot, r.ComposeFsBackend))
+		msg, err := ensureLuksBoot(activeTargetMount, activeLuksUUID, luksNeedsKarg(r.UsesSystemdBoot(), r.ComposeFsBackend))
 		if err != nil {
-			fatal("LUKS boot arguments: %v", err)
+			fatalCode(progress.FailureLUKSBootArgsFailed, "LUKS boot arguments: %v", err)
 		}
 		progress.Info(msg)
 	}
@@ -1181,10 +988,15 @@ func main() {
 	//   2. remount ro — flush writeback, lock the deployment read-only
 	//   3. fsfreeze/thaw — flush the journal for a clean first boot
 	// ZFS handles this internally; fstrim/remount-ro/fsfreeze do not apply.
-	progress.Step(step, totalSteps, "Finalizing installation", profile[pi].cumulativePct, profile[pi].weightPct)
-	if r.Filesystem != "zfs" {
+	seq.begin(stepFinalize)
+	// Every planned step is announced by now; a gap is a bug the step
+	// tests exist to catch, so say so rather than end the install.
+	if err := seq.check(); err != nil {
+		progress.Info("Warning: " + err.Error())
+	}
+	if !r.IsZFS() {
 		if err := disk.FinalizeFilesystemWith(activeTargetMount, freezes.Hooks()); err != nil {
-			fatal("finalizing target filesystem: %v", err)
+			fatalCode(progress.FailureFinalizeFailed, "finalizing target filesystem: %v", err)
 		}
 	}
 
@@ -1192,7 +1004,7 @@ func main() {
 	// /etc (the resolver's: ZFS installs are composefs, and <target>/etc is
 	// not what boots), so the installed system can import the pool. Must be
 	// done before unmounting. Teardown then exports the pool.
-	if r.Filesystem == "zfs" {
+	if r.IsZFS() {
 		poolName := disk.PoolName(r.ZFSPoolName)
 		if d, err := post.ResolveDeployment(activeTargetMount); err != nil {
 			progress.Info(fmt.Sprintf("Warning: ZFS host ID and zpool.cache not written: %v", err))
@@ -1232,6 +1044,25 @@ func main() {
 	progress.Complete("Installation complete!", bootID)
 }
 
+// sourceIdentityLine says what the pre-flight resolved the install source
+// to. It is the source only: the installed system follows targetImgref.
+func sourceIdentityLine(src install.ImageSource) string {
+	line := "Source image " + src.Ref
+	if src.ManifestDigest != "" {
+		line += ": manifest " + src.ManifestDigest
+	}
+	if src.PlatformDigest != "" && src.PlatformDigest != src.ManifestDigest {
+		line += ", platform manifest " + src.PlatformDigest
+	}
+	if src.Platform != "" {
+		line += " (" + src.Platform + ")"
+	}
+	if src.Cached {
+		line += ", from local containers-storage"
+	}
+	return line + "; a pull can still fail after this check, and a tag can move"
+}
+
 func buildBootcInstallOptions(
 	r *recipe.Recipe,
 	sourceImgref, targetImgref, activeTargetMount, scratchDir string,
@@ -1239,11 +1070,6 @@ func buildBootcInstallOptions(
 	needsPull bool,
 	layerCount int,
 ) install.Options {
-	composeFsBackend := r.ComposeFsBackend
-	if r.Filesystem == "zfs" {
-		composeFsBackend = true
-	}
-
 	var kernelArgs []string
 	if rootOpts := r.RootMountOptions(); rootOpts != "" {
 		kernelArgs = append(kernelArgs, "rootflags="+rootOpts)
@@ -1254,7 +1080,7 @@ func buildBootcInstallOptions(
 		TargetImgref:          targetImgref,
 		SelinuxDisabled:       r.SelinuxDisabled,
 		UnifiedStorage:        r.UnifiedStorage,
-		ComposeFsBackend:      composeFsBackend,
+		ComposeFsBackend:      r.UsesComposeFs(),
 		GenericImage:          r.GenericImage,
 		Bootloader:            r.Bootloader,
 		Target:                activeTargetMount,

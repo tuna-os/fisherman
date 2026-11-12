@@ -1,0 +1,1 @@
+{"disk":"@DIR@/missing","filesystem":"xfs","image":"ghcr.io/example/os:stable","hostname":"bad host","encryption":{"type":"luks-passphrase","passphrase":"SENTINEL-LUKS-PASSPHRASE"},"user":{"username":"ada","password":"SENTINEL-USER-PASSWORD"}}

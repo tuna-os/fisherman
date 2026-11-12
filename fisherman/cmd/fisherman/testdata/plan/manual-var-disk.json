@@ -1,0 +1,1 @@
+{"customMounts":[{"partition":"@DIR@/sda3","target":"/","fstype":"xfs"},{"partition":"@DIR@/sda2","target":"/boot","fstype":"ext4"},{"partition":"@DIR@/sda1","target":"/boot/efi","fstype":"unformatted"}],"varDisk":{"disk":"@DIR@/sdb"},"image":"ghcr.io/example/os:stable","hostname":"fixture","encryption":{"type":"none"}}

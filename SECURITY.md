@@ -17,6 +17,26 @@ privately:
 Reporters who disclose responsibly will be credited in the advisory unless
 they ask not to be.
 
+## Supported versions
+
+| Version | Security fixes |
+|---|---|
+| `dev` branch | yes |
+| The latest tagged release | yes |
+| Older tags | no: update to the latest release |
+
+Releases are linear tags, and consumers pin a commit and move forward. There
+are no backports to older tags.
+
+## Response
+
+Response is best effort. There is no SLA and no fix deadline.
+
+- We aim to acknowledge a private report within 14 days.
+- A fix lands on `dev` and ships in the next release. It reaches each
+  frontend through that frontend's submodule bump.
+- We publish the advisory after the fix release.
+
 ## Threat Model
 
 fisherman runs as root, partitions and formats whole block devices, and
@@ -90,6 +110,60 @@ images** and a **trusted caller**.
   the default paths are taken. The lock does not stop another program, or a
   second host that shares the disk, from touching the target.
 
+## Secure Boot
+
+fisherman supports one Secure Boot profile: **image-owned**. The image ships
+its own signed boot chain. bootc and bootupd install that chain, and
+fisherman keeps it byte for byte. fisherman adds no trust of its own.
+
+### What fisherman guarantees for the image-owned profile
+
+- **It prefers the signed systemd-boot binary.** When bootc leaves no UEFI
+  fallback loader on the ESP, fisherman copies systemd-boot from the
+  deployment and takes `<name>.signed` before `<name>`
+  (`findSystemdBootBinary` in
+  [`fisherman/internal/install/systemdboot.go`](fisherman/internal/install/systemdboot.go);
+  test `TestFindSystemdBootBinary_PrefersSigned` in
+  [`systemdboot_test.go`](fisherman/internal/install/systemdboot_test.go)).
+- **It keeps an existing fallback.** When `EFI/BOOT/BOOTX64.EFI` (or
+  `BOOTAA64.EFI` on arm64) is already on the ESP, `InstallSystemdBoot` and
+  `InstallGrubFallback`
+  ([`grub.go`](fisherman/internal/install/grub.go)) change nothing (tests
+  `TestInstallSystemdBoot_NoopWhenFallbackExists`,
+  `TestInstallSystemdBoot_Arm64NoopWhenFallbackExists` and
+  `TestFallbackHelpersLeaveExistingSignedChainUntouched`).
+- **It keeps every signed byte.** Each copy of a signed EFI binary or UKI is
+  identical to its source, certificate table included, and the BLS changes
+  for Plymouth and LUKS do not rewrite a signed UKI. The GRUB fallback copies
+  the shim, the second stage and MokManager that are already on the ESP; it
+  does not take them from image metadata. Tests:
+  [`efi_preservation_test.go`](fisherman/internal/install/efi_preservation_test.go),
+  described in [`docs/EFI-PRESERVATION.md`](docs/EFI-PRESERVATION.md).
+- **It refuses an image for another architecture before the disk is
+  touched** (`image_platform_mismatch`,
+  [`docs/VALIDATE.md`](docs/VALIDATE.md)). The systemd-boot and fallback
+  file names follow the host architecture: `x64` on x86-64, `aa64` on arm64
+  (`systemdBootNames`; test `TestInstallSystemdBoot_ArchFileNames`).
+
+### What fisherman does not do
+
+- It does not stage shim or MokManager from image metadata.
+- It does not enrol or import MOK keys.
+- It does not change PK, KEK, db or dbx, or any other firmware setting.
+- It does not read or act on secure-install metadata that an image declares.
+
+The limits in [`docs/EFI-PRESERVATION.md`](docs/EFI-PRESERVATION.md#limits--separate-gates)
+apply: a `.signed` name is a selection rule, not proof of a trusted
+signature, and the byte tests use an x86-64 fixture only.
+
+### Add a profile
+
+A new Secure Boot profile needs three things before fisherman supports it:
+
+1. a versioned capability in `fisherman probe` ([`docs/PROBE.md`](docs/PROBE.md#capabilities)),
+2. fixtures and tests for it, and
+3. a VM run with Secure Boot enforced.
+
 ## Security-Relevant Invariants
 
 These behaviours have security implications and must not be simplified or
@@ -114,6 +188,24 @@ privileged bootc container. It must be built in a fresh directory created by
 world-writable directory such as `/tmp`. A fixed path would let an
 unprivileged local user pre-plant the library for root to preload, or symlink
 the source path at an arbitrary file for root to truncate (fixed in #161).
+
+The shim is built only when the install needs it: the target disables
+SELinux (`selinuxDisabled`), the host has SELinux active, and bootc runs in
+the image's container (`install.SelinuxWorkaroundRequired`). It is built
+before the first disk step, and an install that cannot build it is refused
+with the disk untouched (`selinux_workaround_unavailable`, #370). Its
+directory is removed when the install ends, on success, failure and cancel.
+The workaround never changes what the recipe asks for: the target keeps
+SELinux disabled, and the host's SELinux and the signature policy stay as
+they are.
+
+Limits: the shim replaces the C library's `lsetxattr` and `fsetxattr`, built
+against the host's C library and preloaded by the image's dynamic loader. A
+program in the image that sets the label with a direct system call, is
+linked statically, or uses another C library (musl) is not covered, and an
+image loader that cannot load a library built on this host ignores it. The
+tests check the interposition on the host's own loader only; a failure from
+a direct system call has not been reproduced.
 
 ### Partition layout
 

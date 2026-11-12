@@ -354,6 +354,476 @@ expect_exit "store reuse: event fields are read (copy_ms)" 0 \
   test "$(reuse_field "$SR/ev" verified measured.copy_ms)" = 1200
 rm -rf "$SR"
 
+# ── matrix recipes (scripts/matrix-recipe.py, #418) ─────────────────────
+#
+# Every matrix entry, as the harness turns it into a recipe, must pass the
+# recipe rules that need no machine (`fisherman validate --json --partial`):
+# a varDisk with LUKS or on composefs, or ZFS without the opt-in, is refused
+# before any VM boots. Needs python3 with PyYAML and a fisherman binary
+# (FISHERMAN_BIN, else built with go); skipped with a notice without them.
+MATRIX_FILE="$(dirname "$0")/bootcrew-matrix.yaml"
+FM_BIN="${FISHERMAN_BIN:-}"
+if [ -z "$FM_BIN" ] && command -v go >/dev/null 2>&1; then
+  FM_BIN=$(mktemp)
+  (cd "$(dirname "$0")/../fisherman" && go build -o "$FM_BIN" ./cmd/fisherman) || FM_BIN=""
+fi
+check_matrix_recipes() {
+  python3 - "$1" "$2" "$(dirname "$0")/../scripts/matrix-recipe.py" <<'PY'
+import importlib.util, json, subprocess, sys, yaml
+matrix, fisherman, script = sys.argv[1:4]
+spec = importlib.util.spec_from_file_location("matrix_recipe", script)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+bad = 0
+for entry in yaml.safe_load(open(matrix))["images"]:
+    r = mod.recipe(entry, "/dev/loop0", "/dev/loop1")
+    out = subprocess.run([fisherman, "validate", "--json", "--partial", "-"],
+                         input=json.dumps(r).encode(), capture_output=True)
+    errors = json.loads(out.stdout or b"{}").get("errors", [{"code": "no output"}])
+    if out.returncode != 0 or errors:
+        bad = 1
+        print("%s: %s" % (entry.get("name"), [e.get("code") for e in errors]), file=sys.stderr)
+sys.exit(bad)
+PY
+}
+if [ -n "$FM_BIN" ] && python3 -c 'import yaml' 2>/dev/null; then
+  expect_exit "matrix: every entry's recipe passes validate --partial (exit 0)" 0 \
+    check_matrix_recipes "$MATRIX_FILE" "$FM_BIN"
+  MATRIX_BAD_RECIPE=$(mktemp)
+  cat > "$MATRIX_BAD_RECIPE" <<'YAML'
+images:
+  - name: luks-with-var-disk
+    filesystem: xfs
+    luks: true
+    luks_passphrase: x
+    var_disk: true
+YAML
+  expect_exit "matrix: a varDisk with LUKS → caught (exit 1)" 1 \
+    check_matrix_recipes "$MATRIX_BAD_RECIPE" "$FM_BIN"
+  rm -f "$MATRIX_BAD_RECIPE"
+  [ -z "${FISHERMAN_BIN:-}" ] && rm -f "$FM_BIN"
+else
+  echo "  SKIP  matrix recipes: needs python3 with PyYAML and go (or FISHERMAN_BIN)"
+fi
+
+# ── guest checks (scripts/vm-checks/, #418) ────────────────────────────
+#
+# boot-verify.sh sources these once SSH answers. Here a function stands in
+# for ssh_root and a script for the ssh client: each check must pass on a
+# good guest and catch the bug it exists for.
+VMC="$(dirname "$0")/../scripts/vm-checks"
+VMC_TMP=$(mktemp -d)
+# run_check SCRIPT: source SCRIPT in a subshell, as boot-verify.sh does.
+# shellcheck disable=SC1090
+run_check() { ( source "$1" ); }
+
+GOOD_HASH=$(openssl passwd -6 -salt fishsalt 'bootcrew-user-test' 2>/dev/null || true)
+OTHER_HASH=$(openssl passwd -6 -salt fishsalt 'another-password' 2>/dev/null || true)
+# yescrypt ($y$), what CentOS Stream 10's chpasswd writes on an ostree target.
+yescrypt() {  # yescrypt PASSWORD — a $y$ hash of PASSWORD, or nothing
+  python3 - "$1" <<'PY' 2>/dev/null || true
+import ctypes, ctypes.util, sys
+lib = ctypes.CDLL(ctypes.util.find_library("crypt") or "libcrypt.so.1")
+lib.crypt.restype = lib.crypt_gensalt.restype = ctypes.c_char_p
+lib.crypt.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+lib.crypt_gensalt.argtypes = [ctypes.c_char_p, ctypes.c_ulong, ctypes.c_char_p, ctypes.c_int]
+print(lib.crypt(sys.argv[1].encode(), lib.crypt_gensalt(b"$y$", 0, None, 0)).decode())
+PY
+}
+YESCRYPT_HASH=$(yescrypt 'bootcrew-user-test')
+YESCRYPT_OTHER=$(yescrypt 'another-password')
+cat >"$VMC_TMP/ssh" <<'SH'
+#!/bin/sh
+# The user session: whatever FAKE_USER_SESSION says.
+printf '%b\n' "$FAKE_USER_SESSION"
+SH
+chmod +x "$VMC_TMP/ssh"
+user_guest() {  # user_guest SESSION SHADOW_HASH — then run user.sh
+  FAKE_USER_SESSION="$1" FAKE_SHADOW="$2" SSH_BIN="$VMC_TMP/ssh" SSH_KEY=/dev/null SSH_PORT=1 \
+    BOOTCREW_USER=bootcrew BOOTCREW_USER_PASSWORD=bootcrew-user-test run_check "$VMC/user.sh"
+}
+ssh_root() {
+  case "$*" in
+    *"getent group wheel"*) echo "wheel:x:10:bootcrew" ;;
+    *"getent shadow"*) echo "$FAKE_SHADOW" ;;
+    *crypto_LUKS*) echo "/dev/sda3" ;;
+    *luksDump*) printf '%b\n' "$FAKE_LUKSDUMP" ;;
+    *journalctl*) echo "enrolled" ;;
+    *"ActiveState"*) echo "${FAKE_UNIT_STATE:-inactive}" ;;
+    *tpm2-enroll.key*) [ "${FAKE_KEY_LEFT:-0}" = 1 ] ;;
+    *findmnt*) printf '%b\n' "$FAKE_VAR" ;;
+    *) return 1 ;;
+  esac
+}
+GOOD_SESSION='bootcrew\nhome-ok\ngroups: bootcrew wheel'
+if [ -n "$GOOD_HASH" ]; then
+  expect_exit "guest user: signs in, owns its home, recipe password → pass (exit 0)" 0 \
+    user_guest "$GOOD_SESSION" "$GOOD_HASH"
+  expect_exit "guest user: another password → caught (exit 1)" 1 \
+    user_guest "$GOOD_SESSION" "$OTHER_HASH"
+  # ssh prints a warning before the session (seen in the first VM run).
+  expect_exit "guest user: a warning line before the session → pass (exit 0)" 0 \
+    user_guest "Warning: Permanently added '[127.0.0.1]:2222' (ED25519) to the list of known hosts.\\n$GOOD_SESSION" "$GOOD_HASH"
+  expect_exit "guest user: locked account (!) → caught (exit 1)" 1 \
+    user_guest "$GOOD_SESSION" '!'
+  expect_exit "guest user: cannot sign in → caught (exit 1)" 1 \
+    user_guest 'Permission denied (publickey)' "$GOOD_HASH"
+  expect_exit "guest user: no home it owns → caught (exit 1)" 1 \
+    user_guest 'bootcrew\ngroups: bootcrew wheel' "$GOOD_HASH"
+  expect_exit "guest user: not in wheel → caught (exit 1)" 1 \
+    user_guest 'bootcrew\nhome-ok\ngroups: bootcrew' "$GOOD_HASH"
+else
+  echo "  SKIP  guest user checks: openssl not found"
+fi
+case "$YESCRYPT_HASH" in
+  '$y$'*)
+    expect_exit "guest user: yescrypt hash of the recipe password → pass (exit 0)" 0 \
+      user_guest "$GOOD_SESSION" "$YESCRYPT_HASH"
+    expect_exit "guest user: yescrypt hash of another password → caught (exit 1)" 1 \
+      user_guest "$GOOD_SESSION" "$YESCRYPT_OTHER" ;;
+  *) echo "  SKIP  guest user yescrypt checks: no libcrypt yescrypt" ;;
+esac
+
+tpm_guest() { FAKE_LUKSDUMP="$1" FAKE_KEY_LEFT="$2" TPM2_WAIT_ITERS=1 run_check "$VMC/tpm2-enrolled.sh"; }
+ENROLLED='Keyslots:\n  0: luks2\n  1: luks2\nTokens:\n  0: systemd-tpm2'
+expect_exit "guest tpm2: token, slot 31 and key gone → pass (exit 0)" 0 tpm_guest "$ENROLLED" 0
+expect_exit "guest tpm2: no systemd-tpm2 token → caught (exit 1)" 1 \
+  tpm_guest 'Keyslots:\n  0: luks2\n  31: luks2' 0
+expect_exit "guest tpm2: single-use slot 31 left → caught (exit 1)" 1 \
+  tpm_guest "$ENROLLED\nKeyslots:\n  31: luks2" 0
+expect_exit "guest tpm2: key file left → caught (exit 1)" 1 tpm_guest "$ENROLLED" 1
+# The race the first VM run hit: the token is there while ExecStopPost has
+# not yet removed slot 31 and the key file. The check must wait for the unit.
+tpm_race() (  # a subshell: its ssh_root must not replace the shared one
+  n="$VMC_TMP/tpm-race"; echo 0 >"$n"
+  ssh_root() {
+    case "$*" in
+      *crypto_LUKS*) echo "/dev/sda3" ;;
+      *ActiveState*) c=$(cat "$n"); echo $((c + 1)) >"$n"
+                     if [ "$c" -lt 2 ]; then echo activating; else echo inactive; fi ;;
+      *luksDump*) if [ "$(cat "$n")" -lt 2 ]; then printf '%b\n' "$ENROLLED\nKeyslots:\n  31: luks2"; else printf '%b\n' "$ENROLLED"; fi ;;
+      *journalctl*) echo "enrolled" ;;
+      *tpm2-enroll.key*) [ "$(cat "$n")" -lt 2 ] ;;
+      *) return 1 ;;
+    esac
+  }
+  TPM2_WAIT_ITERS=5 run_check "$VMC/tpm2-enrolled.sh"
+)
+expect_exit "guest tpm2: token first, cleanup a moment later → pass (exit 0)" 0 tpm_race
+# A VM run under memory pressure: the first ssh calls fail. The check must
+# try again, and must not call a failed query "no LUKS device".
+tpm_ssh() (  # tpm_ssh FAILS ANSWER — the first FAILS queries fail, then ANSWER
+  n="$VMC_TMP/tpm-ssh"; echo 0 >"$n"
+  fails="$1" answer="$2"
+  ssh_root() {
+    case "$*" in
+      *crypto_LUKS*) c=$(cat "$n"); echo $((c + 1)) >"$n"
+                     [ "$c" -ge "$fails" ] || return 255
+                     [ -z "$answer" ] || echo "$answer" ;;
+      *luksDump*) printf '%b\n' "$ENROLLED" ;;
+      *ActiveState*) echo inactive ;;
+      *journalctl*) echo "enrolled" ;;
+      *) return 1 ;;
+    esac
+  }
+  TPM2_SSH_TRIES=4 TPM2_SSH_SLEEP=0 TPM2_WAIT_ITERS=1 run_check "$VMC/tpm2-enrolled.sh"
+)
+expect_exit "guest tpm2: ssh fails twice, then answers → pass (exit 0)" 0 tpm_ssh 2 /dev/sda3
+expect_exit "guest tpm2: ssh never answers → caught (exit 1)" 1 tpm_ssh 9 /dev/sda3
+expect_exit "guest tpm2: ssh answers, no LUKS device → caught (exit 1)" 1 tpm_ssh 0 ""
+
+var_guest() { FAKE_VAR="$1" run_check "$VMC/var-disk.sh"; }
+FSTAB_VAR='UUID=1 /var xfs defaults,nofail,x-systemd.device-timeout=30s,x-systemd.before=local-fs.target 0 0'
+expect_exit "guest varDisk: /var is the xfs disk labelled var → pass (exit 0)" 0 \
+  var_guest "/dev/sdb xfs var\n/var\n$FSTAB_VAR"
+expect_exit "guest varDisk: /var is on the root → caught (exit 1)" 1 \
+  var_guest "/dev/mapper/root[/ostree/deploy/default/var] xfs root\n/var\n$FSTAB_VAR"
+expect_exit "guest varDisk: /var/home elsewhere → caught (exit 1)" 1 \
+  var_guest "/dev/sdb xfs var\n/var/home\n$FSTAB_VAR"
+expect_exit "guest varDisk: no fstab line → caught (exit 1)" 1 \
+  var_guest "/dev/sdb xfs var\n/var"
+
+# btrfs-subvolumes.sh: the guest answers with FAKE_BTRFS (printf %b).
+btrfs_guest() (
+  ssh_root() { printf '%b\n' "$FAKE_BTRFS"; }
+  FAKE_BTRFS="$1" run_check "$VMC/btrfs-subvolumes.sh"
+)
+BT_ROOT='root: /sysroot /dev/vda2[/@] btrfs ro,relatime,compress=zstd:1,ssd,space_cache=v2,subvolid=256,subvol=/@'
+BT_VAR='var: /dev/vda2[/@/state/os/default/var]'
+BT_CMD='cmdline: BOOT_IMAGE=/vmlinuz rw rootflags=subvol=@,compress=zstd:1 console=ttyS0'
+BT_LIST='subvol: ID 256 gen 12 top level 5 path @\nsubvol: ID 257 gen 13 top level 256 path @/state/os/default/var/lib/machines\nlisted: yes'
+expect_exit "guest btrfs: @ mounted with the recipe's options, only @ on top → pass (exit 0)" 0 \
+  btrfs_guest "$BT_ROOT\n$BT_VAR\n$BT_CMD\n$BT_LIST"
+expect_exit "guest btrfs: no btrfs tool in the image → pass, list not checked (exit 0)" 0 \
+  btrfs_guest "$BT_ROOT\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: /sysroot not a mount point, /var on @ → pass (exit 0)" 0 \
+  btrfs_guest "root: /var /dev/vda2[/@/state/os/default/var] btrfs rw,compress=zstd:1,subvolid=256,subvol=/@\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: root at the top level (no subvolume) → caught (exit 1)" 1 \
+  btrfs_guest "root: /sysroot /dev/vda2 btrfs rw,compress=zstd:1,subvolid=5,subvol=/\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: another subvolume (@root) → caught (exit 1)" 1 \
+  btrfs_guest "root: /sysroot /dev/vda2[/@root] btrfs rw,compress=zstd:1,subvolid=256,subvol=/@root\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: no zstd compression → caught (exit 1)" 1 \
+  btrfs_guest "root: /sysroot /dev/vda2[/@] btrfs rw,subvolid=256,subvol=/@\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: not btrfs at all → caught (exit 1)" 1 \
+  btrfs_guest "root: /sysroot /dev/vda2 ext4 rw,relatime\n$BT_VAR\n$BT_CMD"
+expect_exit "guest btrfs: no rootflags on the command line → caught (exit 1)" 1 \
+  btrfs_guest "$BT_ROOT\n$BT_VAR\ncmdline: BOOT_IMAGE=/vmlinuz rw\n$BT_LIST"
+expect_exit "guest btrfs: /var outside @ → caught (exit 1)" 1 \
+  btrfs_guest "$BT_ROOT\nvar: /dev/vda2[/state/os/default/var]\n$BT_CMD\n$BT_LIST"
+expect_exit "guest btrfs: @home and @snapshots on top (#416) → caught (exit 1)" 1 \
+  btrfs_guest "$BT_ROOT\n$BT_VAR\n$BT_CMD\nsubvol: ID 256 gen 12 top level 5 path @\nsubvol: ID 258 gen 12 top level 5 path @home\nsubvol: ID 259 gen 12 top level 5 path @snapshots\nlisted: yes"
+
+# The harness mounts @ to reach the system (scripts/find-tools.sh).
+# shellcheck source=../scripts/find-tools.sh
+source "$(dirname "$0")/../scripts/find-tools.sh"
+mkdir -p "$VMC_TMP/top-sub/@" "$VMC_TMP/top-flat/state/deploy" "$VMC_TMP/top-ostree/@" "$VMC_TMP/top-ostree/ostree"
+expect_exit "btrfs root: top level holds only @ → mount @ (exit 0)" 0 \
+  test "$(btrfs_root_subvol "$VMC_TMP/top-sub")" = "@"
+expect_exit "btrfs root: the system at the top level → no subvolume (exit 1)" 1 \
+  btrfs_root_subvol "$VMC_TMP/top-flat"
+expect_exit "btrfs root: an @ dir next to an ostree tree → no subvolume (exit 1)" 1 \
+  btrfs_root_subvol "$VMC_TMP/top-ostree"
+
+# capabilities.sh (#383): the report taken in the installing VM, held to
+# the installed system. caps_json writes a probe output; each argument
+# after the file is a Python assignment applied to its capabilities.
+CAPS_DIGEST="sha256:$(printf 'a%.0s' $(seq 1 64))"
+caps_json() {  # caps_json FILE KIND [PY-STATEMENT...] — KIND: match | other
+  python3 -I - "$CAPS_DIGEST" "$@" <<'PY'
+import json, sys
+digest, path, kind, edits = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4:]
+src = ["native_inspection", "install_configuration", "finalization", "deployment_mount", "bootc_image_storage"]
+if kind == "match":
+    c = {"version": 1,
+         "live_host": {"backend": "ostree", "bootc_version": "1.17.1", "digest": digest},
+         "source": {"selected": True, "digest": digest, "digest_from": "reference", "transport": "registry"},
+         "execution_root": {"context": "live-host", "established": True, "reason": "digest_match",
+                            "backend": "ostree", "bootc_version": "1.17.1"},
+         "features": {"native_inspection": {"status": "supported", "reason": "observed", "context": "source-root"},
+                      "install_configuration": {"status": "supported", "reason": "observed", "context": "source-root"},
+                      "finalization": {"status": "unknown", "reason": "not_qualified", "context": "source-root"},
+                      "deployment_mount": {"status": "unknown", "reason": "not_qualified", "context": "source-root"},
+                      "bootc_image_storage": {"status": "unknown", "reason": "not_qualified", "context": "source-root"}},
+         "install_defaults": {"observed": True, "root_filesystem": "xfs", "block_setups": ["direct"], "bootloader": "grub"},
+         "image": {"observed": True, "kernel_version": "6.12.0-100.el10.x86_64", "kernel_unified": False}}
+else:
+    c = {"version": 1,
+         "live_host": {"backend": "ostree", "bootc_version": "1.17.1", "digest": digest},
+         "source": {"selected": True, "digest": "sha256:" + "e" * 64, "digest_from": "reference"},
+         "execution_root": {"context": "none", "established": False, "reason": "digest_mismatch",
+                            "backend": "", "bootc_version": ""},
+         "features": {n: {"status": "unknown", "reason": "source_root_unavailable", "context": "none"} for n in src},
+         "install_defaults": {"observed": False, "block_setups": []},
+         "image": {"observed": False}}
+c["features"]["unified_storage"] = {"status": "unsupported", "reason": "fisherman_refuses", "context": "fisherman"}
+for e in edits:
+    exec(e, {"c": c})
+json.dump({"protocol_version": 1, "capabilities": c}, open(path, "w"))
+PY
+}
+CAPS_STATUS_OSTREE='{"status":{"booted":{"image":{"imageDigest":"x"},"ostree":{"checksum":"abc"}}}}'
+CAPS_STATUS_CFS='{"status":{"booted":{"image":{"imageDigest":"x"},"composefs":{"verity":"abc"}}}}'
+caps_guest() (  # caps_guest PROBE OTHER [GUEST-BOOTC [KERNEL [BOOTLOADER [STATUS]]]]
+  ssh_root() {
+    echo "bootc: ${G_BOOTC}"; echo "kernel: ${G_KERNEL}"; echo "bootloader: ${G_LOADER}"; echo "status: ${G_STATUS}"
+  }
+  G_BOOTC="${3:-bootc 1.17.1}" G_KERNEL="${4:-6.12.0-100.el10.x86_64}" G_LOADER="${5:-grub}" \
+    G_STATUS="${6:-$CAPS_STATUS_OSTREE}" CAPS_PROBE="$1" CAPS_PROBE_OTHER="$2" \
+    CAPS_LIVE_BOOTC="bootc 1.17.1" CAPS_SOURCE_DIGEST="$CAPS_DIGEST" CAPS_EXPECT_BACKEND=ostree \
+    run_check "$VMC/capabilities.sh"
+)
+C="$VMC_TMP/caps"
+mkdir -p "$C"
+caps_json "$C/good" match
+caps_json "$C/other" other
+expect_exit "guest caps: the report matches the installing and installed bootc → pass (exit 0)" 0 \
+  caps_guest "$C/good" "$C/other"
+caps_json "$C/cmd-absent" match 'c["features"]["native_inspection"] = {"status": "unsupported", "reason": "command_absent", "context": "source-root"}' \
+  'c["image"] = {"observed": False}'
+expect_exit "guest caps: an older bootc without container inspect → pass (exit 0)" 0 \
+  caps_guest "$C/cmd-absent" "$C/other"
+caps_json "$C/no-loader" match 'c["install_defaults"]["bootloader"] = ""'
+expect_exit "guest caps: print-configuration names no bootloader → pass (exit 0)" 0 \
+  caps_guest "$C/no-loader" "$C/other"
+caps_json "$C/unrooted" match 'c["execution_root"].update(established=False, reason="digest_mismatch", context="none")'
+expect_exit "guest caps: no established execution root → caught (exit 1)" 1 \
+  caps_guest "$C/unrooted" "$C/other"
+expect_exit "guest caps: the installed system has another bootc → caught (exit 1)" 1 \
+  caps_guest "$C/good" "$C/other" "bootc 1.16.0"
+caps_json "$C/oldver" match 'c["execution_root"]["bootc_version"] = "1.16.0"'
+expect_exit "guest caps: the report names another bootc version → caught (exit 1)" 1 \
+  caps_guest "$C/oldver" "$C/other"
+caps_json "$C/cfs" match 'c["execution_root"]["backend"] = "composefs"' 'c["live_host"]["backend"] = "composefs"'
+expect_exit "guest caps: the report says composefs, the install is ostree → caught (exit 1)" 1 \
+  caps_guest "$C/cfs" "$C/other"
+expect_exit "guest caps: the installed system is composefs → caught (exit 1)" 1 \
+  caps_guest "$C/good" "$C/other" "bootc 1.17.1" "6.12.0-100.el10.x86_64" grub "$CAPS_STATUS_CFS"
+caps_json "$C/sdboot" match 'c["install_defaults"]["bootloader"] = "systemd"'
+expect_exit "guest caps: print-configuration says systemd, GRUB installed → caught (exit 1)" 1 \
+  caps_guest "$C/sdboot" "$C/other"
+expect_exit "guest caps: container inspect names another kernel → caught (exit 1)" 1 \
+  caps_guest "$C/good" "$C/other" "bootc 1.17.1" "6.11.0-1.el10.x86_64"
+caps_json "$C/fromnone" match 'c["features"]["install_configuration"] = {"status": "supported", "reason": "observed", "context": "none"}'
+expect_exit "guest caps: a feature answered outside the source root → caught (exit 1)" 1 \
+  caps_guest "$C/fromnone" "$C/other"
+caps_json "$C/helpsupported" match 'c["features"]["finalization"] = {"status": "supported", "reason": "command_present", "context": "source-root"}'
+expect_exit "guest caps: supported from a help text, not observed → caught (exit 1)" 1 \
+  caps_guest "$C/helpsupported" "$C/other"
+caps_json "$C/wrongsrc" match 'c["source"]["digest"] = "sha256:" + "b" * 64'
+expect_exit "guest caps: the report is for another source digest → caught (exit 1)" 1 \
+  caps_guest "$C/wrongsrc" "$C/other"
+# Negative case: the host's bootc answered for a digest the host did not boot.
+caps_json "$C/other-leak" other 'c["execution_root"].update(established=True, reason="digest_match", context="live-host", bootc_version="1.17.1")'
+expect_exit "guest caps: another digest gets the host's execution root → caught (exit 1)" 1 \
+  caps_guest "$C/good" "$C/other-leak"
+caps_json "$C/other-defaults" other 'c["install_defaults"] = {"observed": True, "bootloader": "grub", "block_setups": []}' \
+  'c["features"]["install_configuration"] = {"status": "supported", "reason": "observed", "context": "source-root"}'
+expect_exit "guest caps: another digest reports the host's defaults → caught (exit 1)" 1 \
+  caps_guest "$C/good" "$C/other-defaults"
+# The probe's own golden output (internal/probe/testdata/golden): a
+# digest-pinned source on a matching host, and an unrelated host. Keeps the
+# check on the shape the Go code really emits.
+GOLDEN="$(dirname "$0")/../fisherman/internal/probe/testdata/golden"
+jq '{capabilities: .}' "$GOLDEN/caps-pinned-reference.json" >"$C/golden-match"
+jq '{capabilities: .}' "$GOLDEN/caps-unrelated-live-host.json" >"$C/golden-other"
+golden_guest() (
+  ssh_root() {
+    echo "bootc: bootc 1.17.1"; echo "kernel: 6.12.0-55.el10.x86_64"; echo "bootloader: grub"
+    echo "status: $CAPS_STATUS_OSTREE"
+  }
+  CAPS_PROBE="$C/golden-match" CAPS_PROBE_OTHER="$1" CAPS_LIVE_BOOTC="bootc 1.17.1" \
+    CAPS_SOURCE_DIGEST="sha256:$(printf '1%.0s' $(seq 1 64))" CAPS_EXPECT_BACKEND=ostree \
+    run_check "$VMC/capabilities.sh"
+)
+expect_exit "guest caps: the probe's golden pinned-reference and unrelated-host output → pass (exit 0)" 0 \
+  golden_guest "$C/golden-other"
+expect_exit "guest caps: golden pinned-reference as the negative case → caught (exit 1)" 1 \
+  golden_guest "$C/golden-match"
+echo 'probe: bootc status failed' >"$C/not-json"
+expect_exit "guest caps: no capability report → caught (exit 1)" 1 \
+  caps_guest "$C/not-json" "$C/other"
+unset -f ssh_root
+rm -rf "$VMC_TMP"
+
+# ── enabled units, recovery key, no prompt (#422, #418, #421) ─────────
+#
+# enabled-units.sh (#422): the guest lists what the booted system enables
+# and what the image enables (`sh -s installed` / `sh -s image`); here a
+# function per case stands in for ssh_root and answers both. Then the real
+# guest side, run locally against a small unit tree. capture-recovery-key.py
+# and no-passphrase-prompt.sh are the tpm2-luks entry's harness.
+EU_TMP=$(mktemp -d)
+EU_IMAGE='system:sshd.service\nsystem:chronyd.service\nuser:pipewire.socket'
+eu_guest() (  # eu_guest INSTALLED IMAGE: a subshell, its ssh_root stays here
+  EU_I="$1" EU_M="$2"
+  ssh_root() {
+    case "$*" in
+      *"sh -s installed"*) printf '%b\n' "$EU_I" ;;
+      *"sh -s image"*) [ -n "$EU_M" ] && printf '%b\n' "$EU_M" ;;
+      *) return 1 ;;
+    esac
+  }
+  run_eu_check
+)
+# shellcheck disable=SC1091
+run_eu_check() { ( source "$(dirname "$0")/../scripts/vm-checks/enabled-units.sh" ); }
+expect_exit "guest enabled units: the image's own units only → pass (exit 0)" 0 \
+  eu_guest "$EU_IMAGE" "$EU_IMAGE"
+expect_exit "guest enabled units: an extra unit (cups-browsed) → caught (exit 1)" 1 \
+  eu_guest "$EU_IMAGE\nsystem:cups-browsed.service" "$EU_IMAGE"
+expect_exit "guest enabled units: an extra user unit → caught (exit 1)" 1 \
+  eu_guest "$EU_IMAGE\nuser:avahi-daemon.service" "$EU_IMAGE"
+expect_exit "guest enabled units: fisherman's receipt and enrolment units → pass (exit 0)" 0 \
+  eu_guest "$EU_IMAGE\nsystem:fisherman-boot-receipt.service\nsystem:fisherman-tpm2-enroll.service\nuser:acme-oem-setup.service" "$EU_IMAGE"
+expect_exit "guest enabled units: an allowlisted name in the other scope → caught (exit 1)" 1 \
+  eu_guest "$EU_IMAGE\nuser:fisherman-boot-receipt.service" "$EU_IMAGE"
+expect_exit "guest enabled units: the image list unreadable → caught (exit 1)" 1 \
+  eu_guest "$EU_IMAGE" ""
+# The allowlist names fisherman's own units by the names its code writes.
+eu_allowlisted_units_exist() {
+  local src
+  src="$(dirname "$0")/../fisherman/internal"
+  grep -q '"fisherman-boot-receipt.service"' "$src/receipt/receipt.go" &&
+    grep -q '"fisherman-tpm2-enroll.service"' "$src/luks/firstboot.go" &&
+    grep -q -- '-oem-setup.service' "$src/post/oem.go"
+}
+expect_exit "guest enabled units: the allowlisted units are the ones fisherman writes" 0 \
+  eu_allowlisted_units_exist
+# The guest side for real: an "image" whose /etc (at usr/etc) enables sshd
+# and whose presets enable chronyd, and an "installed" /etc that has both
+# plus whatever the case adds. Needs systemctl (for --root).
+if command -v systemctl >/dev/null 2>&1; then
+  eu_tree() {  # eu_tree ROOT: a minimal deployment
+    local r="$1" u
+    mkdir -p "$r/usr/lib/systemd/system" "$r/usr/lib/systemd/system-preset" \
+      "$r/usr/etc/systemd/system/multi-user.target.wants"
+    for u in sshd chronyd cups-browsed; do
+      printf '[Service]\nExecStart=/bin/true\n[Install]\nWantedBy=multi-user.target\n' \
+        >"$r/usr/lib/systemd/system/$u.service"
+    done
+    printf 'enable chronyd.service\ndisable *\n' >"$r/usr/lib/systemd/system-preset/90-default.preset"
+    ln -s /usr/lib/systemd/system/sshd.service "$r/usr/etc/systemd/system/multi-user.target.wants/sshd.service"
+    cp -a "$r/usr/etc" "$r/etc"
+    # The first boot applied the presets to the installed /etc.
+    ln -s /usr/lib/systemd/system/chronyd.service "$r/etc/systemd/system/multi-user.target.wants/chronyd.service"
+  }
+  eu_local() (  # eu_local ROOT: the check, its guest script run here on ROOT
+    ssh_root() { bash -c "$*"; }
+    ENABLED_UNITS_ROOT="$1" run_eu_check
+  )
+  eu_tree "$EU_TMP/good"
+  expect_exit "guest enabled units (real lists): presets and /usr/etc → pass (exit 0)" 0 \
+    eu_local "$EU_TMP/good"
+  eu_tree "$EU_TMP/extra"
+  ln -s /usr/lib/systemd/system/cups-browsed.service \
+    "$EU_TMP/extra/etc/systemd/system/multi-user.target.wants/cups-browsed.service"
+  expect_exit "guest enabled units (real lists): a wants link the image lacks → caught (exit 1)" 1 \
+    eu_local "$EU_TMP/extra"
+  eu_tree "$EU_TMP/preset"
+  mkdir -p "$EU_TMP/preset/etc/systemd/system-preset"
+  echo 'enable cups-browsed.service' >"$EU_TMP/preset/etc/systemd/system-preset/50-x.preset"
+  expect_exit "guest enabled units (real lists): an enable preset in /etc → caught (exit 1)" 1 \
+    eu_local "$EU_TMP/preset"
+  eu_tree "$EU_TMP/receipt"
+  ln -s /etc/systemd/system/fisherman-boot-receipt.service \
+    "$EU_TMP/receipt/etc/systemd/system/multi-user.target.wants/fisherman-boot-receipt.service"
+  expect_exit "guest enabled units (real lists): fisherman's receipt unit → pass (exit 0)" 0 \
+    eu_local "$EU_TMP/receipt"
+  eu_tree "$EU_TMP/composefs"
+  rm -rf "$EU_TMP/composefs/usr/etc"
+  expect_exit "guest enabled units (real lists): no /usr/etc → caught (exit 1)" 1 \
+    eu_local "$EU_TMP/composefs"
+else
+  echo "  SKIP  guest enabled units (real lists): no systemctl"
+fi
+
+# capture-recovery-key.py: the key reaches the file and never the output.
+CRK="$(dirname "$0")/../scripts/capture-recovery-key.py"
+crk_case() {  # crk_case INPUT: the key file holds k3y and no output line has it
+  rm -f "$EU_TMP/key"
+  printf '%b' "$1" | python3 "$CRK" "$EU_TMP/key" >"$EU_TMP/out" || return 1
+  [ "$(cat "$EU_TMP/key" 2>/dev/null)" = "k3yk3yk3y" ] || return 1
+  [ "$(stat -c %a "$EU_TMP/key")" = 600 ] || return 1
+  ! grep -q k3yk3yk3y "$EU_TMP/out" || return 1
+  grep -q '"step"' "$EU_TMP/out" && grep -qx 'plain text' "$EU_TMP/out"
+}
+expect_exit "recovery key: captured to a 0600 file, redacted in the output (exit 0)" 0 \
+  crk_case '{"type":"step","step":1}\nplain text\n{"type":"recovery_key","key":"k3yk3yk3y"}\n{"type":"complete"}\n'
+expect_exit "recovery key: no recovery_key event → no key file (caught, exit 1)" 1 \
+  crk_case '{"type":"step","step":1}\nplain text\n'
+crk_status() { printf 'x\n' | python3 "$CRK" "$EU_TMP/key"; }
+expect_exit "recovery key: no event is still exit 0 (fisherman's status decides)" 0 crk_status
+
+# no-passphrase-prompt.sh: reads the boot's serial log.
+npp() { printf '%b\n' "$1" >"$EU_TMP/serial.log"; SERIAL_LOG="$EU_TMP/serial.log" run_check "$VMC/no-passphrase-prompt.sh"; }
+expect_exit "guest no prompt: a TPM2 unlock, no prompt → pass (exit 0)" 0 \
+  npp '[  OK  ] Finished systemd-cryptsetup@luks.service\nci-test login:'
+expect_exit "guest no prompt: a passphrase prompt on this boot → caught (exit 1)" 1 \
+  npp '\e[0mPlease enter passphrase for disk luks-1234 (luks-1234):\nci-test login:'
+expect_exit "guest no prompt: no serial log → caught (exit 1)" 1 \
+  env SERIAL_LOG=/nonexistent bash -c ". '$VMC/no-passphrase-prompt.sh'"
+rm -rf "$EU_TMP"
+
 # ── summary ────────────────────────────────────────────────────────────────
 
 echo ""

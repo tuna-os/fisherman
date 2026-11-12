@@ -35,11 +35,13 @@ func TestBootcInstall_RunInSourceContainer(t *testing.T) {
 	const copyRef = "localhost/fisherman-reuse:111111111111-0123456789abcdef"
 	const update = "ghcr.io/example/os:stable"
 	opts := Options{SourceImgref: "containers-storage:" + copyRef, TargetImgref: update,
-		Target: filepath.Join(dir, "target"), ScratchDir: filepath.Join(dir, "scratch")}
+		Target: filepath.Join(dir, "target"), ScratchDir: filepath.Join(dir, "scratch"),
+		SourceRoot: SourceRoot{Established: true, Reason: "digest_match", Backend: "ostree"}}
 
-	// Without the flag the host's bootc would run (the existing local path).
+	// Without the flag the host's bootc would run (the existing local path,
+	// on a host that booted the source).
 	if !useDirectForLocalSource(opts) {
-		t.Fatal("precondition: a local source on a bootc host takes the direct path")
+		t.Fatal("precondition: a local source on a host that booted it takes the direct path")
 	}
 
 	opts.RunInSourceContainer = true

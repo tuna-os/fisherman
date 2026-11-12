@@ -1,12 +1,10 @@
 # fisherman
 
-> ℹ️ **Note on the project home.** This repository is the **origin** and is
-> actively maintained (the `dev` branch carries TunaOS fixes, e.g.
-> customMounts validation and TPM2 first-boot enrolment).
+> ℹ️ **Note on the project home.** `tuna-os/fisherman` is the only origin.
+> Send issues and pull requests here.
 > [`projectbluefin/fisherman`](https://github.com/projectbluefin/fisherman) is
-> a fork of this repo that is kept in sync (see
-> [tuna-os/fisherman#59](https://github.com/tuna-os/fisherman/pull/59)); pick
-> whichever home matches your distro's tooling.
+> a fork. Its changes reach fisherman only through a pull request here.
+> Consumers pin `https://github.com/tuna-os/fisherman`.
 
 fisherman is the part of a [bootc](https://bootc-dev.github.io/bootc/) installer that changes the disk.
 It reads one JSON recipe, then partitions and encrypts the disk, installs the
@@ -38,7 +36,7 @@ choices and draw a progress bar.
 
 | You are | Use fisherman to |
 |---|---|
-| Writing an installer UI | Skip the disk work. Ask `fisherman probe --json` what the machine has, check fields with `fisherman validate --json --partial`, pipe a recipe to `fisherman -`, and read progress. |
+| Writing an installer UI | Skip the disk work. Ask `fisherman probe --json` what the machine has, check fields with `fisherman validate --json --partial`, pipe a recipe to `fisherman -`, and read progress. The guide: [`docs/INTEGRATION.md`](docs/INTEGRATION.md). |
 | Building a bootc image | Get an install path for your image without a distro-specific installer. Any image that `bootc install to-filesystem` accepts works; the nightly matrix covers CentOS, Ubuntu, Debian, Arch and openSUSE bases, among others. |
 | Automating installs | Run unattended from a recipe file, with machine-readable validation errors and progress. |
 
@@ -121,9 +119,14 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 | `fisherman validate --json [--partial] <recipe.json\|->` | no | every problem as one JSON object with stable codes (hostname, username, filesystem, encryption, disk, TPM), the same rules the install enforces before touching a disk; `--partial` checks one page's fields. Schema, codes and the encryption choices file: [`docs/VALIDATE.md`](docs/VALIDATE.md) |
 | `fisherman images [<query>]` | no | list or search the image catalog |
 | `fisherman scan <disk>` | yes | scan a disk for Windows data available to migrate; output contract and safety notes: [`docs/SCAN.md`](docs/SCAN.md) |
+| `fisherman plan --json -` | no | print what an install of the recipe on stdin would do: the source, the target, the partitions it creates, formats or keeps (by boot stack and encryption), the encryption type, the boot stack and the ordered steps. It runs the `validate --json` checks first, writes and pulls nothing, prints no secret, and says `unknown` for what only the install can resolve. Schema: [`docs/PLAN.md`](docs/PLAN.md) |
 | `fisherman probe --json` | no | print disks, TPM, RAM/CPU/UEFI, live-media and offline-store facts as one JSON object; read-only. Schema and an example: [`docs/PROBE.md`](docs/PROBE.md) |
 | `fisherman verify --json` | yes, for `bootc status` | on the installed system, or against what its first boot collected: compare the installation receipt with the booted image (`verified`, `mismatch`, `unsupported`, `unavailable`, `not-yet-run`); read-only, exit 0 only for `verified`. Schemas and codes: [`docs/RECEIPT.md`](docs/RECEIPT.md) |
+| `fisherman diagnostics (--output-dir <dir> \| --stdout)` | no | write a local support bundle for a failed install: allowlisted versions, probe facts, the recipe's effective options, the progress timeline and outcome, and what is still mounted. Never a passphrase, recovery key, password, hash or token; identifiers masked. Never uploaded. Contract: [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) |
 | `fisherman version` | no | print the version |
+
+Every flag, with its value, its default and the exit codes of each command:
+[`docs/CLI.md`](docs/CLI.md).
 
 ## Recipe format
 
@@ -143,11 +146,10 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 }
 ```
 
-The example shows the common fields. A recipe can also carry `user`,
-`bootloader`, `targetImgref`, `btrfsSubvolumes`, `varDisk`, `customMounts`
-and more; the struct in
-[`fisherman/internal/recipe/recipe.go`](fisherman/internal/recipe/recipe.go)
-is the reference until #320 lands.
+The example shows the common fields. Every field, with its type and its
+default, is in [`docs/RECIPE.md`](docs/RECIPE.md); a test holds that page to
+the struct in
+[`fisherman/internal/recipe/recipe.go`](fisherman/internal/recipe/recipe.go).
 
 Things a recipe author should know today:
 
@@ -165,7 +167,7 @@ Things a recipe author should know today:
 - The host's Wi-Fi profiles and Bluetooth pairings are copied to the target only when the host booted from live media. `"copyNetworkProfiles"` and `"copyBluetoothPairings"` (`true` or `false`) override that for each kind. On an installed host the default is not to copy: the keys are the operator's.
 - fisherman sets the firmware's `BootNext` to the installed system's boot entry when the host booted from live media, so the next boot does not start the installer again. `"setBootNext": true` does it on any host, `false` never. A failure is a warning in the log.
 - `"filesystem": "zfs"` is experimental and needs `"experimental": ["zfs"]` (`zfs_experimental`). No VM test installs and boots it. The pool is exported when the install ends, also when it fails.
-- `btrfsSubvolumes` puts the root in an `@` subvolume (`rootflags=subvol=@,compress=zstd:1`). It makes no `@home` and no `@snapshots`: `/home` is `/var/home` inside `@`, as on every bootc system.
+- `btrfsSubvolumes` puts the root in an `@` subvolume (`rootflags=subvol=@,compress=zstd:1`). fisherman writes the root's `rootflags=` into every BLS boot entry itself, in place of the one bootc derives: bootc 1.15.x drops `--karg` on the composefs path. It makes no `@home` and no `@snapshots`: `/home` is `/var/home` inside `@`, as on every bootc system.
 - Print services, the OEM setup unit, friendly audio names and `rhgb quiet` are applied only when the recipe's `extras` or the image catalog turns them on. See [Desktop extras](#desktop-extras).
 - fisherman builds no caches in the target. The image must carry its font, icon, schema and linker caches.
 
@@ -312,6 +314,12 @@ hives after each task. If one hive has no work, the other can continue.
 The guide covers prerequisites, verified `just` setup, credentials, provider
 costs, and how to stop with Ctrl+C. Your subscription quota or API charges apply.
 Never post account credentials or API keys in issues or pull requests.
+
+## Security
+
+Report a vulnerability privately, as [`SECURITY.md`](SECURITY.md) says. That
+file also has the supported versions, the response target, the threat model
+and the Secure Boot profile.
 
 ## License
 

@@ -60,6 +60,10 @@ type deployment struct {
 	EtcDir string // the deployment's /etc, where fstab goes
 	VarDir string // what the installed system sees as /var
 	Root   string // the deployment's root filesystem; "" on composefs-native
+	// ComposeFs is a composefs-native deployment. Its initramfs bind-mounts
+	// the deployment's own var over /var, so a separate /var is not used
+	// at boot (#252).
+	ComposeFs bool
 }
 
 // resolveDeployment finds the deployment bootc installed at target.
@@ -68,7 +72,7 @@ func resolveDeployment(target string) (deployment, error) {
 	if err != nil {
 		return deployment{}, err
 	}
-	dep := deployment{EtcDir: d.Etc, VarDir: d.Var}
+	dep := deployment{EtcDir: d.Etc, VarDir: d.Var, ComposeFs: d.Layout == deploy.ComposeFs}
 	// Only an ostree deployment is a root filesystem to resolve paths in;
 	// a composefs-native one holds /etc alone.
 	if d.Layout == deploy.Ostree {
@@ -152,7 +156,7 @@ func transientEtc(root string) bool {
 // `fisherman validate`.
 func keptFilesystemProblems(r *recipe.Recipe) []recipe.Problem {
 	var ps []recipe.Problem
-	if r.VarDisk != nil && r.VarDisk.KeepExisting {
+	if r.HasVarDisk() && r.VarDisk.KeepExisting {
 		if err := disk.CheckKeptFilesystem(r.VarDisk.Disk, disk.FSType(r.VarDisk.Disk), true); err != nil {
 			ps = append(ps, recipe.Problem{Field: "varDisk.disk", Code: recipe.CodeKeptFilesystemUnusable,
 				Message: "varDisk.keepExisting: " + err.Error()})
@@ -189,7 +193,7 @@ func planPersistentMounts(r *recipe.Recipe, dep deployment) ([]persistentMount, 
 		plan = append(plan, m)
 		return nil
 	}
-	if r.VarDisk != nil {
+	if r.HasVarDisk() {
 		if err := add("varDisk", r.VarDisk.Disk, "/var", varOptions); err != nil {
 			return nil, err
 		}
@@ -344,10 +348,33 @@ func mountDataInDeployment(target string, plan []persistentMount, mounted func(p
 	return nil
 }
 
+// separateVarIgnoredAtBoot refuses a separate /var (a varDisk, or a manual
+// /var partition) on a deployment that bootc installed composefs-native.
+// The recipe rules refuse it before any disk work when the recipe says
+// composefs (recipe.CheckVarDiskBackend, CheckCustomMountsPersistence). This
+// is the check on what bootc really installed. The composefs initramfs
+// bind-mounts the deployment's state var over /var, so the fstab line would
+// never take effect (#252). Without this check, post.SetBootedVar would then
+// point the Flatpak copy and the user's home at a disk the booted system
+// never mounts, and they would be missing on the first boot.
+func separateVarIgnoredAtBoot(dep deployment, plan []persistentMount) error {
+	if !dep.ComposeFs {
+		return nil
+	}
+	for _, m := range plan {
+		if m.Mountpoint == "/var" {
+			return fmt.Errorf("%s: bootc installed a composefs-native deployment, whose initramfs mounts the "+
+				"deployment's own /var, so %s would not be used at boot "+
+				"(see https://github.com/tuna-os/fisherman/issues/252)", m.Field, m.Device)
+		}
+	}
+	return nil
+}
+
 // needsPersistentMounts reports whether the recipe has a mount fisherman
 // must make persistent.
 func needsPersistentMounts(r *recipe.Recipe) bool {
-	if r.VarDisk != nil {
+	if r.HasVarDisk() {
 		return true
 	}
 	for _, cm := range r.CustomMounts {
@@ -372,6 +399,9 @@ func persistMounts(r *recipe.Recipe, target string, mounted func(path string)) e
 	}
 	plan, err := planPersistentMounts(r, dep)
 	if err != nil {
+		return err
+	}
+	if err := separateVarIgnoredAtBoot(dep, plan); err != nil {
 		return err
 	}
 	if err := mountDataInDeployment(target, plan, mounted); err != nil {

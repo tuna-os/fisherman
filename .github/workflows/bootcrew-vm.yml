@@ -62,6 +62,12 @@ jobs:
       - name: Reconcile direction
         run: bash tests/test-reconcile-direction.sh
 
+      # promote.yml's decision table and its workflow/job names against the
+      # workflow files: a path filter, a rename or a gated schedule-only
+      # workflow would block or misjudge every release (#272). No network.
+      - name: Promote gate
+        run: python3 tests/test-promote-gate.py
+
       # workflow_dispatch inputs must reach scripts through env, never as
       # pasted expressions, and release-cut.yml must refuse a malformed
       # version (#337). Parses the workflows; no network.
@@ -165,6 +171,42 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  # ── Advisory: arm64 build and unit tests (#418). ─────────────────────────
+  # .goreleaser.yml ships linux/arm64, and every other job here runs on
+  # x86_64. There is no arm64 VM boot: every matrix digest is an x86_64
+  # image, and the harness has no arm64 firmware (AAVMF) or arm64
+  # ssh-enabled images. ADVISORY: continue-on-error, and not in
+  # required-canaries' needs.
+  unit-tests-arm64:
+    name: advisory / arm64 unit tests
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: fisherman/go.mod
+          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+      - name: Build
+        run: go build -o /tmp/fisherman ./cmd/fisherman && go vet ./...
+        working-directory: fisherman
+      - name: Unit tests
+        # As in unit-tests: the loopback tests need root.
+        run: sudo env "PATH=$PATH" go test -count=1 ./...
+        working-directory: fisherman
+      # tui is its own module with a newer Go than fisherman's go.mod names:
+      # install the version it asks for, as tui-unit-tests does.
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: tui/go.mod
+          cache: false
+      - name: TUI unit tests
+        run: go test -count=1 ./...
+        working-directory: tui
+
   # ── Required canaries: composefs (dakota) + ostree (centos-bootc). ────────
   # Failure here fails the workflow. Treat these as the contract for what
   # fisherman must do on every PR.
@@ -267,7 +309,8 @@ jobs:
     needs: [setup, unit-tests, lint]
     if: ${{ needs.setup.outputs.matrix_advisory != '[]' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # 45, not 30: dakota-tpm2 (#418) boots twice after the install.
+    timeout-minutes: 45
     continue-on-error: true
     strategy:
       fail-fast: false
@@ -290,7 +333,8 @@ jobs:
       - name: Setup CI environment
         uses: $/.github/actions/setup-host-tools
         with:
-          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
+          # swtpm: the software TPM of the tpm2 entries (#418).
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3 swtpm
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman

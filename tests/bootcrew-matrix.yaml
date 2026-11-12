@@ -16,6 +16,31 @@
 # bootloader: systemd | grub2 (default) — passed to fisherman by every harness,
 #          and it selects the partition layout the nightly asserts
 #          (systemd: EFI + DPS-typed root; grub2: EFI + ext4 /boot + root).
+# Optional recipe parts (scripts/matrix-recipe.py turns an entry into the
+# recipe; bootcrew-vm.yml only — the nightly writes its own recipe and knows
+# none of them, so such entries set nightly: false):
+#   luks: true + luks_passphrase — encryption luks-passphrase
+#   encryption: tpm2-luks-passphrase (with luks_passphrase) — the VM gets a
+#          swtpm; the first boot unlocks with the passphrase and enrolls,
+#          the second boot types nothing (scripts/vm-checks/tpm2-enrolled.sh)
+#   encryption: tpm2-luks (no passphrase) — the same two boots; the first
+#          one types the recovery key, which the harness takes from the
+#          install's recovery_key event (scripts/capture-recovery-key.py).
+#          The second boot of either tpm2 type must show no passphrase
+#          prompt (scripts/vm-checks/no-passphrase-prompt.sh)
+#   user: true — a `user` block (bootcrew, in wheel); the user must sign in
+#          and have the recipe's password (scripts/vm-checks/user.sh)
+#   var_disk: true — a second disk as `varDisk`; /var must be it on the
+#          booted system (scripts/vm-checks/var-disk.sh)
+#   btrfs_subvolumes: true — "btrfsSubvolumes": true; the booted system
+#          must mount the @ subvolume as the recipe says
+#          (scripts/vm-checks/btrfs-subvolumes.sh)
+#   enabled_units: true — the booted system enables no unit the image did
+#          not enable, except fisherman's own and the harness's ssh
+#          (scripts/vm-checks/enabled-units.sh has the allowlist). ostree
+#          entries only: the image's /etc is read from /usr/etc.
+#   tests/check-validation.sh runs every entry's recipe through
+#   `fisherman validate --json --partial`.
 # nightly_advisory: true — bootcrew-nightly.yml still runs the full install
 #          and boot for this image, but a failure does not fail the workflow.
 #          Only for images whose upstream is shown to be broken; the entry's
@@ -46,6 +71,10 @@ images:
     vm_boot: true  # ostree backend verification
     required: true # ostree + grub2 canary
     build_ssh_image: true
+    # #422: the booted system enables no unit the image did not enable
+    # (scripts/vm-checks/enabled-units.sh). It passed as an advisory entry
+    # on a booted guest before it moved here.
+    enabled_units: true
 
   - name: yellowfin-gnome50
     image: ghcr.io/tuna-os/yellowfin@sha256:c4d3a42f6defa62c4c28b86b09eeb08748b78922d6df26fc5f3107dbcbd9d1c0 # gnome50
@@ -193,6 +222,115 @@ images:
     luks: true
     luks_passphrase: "bootcrew-luks-test"
     vm_timeout: 800
+    nightly: false
+    vm_boot: true
+
+  # ── #418: paths no entry covered. ADVISORY (no `required`) and PR-gate
+  # only (nightly: false). Promote one with `required: true` once it is
+  # green for a while.
+  #
+  # Not covered, and why:
+  # - ZFS: no image here ships the ZFS kernel module, and ZFS stays
+  #   experimental until one does (#413).
+  # - A manual layout (customMounts): the harness has no step that
+  #   partitions the disk before fisherman runs; custom-mounts-e2e.yml runs
+  #   the loopback unit test only.
+  # - arm64 boot: every digest here is x86_64, and the harness has no arm64
+  #   firmware (AAVMF) or arm64 ssh-enabled images. bootcrew-vm.yml builds
+  #   and unit-tests fisherman on arm64 instead (advisory / arm64).
+  # - tpm2-luks without a passphrase used to be here: its first boot needs
+  #   the recovery key, which only the install's recovery_key event carries.
+  #   The harness now captures it (dakota-tpm2-luks below).
+
+  # The most common desktop shape: GRUB, ostree, XFS, LUKS and a user. Must
+  # boot, unlock with the passphrase, and let the user sign in.
+  - name: centos-bootc-luks-user
+    image: quay.io/centos-bootc/centos-bootc@sha256:9aedf2d189b85c498697f9b83112c893b084d359268da7dd6d5d848478d260de # c10s
+    ssh_image_name: centos-bootc
+    filesystem: xfs
+    composefs_backend: false
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    luks: true
+    luks_passphrase: "bootcrew-luks-test"
+    user: true
+    vm_timeout: 800
+    nightly: false
+    vm_boot: true
+
+  # A separate /var disk. ostree and unencrypted: fisherman refuses a
+  # varDisk on composefs (#252) and with LUKS (#406).
+  - name: centos-bootc-var-disk
+    image: quay.io/centos-bootc/centos-bootc@sha256:9aedf2d189b85c498697f9b83112c893b084d359268da7dd6d5d848478d260de # c10s
+    ssh_image_name: centos-bootc
+    filesystem: xfs
+    composefs_backend: false
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    var_disk: true
+    nightly: false
+    vm_boot: true
+
+  # tpm2-luks (#418 item 2, #421): TPM2 with no passphrase. fisherman makes
+  # a random key and emits it once as the recovery_key event; the harness
+  # captures it from the install's output (redacted in the log, masked on
+  # GitHub, kept in a 0600 file under /tmp only until it is read). The
+  # first boot has no TPM2 token yet: luks-unlock.py types the recovery
+  # key, and the first-boot unit enrolls the swtpm with its single-use key.
+  # The second boot types nothing and must show no passphrase prompt
+  # (the same two boots as dakota-tpm2 below).
+  - name: dakota-tpm2-luks
+    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    ssh_image_name: dakota
+    filesystem: ext4
+    composefs_backend: true
+    bootloader: systemd
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    encryption: tpm2-luks
+    vm_timeout: 800
+    nightly: false
+    vm_boot: true
+
+  # TPM2 with swtpm, on the composefs + systemd-boot layout dakota-luks
+  # already unlocks with a passphrase. Two boots (see the header). Needs the
+  # image's initrd to unlock with a TPM2 token; if it cannot, the second
+  # boot waits at the prompt and times out.
+  - name: dakota-tpm2
+    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    ssh_image_name: dakota
+    filesystem: ext4
+    composefs_backend: true
+    bootloader: systemd
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    encryption: tpm2-luks-passphrase
+    luks_passphrase: "bootcrew-luks-test"
+    vm_timeout: 800
+    nightly: false
+    vm_boot: true
+
+  # btrfsSubvolumes: the root in an @ subvolume, mounted with
+  # rootflags=subvol=@,compress=zstd:1. The guest must mount @ as the recipe
+  # says and have no other top-level subvolume
+  # (scripts/vm-checks/btrfs-subvolumes.sh). dakota's kernel has btrfs
+  # (dakota-luks-btrfs boots), and GPT auto-discovery finds the root, so
+  # only rootflags select the subvolume. Unencrypted, so a failure here is
+  # the subvolume, not LUKS.
+  - name: dakota-btrfs-subvolumes
+    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    ssh_image_name: dakota
+    filesystem: btrfs
+    composefs_backend: true
+    bootloader: systemd
+    unified_storage: false
+    selinux_disabled: false
+    flatpaks: []
+    btrfs_subvolumes: true
     nightly: false
     vm_boot: true
 

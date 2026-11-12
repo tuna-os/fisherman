@@ -3,7 +3,9 @@ package probe
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -24,6 +26,14 @@ type Target struct {
 	// (ExcludedTooSmall, UnmetUEFI) do not apply to it. The others do.
 	Loop      bool
 	SizeBytes int64
+	// Serial and WWN are the disk's identity as lsblk reads it from udev
+	// (ID_SERIAL_SHORT, ID_WWN), whitespace trimmed; Model is lsblk's
+	// MODEL. Each is empty when the device reports none: loop devices,
+	// most virtual disks and some USB bridges have no serial or WWN.
+	Serial, WWN, Model string
+	// ByID lists the /dev/disk/by-id links that resolve to Device, sorted.
+	// Empty when udev made none or /dev/disk/by-id cannot be read.
+	ByID []string
 	// Reasons lists every reason Device is not eligible, in the order Disks
 	// tests them: ExcludedNotDisk, ExcludedBootDisk, ExcludedReadOnly,
 	// ExcludedTooSmall. Empty means eligible. ExcludedNotDisk stands alone:
@@ -49,16 +59,9 @@ func (t Target) Eligible() bool { return len(t.Reasons) == 0 }
 // resolve, or lsblk failed); callers must treat that as "not eligible".
 func (p *Prober) Target(path string) (Target, error) {
 	t := Target{Path: path, Device: path}
-	resolved, err := filepath.EvalSymlinks(p.local(path))
+	resolved, err := p.resolve(path)
 	if err != nil {
 		return t, err
-	}
-	if root := filepath.Clean(p.root()); root != "/" {
-		// A fixture root (tests): report the path as the host would name it.
-		if r, err := filepath.EvalSymlinks(root); err == nil {
-			root = r
-		}
-		resolved = "/" + strings.TrimPrefix(strings.TrimPrefix(resolved, root), "/")
 	}
 	t.Device = resolved
 
@@ -71,6 +74,8 @@ func (p *Prober) Target(path string) (Target, error) {
 			continue
 		}
 		t.SizeBytes = int64(dev.Size)
+		t.Serial, t.WWN, t.Model = strings.TrimSpace(str(dev.Serial)), strings.TrimSpace(str(dev.WWN)), squash(str(dev.Model))
+		t.ByID = p.byIDLinks(t.Device)
 		switch excludedReason(lsblkDevice{Name: dev.Name, KName: dev.KName, Type: dev.Type, Size: flexInt(MinDiskBytes)}) {
 		case "":
 		case ExcludedLoop:
@@ -92,6 +97,42 @@ func (p *Prober) Target(path string) (Target, error) {
 	}
 	t.Reasons = []string{ExcludedNotDisk}
 	return t, nil
+}
+
+// resolve follows the symlinks of path, a host path, and returns the node
+// it names as the host would name it.
+func (p *Prober) resolve(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(p.local(path))
+	if err != nil {
+		return "", err
+	}
+	if root := filepath.Clean(p.root()); root != "/" {
+		// A fixture root (tests): report the path as the host would name it.
+		if r, err := filepath.EvalSymlinks(root); err == nil {
+			root = r
+		}
+		resolved = "/" + strings.TrimPrefix(strings.TrimPrefix(resolved, root), "/")
+	}
+	return resolved, nil
+}
+
+// byIDLinks lists the /dev/disk/by-id links that resolve to device, sorted.
+// It only reads the directory and follows the links.
+func (p *Prober) byIDLinks(device string) []string {
+	const dir = "/dev/disk/by-id"
+	entries, err := os.ReadDir(p.local(dir))
+	if err != nil {
+		return nil
+	}
+	var links []string
+	for _, e := range entries {
+		link := dir + "/" + e.Name()
+		if dest, err := p.resolve(link); err == nil && dest == device {
+			links = append(links, link)
+		}
+	}
+	sort.Strings(links)
+	return links
 }
 
 // lsblkTree is the device tree Disks parses, unjudged.

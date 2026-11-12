@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tuna-os/fisherman/internal/install"
 	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/runner"
 )
@@ -115,4 +116,19 @@ func runProbe(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// establishSourceRoot asks the probe whether the host's root is the
+// execution root of opts.SourceImgref (tuna-os/fisherman#363). It runs only
+// when the install has that choice to make (install.NeedsSourceRoot), and
+// only the read-only calls of probe.SourceExecutionRoot. stores are the
+// recipe's or the discovered image stores.
+func establishSourceRoot(opts install.Options, stores []string) install.SourceRoot {
+	if !install.NeedsSourceRoot(opts) {
+		return install.SourceRoot{}
+	}
+	p := newProber()
+	p.Selection = probe.Selection{Source: opts.SourceImgref, TargetImgref: opts.TargetImgref}
+	r := p.SourceExecutionRoot(stores)
+	return install.SourceRoot{Established: r.Established, Reason: r.Reason, Backend: r.Backend}
 }

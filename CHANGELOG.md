@@ -7,6 +7,167 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### ✨ Features
+
+- **The plan reports the target disk's identity and capacity, and a recipe
+  can bind the install to the planned disk** (part of #371).
+  `plan.target.identity` has the serial, WWN, model, size and
+  `/dev/disk/by-id` links of the target disk, from the same read-only
+  `lsblk` call as the target checks (which now also asks for `SERIAL` and
+  `WWN`); `plan.target.stable_id` is the WWN, else the serial; a value the
+  disk does not report is `unknown` with a reason. The new
+  `plan.capacity` and each partition's `size_bytes` give the space the
+  automatic layout takes, a lower bound for the root and whether the disk
+  meets fisherman's 50 GiB minimum; the root an image needs stays
+  `unknown`. The new optional recipe field `diskIdentity`
+  (`serial`, `wwn`, `sizeBytes`) makes the full `validate`, `plan` and the
+  install's pre-flight refuse a device that no longer matches, with the new
+  code `disk_identity_mismatch`; a `diskIdentity` that binds nothing, has a
+  negative size or comes with `customMounts` is `disk_identity_invalid`
+  (also in `--partial`). Docs: PLAN.md, VALIDATE.md ("Disk identity"),
+  RECIPE.md, DIAGNOSTICS.md.
+- **`fisherman plan --json -`: a non-destructive install plan** (part of
+  #371): a new command reads a recipe on stdin (never a file), runs the
+  `validate --json` checks through the same function, and prints a
+  versioned plan: the source, the target disk, the partitions the install
+  creates, formats or keeps (by boot stack and encryption, from the table
+  the install itself partitions with), the encryption type with no secret,
+  the boot stack, the devices it destroys, the scratch path and the ordered
+  steps of the install's step plan. A value only the install can resolve
+  (the image digest, a pull, a stable disk identity) is `"unknown"` and
+  listed in `plan.unknown`. It needs no root and writes, mounts and pulls
+  nothing; the tests run it under a command runner that fails on any
+  mutating command, plant sentinel secrets, and pin golden output per
+  recipe shape. The GPT layouts now live in one table
+  (`disk.LayoutPartitions`), and the manual layout's order and actions in
+  `disk.OrderMounts` and `MountSpec.Action`; the install and the plan both
+  read them. Equal-depth manual mounts now keep the recipe's order (a
+  stable sort), and a ZFS partitioning failure says "partitioning disk"
+  like the others. See `docs/PLAN.md`.
+
+- **`fisherman diagnostics`: a local support bundle** (#375): a new command
+  writes one JSON file of allowlisted facts about an install: versions, the
+  probe's facts, the recipe's effective options (never the recipe), the
+  progress timeline with the runtime failure code and cleanup outcome, and
+  the mounts and LUKS mapper still open under the target and scratch
+  directory. It never holds a passphrase, recovery key, password, password
+  hash or token; messages are redacted, unknown fields and events are only
+  counted, and host, user and device identifiers are masked unless
+  `--include-identifiers`. The file is new, mode 0600, created with
+  `O_EXCL|O_NOFOLLOW`, bounded in size, and removed on a write error;
+  `--stdout` prints it for review. The command only reads, and an install
+  never runs it. Sentinel tests plant secrets in every input. See
+  `docs/DIAGNOSTICS.md`.
+
+- **Runtime failure codes on the `error` event** (#369): every `error` event
+  now has a `code`. It is the validate code for a recipe or preflight
+  problem, as before, and otherwise one of the documented failure codes for
+  the operation that failed (`partition_failed`, `pull_failed`,
+  `bootc_install_failed`, …, `cancelled`, `unknown`). The event also carries
+  `step_id` (the running step), `disk_changed` (a disk step had started) and
+  `cleanup` (`status` `ok`, `failed` or `timed_out`, and its `message`). A
+  cleanup failure no longer hides the primary cause. An unloadable recipe
+  gets the code `validate --json` gives it (`recipe_malformed`,
+  `recipe_unreadable`). The LUKS passphrase, the user password and the
+  recovery key are redacted from the event and the stderr line, and the
+  message is bounded. `message`, exit 1 versus 130 and the one terminal event
+  after teardown are unchanged.
+
+### 🐛 Fixes
+
+- **A separate `/var` disk gets the Flatpaks** (#252 follow-up): on an
+  ostree deployment with a `varDisk` or a manual `/var` partition, a recipe
+  `flatpakVarPath` sent the
+  Flatpak copy under the target root, which the booted system does not mount
+  on `/var`. The copy now goes to the disk, and the install log says that
+  `flatpakVarPath` is not used.
+- **Release gate: a refusal fails, and only gated push runs count** (#272):
+  `promote.yml` reported every refusal as a green run (137 of 138 runs),
+  judged every check run on the commit, scheduled and advisory ones
+  included, and required checks by name, which two workflows share. The
+  decision now lives in `scripts/promote-gate.py`: it reads the push runs
+  of the gated workflows (`GATED_WORKFLOWS`, equal to the `workflow_run`
+  list), ignores `advisory / ...` jobs and scheduled runs, needs every
+  `REQUIRED_JOBS` entry green, and answers promote, wait or refuse. A
+  refusal, an absent gated run or a job stuck for six hours fails the Gate
+  job. `customMounts E2E disk layout` is now required by name.
+  `tests/test-promote-gate.py` (run in the lint job) holds the decision
+  table and checks the names against the workflow files.
+- **A separate `/var` on a composefs deployment no longer gets the
+  Flatpaks** (#252): `var_disk_unsupported_composefs` refuses a `varDisk` when
+  the recipe says composefs (`composeFsBackend`, or `filesystem: zfs`). After
+  bootc ran, the persistent-mounts step now also checks what bootc really
+  installed. On a composefs-native deployment with a `varDisk` or a manual
+  `/var` partition it fails (`persistent_mounts_failed`) before it points the
+  Flatpak copy and the user's home at that disk, which the composefs
+  initramfs hides behind the deployment's own `/var`. Before, they were
+  copied onto a disk that the first boot does not mount. Mounts below `/var`
+  are unchanged. Tests on the composefs deploy fixture and for
+  `validate --json --partial`.
+- **btrfs roots booted without the recipe's mount options on composefs**
+  (#418): bootc 1.15.x writes the composefs boot entry from the root's own
+  arguments, `composefs=` and `kargs.d`, and never reads `--karg`
+  (`setup_composefs_bls_boot`; newer bootc reads it). fisherman's
+  `rootflags=subvol=@,compress=zstd:1` (or `compress=zstd:1` without
+  subvolumes) was dropped, the entry had bootc's own
+  `rootflags=subvol=/@` (or `subvol=/`), and the installed system mounted
+  its root uncompressed. Found by the new `dakota-btrfs-subvolumes` VM entry;
+  `dakota-luks-btrfs` had the same entry (`rootflags=subvol=/`). fisherman
+  now replaces bootc's `rootflags=` in every BLS entry with the recipe's
+  and reads each entry back (`post.RequireRootFlags`). Where bootc honours
+  `--karg` (ostree), the entry had both, and one `rootflags=` remains. A
+  failure is the new `error` code `root_flags_failed`. An image that boots a
+  unified kernel image has no entry to change, and the log says so.
+
+- **A cancel during the source reuse copy could leave `/var/tmp` bound to
+  a deleted directory** (#384): a cancel stops the copy's `bootc` and runs
+  the teardown, and the copy's own unbind and `Release` raced for the
+  bind. When the copy took it first, the session was already released, so
+  its `umount` was refused. `Release` then saw no bind, skipped the unbind
+  and removed the scratch. `/var/tmp` stayed on the deleted
+  `source-reuse/var-tmp`, and the next install failed with "cannot bind ...
+  over /var/tmp" (store-reuse VM run 43186222564). The bind, the copy's
+  unbind and `Release`'s unbind now run one at a time. One `umount` undoes
+  one `mount`, even after `Release` has begun, and `Release` waits for a
+  bind in flight. Neither unmounts `/var/tmp` a second time. If the bind
+  cannot be undone, `Release` keeps the scratch and reports it, so it does
+  not remove it from under the bind.
+- **The host's bootc installed a local source it did not boot** (#363): an
+  install from a local `containers-storage:` source took the direct path
+  (the host's bootc, no podman) whenever the host had a bootc. bootc reads
+  the install configuration and the backend from the root it runs in, so
+  an unrelated live host could give its configuration to the source. The
+  direct path now needs an established source execution root, by the rules
+  of `fisherman probe`'s `capabilities.execution_root` (the host booted the
+  source's digest). Otherwise the install runs the source image's own bootc
+  in its container, and an `info` event before the first step says which
+  path it takes and why. The direct path for a live ISO that installs its
+  own image (#237) stays. See `docs/PROBE.md`.
+
+- **A source the install cannot use was found only after the wipe** (#364):
+  with no copy in local containers-storage, a registry that did not answer,
+  refused access or did not know the tag gave "pull required", and the pull
+  failed after the disk was partitioned. The pre-flight now refuses such a
+  source, and an image that is not a bootc image or not for this host, before
+  the first step (`image_not_found`, `image_source_unauthorized`,
+  `image_source_unreachable`, `image_inspect_failed`,
+  `image_inspect_malformed`, `image_platform_mismatch`, `image_not_bootc`). A
+  network or registry-side failure is tried three times first. A cached image
+  is used as before, offline too. The install log names the source's manifest
+  and platform manifest digests, apart from `targetImgref`.
+- **The SELinux label workaround was built after the wipe** (#370): an
+  install with `selinuxDisabled` on a host with SELinux active compiled its
+  preload library only when bootc ran, and went on without it when the host
+  had no compiler. It is now built before the first step, and an install that
+  cannot build it is refused (`selinux_workaround_unavailable`). No other
+  install needs a compiler.
+- **`needs_user_creation` defaults to true in the image catalog resolver**
+  (tuna-os/bootc-installer#288): a leaf that does not set it now asks for
+  the first account, as bootc-installer's catalog contract and all five
+  frontends already do; an explicit `false` on the leaf or an ancestor is
+  kept. `fisherman images` showed "Needs user creation: no" for the 69
+  catalog leaves that leave it unset.
+
 ### 🐛 Fixes
 
 - **`bootc_store` matched no real image on amd64** (#384): bootc status
@@ -16,9 +177,171 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fixtures. The probe now reports every architecture in the kernel's
   spelling (`probe.NormalizeArch`), and `sourceReuse.platform` accepts
   either. Found by the first run of the store-reuse VM profile.
+- **`image` and `targetImgref` were read only after the wipe** (#414): a
+  newline, a space or a leading `-` in either reached `skopeo`, `podman` and
+  `bootc --target-imgref` after the disk was partitioned, and `-v` would be
+  read as a flag. A non-empty value now has no whitespace or control
+  character and no `-` first (`image_invalid`, `target_imgref_invalid`), in
+  `validate`, `validate --partial` and the install preflight. With
+  `sourceReuse` its own rules judge both fields, as before.
+
+### 📝 Documentation
+
+- **The Secure Boot profile** (#342): `SECURITY.md` names the one
+  supported profile, image-owned: bootc and bootupd install the image's own
+  signed chain, fisherman prefers the `.signed` systemd-boot binary, keeps an
+  existing fallback and keeps every signed byte. It lists what fisherman
+  does not do (no shim or MokManager staging from image metadata, no MOK
+  enrolment, no PK/KEK/db/dbx change) and what a new profile needs first.
+  Each guarantee links to the code and the test. No code change.
+- **Supported versions and response** (#294): `SECURITY.md` says that `dev`
+  and the latest release get security fixes, with no backports, and that
+  the response is best effort with no SLA: we aim to acknowledge a report
+  within 14 days. README links to `SECURITY.md`.
+- **One project home** (#303): README, AGENTS.md and ROADMAP.md say that
+  tuna-os/fisherman is the only origin, that projectbluefin/fisherman is a
+  fork whose changes come in through a PR here, and that consumers pin
+  tuna-os/fisherman. The text that offered either repository as a home is
+  gone.
+- **An integration guide** (#328): `docs/INTEGRATION.md` says which
+  command a frontend runs when, what to take from the probe, the recipe
+  contract, how to run the install with the recipe on stdin, how to read
+  the event stream, the `error` event and the exit codes, how to test
+  without a disk, and how to pin and package fisherman. Tests hold its
+  event types, `error` fields, cleanup statuses and exit codes to the code.
+- **A recipe field reference** (#320): `docs/RECIPE.md` has every recipe
+  key at every depth with its type, whether it is required and its
+  default. A reflection test fails on a missing, extra or mistyped row,
+  and the page's example is parsed strictly.
+- **A command-line reference** (#322): `docs/CLI.md` has every command and
+  flag with its value, default and exit codes, and the environment
+  variables. A go/ast test holds it to the argument parsers.
+- **The VALIDATE.md examples are real** (#326): `TestValidateDocExamples`
+  runs every `fisherman validate` example of the page and compares the
+  output byte for byte (field and code pairs for an elided one).
+- **ROADMAP.md refreshed to 2026-11-12** (#286): re-measured release,
+  branch and pin figures; Q3 moved to a dated historical section; Q4
+  marked current; a 2027 Q1 forward look.
+- **Firn compatibility matrix** (#386): `docs/FIRN-COMPATIBILITY.md` compares
+  Firn's schema-2 TOML recipe with the fisherman recipe field by field, from
+  the code of both at pinned commits: encryption, bootloader (opposite
+  defaults), filesystem and btrfs subvolumes (same name, other layout),
+  image references and transports, the user, Flatpaks (install vs. copy),
+  and explicit vs. absent values, with the mappings that carry over and the
+  ones a converter must refuse. No adapter: out of scope by owner decision;
+  fisherman JSON stays authoritative.
+- **Getting help uses the support bundle**: TROUBLESHOOTING.md now points to
+  `fisherman diagnostics` instead of collecting and cleaning files by hand.
+
+- **TROUBLESHOOTING.md and VALIDATE.md match the code** (#419): the probe
+  fields (`disks[]`, `system.ram_bytes`, `system.cpu_threads`/`cpu_cores`,
+  `unmet` is advice except `uefi`), the event `type`s and `step_id`s, the
+  real error-message prefixes, cancel (teardown, exit 130), `jq` commands
+  that skip the non-JSON lines of stdout, `.errors[]`, the full rule order,
+  and no `slurpRescueStore` field. New tests hold the problem codes
+  (`internal/recipe/docs_test.go`), the event types and step ids
+  (`internal/progress/docs_test.go`) and the probe fields
+  (`internal/probe/docs_test.go`) to the documents in both directions.
+- The `CheckImage` comment no longer claims a digest comparison, and the
+  info line says `Image found in local cache, no pull needed`.
+- The Flatpak manifest installs the polkit policy that exists
+  (`org.tunaos.Installer.policy`). `.goreleaser.yml` no longer sets
+  `main.commit`/`main.date`, which do not exist, and its archives, like the
+  meson install (`<datadir>/fisherman/data/`), now ship `data/images.json`.
+
+### ♻️ Refactoring
+
+- **The disk phase leaves `main()`** (part of #313): partitioning,
+  formatting the ESP and the ext4 `/boot`, LUKS, formatting and mounting the
+  root (or the manual layout), and the `/var` disk are now `diskPhase`
+  (`cmd/fisherman/disk_phase.go`). It takes the recipe, the step sequencer,
+  the mount point, the mapper name and its disk operations as arguments,
+  returns the partitions, root device, target mount, LUKS UUID and recovery
+  key the later steps read, and reports a failure as an error carrying the
+  failure code, which `main()` passes to the same `fatalCode` call. No
+  behaviour change: the same steps, messages, failure codes and teardown
+  registrations in the same order, and the same layout, LUKS parameters and
+  mount options. Golden tests pin the phase's full operation log for every
+  step-contract shape and every failure point, and the step contract test
+  replays the phase as part of `main()`.
+- **The recipe answers its own install-state questions** (#317):
+  `recipe.Recipe` has `HasEncryption`, `HasTPM2`, `IsManualLayout`, `IsZFS`,
+  `UsesSystemdBoot`, `UsesComposeFs`, `HasVarDisk`, `FormatsVarDisk`,
+  `EncryptsRoot` and `EnrollsTPM2` (`internal/recipe/state.go`). The install
+  path, `validate` and the host-tool chain call them in place of the
+  booleans `main()` computed and passed around. No behaviour change.
+- **One step plan, announced by a sequencer** (#316): `planSteps`
+  (`cmd/fisherman/steps.go`) builds the ordered step list and its weights
+  from the recipe, and `total_steps` is its length. `main()` announces each
+  step with `seq.begin`, which supplies the step number, the total and the
+  bar position: no manual index any more. A step out of plan is logged as a
+  warning at the finalize step. `TestMainAnnouncesThePlan` replays `main()`
+  for each recipe variant (plain, LUKS, TPM2, manual layout, ZFS, btrfs
+  subvolumes, systemd-boot, source reuse, a `/var` disk) and fails when the
+  steps it announces differ from the plan. The events are unchanged.
+
+### 🔧 CI
+
+- **GoReleaser is pinned** (#344): `release-publish.yml` runs GoReleaser
+  `v2.20.1`, not `latest`.
 
 ### 🧪 Testing
 
+- **`TestStopDescendants_EscalatesToSIGKILL` failed now and then**: it sent
+  SIGTERM as soon as the shell existed, which can be before the shell has
+  installed `trap "" TERM`. The shell then died of SIGTERM, nothing needed
+  SIGKILL, and the test failed ("killed 0", 2 runs in 150 under load). The
+  shell now says "ready" after the trap, and the test waits for it.
+- **The capability report is checked against the bootc that installs**
+  (#383): the advisory store reuse VM profile takes
+  `fisherman probe --json --source <booted ref>@<booted digest>` inside the
+  VM that installs, before it installs that image from its own bootc store.
+  The new guest check `scripts/vm-checks/capabilities.sh` then holds the
+  report to the installed system: an established `digest_match` root, one
+  bootc version in the report, the installing VM and the installed system,
+  the recipe's backend, the `print-configuration` bootloader (when it names
+  one) and the `container inspect` kernel. The negative case, the same name
+  pinned by a digest the VM did not boot, must be `digest_mismatch` with no
+  answer from the VM's bootc. `tests/check-validation.sh` proves each check
+  catches its bug, also on the probe's own golden output.
+- **A VM entry for `btrfsSubvolumes`** (#418): `dakota-btrfs-subvolumes`
+  (advisory, PR gate) installs with `"btrfsSubvolumes": true`. The guest
+  check `scripts/vm-checks/btrfs-subvolumes.sh` requires the root on the `@`
+  subvolume with `subvol=/@,compress=zstd:1`, the same `rootflags` on the
+  kernel command line, `/var` inside `@`, and `@` as the only top-level
+  subvolume (#416). The harness scripts that write into the installed root
+  now mount `@` when the top level holds only it.
+
+- **The TPM2 guest check said "no LUKS device" when ssh had failed**: a
+  `dakota-tpm2` run under memory pressure missed ssh's one-second connect
+  timeout, and `tpm2-enrolled.sh` read the empty answer as an unencrypted
+  guest. It now tries the query again while ssh fails, and says "the guest
+  did not answer over SSH" when it never does.
+
+- **The VM matrix covers a user, GRUB with LUKS, TPM2 and a /var disk**
+
+- **A recipe field that never reaches the install fails a test** (#289):
+  `recipeFieldUses` (`cmd/fisherman/recipe_consumers_test.go`) lists every
+  field of `recipe.Recipe`, nested ones included, with the files that pass
+  it on to the install, or the reason it only accepts or refuses the recipe.
+  The test fails on a field without an entry, an entry for a field that is
+  gone, and a listed file that no longer reads the field. A second test
+  holds the `install.Options` projection (`buildBootcInstallOptions`) to a
+  source table: each option comes from a named recipe field, an argument, or
+  a later step, and follows its recipe field.
+, GRUB with LUKS, TPM2 and a /var disk**
+  (#418), as advisory PR-gate entries: `centos-bootc-luks-user` (GRUB,
+  ostree, XFS, LUKS and a `user` that must sign in with the recipe's
+  password), `centos-bootc-var-disk` (`/var` must be the `varDisk` on the
+  booted system) and `dakota-tpm2` (`tpm2-luks-passphrase` against swtpm:
+  the first boot unlocks with the passphrase and enrolls, the second boot
+  types nothing). `scripts/matrix-recipe.py` writes each entry's recipe,
+  and `tests/check-validation.sh` runs every one through
+  `fisherman validate --json --partial` and holds the new guest checks
+  (`scripts/vm-checks/`) to the bugs they catch. A new advisory job builds
+  and unit-tests fisherman and the TUI on arm64. Not covered, with the
+  reasons in `tests/bootcrew-matrix.yaml`: ZFS, a manual layout, an arm64
+  boot, and `tpm2-luks` without a passphrase.
 - **The installation receipt checks are required on the required canaries**
   (#385): `required / dakota` (composefs, systemd-boot) and
   `required / centos-bootc` (ostree, GRUB) now run `scripts/boot-verify.sh`
@@ -27,6 +350,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed system. A receipt for another image gave `mismatch`, and the CI
   host's own status gave `unavailable`. The advisory images keep the checks
   advisory.
+- **The VM matrix boots `tpm2-luks` and checks the enabled units** (#418,
+  #421, #422): `dakota-tpm2-luks` installs with TPM2 and no passphrase
+  against swtpm. The harness takes the recovery key from the install's
+  `recovery_key` event (`scripts/capture-recovery-key.py`: a 0600 file
+  under /tmp, the event printed with the key redacted, the key masked on
+  GitHub), types it on the first boot, and the second boot must unlock with
+  no prompt (`scripts/vm-checks/no-passphrase-prompt.sh`, also on
+  `dakota-tpm2`). The required `centos-bootc` canary runs
+  `scripts/vm-checks/enabled-units.sh`: the booted system must enable no
+  unit that the image's own `/etc` (at `/usr/etc`) and presets do not
+  enable, except an allowlist of fisherman's own units and the harness's
+  ssh. The check passed as an advisory entry first. `dakota-tpm2-luks` is
+  advisory. `tests/check-validation.sh` holds the
+  check, the capture and the prompt check to the cases they catch.
 
 ### ✨ Features
 

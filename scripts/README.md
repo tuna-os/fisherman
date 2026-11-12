@@ -35,6 +35,33 @@ Boots a QEMU VM with the installed disk and verifies system state via SSH.
 ./boot-verify.sh 2222 /tmp/id_rsa 600 2G /dev/loop0 dakota hunter2
 ```
 
+**Optional, from the environment** (unset by default):
+- `BOOTCREW_EXTRA_DRIVE`: a second raw disk for the VM (a `varDisk`)
+- `BOOTCREW_SWTPM_STATE`: a state directory under `/tmp`; the VM gets a
+  swtpm TPM 2.0 whose state lasts across boots
+- `BOOTCREW_GUEST_CHECKS`: space-separated scripts from `vm-checks/`, run
+  once SSH answers; one that fails fails the boot check
+
+### `matrix-recipe.py`
+Writes the recipe for one `tests/bootcrew-matrix.yaml` entry
+(`matrix-recipe.py <entry-json> <disk> [<var-disk>]`). The docstring lists
+the entry fields it reads. `just bootcrew-ci-test` and
+`tests/check-validation.sh` both use it.
+
+### `vm-checks/`
+Guest checks for the optional matrix fields (#418): `user.sh` (the recipe's
+user signs in, owns its home, is in `wheel` and has the recipe's password),
+`var-disk.sh` (`/var` is the `varDisk`), `tpm2-enrolled.sh` (the
+first-boot TPM2 enrolment left a `systemd-tpm2` token and removed its
+single-use keyslot and key) and `btrfs-subvolumes.sh` (`btrfs_subvolumes`:
+the root is the `@` subvolume, mounted with the recipe's `rootflags`, `/var`
+is inside it, and `@` is the only top-level subvolume). `capabilities.sh`
+(#383) runs in the store reuse profile only: it holds the capability report
+taken in the installing VM to the bootc version, backend, bootloader and
+kernel of the installed system, and checks that a report for a digest the
+VM did not boot answers nothing. `tests/check-validation.sh` checks that
+each one catches its bug.
+
 ### `store-reuse-vm.sh` and `store-reuse-lib.sh`
 The advisory offline VM profile for the bootc store reuse (#384 phase 2,
 [`docs/SOURCE-REUSE.md`](../docs/SOURCE-REUSE.md)), run by the
@@ -52,8 +79,11 @@ the SSH forward, checks that no registry is reachable, then inside the VM:
 validates a `sourceReuse` recipe for the booted digest, checks a missing
 digest is refused with disk B untouched, cancels an install during the copy
 and checks nothing is left behind, and installs from the VM's own bootc
-store onto disk B. Disk B then boots through `boot-verify.sh` (receipt
-checks required) and `store_reuse_identity` (`store-reuse-lib.sh`, tested by
+store onto disk B. Before the install it takes `fisherman probe --json
+--source <booted ref>@<booted digest>` and the same for a digest the VM did
+not boot. Disk B then boots through `boot-verify.sh` (receipt checks
+required, guest check `vm-checks/capabilities.sh`) and
+`store_reuse_identity` (`store-reuse-lib.sh`, tested by
 `tests/check-validation.sh`) checks it booted the verified copy. The job
 summary compares time, scratch and disk with the baseline. Needs sudo, KVM,
 QEMU, OVMF, jq and python3.
@@ -85,6 +115,26 @@ Takes a container image and adds sshd + SSH public key authentication.
 ```bash
 ./prepare-ssh-image.sh quay.io/centos-bootc/centos-bootc:c10s /tmp/ssh/id_rsa.pub
 ```
+
+### `vm-checks/enabled-units.sh` and `vm-checks/no-passphrase-prompt.sh`
+`enabled-units.sh` (#422, matrix field `enabled_units`) lists the units the
+booted system enables (`systemctl list-unit-files --state=enabled`, system
+and user scope, the `*.wants`/`*.requires`/`*.upholds` links under
+`/etc/systemd`, and the `enable` lines of presets there) and the units the
+image enables (the same lists, read from the image's `/etc` at `/usr/etc`
+after its own presets are applied, as systemd does on the first boot). A
+unit only the installed system enables fails the check, unless the
+allowlist in the script names it: fisherman's receipt collector, its TPM2
+enrolment unit, the OEM user unit, and the harness's ssh. ostree entries
+only. `no-passphrase-prompt.sh` runs on the second boot of a `tpm2-*`
+entry and fails if the serial log shows a LUKS passphrase prompt.
+
+### `capture-recovery-key.py`
+`fisherman recipe.json | capture-recovery-key.py <key-file>`: passes the
+progress output through, writes the key of the `recovery_key` event to
+`<key-file>` (mode 0600) and prints the event with the key redacted. The
+`tpm2-luks` entry uses it: its first boot has no TPM2 token yet and needs
+the recovery key typed.
 
 ### `verify-installation.sh`
 Verifies that fisherman created a valid systemd-boot or GRUB partition layout with the expected content.

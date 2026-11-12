@@ -53,6 +53,8 @@ const (
 	CodeVarDiskSameAsDisk             = "var_disk_same_as_disk"
 	CodeVarDiskUnsupportedComposeFs   = "var_disk_unsupported_composefs"
 	CodeImageRequired                 = "image_required"
+	CodeImageInvalid                  = "image_invalid"
+	CodeTargetImgrefInvalid           = "target_imgref_invalid"
 	CodeImageTypeUnsupported          = "image_type_unsupported"
 	CodeBootloaderUnsupported         = "bootloader_unsupported"
 	CodeEncryptionUnsupported         = "encryption_unsupported"
@@ -90,6 +92,12 @@ const (
 	CodeVarDiskBootDisk     = "var_disk_boot_disk"
 	CodeVarDiskReadOnly     = "var_disk_read_only"
 	CodeOverrideUnsupported = "override_unsupported"
+	// CodeDiskIdentityInvalid: diskIdentity sets no field, a negative
+	// size, or is given with customMounts (which names no disk).
+	CodeDiskIdentityInvalid = "disk_identity_invalid"
+	// CodeDiskIdentityMismatch: the device `disk` names no longer has the
+	// serial, WWN or size the recipe's diskIdentity holds. Full mode only.
+	CodeDiskIdentityMismatch = "disk_identity_mismatch"
 
 	CodeLocaleInvalid          = "locale_invalid"
 	CodeKeyboardLayoutRequired = "keyboard_layout_required"
@@ -128,6 +136,21 @@ const (
 	CodeNotRoot               = "not_root"
 	CodeHostToolMissing       = "host_tool_missing"
 	CodeInstallAlreadyRunning = "install_already_running"
+	// CodeSelinuxWorkaroundUnavailable: the install needs the SELinux label
+	// workaround (the target disables SELinux, the host enforces it) and
+	// the host cannot build it.
+	CodeSelinuxWorkaroundUnavailable = "selinux_workaround_unavailable"
+
+	// Install-only: the image source check before the first disk step
+	// (install.CheckImage). It reads the registry or local
+	// containers-storage, which validate does not.
+	CodeImageNotFound           = "image_not_found"
+	CodeImageSourceUnauthorized = "image_source_unauthorized"
+	CodeImageSourceUnreachable  = "image_source_unreachable"
+	CodeImageInspectFailed      = "image_inspect_failed"
+	CodeImageInspectMalformed   = "image_inspect_malformed"
+	CodeImagePlatformMismatch   = "image_platform_mismatch"
+	CodeImageNotBootc           = "image_not_bootc"
 )
 
 // Filesystems is the set of root filesystems the auto-partition path can
@@ -433,6 +456,44 @@ func CheckImageType(t string) []Problem {
 	}
 }
 
+// CheckImageRefs applies the reference syntax rule to image and
+// targetImgref: an empty value is not judged here (ValidateImage and the
+// sourceReuse rules decide whether one is needed); any other value has no
+// whitespace or control character and does not start with "-". image is an
+// argument of skopeo, podman and bootc, and targetImgref of bootc's
+// --target-imgref; both are read after the disk is partitioned, so a
+// newline, a space or a leading "-" (read as a flag) failed the install
+// with the disk already wiped (#414). With sourceReuse the sourceReuse
+// rules judge both fields instead: image must be empty, and targetImgref
+// has the stricter checkReuseUpdateRef.
+func CheckImageRefs(r *Recipe) []Problem {
+	if r.SourceReuse != nil {
+		return nil
+	}
+	var ps []Problem
+	if r.Image != "" && !refSyntaxOK(r.Image) {
+		ps = append(ps, Problem{"image", CodeImageInvalid,
+			fmt.Sprintf("image must be an image reference without spaces or control characters, not starting with \"-\", got %q", r.Image)})
+	}
+	if r.TargetImgref != "" && !refSyntaxOK(r.TargetImgref) {
+		ps = append(ps, Problem{"targetImgref", CodeTargetImgrefInvalid,
+			fmt.Sprintf("targetImgref must be an image reference without spaces or control characters, not starting with \"-\", got %q", r.TargetImgref)})
+	}
+	return ps
+}
+
+func refSyntaxOK(ref string) bool {
+	if strings.HasPrefix(ref, "-") {
+		return false
+	}
+	for _, c := range ref {
+		if unicode.IsSpace(c) || unicode.IsControl(c) {
+			return false
+		}
+	}
+	return true
+}
+
 // CheckBootloader applies the bootloader rule.
 func CheckBootloader(b string) []Problem {
 	switch b {
@@ -463,7 +524,7 @@ func CheckSlurp(s *SlurpSpec) []Problem {
 // separate check because it reads the machine, not the recipe; the install
 // path and `validate` run it, `validate --partial` does not.
 func (r *Recipe) CheckTPM(tpm2Usable bool) []Problem {
-	if len(r.CustomMounts) > 0 || !NeedsTPM2(r.Encryption.Type) || tpm2Usable {
+	if r.IsManualLayout() || !r.HasTPM2() || tpm2Usable {
 		return nil
 	}
 	return []Problem{{"encryption.type", CodeEncryptionTPMUnavailable,
@@ -680,7 +741,7 @@ func CheckExperimental(experimental []string) []Problem {
 // matrix entry installs it and boots the result (tuna-os/fisherman#413).
 // The opt-in is the caller's statement that it knows.
 func CheckExperimentalFilesystem(r *Recipe) []Problem {
-	if r.Filesystem == "zfs" && !r.AcceptsExperimental(ExperimentalZFS) {
+	if r.IsZFS() && !r.AcceptsExperimental(ExperimentalZFS) {
 		return []Problem{{"filesystem", CodeZFSExperimental,
 			"filesystem \"zfs\" is experimental: no VM test installs and boots it. " +
 				"Add \"experimental\": [\"zfs\"] to the recipe to accept that, or use xfs, ext4 or btrfs"}}
@@ -774,6 +835,60 @@ type TargetFacts struct {
 	MinBytes  int64
 	// NotDisk, BootDisk, ReadOnly, TooSmall are probe's excluded reasons.
 	NotDisk, BootDisk, ReadOnly, TooSmall bool
+	// Serial and WWN are the identity the device reports now (probe's
+	// Target); empty when it reports none.
+	Serial, WWN string
+}
+
+// CheckDiskIdentity is the rule for the shape of diskIdentity, which needs
+// no machine. Whether the device matches is CheckTarget's.
+func CheckDiskIdentity(r *Recipe) []Problem {
+	id := r.DiskIdentity
+	if id == nil {
+		return nil
+	}
+	switch {
+	case r.IsManualLayout():
+		return []Problem{{"diskIdentity", CodeDiskIdentityInvalid,
+			"diskIdentity binds the disk of the automatic layout; customMounts names partitions, not a disk"}}
+	case id.SizeBytes < 0:
+		return []Problem{{"diskIdentity.sizeBytes", CodeDiskIdentityInvalid,
+			fmt.Sprintf("diskIdentity.sizeBytes is %d; it must be the disk size in bytes", id.SizeBytes)}}
+	case strings.TrimSpace(id.Serial) == "" && strings.TrimSpace(id.WWN) == "" && id.SizeBytes == 0:
+		return []Problem{{"diskIdentity", CodeDiskIdentityInvalid,
+			"diskIdentity sets none of serial, wwn and sizeBytes, so it binds nothing"}}
+	}
+	return nil
+}
+
+// checkDiskIdentityMatch compares the recipe's diskIdentity with what the
+// device reports now. A field the recipe sets and the device no longer
+// reports is a mismatch: a binding fails closed.
+func (r *Recipe) checkDiskIdentityMatch(f *TargetFacts) []Problem {
+	id := r.DiskIdentity
+	if id == nil || len(CheckDiskIdentity(r)) > 0 {
+		return nil
+	}
+	now := func(v string) string {
+		if v == "" {
+			return "none"
+		}
+		return fmt.Sprintf("%q", v)
+	}
+	var ps []Problem
+	if want := strings.TrimSpace(id.Serial); want != "" && want != f.Serial {
+		ps = append(ps, Problem{"diskIdentity.serial", CodeDiskIdentityMismatch,
+			fmt.Sprintf("disk %s reports serial %s, not %q: it is not the disk the install was planned for", r.Disk, now(f.Serial), want)})
+	}
+	if want := strings.TrimSpace(id.WWN); want != "" && !strings.EqualFold(want, f.WWN) {
+		ps = append(ps, Problem{"diskIdentity.wwn", CodeDiskIdentityMismatch,
+			fmt.Sprintf("disk %s reports WWN %s, not %q: it is not the disk the install was planned for", r.Disk, now(f.WWN), want)})
+	}
+	if id.SizeBytes != 0 && id.SizeBytes != f.SizeBytes {
+		ps = append(ps, Problem{"diskIdentity.sizeBytes", CodeDiskIdentityMismatch,
+			fmt.Sprintf("disk %s is %d bytes, not %d: it is not the disk the install was planned for", r.Disk, f.SizeBytes, id.SizeBytes)})
+	}
+	return ps
 }
 
 // CheckTarget applies the target-eligibility rules to `disk` and
@@ -785,6 +900,8 @@ type TargetFacts struct {
 //     live medium) is on, or read-only: always an error. An install there
 //     either destroys the system that is running it or fails after the
 //     partition table is gone.
+//   - a diskIdentity the device no longer matches: always an error
+//     (disk_identity_mismatch).
 //   - smaller than the minimum, or a machine that did not boot through
 //     UEFI: an error unless the recipe lists it in `override`. Neither
 //     applies to a loop device, which is an image for another machine.
@@ -793,7 +910,7 @@ type TargetFacts struct {
 // exist (Problems has reported that).
 func (r *Recipe) CheckTarget(disk, varDisk *TargetFacts, uefi bool) []Problem {
 	var ps []Problem
-	manual := len(r.CustomMounts) > 0
+	manual := r.IsManualLayout()
 	loop := false
 	if disk != nil && !manual {
 		loop = disk.Loop
@@ -818,6 +935,7 @@ func (r *Recipe) CheckTarget(disk, varDisk *TargetFacts, uefi bool) []Problem {
 					fmt.Sprintf("disk %s is %d bytes; the minimum is %d (add \"too_small\" to \"override\" to install anyway)",
 						r.Disk, disk.SizeBytes, disk.MinBytes)})
 			}
+			ps = append(ps, r.checkDiskIdentityMatch(disk)...)
 		}
 	}
 	if varDisk != nil && r.VarDisk != nil {

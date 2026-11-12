@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -71,6 +72,8 @@ type terminator struct {
 	// problem is the coded problem behind a failure (failProblem), so the
 	// error event can carry its code and field.
 	problem recipe.Problem
+	// code is the runtime failure code behind a failure (failCode).
+	code string
 
 	cancelOnce sync.Once
 	cancelled  chan struct{}
@@ -78,7 +81,8 @@ type terminator struct {
 	halt           func()
 	stopChildren   func() int
 	cleanup        func() error
-	emitError      func(string)
+	emitError      func(progress.Failure)
+	stepState      func() (stepID string, started bool)
 	stderr         io.Writer
 	exit           func(int)
 	silenceStdout  func()
@@ -99,20 +103,38 @@ func newTerminator() *terminator {
 		park:           parkForever,
 		settle:         cancelSettle,
 		cleanupTimeout: cleanupTimeout,
-	}
-	t.emitError = func(msg string) {
-		p := t.failedProblem()
-		progress.ErrorWithCode(msg, p.Code, p.Field)
+		emitError:      progress.Fail,
+		stepState:      progress.CurrentStep,
 	}
 	return t
 }
 
-// failedProblem is the coded problem a failProblem call recorded, or the
-// zero Problem.
-func (t *terminator) failedProblem() recipe.Problem {
+// failure is the code and field of the failure that claimed the exit: the
+// validate problem of failProblem, else the runtime code of failCode, else
+// progress.FailureUnknown. A cancel is always progress.FailureCancelled.
+func (t *terminator) failure(label string) (code, field string) {
+	if label == "cancelled" {
+		return progress.FailureCancelled, ""
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.problem
+	switch {
+	case t.problem.Code != "":
+		return t.problem.Code, t.problem.Field
+	case t.code != "":
+		return t.code, ""
+	}
+	return progress.FailureUnknown, ""
+}
+
+// failCode is fail for a runtime failure with a progress.Failure* code.
+func (t *terminator) failCode(msg, code string) {
+	t.mu.Lock()
+	if !t.claimed {
+		t.code = code
+	}
+	t.mu.Unlock()
+	t.fail(msg)
 }
 
 // failProblem is fail for a failure with a stable code: the error event
@@ -263,18 +285,37 @@ func (t *terminator) claimSuccess() {
 
 // finish is the single teardown path: refuse new subprocesses, stop running
 // ones, tear down mounts and LUKS, then emit the error event and exit.
-// Teardown runs before the event so the message can say whether it worked.
+// Teardown runs before the event so the event can say whether it worked:
+// in its own `cleanup` object, and at the end of the message as before.
+// The code stays the one of the failure that ended the install, whatever
+// the teardown did.
 func (t *terminator) finish(msg string, code int, label string) {
+	stepID, started := t.stepState()
 	t.halt()
 	if n := t.stopChildren(); n > 0 {
 		fmt.Fprintf(t.stderr, "fisherman: %d child process(es) ignored SIGTERM and were killed\n", n)
 	}
+	outcome := &progress.Cleanup{Status: progress.CleanupOK}
 	if err := t.runCleanup(); err != nil {
+		outcome.Status, outcome.Message = progress.CleanupFailed, err.Error()
+		var timeout cleanupTimeoutError
+		if errors.As(err, &timeout) {
+			outcome.Status = progress.CleanupTimedOut
+		}
 		msg += "; cleanup failed, the target may still be mounted or unlocked: " + err.Error()
 	}
-	t.emitError(msg)
-	fmt.Fprintf(t.stderr, "fisherman: %s: %s\n", label, msg)
+	failureCode, field := t.failure(label)
+	t.emitError(progress.Failure{Message: msg, Code: failureCode, Field: field,
+		StepID: stepID, DiskChanged: started, Cleanup: outcome})
+	fmt.Fprintf(t.stderr, "fisherman: %s: %s\n", label, progress.Sanitize(msg))
 	t.exit(code)
+}
+
+// cleanupTimeoutError: the teardown did not finish within cleanupTimeout.
+type cleanupTimeoutError struct{ after time.Duration }
+
+func (e cleanupTimeoutError) Error() string {
+	return fmt.Sprintf("teardown did not finish within %s", e.after)
 }
 
 // runCleanup runs the registered teardown, bounded by cleanupTimeout.
@@ -285,7 +326,7 @@ func (t *terminator) runCleanup() error {
 	case err := <-done:
 		return err
 	case <-time.After(t.cleanupTimeout):
-		return fmt.Errorf("teardown did not finish within %s", t.cleanupTimeout)
+		return cleanupTimeoutError{t.cleanupTimeout}
 	}
 }
 

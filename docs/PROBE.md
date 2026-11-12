@@ -369,6 +369,36 @@ then `/var/lib/containers/storage`; a name without a tag also matches
 `<name>:latest`. A store entry matches the host through any digest it
 records (the manifest digest, or the list digest it was pulled by).
 
+#### The install uses the same rule
+
+An install from a local `containers-storage:` source with the ostree
+backend can run the host's bootc straight against the local store. That
+path keeps an 8 GiB live ISO clear of the memory that a container install
+needs (#237). But bootc reads the install configuration, the backend and the
+bound images from the root it runs in, also with `--source-imgref`. So
+before any disk step, fisherman establishes the execution root for the
+recipe's source by the rules above (`probe.SourceExecutionRoot`: `bootc
+status --json` and the store reads only, no feature command), and adds the
+recipe's `additionalImageStores` to the stores it searches (#363).
+
+| Execution root | Install path |
+|---|---|
+| `established` (`digest_match`), host backend `ostree` or not reported | the host's bootc, `--source-imgref containers-storage:<source>` |
+| `digest_mismatch`, `host_digest_unknown`, `source_digest_unknown` | the source image's own bootc in a podman container |
+| `host_not_bootc`, or no bootc on the host | the source image's own bootc in a podman container |
+| `established`, host backend `composefs` | the source image's own bootc in a podman container: the direct path is qualified on OSTree-backed live hosts only |
+
+A `progress` `info` event before the first step says which path the install
+takes and why, for example `bootc: the host's root is not established as the
+source's execution root (digest_mismatch); installing with the source
+image's own bootc in a podman container`. The container path runs the
+source's bootc, so the configuration is the source's; it redirects podman
+storage to the target disk when `/var` is small. In both paths,
+`--target-imgref` is the recipe's `targetImgref`: the source and the update
+origin stay separate. A composefs install, an OCI layout source, a registry
+source and a source reuse copy (`SOURCE-REUSE.md`) do not ask: they take
+the container path as before.
+
 #### Features
 
 | Feature | What it is | How it is answered in the source root |
@@ -432,6 +462,19 @@ install of the source on the matrix in `tests/bootcrew-matrix.yaml` is the
 proof; until a qualified profile exists for a source, they stay `unknown`. The
 `bootc_store` inventory does not change this: it lists what the live host
 stores, not what the source's bootc can do.
+
+#### Checked against a real install
+
+The advisory store reuse VM profile (`scripts/store-reuse-vm.sh`,
+[`SOURCE-REUSE.md`](SOURCE-REUSE.md#the-offline-vm-profile-advisory)) takes
+the report inside the VM that installs, for the booted image pinned by its
+digest, and installs that image from the VM's own bootc store. The guest
+check `scripts/vm-checks/capabilities.sh` then compares the report with the
+installed system: the execution root, the bootc version, the backend, the
+`print-configuration` bootloader and the `container inspect` kernel. The same
+probe for a digest the VM did not boot must answer nothing from the VM's
+bootc. It is advisory, and it does not qualify `deployment_mount`,
+`bootc_image_storage` or `finalization`.
 
 Fixtures: `fisherman/internal/probe/testdata/golden/caps-*.json` pin the
 object for no source, a matching OSTree root with a current bootc, a
