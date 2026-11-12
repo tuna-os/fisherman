@@ -38,7 +38,7 @@ choices and draw a progress bar.
 
 | You are | Use fisherman to |
 |---|---|
-| Writing an installer UI | Skip the disk work. Ask `fisherman probe --json` what the machine has, check fields with `fisherman validate --json --partial`, pipe a recipe to `fisherman -`, and read progress. |
+| Writing an installer UI | Skip the disk work. Ask `fisherman probe --json` what the machine has, check fields with `fisherman validate --json --partial`, pipe a recipe to `fisherman -`, and read progress. The guide: [`docs/INTEGRATION.md`](docs/INTEGRATION.md). |
 | Building a bootc image | Get an install path for your image without a distro-specific installer. Any image that `bootc install to-filesystem` accepts works; the nightly matrix covers CentOS, Ubuntu, Debian, Arch and openSUSE bases, among others. |
 | Automating installs | Run unattended from a recipe file, with machine-readable validation errors and progress. |
 
@@ -125,6 +125,9 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 | `fisherman verify --json` | yes, for `bootc status` | on the installed system, or against what its first boot collected: compare the installation receipt with the booted image (`verified`, `mismatch`, `unsupported`, `unavailable`, `not-yet-run`); read-only, exit 0 only for `verified`. Schemas and codes: [`docs/RECEIPT.md`](docs/RECEIPT.md) |
 | `fisherman version` | no | print the version |
 
+Every flag, with its value, its default and the exit codes of each command:
+[`docs/CLI.md`](docs/CLI.md).
+
 ## Recipe format
 
 ```json
@@ -143,11 +146,10 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 }
 ```
 
-The example shows the common fields. A recipe can also carry `user`,
-`bootloader`, `targetImgref`, `btrfsSubvolumes`, `varDisk`, `customMounts`
-and more; the struct in
-[`fisherman/internal/recipe/recipe.go`](fisherman/internal/recipe/recipe.go)
-is the reference until #320 lands.
+The example shows the common fields. Every field, with its type and its
+default, is in [`docs/RECIPE.md`](docs/RECIPE.md); a test holds that page to
+the struct in
+[`fisherman/internal/recipe/recipe.go`](fisherman/internal/recipe/recipe.go).
 
 Things a recipe author should know today:
 

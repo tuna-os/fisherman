@@ -81,7 +81,7 @@ reports at most one problem from its own rule (the first it breaks).
 ### Example
 
 ```console
-$ fisherman validate --json recipe.json
+$ echo '{"hostname":"my_pc","user":{"username":"Alice"}}' | fisherman validate --json --partial -
 {
   "protocol_version": 1,
   "valid": false,
@@ -102,6 +102,11 @@ $ fisherman validate --json recipe.json
 
 More, byte for byte, in
 `fisherman/cmd/fisherman/testdata/validate/*.golden` (inputs beside them).
+
+Every complete output in this document is real: `TestValidateDocExamples`
+(`fisherman/cmd/fisherman/validate_doc_test.go`) runs the command on the
+line above it and compares the output byte for byte. An elided output
+(`...`) is held to each `field` and `code` pair that it shows.
 
 ## Unknown keys
 
@@ -606,15 +611,16 @@ checks.
 
 When calling `fisherman validate --json`, errors are returned as:
 
-```json
+```console
+$ echo '{"encryption":{"type":"luks-passphrase"}}' | fisherman validate --json --partial -
 {
   "protocol_version": 1,
   "valid": false,
   "errors": [
     {
-      "field": "hostname",
-      "code": "hostname_invalid_char",
-      "message": "hostname \"my_pc\" contains '_'; use only letters, digits, hyphens and dots"
+      "field": "encryption.passphrase",
+      "code": "encryption_passphrase_required",
+      "message": "encryption.passphrase required for luks-passphrase"
     }
   ]
 }
