@@ -94,6 +94,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 📝 Documentation
 
+- **Firn compatibility matrix** (#386): `docs/FIRN-COMPATIBILITY.md` compares
+  Firn's schema-2 TOML recipe with the fisherman recipe field by field, from
+  the code of both at pinned commits: encryption, bootloader (opposite
+  defaults), filesystem and btrfs subvolumes (same name, other layout),
+  image references and transports, the user, Flatpaks (install vs. copy),
+  and explicit vs. absent values, with the mappings that carry over and the
+  ones a converter must refuse. No adapter: out of scope by owner decision;
+  fisherman JSON stays authoritative.
 - **Getting help uses the support bundle**: TROUBLESHOOTING.md now points to
   `fisherman diagnostics` instead of collecting and cleaning files by hand.
 
