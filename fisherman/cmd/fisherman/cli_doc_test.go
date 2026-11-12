@@ -154,6 +154,7 @@ func TestCLIReferenceCoversEveryFlag(t *testing.T) {
 		{"## `fisherman probe`", []string{"runProbe"}},
 		{"## `fisherman verify`", []string{"runVerify"}},
 		{"## `fisherman images`", []string{"runImages"}},
+		{"## `fisherman diagnostics`", []string{"runDiagnostics"}},
 	} {
 		want := flagsOf(lits, c.funcs...)
 		if len(want) == 0 {

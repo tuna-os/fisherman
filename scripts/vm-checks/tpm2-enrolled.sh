@@ -9,7 +9,19 @@
 # means the TPM unlocked the root.
 set -u
 fail=0
-dev=$(ssh_root "lsblk -nrpo NAME,FSTYPE | awk '\$2 == \"crypto_LUKS\" { print \$1; exit }'" 2>/dev/null || true)
+# A guest under memory pressure can miss ssh's one-second connect timeout
+# (a VM run read "no LUKS device" when the query itself had failed). Try
+# again while ssh fails, and say which of the two it was.
+dev="" answered=0
+for _ in $(seq 1 "${TPM2_SSH_TRIES:-10}"); do
+  if out=$(ssh_root "lsblk -nrpo NAME,FSTYPE | awk '\$2 == \"crypto_LUKS\" { print \$1; exit }'" 2>/dev/null); then
+    answered=1; dev=$out; break
+  fi
+  sleep "${TPM2_SSH_SLEEP:-3}"
+done
+if [ "$answered" = 0 ]; then
+  echo "❌ the guest did not answer over SSH"; exit 1
+fi
 if [ -z "$dev" ]; then
   echo "❌ no LUKS device in the guest"; exit 1
 fi

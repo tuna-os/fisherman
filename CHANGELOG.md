@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### ✨ Features
 
+- **`fisherman diagnostics`: a local support bundle** (#375): a new command
+  writes one JSON file of allowlisted facts about an install: versions, the
+  probe's facts, the recipe's effective options (never the recipe), the
+  progress timeline with the runtime failure code and cleanup outcome, and
+  the mounts and LUKS mapper still open under the target and scratch
+  directory. It never holds a passphrase, recovery key, password, password
+  hash or token; messages are redacted, unknown fields and events are only
+  counted, and host, user and device identifiers are masked unless
+  `--include-identifiers`. The file is new, mode 0600, created with
+  `O_EXCL|O_NOFOLLOW`, bounded in size, and removed on a write error;
+  `--stdout` prints it for review. The command only reads, and an install
+  never runs it. Sentinel tests plant secrets in every input. See
+  `docs/DIAGNOSTICS.md`.
+
 - **Runtime failure codes on the `error` event** (#369): every `error` event
   now has a `code`. It is the validate code for a recipe or preflight
   problem, as before, and otherwise one of the documented failure codes for
@@ -40,6 +54,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   failure is the new `error` code `root_flags_failed`. An image that boots a
   unified kernel image has no entry to change, and the log says so.
 
+- **A cancel during the source reuse copy could leave `/var/tmp` bound to
+  a deleted directory** (#384): a cancel stops the copy's `bootc` and runs
+  the teardown, and the copy's own unbind and `Release` raced for the
+  bind. When the copy took it first, the session was already released, so
+  its `umount` was refused. `Release` then saw no bind, skipped the unbind
+  and removed the scratch. `/var/tmp` stayed on the deleted
+  `source-reuse/var-tmp`, and the next install failed with "cannot bind ...
+  over /var/tmp" (store-reuse VM run 43186222564). The bind, the copy's
+  unbind and `Release`'s unbind now run one at a time. One `umount` undoes
+  one `mount`, even after `Release` has begun, and `Release` waits for a
+  bind in flight. Neither unmounts `/var/tmp` a second time. If the bind
+  cannot be undone, `Release` keeps the scratch and reports it, so it does
+  not remove it from under the bind.
 - **The host's bootc installed a local source it did not boot** (#363): an
   install from a local `containers-storage:` source took the direct path
   (the host's bootc, no podman) whenever the host had a bootc. bootc reads
@@ -95,6 +122,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 📝 Documentation
 
+- **The Secure Boot profile** (#342): `SECURITY.md` names the one
+  supported profile, image-owned: bootc and bootupd install the image's own
+  signed chain, fisherman prefers the `.signed` systemd-boot binary, keeps an
+  existing fallback and keeps every signed byte. It lists what fisherman
+  does not do (no shim or MokManager staging from image metadata, no MOK
+  enrolment, no PK/KEK/db/dbx change) and what a new profile needs first.
+  Each guarantee links to the code and the test. No code change.
+- **Supported versions and response** (#294): `SECURITY.md` says that `dev`
+  and the latest release get security fixes, with no backports, and that
+  the response is best effort with no SLA: we aim to acknowledge a report
+  within 14 days. README links to `SECURITY.md`.
+- **One project home** (#303): README, AGENTS.md and ROADMAP.md say that
+  tuna-os/fisherman is the only origin, that projectbluefin/fisherman is a
+  fork whose changes come in through a PR here, and that consumers pin
+  tuna-os/fisherman. The text that offered either repository as a home is
+  gone.
 - **An integration guide** (#328): `docs/INTEGRATION.md` says which
   command a frontend runs when, what to take from the probe, the recipe
   contract, how to run the install with the recipe on stdin, how to read
@@ -114,6 +157,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ROADMAP.md refreshed to 2026-11-12** (#286): re-measured release,
   branch and pin figures; Q3 moved to a dated historical section; Q4
   marked current; a 2027 Q1 forward look.
+- **Firn compatibility matrix** (#386): `docs/FIRN-COMPATIBILITY.md` compares
+  Firn's schema-2 TOML recipe with the fisherman recipe field by field, from
+  the code of both at pinned commits: encryption, bootloader (opposite
+  defaults), filesystem and btrfs subvolumes (same name, other layout),
+  image references and transports, the user, Flatpaks (install vs. copy),
+  and explicit vs. absent values, with the mappings that carry over and the
+  ones a converter must refuse. No adapter: out of scope by owner decision;
+  fisherman JSON stays authoritative.
+- **Getting help uses the support bundle**: TROUBLESHOOTING.md now points to
+  `fisherman diagnostics` instead of collecting and cleaning files by hand.
 
 - **TROUBLESHOOTING.md and VALIDATE.md match the code** (#419): the probe
   fields (`disks[]`, `system.ram_bytes`, `system.cpu_threads`/`cpu_cores`,
@@ -175,6 +228,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   kernel command line, `/var` inside `@`, and `@` as the only top-level
   subvolume (#416). The harness scripts that write into the installed root
   now mount `@` when the top level holds only it.
+
+- **The TPM2 guest check said "no LUKS device" when ssh had failed**: a
+  `dakota-tpm2` run under memory pressure missed ssh's one-second connect
+  timeout, and `tpm2-enrolled.sh` read the empty answer as an unencrypted
+  guest. It now tries the query again while ssh fails, and says "the guest
+  did not answer over SSH" when it never does.
+
 - **The VM matrix covers a user, GRUB with LUKS, TPM2 and a /var disk**
 
 - **A recipe field that never reaches the install fails a test** (#289):

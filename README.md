@@ -1,12 +1,10 @@
 # fisherman
 
-> ℹ️ **Note on the project home.** This repository is the **origin** and is
-> actively maintained (the `dev` branch carries TunaOS fixes, e.g.
-> customMounts validation and TPM2 first-boot enrolment).
+> ℹ️ **Note on the project home.** `tuna-os/fisherman` is the only origin.
+> Send issues and pull requests here.
 > [`projectbluefin/fisherman`](https://github.com/projectbluefin/fisherman) is
-> a fork of this repo that is kept in sync (see
-> [tuna-os/fisherman#59](https://github.com/tuna-os/fisherman/pull/59)); pick
-> whichever home matches your distro's tooling.
+> a fork. Its changes reach fisherman only through a pull request here.
+> Consumers pin `https://github.com/tuna-os/fisherman`.
 
 fisherman is the part of a [bootc](https://bootc-dev.github.io/bootc/) installer that changes the disk.
 It reads one JSON recipe, then partitions and encrypts the disk, installs the
@@ -123,6 +121,7 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 | `fisherman scan <disk>` | yes | scan a disk for Windows data available to migrate; output contract and safety notes: [`docs/SCAN.md`](docs/SCAN.md) |
 | `fisherman probe --json` | no | print disks, TPM, RAM/CPU/UEFI, live-media and offline-store facts as one JSON object; read-only. Schema and an example: [`docs/PROBE.md`](docs/PROBE.md) |
 | `fisherman verify --json` | yes, for `bootc status` | on the installed system, or against what its first boot collected: compare the installation receipt with the booted image (`verified`, `mismatch`, `unsupported`, `unavailable`, `not-yet-run`); read-only, exit 0 only for `verified`. Schemas and codes: [`docs/RECEIPT.md`](docs/RECEIPT.md) |
+| `fisherman diagnostics (--output-dir <dir> \| --stdout)` | no | write a local support bundle for a failed install: allowlisted versions, probe facts, the recipe's effective options, the progress timeline and outcome, and what is still mounted. Never a passphrase, recovery key, password, hash or token; identifiers masked. Never uploaded. Contract: [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) |
 | `fisherman version` | no | print the version |
 
 Every flag, with its value, its default and the exit codes of each command:
@@ -314,6 +313,12 @@ hives after each task. If one hive has no work, the other can continue.
 The guide covers prerequisites, verified `just` setup, credentials, provider
 costs, and how to stop with Ctrl+C. Your subscription quota or API charges apply.
 Never post account credentials or API keys in issues or pull requests.
+
+## Security
+
+Report a vulnerability privately, as [`SECURITY.md`](SECURITY.md) says. That
+file also has the supported versions, the response target, the threat model
+and the Secure Boot profile.
 
 ## License
 
