@@ -369,6 +369,36 @@ then `/var/lib/containers/storage`; a name without a tag also matches
 `<name>:latest`. A store entry matches the host through any digest it
 records (the manifest digest, or the list digest it was pulled by).
 
+#### The install uses the same rule
+
+An install from a local `containers-storage:` source with the ostree
+backend can run the host's bootc straight against the local store. That
+path keeps an 8 GiB live ISO clear of the memory that a container install
+needs (#237). But bootc reads the install configuration, the backend and the
+bound images from the root it runs in, also with `--source-imgref`. So
+before any disk step, fisherman establishes the execution root for the
+recipe's source by the rules above (`probe.SourceExecutionRoot`: `bootc
+status --json` and the store reads only, no feature command), and adds the
+recipe's `additionalImageStores` to the stores it searches (#363).
+
+| Execution root | Install path |
+|---|---|
+| `established` (`digest_match`), host backend `ostree` or not reported | the host's bootc, `--source-imgref containers-storage:<source>` |
+| `digest_mismatch`, `host_digest_unknown`, `source_digest_unknown` | the source image's own bootc in a podman container |
+| `host_not_bootc`, or no bootc on the host | the source image's own bootc in a podman container |
+| `established`, host backend `composefs` | the source image's own bootc in a podman container: the direct path is qualified on OSTree-backed live hosts only |
+
+A `progress` `info` event before the first step says which path the install
+takes and why, for example `bootc: the host's root is not established as the
+source's execution root (digest_mismatch); installing with the source
+image's own bootc in a podman container`. The container path runs the
+source's bootc, so the configuration is the source's; it redirects podman
+storage to the target disk when `/var` is small. In both paths,
+`--target-imgref` is the recipe's `targetImgref`: the source and the update
+origin stay separate. A composefs install, an OCI layout source, a registry
+source and a source reuse copy (`SOURCE-REUSE.md`) do not ask: they take
+the container path as before.
+
 #### Features
 
 | Feature | What it is | How it is answered in the source root |
