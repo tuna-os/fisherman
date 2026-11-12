@@ -115,6 +115,24 @@ world-writable directory such as `/tmp`. A fixed path would let an
 unprivileged local user pre-plant the library for root to preload, or symlink
 the source path at an arbitrary file for root to truncate (fixed in #161).
 
+The shim is built only when the install needs it: the target disables
+SELinux (`selinuxDisabled`), the host has SELinux active, and bootc runs in
+the image's container (`install.SelinuxWorkaroundRequired`). It is built
+before the first disk step, and an install that cannot build it is refused
+with the disk untouched (`selinux_workaround_unavailable`, #370). Its
+directory is removed when the install ends, on success, failure and cancel.
+The workaround never changes what the recipe asks for: the target keeps
+SELinux disabled, and the host's SELinux and the signature policy stay as
+they are.
+
+Limits: the shim replaces the C library's `lsetxattr` and `fsetxattr`, built
+against the host's C library and preloaded by the image's dynamic loader. A
+program in the image that sets the label with a direct system call, is
+linked statically, or uses another C library (musl) is not covered, and an
+image loader that cannot load a library built on this host ignores it. The
+tests check the interposition on the host's own loader only; a failure from
+a direct system call has not been reproduced.
+
 ### Partition layout
 
 - **GRUB images always use 3 partitions** (EFI, ext4 `/boot`, root), even

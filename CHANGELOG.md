@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **A source the install cannot use was found only after the wipe** (#364):
+  with no copy in local containers-storage, a registry that did not answer,
+  refused access or did not know the tag gave "pull required", and the pull
+  failed after the disk was partitioned. The pre-flight now refuses such a
+  source, and an image that is not a bootc image or not for this host, before
+  the first step (`image_not_found`, `image_source_unauthorized`,
+  `image_source_unreachable`, `image_inspect_failed`,
+  `image_inspect_malformed`, `image_platform_mismatch`, `image_not_bootc`). A
+  network or registry-side failure is tried three times first. A cached image
+  is used as before, offline too. The install log names the source's manifest
+  and platform manifest digests, apart from `targetImgref`.
+- **The SELinux label workaround was built after the wipe** (#370): an
+  install with `selinuxDisabled` on a host with SELinux active compiled its
+  preload library only when bootc ran, and went on without it when the host
+  had no compiler. It is now built before the first step, and an install that
+  cannot build it is refused (`selinux_workaround_unavailable`). No other
+  install needs a compiler.
 - **`needs_user_creation` defaults to true in the image catalog resolver**
   (tuna-os/bootc-installer#288): a leaf that does not set it now asks for
   the first account, as bootc-installer's catalog contract and all five

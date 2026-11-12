@@ -1,47 +1,102 @@
 package install_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tuna-os/fisherman/internal/install"
+	"github.com/tuna-os/fisherman/internal/recipe"
 )
 
-func TestCheckImage_NeedsPullWhenNotCached(t *testing.T) {
-	call := 0
-	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
-		call++
-		if call == 1 {
-			// Remote inspect: return manifest with digest + layers
-			return []byte(`{"Digest":"sha256:aaaa","Layers":["sha256:l1","sha256:l2"]}`), nil
-		}
-		// Local inspect: not found
-		return nil, fmt.Errorf("image not known")
+// bootcImage is a `skopeo inspect` answer for a bootc image of this host's
+// architecture with the given digest letter and layer count.
+func bootcImage(digest byte, layers int) string {
+	ls := make([]string, layers)
+	for i := range ls {
+		ls[i] = fmt.Sprintf("%q", fmt.Sprintf("sha256:l%d", i))
 	}
-	defer func() { install.SkopeoInspectFn = install.DefaultSkopeoInspect }()
+	return fmt.Sprintf(`{"Digest":"sha256:%s","Layers":[%s],"Labels":{"containers.bootc":"1"},"Architecture":%q,"Os":"linux"}`,
+		strings.Repeat(string(digest), 64), strings.Join(ls, ","), install.HostArchitecture())
+}
 
-	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
-	if !result.NeedsPull {
-		t.Error("NeedsPull should be true when image not in local storage")
+// fakeInspect answers `skopeo inspect` by the transport of its last
+// argument: docker:// (remote) or containers-storage: (local), and --raw.
+// An empty answer is an error with that text.
+type fakeInspect struct {
+	remote, remoteErr string
+	raw               string
+	local             string
+	calls             []string
+}
+
+func (f *fakeInspect) install(t *testing.T) {
+	t.Helper()
+	oldWaits := install.InspectRetryWaits
+	install.InspectRetryWaits = []time.Duration{0, 0}
+	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
+		f.calls = append(f.calls, strings.Join(args, " "))
+		last := args[len(args)-1]
+		switch {
+		case strings.HasPrefix(last, "containers-storage:"):
+			if f.local == "" {
+				return nil, fmt.Errorf("image not known")
+			}
+			return []byte(f.local), nil
+		case args[0] == "--raw":
+			if f.raw == "" {
+				return nil, fmt.Errorf("raw not available")
+			}
+			return []byte(f.raw), nil
+		}
+		if f.remote == "" {
+			return nil, fmt.Errorf("%s", f.remoteErr)
+		}
+		return []byte(f.remote), nil
+	}
+	t.Cleanup(func() {
+		install.SkopeoInspectFn = install.DefaultSkopeoInspect
+		install.InspectRetryWaits = oldWaits
+	})
+}
+
+func (f *fakeInspect) remoteCalls() int {
+	n := 0
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "--no-tags docker://") {
+			n++
+		}
+	}
+	return n
+}
+
+const testRef = "ghcr.io/tuna-os/yellowfin:gnome-hwe"
+
+func TestCheckImage_NeedsPullWhenNotCached(t *testing.T) {
+	f := &fakeInspect{remote: bootcImage('a', 2)}
+	f.install(t)
+	result := install.CheckImage(testRef)
+	if !result.NeedsPull || result.Err != nil {
+		t.Fatalf("got %+v, want a pull and no refusal", result)
 	}
 	if result.LayerCount != 2 {
 		t.Errorf("LayerCount = %d, want 2", result.LayerCount)
 	}
+	if result.Source.ManifestDigest != "sha256:"+strings.Repeat("a", 64) || result.Source.Cached {
+		t.Errorf("Source = %+v", result.Source)
+	}
 }
 
 func TestCheckImage_NoPullWhenCachedAndCurrent(t *testing.T) {
-	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
-		// Both remote and local return same digest
-		return []byte(`{"Digest":"sha256:bbbb","Layers":["sha256:l1","sha256:l2","sha256:l3"]}`), nil
-	}
-	defer func() { install.SkopeoInspectFn = install.DefaultSkopeoInspect }()
-
-	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
-	if result.NeedsPull {
-		t.Error("NeedsPull should be false when local digest matches remote")
+	f := &fakeInspect{remote: bootcImage('b', 3), local: bootcImage('b', 3)}
+	f.install(t)
+	result := install.CheckImage(testRef)
+	if result.NeedsPull || result.Err != nil {
+		t.Fatalf("got %+v, want the cached image", result)
 	}
 	if result.LayerCount != 3 {
 		t.Errorf("LayerCount = %d, want 3", result.LayerCount)
@@ -53,62 +108,145 @@ func TestCheckImage_LocalImagePreferredOverNewer(t *testing.T) {
 	// (i.e. remote is newer), we still use the local image.  The ISO embeds
 	// a specific image version for offline install; post-install updates are
 	// handled by `bootc update`, not by re-pulling during installation.
-	call := 0
-	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
-		call++
-		if call == 1 {
-			return []byte(`{"Digest":"sha256:remote-newer","Layers":["sha256:l1"]}`), nil
-		}
-		return []byte(`{"Digest":"sha256:local-embedded","Layers":["sha256:l1"]}`), nil
-	}
-	defer func() { install.SkopeoInspectFn = install.DefaultSkopeoInspect }()
-
-	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
+	f := &fakeInspect{remote: bootcImage('c', 1), local: bootcImage('d', 1)}
+	f.install(t)
+	result := install.CheckImage(testRef)
 	if result.NeedsPull {
 		t.Error("NeedsPull should be false when local image exists, even if remote is newer")
 	}
 	if result.Offline {
 		t.Error("Offline should be false when remote is reachable")
 	}
+	if !result.Source.Cached || result.Source.ManifestDigest != "sha256:"+strings.Repeat("d", 64) {
+		t.Errorf("Source = %+v, want the cached copy", result.Source)
+	}
 }
 
-func TestCheckImage_NeedsPullOnNetworkErrorNoCachedImage(t *testing.T) {
-	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
-		return nil, fmt.Errorf("network error")
-	}
-	defer func() { install.SkopeoInspectFn = install.DefaultSkopeoInspect }()
-
-	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
-	if !result.NeedsPull {
-		t.Error("NeedsPull should be true when offline and image not in local storage")
+// Before #364 a registry that did not answer, with no cached copy, gave
+// NeedsPull and no error: the install wiped the disk and then failed in the
+// pull. Now it is refused, after bounded retries.
+func TestCheckImage_RefusesUnreachableUncachedImage(t *testing.T) {
+	f := &fakeInspect{remoteErr: "pinging container registry ghcr.io: dial tcp: lookup ghcr.io: no such host"}
+	f.install(t)
+	result := install.CheckImage(testRef)
+	if result.Err == nil || result.Err.Code != recipe.CodeImageSourceUnreachable {
+		t.Fatalf("Err = %+v, want %s", result.Err, recipe.CodeImageSourceUnreachable)
 	}
 	if result.Offline {
 		t.Error("Offline should be false when image is not in local storage")
 	}
+	if n := f.remoteCalls(); n != 3 {
+		t.Errorf("remote inspections = %d, want 3 (bounded retries)", n)
+	}
 }
 
 func TestCheckImage_OfflineWithLocalCache(t *testing.T) {
-	call := 0
-	install.SkopeoInspectFn = func(args ...string) ([]byte, error) {
-		call++
-		if call == 1 {
-			// Remote inspect: offline / unreachable
-			return nil, fmt.Errorf("network unreachable")
-		}
-		// Local inspect: image is cached
-		return []byte(`{"Digest":"sha256:cached","Layers":["sha256:l1","sha256:l2","sha256:l3"]}`), nil
-	}
-	defer func() { install.SkopeoInspectFn = install.DefaultSkopeoInspect }()
-
-	result := install.CheckImage("ghcr.io/tuna-os/yellowfin:gnome-hwe")
-	if result.NeedsPull {
-		t.Error("NeedsPull should be false when offline but image is in local storage")
+	f := &fakeInspect{remoteErr: "dial tcp: connect: network is unreachable", local: bootcImage('e', 3)}
+	f.install(t)
+	result := install.CheckImage(testRef)
+	if result.NeedsPull || result.Err != nil {
+		t.Fatalf("got %+v, want the cached image", result)
 	}
 	if !result.Offline {
 		t.Error("Offline should be true when registry was unreachable")
 	}
 	if result.LayerCount != 3 {
 		t.Errorf("LayerCount = %d, want 3", result.LayerCount)
+	}
+	if n := f.remoteCalls(); n != 1 {
+		t.Errorf("remote inspections = %d, want 1: a cached image needs no retries", n)
+	}
+}
+
+// Each known-unavailable or incompatible source has its own code, and only
+// a network or registry-side failure is retried.
+func TestCheckImage_RefusesSources(t *testing.T) {
+	otherArch := "s390x"
+	if install.HostArchitecture() == otherArch {
+		otherArch = "amd64"
+	}
+	alpine := fmt.Sprintf(`{"Digest":"sha256:%s","Layers":["sha256:l"],"Labels":null,"Architecture":%q,"Os":"linux"}`,
+		strings.Repeat("f", 64), install.HostArchitecture())
+	wrongArch := strings.Replace(bootcImage('a', 1), `"Architecture":"`+install.HostArchitecture()+`"`, `"Architecture":"`+otherArch+`"`, 1)
+	for _, tt := range []struct {
+		name    string
+		f       fakeInspect
+		code    string
+		retries int
+	}{
+		{"missing manifest", fakeInspect{remoteErr: "reading manifest nope in quay.io/x/y: manifest unknown"}, recipe.CodeImageNotFound, 1},
+		{"unauthorized", fakeInspect{remoteErr: "Requesting bearer token: invalid status code from registry 403 (Forbidden)"}, recipe.CodeImageSourceUnauthorized, 1},
+		{"registry error is retried", fakeInspect{remoteErr: "pinging container registry x: received unexpected HTTP status: 503 Service Unavailable"}, recipe.CodeImageSourceUnreachable, 3},
+		{"unknown failure", fakeInspect{remoteErr: "exit status 1"}, recipe.CodeImageInspectFailed, 1},
+		{"malformed answer", fakeInspect{remote: `{"Layers":[]}`}, recipe.CodeImageInspectMalformed, 1},
+		{"not json", fakeInspect{remote: `{bad`}, recipe.CodeImageInspectMalformed, 1},
+		{"wrong architecture", fakeInspect{remote: wrongArch}, recipe.CodeImagePlatformMismatch, 1},
+		{"index without this platform", fakeInspect{remoteErr: "choosing image instance: no image found in manifest list for architecture riscv64, variant \"\", OS linux"}, recipe.CodeImagePlatformMismatch, 1},
+		{"ordinary container", fakeInspect{remote: alpine}, recipe.CodeImageNotBootc, 1},
+		{"cached ordinary container", fakeInspect{remote: bootcImage('a', 1), local: alpine}, recipe.CodeImageNotBootc, 1},
+		{"cached wrong architecture", fakeInspect{remoteErr: "no such host", local: wrongArch}, recipe.CodeImagePlatformMismatch, 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			f := tt.f
+			f.install(t)
+			result := install.CheckImage(testRef)
+			if result.Err == nil || result.Err.Code != tt.code {
+				t.Fatalf("Err = %+v, want %s", result.Err, tt.code)
+			}
+			if !strings.Contains(result.Err.Message, "ghcr.io/tuna-os/yellowfin") {
+				t.Errorf("message %q does not name the image", result.Err.Message)
+			}
+			if n := f.remoteCalls(); n != tt.retries {
+				t.Errorf("remote inspections = %d, want %d", n, tt.retries)
+			}
+		})
+	}
+}
+
+// The index digest and the platform manifest digest are kept apart: a
+// multi-platform tag names an index, and the install uses this host's entry.
+func TestCheckImage_IndexAndPlatformDigests(t *testing.T) {
+	arch := install.HostArchitecture()
+	platform := "sha256:" + strings.Repeat("9", 64)
+	index := fmt.Sprintf(`{"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[
+		{"digest":"sha256:%s","platform":{"architecture":"riscv64","os":"linux"}},
+		{"digest":%q,"platform":{"architecture":%q,"os":"linux"}}]}`, strings.Repeat("8", 64), platform, arch)
+	f := &fakeInspect{remote: bootcImage('a', 1), raw: index}
+	f.install(t)
+	got := install.CheckImage(testRef).Source
+	if got.ManifestDigest != "sha256:"+strings.Repeat("a", 64) || got.PlatformDigest != platform || got.Platform != "linux/"+arch {
+		t.Fatalf("Source = %+v", got)
+	}
+
+	f = &fakeInspect{remote: bootcImage('a', 1), raw: `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json","layers":[]}`}
+	f.install(t)
+	if got := install.CheckImage(testRef).Source; got.PlatformDigest != got.ManifestDigest {
+		t.Fatalf("single-platform image: Source = %+v, want the platform digest to be the manifest digest", got)
+	}
+
+	f = &fakeInspect{remote: bootcImage('a', 1), raw: strings.Replace(index, `"architecture":"`+arch+`"`, `"architecture":"mips"`, 1)}
+	f.install(t)
+	if c := install.CheckImage(testRef); c.Err == nil || c.Err.Code != recipe.CodeImagePlatformMismatch {
+		t.Fatalf("index without this platform: %+v", c.Err)
+	}
+}
+
+func TestIsBootcImage(t *testing.T) {
+	for labels, want := range map[string]bool{
+		`{"containers.bootc":"1"}`:   true,
+		`{"ostree.bootable":"true"}`: true,
+		`{"ostree.bootable":"1"}`:    true,
+		`{"containers.bootc":"0"}`:   false,
+		`{}`:                         false,
+		`null`:                       false,
+	} {
+		var m map[string]string
+		if err := json.Unmarshal([]byte(labels), &m); err != nil {
+			t.Fatal(err)
+		}
+		if got := install.IsBootcImage(m); got != want {
+			t.Errorf("IsBootcImage(%s) = %v, want %v", labels, got, want)
+		}
 	}
 }
 
@@ -705,5 +843,20 @@ func TestBootcInstall_LocalSourceInstallsDirectly(t *testing.T) {
 	}
 	if exported {
 		t.Error("a direct install from local storage exported an OCI copy")
+	}
+}
+
+// An explicit containers-storage source is read locally only, and must be a
+// bootc image for this host too.
+func TestCheckImage_ExplicitLocalSourceMustBeBootc(t *testing.T) {
+	const source = "containers-storage:ghcr.io/example/os:stable"
+	f := &fakeInspect{local: strings.Replace(bootcImage('a', 1), `{"containers.bootc":"1"}`, `{}`, 1)}
+	f.install(t)
+	c := install.CheckImage(source)
+	if c.NeedsPull || c.Err == nil || c.Err.Code != recipe.CodeImageNotBootc {
+		t.Fatalf("got %+v, want image_not_bootc", c)
+	}
+	if f.remoteCalls() != 0 {
+		t.Fatalf("an explicit local source queried a registry: %v", f.calls)
 	}
 }

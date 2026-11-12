@@ -567,6 +567,14 @@ does: it needs no root.
 | `not_root` | (none) | The install did not run as root | Run fisherman through `pkexec` or `sudo` |
 | `install_already_running` | (none) | Another fisherman install holds the host-wide install lock (`/run/lock/fisherman-install.lock`). Two installs on one host share the scratch directory, so the second is refused before it reads its recipe. The message names the other process | Wait for the other install, or cancel it. A lock file left by a dead process does not block: the kernel drops the lock with the process |
 | `host_tool_missing` | (none) | A program the install of this recipe runs is not on the host. The message names it and its package | Install the package on the host |
+| `selinux_workaround_unavailable` | (none) | The recipe disables SELinux on the target (`selinuxDisabled`), this host has SELinux active, and bootc runs in the image's container. The host's policy then rejects the image's label types, so the install needs a small preload library that drops `security.selinux` writes, and it cannot build it. Reported before any disk is changed. An install that does not meet all three conditions needs no compiler | Install a C compiler (`cc`) and the C library headers on the host, or install from a host without SELinux active |
+| `image_not_found` | `image` | The registry does not have the image: the repository or the tag is unknown (`manifest unknown`, `name unknown`), and local containers-storage has no copy | Check the name and the tag |
+| `image_source_unauthorized` | `image` | The registry refused access (401, 403, `denied`), and local containers-storage has no copy. A registry also answers so for a repository that does not exist | Log in on the host (`podman login`), or check the name |
+| `image_source_unreachable` | `image` | The registry did not answer after three attempts (no network, a DNS or TLS failure, a 429 or 5xx answer), and local containers-storage has no copy | Connect to the network, or pull the image on the host first |
+| `image_inspect_failed` | `image` | `skopeo inspect` failed for another reason, and local containers-storage has no copy. The message holds skopeo's reason | See the message |
+| `image_inspect_malformed` | `image` | The registry's answer has no usable `sha256` manifest digest, and local containers-storage has no copy | See the install log; report it if the registry is a standard one |
+| `image_platform_mismatch` | `image` | The image (the registry's, or the cached copy) is for another OS or architecture, or its index lists no build for this host | Choose the image built for this architecture |
+| `image_not_bootc` | `image` | The image (the registry's, the cached copy, or a `containers-storage:` source) has neither the `containers.bootc=1` nor the `ostree.bootable` label: it is an ordinary container, which bootc refuses | Choose a bootc image |
 | `kept_filesystem_unusable` | `varDisk.disk`, `customMounts[i].partition` | The recipe keeps this device as it is, and `blkid` finds no filesystem on it that can be mounted (none, a LUKS or LVM volume, swap, or for `/var` a filesystem with no POSIX owners). Reported before any disk is changed | Format the device (`keepExisting: false`, or a real `fstype`), or name the device that holds the filesystem |
 
 The host-tool list comes from the recipe. The auto layout needs `sfdisk`,
@@ -582,6 +590,17 @@ entry. A `varDisk` that is not kept needs `wipefs` and `mkfs.xfs`. A
 Every install needs
 `skopeo` and `podman`; a `sourceReuse` install also needs `bootc` and `ostree`. fisherman looks for them where they run: on the host,
 through `flatpak-spawn --host` inside a Flatpak sandbox.
+
+The image check reads manifests and image configurations only, never the
+layers. An image in local containers-storage is used as it is: the
+registry need not answer. An image that is not cached must be in the
+registry, readable, a bootc image and built for this host. The check
+cannot promise the pull that follows: the network can fail, and a tag can
+move to another image, after it. The install log names what the check saw
+(`Source image …: manifest …, platform manifest …`); that is the install
+source only, and the installed system follows `targetImgref`. A source
+with the `oci:` transport, or media that the live host binds, has its own
+checks.
 
 ### Interpreting Errors in JSON
 

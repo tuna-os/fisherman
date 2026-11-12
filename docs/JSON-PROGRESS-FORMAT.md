@@ -106,6 +106,7 @@ report non-fatal problems; the install continues.
 ```
 
 Other examples: `Image pull required (71 layers)`,
+`Source image ghcr.io/example/os:stable: manifest sha256:…, platform manifest sha256:… (linux/amd64); …`,
 `Image found in local cache, no pull needed`,
 `Offline: registry unreachable, using locally cached image`,
 `Writing hostname: <hostname>`,
@@ -305,7 +306,13 @@ read, and it touches nothing the running install owns. A disk that is not an eli
 disk … ` with one of the `disk_*` codes
 ([VALIDATE.md](VALIDATE.md#target-eligibility)). A missing host program is
 `missing required host tool: "mkfs.xfs" not found on the host; install the
-"xfsprogs" package` (`code` `host_tool_missing`).
+"xfsprogs" package` (`code` `host_tool_missing`). An image the registry does
+not give, with no local copy, or one that is not a bootc image for this host,
+is `image source: …` with one of the `image_*` codes and `field` `image`
+([VALIDATE.md](VALIDATE.md#install-only)). A SELinux label workaround that
+the install needs and cannot build is `cannot prepare the install: …`
+(`code` `selinux_workaround_unavailable`). All of these come before the
+first `step` event: the disk is not changed.
 
 `error` is **not** emitted when fisherman exits 2 (unknown command) or
 panics, or when it is killed with SIGKILL. See [Exit codes](#exit-codes).
