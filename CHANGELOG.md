@@ -278,6 +278,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed system. A receipt for another image gave `mismatch`, and the CI
   host's own status gave `unavailable`. The advisory images keep the checks
   advisory.
+- **The VM matrix boots `tpm2-luks` and checks the enabled units** (#418,
+  #421, #422): `dakota-tpm2-luks` installs with TPM2 and no passphrase
+  against swtpm. The harness takes the recovery key from the install's
+  `recovery_key` event (`scripts/capture-recovery-key.py`: a 0600 file
+  under /tmp, the event printed with the key redacted, the key masked on
+  GitHub), types it on the first boot, and the second boot must unlock with
+  no prompt (`scripts/vm-checks/no-passphrase-prompt.sh`, also on
+  `dakota-tpm2`). The required `centos-bootc` canary runs
+  `scripts/vm-checks/enabled-units.sh`: the booted system must enable no
+  unit that the image's own `/etc` (at `/usr/etc`) and presets do not
+  enable, except an allowlist of fisherman's own units and the harness's
+  ssh. The check passed as an advisory entry first. `dakota-tpm2-luks` is
+  advisory. `tests/check-validation.sh` holds the
+  check, the capture and the prompt check to the cases they catch.
 
 ### ✨ Features
 
