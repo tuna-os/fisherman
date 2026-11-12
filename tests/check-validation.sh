@@ -419,6 +419,19 @@ run_check() { ( source "$1" ); }
 
 GOOD_HASH=$(openssl passwd -6 -salt fishsalt 'bootcrew-user-test' 2>/dev/null || true)
 OTHER_HASH=$(openssl passwd -6 -salt fishsalt 'another-password' 2>/dev/null || true)
+# yescrypt ($y$), what CentOS Stream 10's chpasswd writes on an ostree target.
+yescrypt() {  # yescrypt PASSWORD — a $y$ hash of PASSWORD, or nothing
+  python3 - "$1" <<'PY' 2>/dev/null || true
+import ctypes, ctypes.util, sys
+lib = ctypes.CDLL(ctypes.util.find_library("crypt") or "libcrypt.so.1")
+lib.crypt.restype = lib.crypt_gensalt.restype = ctypes.c_char_p
+lib.crypt.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
+lib.crypt_gensalt.argtypes = [ctypes.c_char_p, ctypes.c_ulong, ctypes.c_char_p, ctypes.c_int]
+print(lib.crypt(sys.argv[1].encode(), lib.crypt_gensalt(b"$y$", 0, None, 0)).decode())
+PY
+}
+YESCRYPT_HASH=$(yescrypt 'bootcrew-user-test')
+YESCRYPT_OTHER=$(yescrypt 'another-password')
 cat >"$VMC_TMP/ssh" <<'SH'
 #!/bin/sh
 # The user session: whatever FAKE_USER_SESSION says.
@@ -447,6 +460,9 @@ if [ -n "$GOOD_HASH" ]; then
     user_guest "$GOOD_SESSION" "$GOOD_HASH"
   expect_exit "guest user: another password → caught (exit 1)" 1 \
     user_guest "$GOOD_SESSION" "$OTHER_HASH"
+  # ssh prints a warning before the session (seen in the first VM run).
+  expect_exit "guest user: a warning line before the session → pass (exit 0)" 0 \
+    user_guest "Warning: Permanently added '[127.0.0.1]:2222' (ED25519) to the list of known hosts.\\n$GOOD_SESSION" "$GOOD_HASH"
   expect_exit "guest user: locked account (!) → caught (exit 1)" 1 \
     user_guest "$GOOD_SESSION" '!'
   expect_exit "guest user: cannot sign in → caught (exit 1)" 1 \
@@ -458,6 +474,14 @@ if [ -n "$GOOD_HASH" ]; then
 else
   echo "  SKIP  guest user checks: openssl not found"
 fi
+case "$YESCRYPT_HASH" in
+  '$y$'*)
+    expect_exit "guest user: yescrypt hash of the recipe password → pass (exit 0)" 0 \
+      user_guest "$GOOD_SESSION" "$YESCRYPT_HASH"
+    expect_exit "guest user: yescrypt hash of another password → caught (exit 1)" 1 \
+      user_guest "$GOOD_SESSION" "$YESCRYPT_OTHER" ;;
+  *) echo "  SKIP  guest user yescrypt checks: no libcrypt yescrypt" ;;
+esac
 
 tpm_guest() { FAKE_LUKSDUMP="$1" FAKE_KEY_LEFT="$2" TPM2_WAIT_ITERS=1 run_check "$VMC/tpm2-enrolled.sh"; }
 ENROLLED='Keyslots:\n  0: luks2\n  1: luks2\nTokens:\n  0: systemd-tpm2'
