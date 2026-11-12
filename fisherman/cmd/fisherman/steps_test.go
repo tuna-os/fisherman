@@ -68,6 +68,7 @@ func stepConsts(t *testing.T) map[string]string {
 var stepPhases = map[string]string{
 	"diskPhase":    "disk_phase.go",
 	"installPhase": "install_phase.go",
+	"postPhase":    "post_phase.go",
 }
 
 // phaseCall is the name of the step phase a statement of main() calls

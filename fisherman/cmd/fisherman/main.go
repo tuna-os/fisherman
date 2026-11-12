@@ -610,9 +610,6 @@ func main() {
 	}
 	activeTargetMount := dp.targetMount
 	activeEfiPart := dp.efiPart
-	activeRootPart := dp.rootPart     // only used for TPM2 enrolment, empty in manual mode
-	activeLuksUUID := dp.luksUUID     // LUKS partition UUID for boot entry injection; empty if no encryption
-	luksRecoveryKey := dp.recoveryKey // random passphrase for tpm2-luks (emitted as recovery key)
 
 	// ── Step 6: the install phase (install_phase.go) ─────────────────────────
 	// Scratch space, the target image reference, bootc install, the check
@@ -637,177 +634,23 @@ func main() {
 	}
 	targetImgref := ip.targetImgref
 
-	// ── Persistent mounts (varDisk, customMounts data and swap) ──────────────
-	// From here on every step writes into the installed system through the
-	// deployment resolver (post.ResolveDeployment). persistMounts tells it
-	// that a separate /var (a varDisk, or a manual /var partition) is what
-	// the booted system mounts at /var, mounts the other /var devices where
-	// those steps write, and writes the fstab lines. See mounts.go (#406,
-	// #372).
-	if err := persistMounts(r, activeTargetMount, cleanup.AddMount); err != nil {
-		fatalCode(progress.FailurePersistentMountsFailed, "persistent mounts: %v", err)
+	// ── TPM2, steps 7 and 8, the receipt: the post-install phase ────────────
+	// (post_phase.go) Persistent mounts, TPM2 staging, flatpaks, the
+	// configuration of the installed system and the installation receipt.
+	err = postPhase(r, seq, postInput{
+		disk:            dp,
+		extras:          extras,
+		hostIsLive:      hostIsLive,
+		dataResult:      dataResult,
+		wallpaperResult: wallpaperResult,
+		sourceImgref:    sourceImgref,
+		targetImgref:    targetImgref,
+		liveImage:       live.LiveImage,
+		mediaInput:      mediaInput,
+	}, livePostOps())
+	if err != nil {
+		failPhase(err)
 	}
-
-	// ── TPM2 enrolment ────────────────────────────────────────────────────────
-	// Both tpm2-luks and tpm2-luks-passphrase add a TPM2 auto-unlock token so
-	// the system boots without a passphrase prompt. The difference:
-	//   tpm2-luks:            random passphrase (recovery key) + TPM2
-	//   tpm2-luks-passphrase: user passphrase (fallback) + TPM2
-	if r.EnrollsTPM2() {
-		seq.begin(stepEnrollTPM2)
-
-		unlockPassphrase := r.Encryption.Passphrase
-		if r.Encryption.Type == "tpm2-luks" {
-			unlockPassphrase = luksRecoveryKey
-		}
-		progress.Info(stageTPM2Enrollment(activeTargetMount, activeRootPart, activeLuksUUID, unlockPassphrase))
-
-		// For tpm2-luks the user never chose a passphrase, so we emit the
-		// random one as a recovery key they must save before rebooting.
-		if luksRecoveryKey != "" {
-			progress.RecoveryKey(luksRecoveryKey)
-		}
-	}
-
-	// ── Step 7: Copy system flatpaks ──────────────────────────────────────────
-	seq.begin(stepFlatpaks)
-
-	if err := post.CopyFlatpaks(activeTargetMount, r.Flatpaks, r.FlatpakVarPath); err != nil {
-		// Non-fatal — the system will work without pre-installed flatpaks.
-		progress.Info(fmt.Sprintf("Warning: could not copy flatpaks: %v", err))
-	}
-
-	// ── Step 8: Post-install configuration ───────────────────────────────────
-	seq.begin(stepConfigure)
-
-	progress.Info(fmt.Sprintf("Writing hostname: %s", r.Hostname))
-	if err := post.WriteHostname(activeTargetMount, r.Hostname); err != nil {
-		fatalCode(progress.FailureHostnameFailed, "writing hostname: %v", err)
-	}
-
-	// Create a user account if the recipe requests one (e.g. Bazzite has no OOBE).
-	if r.User.Username != "" {
-		progress.Info(fmt.Sprintf("Creating user: %s", r.User.Username))
-		if err := post.CreateUser(activeTargetMount, post.UserConfig{
-			Username: r.User.Username,
-			Fullname: r.User.Fullname,
-			Password: r.User.Password,
-			Groups:   r.User.Groups,
-		}); err != nil {
-			fatalCode(progress.FailureUserFailed, "creating user: %v", err)
-		}
-	}
-
-	// Language, keyboard layout and time zone, when the recipe has them. For
-	// an encrypted install the keymap also goes to the initrd. Non-fatal.
-	applyLocale(activeTargetMount, r, r.EncryptsRoot())
-
-	// rhgb and quiet in every BLS loader entry, for the graphical boot
-	// splash: only for an image that asks (extras.bootSplash). Another
-	// image keeps the kernel arguments it ships. Non-fatal.
-	if extras.BootSplash {
-		n, err := post.EnsurePlymouthArgs(activeTargetMount)
-		if err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not set Plymouth kernel args: %v", err))
-		} else if n > 0 {
-			progress.Info(fmt.Sprintf("Added Plymouth boot args to %d loader entr%s", n, map[bool]string{true: "y", false: "ies"}[n == 1]))
-		} else {
-			progress.Info("Plymouth boot args: already in every loader entry")
-		}
-	}
-
-	// Every BLS entry must mount the root with the recipe's options
-	// (rootflags=subvol=@,compress=zstd:1 for btrfsSubvolumes): bootc 1.15.x
-	// drops --karg on the composefs path and writes only its own
-	// rootflags=subvol=<mount's subvol>. Before the LUKS check, which wants
-	// rd.luks.name last.
-	if msg, err := ensureRootFlags(activeTargetMount, r.RootMountOptions()); err != nil {
-		fatalCode(progress.FailureRootFlagsFailed, "root mount options: %v", err)
-	} else if msg != "" {
-		progress.Info(msg)
-	}
-
-	// Every BLS entry must carry rd.luks.name=<UUID>=root so the initrd
-	// unlocks the LUKS container and maps it to /dev/mapper/root before
-	// mounting the root filesystem. bootc install to-filesystem only sees the
-	// open mapper device and never writes LUKS parameters itself; the --karg
-	// above asks it to, and this checks every entry and patches what is
-	// missing. Fatal unless GPT auto-discovery finds the root (#410).
-	if activeLuksUUID != "" {
-		msg, err := ensureLuksBoot(activeTargetMount, activeLuksUUID, luksNeedsKarg(r.UsesSystemdBoot(), r.ComposeFsBackend))
-		if err != nil {
-			fatalCode(progress.FailureLUKSBootArgsFailed, "LUKS boot arguments: %v", err)
-		}
-		progress.Info(msg)
-	}
-
-	// Wi-Fi profiles and Bluetooth pairings hold secrets (passwords, link
-	// keys). They follow the user from live media to the disk; from any
-	// other host they are copied only when the recipe asks (#411).
-	copyHostSecrets(activeTargetMount, r, hostIsLive)
-
-	// Generate friendly audio device names and hide useless outputs (S/PDIF,
-	// Pro Audio, monitor loopbacks). Writes WirePlumber rules to the
-	// deployment's /etc. Only for an image that asks (extras.audioNames).
-	// Non-fatal.
-	if extras.AudioNames {
-		if err := post.GenerateAudioConfig(activeTargetMount); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not configure audio devices: %v", err))
-		}
-	}
-
-	// Inject slurped Windows data into the installed system's /var (the one
-	// the booted system mounts, from the deployment resolver). Non-fatal.
-	if (dataResult != nil && dataResult.Found) || (wallpaperResult != nil && wallpaperResult.Found) {
-		if d, err := post.ResolveDeployment(activeTargetMount); err != nil {
-			progress.Info(fmt.Sprintf("Warning: could not inject migrated data: %v", err))
-		} else {
-			if dataResult != nil && dataResult.Found {
-				if err := slurp.InjectData(d.Var, dataResult); err != nil {
-					progress.Info(fmt.Sprintf("Warning: could not inject user data: %v", err))
-				}
-			}
-			if wallpaperResult != nil && wallpaperResult.Found {
-				if err := slurp.InjectWallpapers(d.Var, wallpaperResult); err != nil {
-					progress.Info(fmt.Sprintf("Warning: could not inject wallpapers: %v", err))
-				}
-			}
-		}
-	}
-	// Cleanup scratch space (both data and wallpaper slurps use /run/fisherman-slurp)
-	if dataResult != nil || wallpaperResult != nil {
-		slurp.CleanupScratch()
-	}
-
-	// Detect OEM hardware (ASUS, Framework) and queue vendor-specific packages
-	// for first-login install via brew; enable the vendor's service when the
-	// image has it. Only for an image that asks (extras.oemSetup). Non-fatal.
-	if extras.OEMSetup {
-		if err := post.InstallOEMPackages(activeTargetMount, r.DistroID, r.BrewTap); err != nil {
-			progress.Info(fmt.Sprintf("Warning: OEM package setup: %v", err))
-		}
-	}
-
-	// Print auto-discovery (cups-browsed, avahi-daemon, ipp-usb): only for an
-	// image that asks (extras.printServices), and each unit only when the
-	// installed image has it.
-	if extras.PrintServices {
-		post.EnablePrintServices(activeTargetMount)
-	}
-
-	// The installation receipt and its first-boot collector (#385). The
-	// install says "installed, reboot required"; only the installed system,
-	// after it boots, can say which image it booted.
-	// The log line, then the `receipt` event a frontend keys on.
-	receiptStatus, receiptMsg := stageReceipt(activeTargetMount, sourceImgref,
-		receiptUpdateRef(sourceImgref, targetImgref, live.LiveImage), mediaInput)
-	progress.Info(receiptMsg)
-	progress.Receipt(receiptStatus)
-
-	// No cache warming and no thumbnail generation here: the image's /usr is
-	// read-only (and, on ostree, hard-linked into the repository), its caches
-	// are built with the image, and the host's tools would write the host's
-	// answers (#407).
 
 	// Target-resident scratch (live media) goes now, while the target is
 	// still mounted read-write: finalize makes it read-only, and after the

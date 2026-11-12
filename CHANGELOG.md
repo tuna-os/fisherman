@@ -240,6 +240,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with the same cleanup registration, and `--skip-finalize` is untouched.
   Golden tests pin the operation log, bootc's options included, for each
   shape, the retag sequence and every failure point.
+- **The post-install phase leaves `main()`** (part of #313): the
+  persistent mounts, the first-boot TPM2 staging and the recovery key, the
+  system flatpaks (step 7), the configuration of step 8 (hostname, user,
+  locale, boot splash, root flags, LUKS boot arguments, host secrets,
+  audio, migrated Windows data, OEM packages, print services) and the
+  installation receipt are now `postPhase` (`cmd/fisherman/post_phase.go`).
+  No behaviour change: the same steps, warnings, events, failure codes and
+  mount registrations, in the same order. Golden tests pin the log for
+  each shape, with everything turned on, each warning and each failure.
 - **The recipe answers its own install-state questions** (#317):
   `recipe.Recipe` has `HasEncryption`, `HasTPM2`, `IsManualLayout`, `IsZFS`,
   `UsesSystemdBoot`, `UsesComposeFs`, `HasVarDisk`, `FormatsVarDisk`,
