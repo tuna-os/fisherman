@@ -25,6 +25,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **The host's bootc installed a local source it did not boot** (#363): an
+  install from a local `containers-storage:` source took the direct path
+  (the host's bootc, no podman) whenever the host had a bootc. bootc reads
+  the install configuration and the backend from the root it runs in, so
+  an unrelated live host could give its configuration to the source. The
+  direct path now needs an established source execution root, by the rules
+  of `fisherman probe`'s `capabilities.execution_root` (the host booted the
+  source's digest). Otherwise the install runs the source image's own bootc
+  in its container, and an `info` event before the first step says which
+  path it takes and why. The direct path for a live ISO that installs its
+  own image (#237) stays. See `docs/PROBE.md`.
+
 - **A source the install cannot use was found only after the wipe** (#364):
   with no copy in local containers-storage, a registry that did not answer,
   refused access or did not know the tag gave "pull required", and the pull
