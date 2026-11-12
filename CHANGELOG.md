@@ -104,7 +104,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🧪 Testing
 
-- **The VM matrix covers a user, GRUB with LUKS, TPM2 and a /var disk**
+- **A recipe field that never reaches the install fails a test** (#289):
+  `recipeFieldUses` (`cmd/fisherman/recipe_consumers_test.go`) lists every
+  field of `recipe.Recipe`, nested ones included, with the files that pass
+  it on to the install, or the reason it only accepts or refuses the recipe.
+  The test fails on a field without an entry, an entry for a field that is
+  gone, and a listed file that no longer reads the field. A second test
+  holds the `install.Options` projection (`buildBootcInstallOptions`) to a
+  source table: each option comes from a named recipe field, an argument, or
+  a later step, and follows its recipe field.
+, GRUB with LUKS, TPM2 and a /var disk**
   (#418), as advisory PR-gate entries: `centos-bootc-luks-user` (GRUB,
   ostree, XFS, LUKS and a `user` that must sign in with the recipe's
   password), `centos-bootc-var-disk` (`/var` must be the `varDisk` on the
