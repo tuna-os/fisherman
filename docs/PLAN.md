@@ -386,7 +386,12 @@ The full `validate`, `plan` and the install's pre-flight then refuse the
 recipe with `disk_identity_mismatch` when the device `disk` names reports
 another serial, WWN or size, or no longer reports one
 ([VALIDATE.md](VALIDATE.md#disk-identity)). The install runs the check with
-its other pre-flight checks, before its first disk step.
+its other pre-flight checks, before its first disk step, and again right
+before it writes the partition table: the device a path names can change in
+between (a disk swapped, or the disks renumbered after a replug). A
+mismatch there fails the install with `disk_identity_mismatch` and nothing
+written; a device that is gone is a mismatch too, and one `lsblk` cannot
+read is `disk_unverified`.
 
 ## Binding the install to the confirmed plan
 
@@ -436,6 +441,4 @@ The plan does not yet report the mounts of the installed system beyond the
 partitions or the free space inside a kept manual root partition. The
 unpacked size of a registry image or an OCI layout whose layers do not
 record it is an estimate. A manual layout's disks are bound
-by `planBinding`, not by `diskIdentity`. A `diskIdentity` without a
-`planBinding` is checked in the pre-flight only, not again right before
-the install partitions. See tuna-os/fisherman#371.
+by `planBinding`, not by `diskIdentity`. See tuna-os/fisherman#371.

@@ -110,6 +110,9 @@ type diskOps struct {
 	recheckPlan func(r *recipe.Recipe) []recipe.Problem
 
 	applyCustomLayout func(specs []disk.MountSpec, target string, hooks disk.LayoutHooks) (string, string, []string, error)
+	// recheckDisk re-reads the device r.Disk names and returns the
+	// diskIdentity problems (#371); only called for a recipe with one.
+	recheckDisk       func(r *recipe.Recipe) []recipe.Problem
 	partitionLayout   func(dev string, layout disk.Layout) error
 	formatEFI         func(part string) error
 	formatBoot        func(part string) error
@@ -147,6 +150,7 @@ func liveDiskOps() diskOps {
 	return diskOps{
 		recheckPlan:       planBindingProblems,
 		applyCustomLayout: disk.ApplyCustomLayoutWith,
+		recheckDisk:       recheckDiskIdentity,
 		partitionLayout:   disk.PartitionLayout,
 		formatEFI:         disk.FormatEFI,
 		formatBoot:        disk.FormatBoot,
@@ -177,6 +181,12 @@ func liveDiskOps() diskOps {
 		setZFSPool:        cleanup.SetZFSPool,
 		swapOn:            swaps.Add,
 	}
+}
+
+// recheckDiskIdentity is the live recheckDisk: what the device r.Disk names
+// reports now, judged by the diskIdentity rule alone.
+func recheckDiskIdentity(r *recipe.Recipe) []recipe.Problem {
+	return r.RecheckDiskIdentity(targetFacts(r.Disk))
 }
 
 // diskPhase prepares the target for r: steps 1 to 5 (or "Preparing disk"
@@ -231,6 +241,18 @@ func diskPhase(r *recipe.Recipe, seq *stepSequencer, targetMount, luksMapper str
 		// root; LUKS, if any, wraps the root), GRUB2 writes three (ESP +
 		// ext4 /boot + root), encrypted or not.
 		layout := autoLayout(r)
+
+		// The pre-flight checked diskIdentity, but the device a path names
+		// can change before this point (a disk swapped, or the disks
+		// renumbered after a replug). Check it again right before the
+		// partition table is written, so a mismatch fails with nothing
+		// written (#371).
+		if r.DiskIdentity != nil {
+			if ps := ops.recheckDisk(r); len(ps) > 0 {
+				return res, phaseProblem("invalid recipe", ps[0])
+			}
+			ops.info(fmt.Sprintf("Disk %s still matches diskIdentity", r.Disk))
+		}
 		if err := ops.partitionLayout(r.Disk, layout); err != nil {
 			return res, phaseFail(progress.FailurePartitionFailed, "partitioning disk: %v", err)
 		}
