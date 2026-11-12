@@ -58,6 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **A separate `/var` disk gets the Flatpaks** (#252 follow-up): on an
+  ostree deployment with a `varDisk` or a manual `/var` partition, a recipe
+  `flatpakVarPath` sent the
+  Flatpak copy under the target root, which the booted system does not mount
+  on `/var`. The copy now goes to the disk, and the install log says that
+  `flatpakVarPath` is not used.
 - **Release gate: a refusal fails, and only gated push runs count** (#272):
   `promote.yml` reported every refusal as a green run (137 of 138 runs),
   judged every check run on the commit, scheduled and advisory ones
