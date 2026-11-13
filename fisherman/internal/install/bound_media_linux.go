@@ -45,7 +45,7 @@ func PreflightBoundOCIMediaInput(m *MediaInput) error {
 	if m == nil {
 		return fmt.Errorf("missing bound media input")
 	}
-	if err := m.Validate(); err != nil {
+	if err := m.ValidateBound(boundOfflineStoreRoot); err != nil {
 		return err
 	}
 	if m.SchemaVersion != 1 || m.Image == "" || m.TargetImgref == "" ||
@@ -153,7 +153,7 @@ func PreflightBoundStoreMediaInput(m *MediaInput) error {
 	if m == nil {
 		return fmt.Errorf("missing bound media input")
 	}
-	if err := m.Validate(); err != nil {
+	if err := m.ValidateBound(boundOfflineStoreRoot); err != nil {
 		return err
 	}
 	if m.SchemaVersion != 1 || m.Image == "" || m.TargetImgref == "" ||

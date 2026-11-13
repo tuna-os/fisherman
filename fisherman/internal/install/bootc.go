@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tuna-os/fisherman/internal/mediainput"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
 	"github.com/tuna-os/fisherman/internal/runner"
@@ -345,8 +346,8 @@ func writeAdditionalStoresConf(scratchDir string, stores []string) (hostPath, co
 // defer immediately.
 // LiveMediaImageStore is the SuperISO offline image store. When it is
 // mounted on the host, every install exposes it to bootc, and `fisherman
-// probe` lists it among the offline stores.
-const LiveMediaImageStore = "/var/lib/superiso-store"
+// probe` lists it among the offline stores. See mediainput.LiveMediaImageStore.
+const LiveMediaImageStore = mediainput.LiveMediaImageStore
 
 func appendImageStoreArgs(podmanArgs []string, scratch string, opts Options) ([]string, func()) {
 	noop := func() {}
@@ -1441,15 +1442,7 @@ func DefaultSkopeoInspect(args ...string) ([]byte, error) {
 var SkopeoInspectFn = DefaultSkopeoInspect
 
 func validSHA256Digest(digest string) bool {
-	if len(digest) != 71 || !strings.HasPrefix(digest, "sha256:") {
-		return false
-	}
-	for _, ch := range digest[7:] {
-		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
-			return false
-		}
-	}
-	return true
+	return mediainput.ValidSHA256Digest(digest)
 }
 
 // imageInfo is the part of `skopeo inspect` output the pre-flight reads.

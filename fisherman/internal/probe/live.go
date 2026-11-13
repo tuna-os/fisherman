@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/tuna-os/fisherman/internal/install"
+	"github.com/tuna-os/fisherman/internal/mediainput"
 )
 
 // Live-media signals. /run/ostree-booted is deliberately NOT one: every
@@ -245,9 +245,10 @@ func present(raw json.RawMessage) bool {
 }
 
 // Offline OCI media input, the v1 contract between the tacklebox ISO builder
-// and fisherman. The alias keeps one canonical type in install (which probe
-// already imports, so the reverse would be a cycle); ParseMediaInput and
-// Validate are re-exported here for callers that only know probe.
+// and fisherman. The canonical type lives in internal/mediainput, a
+// standard-library-only package, so probe stays independent of install;
+// ParseMediaInput and Validate are re-exported here for callers that only
+// know probe.
 const (
 	// MediaInputPath is the host path the ISO builder writes
 	// media-input.json to. A host /etc path, so Flatpak-aware like
@@ -256,12 +257,12 @@ const (
 )
 
 // MediaInput describes the immutable embedded image on offline live media.
-// See install.MediaInput for the field contract.
-type MediaInput = install.MediaInput
+// See mediainput.MediaInput for the field contract.
+type MediaInput = mediainput.MediaInput
 
-// ParseMediaInput decodes media-input.json; see install.ParseMediaInput.
+// ParseMediaInput decodes media-input.json; see mediainput.ParseMediaInput.
 func ParseMediaInput(data []byte) (*MediaInput, error) {
-	return install.ParseMediaInput(data)
+	return mediainput.ParseMediaInput(data)
 }
 
 // MediaInput reads the host's media-input.json. Inside a Flatpak the host's
@@ -312,7 +313,7 @@ func (p *Prober) Offline() Offline {
 			}
 		}
 	}
-	candidates = append(candidates, offlineStoreDefault, install.LiveMediaImageStore)
+	candidates = append(candidates, offlineStoreDefault, mediainput.LiveMediaImageStore)
 
 	o := Offline{Stores: []string{}, Images: []string{}}
 	seenStore := map[string]bool{}
