@@ -3,6 +3,14 @@ name: customMounts E2E (manual layout)
 on:
   pull_request:
     branches: [dev, main]
+    # Prose and the tui module (a separate Go module nothing here builds)
+    # cannot change this job. Not a required check: branch protection needs
+    # only required-canaries. No filter on push, which promote.yml judges.
+    paths-ignore:
+      - '**.md'
+      - docs/**
+      - LICENSE
+      - tui/**
   push:
     branches: [dev, main]
 

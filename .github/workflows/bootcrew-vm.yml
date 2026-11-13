@@ -3,8 +3,11 @@ name: Bootcrew VM Boot (E2E tests)
 on:
   push:
     branches: [prod, dev]
+  # ready_for_review is listed so a draft PR (which skips the heavy VM and
+  # arm64 jobs, see `setup`) gets the full run the moment it is marked ready.
   pull_request:
     branches: [prod, dev]
+    types: [opened, synchronize, reopened, ready_for_review]
   # Every night on dev (the default branch), so the required entries of
   # tests/bootcrew-matrix.yaml, the #418 shapes among them, gate a nightly
   # run as well as each PR (#423). bootcrew-nightly.yml is the full install
@@ -88,10 +91,16 @@ jobs:
   setup:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
     outputs:
       matrix_required: ${{ steps.read-matrix.outputs.matrix_required }}
       matrix_advisory: ${{ steps.read-matrix.outputs.matrix_advisory }}
       matrix_store_reuse: ${{ steps.read-matrix.outputs.matrix_store_reuse }}
+      heavy: ${{ steps.scope.outputs.heavy }}
+      vm: ${{ steps.scope.outputs.vm }}
+      advisory: ${{ steps.scope.outputs.advisory }}
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -114,6 +123,58 @@ jobs:
           EOF
           echo "--- parsed matrix ---"
           cat "$GITHUB_OUTPUT"
+
+      # What this change can affect. Only pull requests are narrowed: every
+      # push, the nightly and manual runs keep heavy=vm=advisory=true, so the
+      # full suite still runs on every dev commit (promote.yml judges those
+      # push runs). A pull request that is a draft, or that changes only
+      # prose, skips the heavy jobs; `lint` and `unit-tests` always run.
+      #   heavy:    arm64 unit tests and the tui tests (not for prose-only)
+      #   vm:       the required VM boots (not for prose-only or tui-only:
+      #             nothing in justfile/scripts/tests reads tui/)
+      #   advisory: the advisory VM boots and the store-reuse profile. These
+      #             never gate a merge, so a pull request runs them only when
+      #             it changes the matrix or this workflow.
+      # If the file list cannot be read, everything runs.
+      - name: Scope the heavy jobs
+        id: scope
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          PR_FILES: ${{ github.event.pull_request.changed_files }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+        run: |
+          set -euo pipefail
+          heavy=true vm=true advisory=true
+          if [ "$EVENT" = pull_request ]; then
+            advisory=false
+            if [ "$DRAFT" = true ]; then
+              heavy=false vm=false
+            elif [ "${PR_FILES:-0}" -le 3000 ] \
+              && gh api --paginate "repos/$REPO/pulls/$PR/files?per_page=100" \
+                --jq '.[] | .filename, (.previous_filename // empty)' > "$RUNNER_TEMP/changed.txt"; then
+              heavy=false vm=false
+              while IFS= read -r f; do
+                [ -n "$f" ] || continue
+                case "$f" in
+                  *.md|docs/*|LICENSE) ;;
+                  tui/*) heavy=true ;;
+                  *) heavy=true vm=true ;;
+                esac
+                case "$f" in
+                  tests/bootcrew-matrix.yaml|.github/workflows/bootcrew-vm.yml) advisory=true ;;
+                esac
+              done < "$RUNNER_TEMP/changed.txt"
+              [ "$vm" = true ] || advisory=false
+            fi
+          fi
+          {
+            echo "heavy=$heavy"
+            echo "vm=$vm"
+            echo "advisory=$advisory"
+          } | tee -a "$GITHUB_OUTPUT" >> "$GITHUB_STEP_SUMMARY"
 
   unit-tests:
     runs-on: ubuntu-24.04
@@ -151,6 +212,8 @@ jobs:
   # the gate's summary line keeps its shape; a failure here still fails the
   # workflow run.
   tui-unit-tests:
+    needs: setup
+    if: ${{ needs.setup.outputs.heavy == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -184,6 +247,8 @@ jobs:
   # ssh-enabled images. Gating (#423): required-canaries needs it.
   unit-tests-arm64:
     name: arm64 unit tests
+    needs: setup
+    if: ${{ needs.setup.outputs.heavy == 'true' }}
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 15
     steps:
@@ -219,6 +284,7 @@ jobs:
   vm-boot-required:
     name: required / ${{ matrix.image.name }}
     needs: [setup, unit-tests, lint]
+    if: ${{ needs.setup.outputs.vm == 'true' }}
     runs-on: ubuntu-24.04
     # 45, not 30: dakota-tpm2 (#418) boots twice after the install.
     timeout-minutes: 45
@@ -288,22 +354,44 @@ jobs:
   required-canaries:
     name: required-canaries
     if: always()
-    needs: [lint, unit-tests, unit-tests-arm64, vm-boot-required]
+    needs: [setup, lint, unit-tests, unit-tests-arm64, vm-boot-required]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
       - name: Verify required jobs succeeded
+        env:
+          SETUP: ${{ needs.setup.result }}
+          HEAVY: ${{ needs.setup.outputs.heavy }}
+          VM_SCOPE: ${{ needs.setup.outputs.vm }}
+          LINT: ${{ needs.lint.result }}
+          UNIT: ${{ needs.unit-tests.result }}
+          ARM64: ${{ needs.unit-tests-arm64.result }}
+          VM: ${{ needs.vm-boot-required.result }}
         run: |
-          lint='${{ needs.lint.result }}'
-          unit='${{ needs.unit-tests.result }}'
-          arm64='${{ needs.unit-tests-arm64.result }}'
-          vm='${{ needs.vm-boot-required.result }}'
-          echo "lint=$lint  unit=$unit  arm64=$arm64  vm=$vm"
+          echo "setup=$SETUP heavy=$HEAVY vm-scope=$VM_SCOPE lint=$LINT unit=$UNIT arm64=$ARM64 vm=$VM"
           # vm-boot-required is a matrix; its aggregate result is "success"
           # only when every matrix leg succeeded. fail-fast: false ensures
           # all legs run so we get full signal here.
-          if [ "$lint" != "success" ] || [ "$unit" != "success" ] || [ "$arm64" != "success" ] || [ "$vm" != "success" ]; then
-            echo "::error::required-canaries gate failed (lint=$lint unit=$unit arm64=$arm64 vm-boot-required=$vm)"
+          # setup must have succeeded: its scope outputs say which jobs were
+          # meant to run. A job may report "skipped" only when setup scoped it
+          # out (a draft or prose-only pull request); otherwise it must be
+          # "success", so a skip caused by a failed dependency still fails.
+          bad=
+          [ "$SETUP" = success ] || bad="$bad setup=$SETUP"
+          [ "$LINT" = success ] || bad="$bad lint=$LINT"
+          [ "$UNIT" = success ] || bad="$bad unit=$UNIT"
+          if [ "$HEAVY" = true ] || [ "$HEAVY" = "" ]; then
+            [ "$ARM64" = success ] || bad="$bad arm64=$ARM64"
+          else
+            [ "$ARM64" = success ] || [ "$ARM64" = skipped ] || bad="$bad arm64=$ARM64"
+          fi
+          if [ "$VM_SCOPE" = true ] || [ "$VM_SCOPE" = "" ]; then
+            [ "$VM" = success ] || bad="$bad vm-boot-required=$VM"
+          else
+            [ "$VM" = success ] || [ "$VM" = skipped ] || bad="$bad vm-boot-required=$VM"
+          fi
+          if [ -n "$bad" ]; then
+            echo "::error::required-canaries gate failed:$bad"
             exit 1
           fi
           echo "All required checks passed."
@@ -315,7 +403,7 @@ jobs:
   vm-boot-advisory:
     name: advisory / ${{ matrix.image.name }}
     needs: [setup, unit-tests, lint]
-    if: ${{ needs.setup.outputs.matrix_advisory != '[]' }}
+    if: ${{ needs.setup.outputs.matrix_advisory != '[]' && needs.setup.outputs.advisory == 'true' }}
     runs-on: ubuntu-24.04
     # 45, not 30: dakota-tpm2 (#418) boots twice after the install.
     timeout-minutes: 45
@@ -377,7 +465,7 @@ jobs:
   store-reuse-advisory:
     name: advisory / store-reuse / ${{ matrix.profile.name }}
     needs: [setup, unit-tests, lint]
-    if: ${{ needs.setup.outputs.matrix_store_reuse != '[]' }}
+    if: ${{ needs.setup.outputs.matrix_store_reuse != '[]' && needs.setup.outputs.advisory == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     continue-on-error: true
