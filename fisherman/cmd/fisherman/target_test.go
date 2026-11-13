@@ -341,3 +341,20 @@ func TestPartialProblemsImageRefs(t *testing.T) {
 		}
 	}
 }
+
+// tuna-os/fisherman#414: the account page gets the full name and password
+// rules from --partial, and the encryption page the passphrase rule.
+func TestPartialProblemsUserSecrets(t *testing.T) {
+	ps, err := partialProblems([]byte(`{"user":{"username":"jane","fullname":"a:b","password":"x\nroot:pw"},"encryption":{"type":"luks-passphrase","passphrase":"a\nb"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"encryption.passphrase:encryption_passphrase_invalid", "user.fullname:fullname_invalid", "user.password:password_invalid"}
+	if got := problemCodes(ps); !reflect.DeepEqual(got, want) {
+		t.Errorf("partialProblems = %v, want %v", got, want)
+	}
+	ps, err = partialProblems([]byte(`{"user":{"fullname":"Jane Doe","password":"$6$salt$hash"}}`))
+	if err != nil || len(ps) != 0 {
+		t.Errorf("valid fullname and hash: %v, %v", ps, err)
+	}
+}

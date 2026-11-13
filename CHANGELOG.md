@@ -775,6 +775,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `user.fullname` rejects `:` and control characters, a leading `$` is only
   accepted as a complete pre-hashed crypt setting with a whitelisted scheme
   id, and validator errors no longer mangle `%` via `fmt.Errorf`.
+  `validate --partial` applies the full name and password rules when the
+  `user` object has those keys.
 
 - **ZFS: the pool is exported, and its host files go where the system
   boots** (#413). The pool is registered for teardown and exported after the

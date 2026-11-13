@@ -274,7 +274,7 @@ A rule runs when its key is present:
 | Key present | Rules |
 |---|---|
 | `hostname` | hostname |
-| `user` with `username` | username |
+| `user` | username, fullname and password, each when the `user` object has it |
 | `slurp` | slurp |
 | `distroID` | distroID |
 | `brewTap` | brewTap |
