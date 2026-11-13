@@ -386,6 +386,29 @@ func TestCreateUserComposeFsHashesDollarLeadingPlaintextPassword(t *testing.T) {
 	}
 }
 
+// A plaintext password shaped like "$id$..." with a non-whitelisted id is
+// not a crypt setting either: "$ecret$1" must be hashed in-process, not
+// stored verbatim (tuna-os/fisherman#414).
+func TestCreateUserComposeFsHashesDollarIdLookalikePassword(t *testing.T) {
+	_, _, calls := fakeComposeFsUser(t)
+	const plain = "$ecret$1"
+
+	if err := CreateUser("sysroot-ignored", UserConfig{Username: "gina", Password: plain}); err != nil {
+		t.Fatalf("CreateUser: %v", err)
+	}
+	if len(*calls) != 1 {
+		t.Fatalf("want one chpasswd call, got %v", *calls)
+	}
+	c := (*calls)[0]
+	hash, ok := strings.CutPrefix(strings.TrimSuffix(c.stdin, "\n"), "gina:")
+	if !ok || !strings.HasPrefix(hash, "$6$") || strings.Contains(c.stdin, plain) {
+		t.Fatalf("chpasswd stdin = %q; want gina:$6$<salt>$<hash>", c.stdin)
+	}
+	if again, err := sha512crypt.Crypt(plain, hash); err != nil || again != hash {
+		t.Errorf("stdin hash %q does not verify the password (got %q, %v)", hash, again, err)
+	}
+}
+
 // The ostree branch keeps chroot chpasswd with the target's own PAM stack:
 // a plaintext password goes in as-is, without -e.
 func TestCreateUserOstreePlaintextPasswordUnchanged(t *testing.T) {

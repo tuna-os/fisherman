@@ -482,6 +482,8 @@ func (r *Recipe) Problems() []Problem {
 	// after the OS was already on disk. Checking it here makes the install
 	// refuse it before partitioning.
 	ps = append(ps, CheckUsername(r.User.Username)...)
+	ps = append(ps, CheckFullname(r.User.Fullname)...)
+	ps = append(ps, CheckPassword(r.User.Password)...)
 	// distroID and brewTap end up in generated paths, unit names and a root
 	// shell script, so they are refused before any disk step too.
 	ps = append(ps, CheckDistroID(r.DistroID)...)

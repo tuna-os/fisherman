@@ -210,6 +210,12 @@ func partialProblems(raw []byte) ([]recipe.Problem, error) {
 			if _, ok := user["username"]; ok {
 				ps = append(ps, recipe.CheckUsername(r.User.Username)...)
 			}
+			if _, ok := user["fullname"]; ok {
+				ps = append(ps, recipe.CheckFullname(r.User.Fullname)...)
+			}
+			if _, ok := user["password"]; ok {
+				ps = append(ps, recipe.CheckPassword(r.User.Password)...)
+			}
 		}
 	}
 	if has("slurp") {

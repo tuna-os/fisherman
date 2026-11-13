@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/tuna-os/fisherman/internal/sha512crypt"
 )
 
 // This file is the one place the recipe rules live. Validate(), the install
@@ -72,6 +74,9 @@ const (
 	CodeUsernameInvalidStart          = "username_invalid_start"
 	CodeUsernameInvalidChar           = "username_invalid_char"
 	CodeUsernameReserved              = "username_reserved"
+	CodeFullnameInvalid               = "fullname_invalid"
+	CodePasswordInvalid               = "password_invalid"
+	CodePassphraseInvalid             = "encryption_passphrase_invalid"
 	CodeSlurpUnsupported              = "slurp_unsupported"
 	CodeDistroIDInvalid               = "distro_id_invalid"
 	CodeBrewTapInvalid                = "brew_tap_invalid"
@@ -320,6 +325,65 @@ func CheckUsername(u string) []Problem {
 	return nil
 }
 
+// hasControl reports whether s contains an ASCII or Unicode control character
+// (newline, carriage return, NUL, ...). Anything reaching chpasswd,
+// useradd --comment or the LUKS unlock prompt must be free of them: a newline
+// in a password adds a second user:password line to chpasswd's stdin, and a
+// control character in a passphrase cannot be typed at the boot prompt.
+func hasControl(s string) bool {
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// CheckFullname applies the user.fullname rule. Empty is valid (no comment is
+// set); otherwise no ":" (the passwd field separator, rejected by useradd
+// after the OS is already deployed) and no control characters.
+func CheckFullname(f string) []Problem {
+	if f == "" {
+		return nil
+	}
+	if strings.Contains(f, ":") || hasControl(f) {
+		return []Problem{{"user.fullname", CodeFullnameInvalid,
+			fmt.Sprintf("fullname must not contain %q or control characters, got %q", ":", f)}}
+	}
+	return nil
+}
+
+// CheckPassword applies the user.password rule. Empty is valid (no password is
+// set); otherwise no control characters (a newline would inject a second
+// chpasswd line and set another account's password), and a leading "$" is
+// only accepted as a complete pre-hashed crypt setting with a whitelisted
+// scheme id — a "$..." plaintext string would otherwise be stored verbatim
+// with chpasswd -e and lock the account.
+func CheckPassword(pw string) []Problem {
+	if pw == "" {
+		return nil
+	}
+	if hasControl(pw) {
+		return []Problem{{"user.password", CodePasswordInvalid,
+			"password must not contain control characters"}}
+	}
+	if strings.HasPrefix(pw, "$") && !sha512crypt.IsHashSetting(pw) {
+		return []Problem{{"user.password", CodePasswordInvalid,
+			"a password starting with \"$\" must be a complete pre-hashed crypt setting (e.g. \"$6$salt$hash\"); otherwise change the first character"}}
+	}
+	return nil
+}
+
+// CheckPassphraseControl applies the control-character rule to an LUKS
+// passphrase: it must be typeable at the boot unlock prompt.
+func CheckPassphraseControl(field, pw string) []Problem {
+	if hasControl(pw) {
+		return []Problem{{field, CodePassphraseInvalid,
+			fmt.Sprintf("%s must not contain control characters", field)}}
+	}
+	return nil
+}
+
 // distroIDPattern and brewTapPattern bound two recipe strings the install
 // writes into generated files: distroID names /etc/<distroID>/oem/, the
 // <distroID>-oem-setup.service unit, its preset and the GRUB fallback
@@ -373,6 +437,11 @@ func CheckEncryption(e Encryption) []Problem {
 	if c.NeedsPassphrase && e.Passphrase == "" {
 		return []Problem{{"encryption.passphrase", CodeEncryptionPassphraseRequired,
 			fmt.Sprintf("encryption.passphrase required for %s", e.Type)}}
+	}
+	if c.NeedsPassphrase {
+		if ps := CheckPassphraseControl("encryption.passphrase", e.Passphrase); ps != nil {
+			return ps
+		}
 	}
 	return nil
 }
