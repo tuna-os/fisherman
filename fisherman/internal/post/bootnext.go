@@ -40,3 +40,18 @@ func FindBootNextID(efiPart string) (string, error) {
 	}
 	return "", nil
 }
+
+// SetBootNext sets the firmware's BootNext variable to the boot entry id
+// (4 hex digits, as FindBootNextID returns it), so the next boot, and only
+// the next, starts that entry whatever the boot order says. It needs root:
+// an EFI variable write. A frontend cannot do it as the desktop user
+// (tuna-os/bootc-installer#318), so the install does it while it is root.
+func SetBootNext(id string) error {
+	if len(id) != 4 || strings.Trim(strings.ToLower(id), "0123456789abcdef") != "" {
+		return fmt.Errorf("boot entry id %q is not 4 hexadecimal digits", id)
+	}
+	if out, err := Exec.Command("efibootmgr", "--bootnext", id).Output(); err != nil {
+		return fmt.Errorf("efibootmgr --bootnext %s: %w %s", id, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}

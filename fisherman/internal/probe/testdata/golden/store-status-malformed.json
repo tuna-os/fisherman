@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "context": "live-host",
+  "available": false,
+  "reason": "malformed_output",
+  "machine_platform": "x86_64",
+  "sources": {
+    "bootc_status": "malformed_output",
+    "store_index": "not_applicable",
+    "image_list": "not_applicable"
+  },
+  "ignored_entries": 0,
+  "items": []
+}

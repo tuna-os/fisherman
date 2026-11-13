@@ -34,6 +34,17 @@ type Result struct {
 	System          System  `json:"system"`
 	Live            Live    `json:"live"`
 	Offline         Offline `json:"offline"`
+	// Bootc, GPUs and DMI were added after protocol version 1 shipped.
+	// They are additions, so the version did not change.
+	Bootc Bootc `json:"bootc"`
+	GPUs  []GPU `json:"gpus"`
+	DMI   DMI   `json:"dmi"`
+	// Capabilities is the versioned, source-scoped bootc report
+	// (tuna-os/fisherman#383). It has its own version field.
+	Capabilities Capabilities `json:"capabilities"`
+	// BootcStore is the versioned inventory of the live host's bootc-owned
+	// image storage (tuna-os/fisherman#384). It has its own version field.
+	BootcStore BootcStore `json:"bootc_store"`
 }
 
 // Runner runs a command on the host and returns its stdout. In production it
@@ -54,6 +65,21 @@ type Prober struct {
 	// runner.InFlatpak in production: internal/runner owns the one sandbox
 	// detector, and its Output already forwards Run to the host there.
 	Sandboxed func() bool
+	// Selection names the source the frontend selected. The zero value
+	// selects nothing; see Capabilities.
+	Selection Selection
+	// ListBootcImages asks BootcStore to run `bootc image list`. It is off
+	// in the default probe: bootc needs root for it and opens its own store
+	// to answer, so it is not read-only (docs/PROBE.md).
+	ListBootcImages bool
+	// Euid is the probe's effective user id; os.Geteuid when nil.
+	Euid func() int
+	// Arch is the machine architecture in bootc's spelling ("x86_64");
+	// derived from runtime.GOARCH when empty.
+	Arch string
+
+	// status caches the host's `bootc status --json` for one probe.
+	status *bootcHostStatus
 }
 
 // Probe gathers every section. Only a failure that leaves a section
@@ -68,13 +94,20 @@ func (p *Prober) Probe() (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("system: %w", err)
 	}
+	live, offline, bootc := p.Live(), p.Offline(), p.Bootc()
+	caps := p.Capabilities(live, offline, bootc)
 	return &Result{
 		ProtocolVersion: ProtocolVersion,
 		Disks:           disks,
 		TPM:             p.TPM(),
 		System:          sys,
-		Live:            p.Live(),
-		Offline:         p.Offline(),
+		Live:            live,
+		Offline:         offline,
+		Bootc:           bootc,
+		GPUs:            p.GPUs(),
+		DMI:             p.DMI(),
+		Capabilities:    caps,
+		BootcStore:      p.BootcStore(caps, live),
 	}, nil
 }
 

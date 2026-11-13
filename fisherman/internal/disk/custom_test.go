@@ -508,3 +508,52 @@ func TestApplyCustomLayout_PreserveCanary(t *testing.T) {
 		t.Errorf("formatted = %v, want [/dev/sda2 /dev/sda4] (root first)", formattedDevices)
 	}
 }
+
+// The hooks hand each resource to the caller the moment it is acquired
+// (tuna-os/fisherman#362): a failure on a later partition must not lose the
+// mounts made before it.
+func TestApplyCustomLayoutWith_HooksFollowAcquisition(t *testing.T) {
+	targetBase := filepath.Join(t.TempDir(), "target")
+	rec := setupRecorder(t)
+	mounts := 0
+	runner.RunFn = func(stdin io.Reader, name string, args ...string) error {
+		_ = rec.run(stdin, name, args...)
+		if name == "mount" {
+			if mounts++; mounts == 2 {
+				return os.ErrPermission
+			}
+		}
+		return nil
+	}
+
+	var mounted, swap []string
+	specs := []disk.MountSpec{
+		{Partition: "/dev/sda1", Target: "/", Fstype: "xfs"},
+		{Partition: "/dev/sda4", Target: "swap", Fstype: "swap"},
+		{Partition: "/dev/sda2", Target: "/boot", Fstype: "ext4"},
+		{Partition: "/dev/sda3", Target: "/boot/efi", Fstype: "fat32"},
+	}
+	_, _, returned, err := disk.ApplyCustomLayoutWith(specs, targetBase, disk.LayoutHooks{
+		Mounted: func(p string) { mounted = append(mounted, p) },
+		SwapOn:  func(d string) { swap = append(swap, d) },
+	})
+	if err == nil {
+		t.Fatal("expected the second mount's error")
+	}
+	if len(mounted) != 1 || mounted[0] != targetBase {
+		t.Errorf("Mounted hook saw %v, want only the root %s", mounted, targetBase)
+	}
+	if len(returned) != 1 || returned[0] != targetBase {
+		t.Errorf("returned mounts = %v, want only the root", returned)
+	}
+	// The swap entry sorts before /boot, so it was reached, and the hook ran
+	// before mkswap.
+	if len(swap) != 1 || swap[0] != "/dev/sda4" {
+		t.Errorf("SwapOn hook saw %v, want /dev/sda4", swap)
+	}
+	for _, c := range rec.calls {
+		if c.name == "mkfs.fat" {
+			t.Error("the layout went on to the ESP after /boot failed to mount")
+		}
+	}
+}

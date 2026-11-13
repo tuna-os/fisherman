@@ -79,29 +79,74 @@ func MountZFSRoot(poolName, altroot string) error {
 }
 
 // ExportZFSPool exports a pool so it can be cleanly imported at next boot.
+// The install does not call it directly: the pool is registered with
+// post.Cleanup (SetZFSPool), which exports it after the unmounts on every
+// exit path.
 func ExportZFSPool(poolName string) error {
 	progress.Info(fmt.Sprintf("Exporting ZFS pool %s", poolName))
 	return runner.Run("zpool", "export", poolName)
 }
 
-// SetZFSCachefile writes the pool's zpool.cache to the installed system so
-// the initramfs can import the pool by cache instead of scanning.
-func SetZFSCachefile(poolName, targetRoot string) error {
-	cacheDir := filepath.Join(targetRoot, "etc", "zfs")
+// SetZFSCachefile writes the pool's zpool.cache into etcDir/zfs, so the
+// installed system's initramfs can import the pool from the cache instead
+// of scanning.
+//
+// etcDir is the /etc the BOOTED system sees (deploy.Deployment.Etc). ZFS
+// installs use the composefs backend, whose /etc is
+// state/deploy/<verity>/etc: <target>/etc is not it (#413).
+//
+// The cache is written to a temporary file on the host, copied into the
+// target, and the pool's cachefile property is then set to "none". Pointing
+// the property at a path inside the pool itself does not survive the
+// export: `zpool export` removes the pool from its cache file, and by then
+// that path names the unmounted mountpoint on the host.
+func SetZFSCachefile(poolName, etcDir string) error {
+	cacheDir := filepath.Join(etcDir, "zfs")
 	cacheFile := filepath.Join(cacheDir, "zpool.cache")
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", cacheDir, err)
 	}
+	tmp, err := os.CreateTemp("", "fisherman-zpool-*.cache")
+	if err != nil {
+		return fmt.Errorf("temporary cache file: %w", err)
+	}
+	tmpPath := tmp.Name()
+	tmp.Close()
+	defer os.Remove(tmpPath)
+
 	progress.Info(fmt.Sprintf("Writing zpool.cache to %s", cacheFile))
-	return runner.Run("zpool", "set", "cachefile="+cacheFile, poolName)
+	if err := runner.Run("zpool", "set", "cachefile="+tmpPath, poolName); err != nil {
+		return fmt.Errorf("zpool set cachefile: %w", err)
+	}
+	// Whatever happens next, the pool must not keep pointing at a file
+	// that is about to be deleted.
+	defer func() { _ = runner.Run("zpool", "set", "cachefile=none", poolName) }()
+
+	data, err := os.ReadFile(tmpPath)
+	if err != nil {
+		return fmt.Errorf("reading the pool cache: %w", err)
+	}
+	if len(data) == 0 {
+		return fmt.Errorf("zpool wrote an empty cache file for %s", poolName)
+	}
+	if err := os.WriteFile(cacheFile, data, 0o644); err != nil {
+		return fmt.Errorf("writing %s: %w", cacheFile, err)
+	}
+	return nil
 }
 
-// WriteHostID writes a machine host ID to <targetRoot>/etc/hostid.
-// ZFS requires a stable host ID (zgenhostid) so pools can be correctly
-// associated with the host. We generate 4 random bytes and write them in
-// the native byte order format that zgenhostid uses.
-func WriteHostID(targetRoot string) error {
-	etcDir := filepath.Join(targetRoot, "etc")
+// WriteHostID writes a machine host ID to etcDir/hostid, where etcDir is
+// the /etc the booted system sees (deploy.Deployment.Etc; see
+// SetZFSCachefile).
+//
+// ZFS wants a stable host ID (zgenhostid). The pool itself records the ID
+// of the host that last had it imported, which is the installer host; that
+// does not block the installed system, because the install exports the pool
+// and an exported pool imports on any host without force.
+//
+// We generate 4 random bytes and write them in the native byte order format
+// that zgenhostid uses.
+func WriteHostID(etcDir string) error {
 	if err := os.MkdirAll(etcDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", etcDir, err)
 	}

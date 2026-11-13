@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/tuna-os/fisherman/internal/deploy"
 	"github.com/tuna-os/fisherman/internal/runner"
 	"github.com/tuna-os/fisherman/internal/sha512crypt"
 )
@@ -31,32 +32,25 @@ func CreateUser(sysroot string, u UserConfig) error {
 		return nil
 	}
 
-	var root string
+	d, err := ResolveDeployment(sysroot)
+	if err != nil {
+		return err
+	}
+	// composefs-native has no full chrootable rootfs during deploy — the
+	// sealed image's /usr (with useradd) is mounted read-only elsewhere,
+	// so `chroot <sysroot> useradd` exits 127 (dakota, GH matrix
+	// 20260724T1508). d.Root is then the writable deployment root (parent of
+	// the state/deploy/<hash>/etc dir) and `useradd --root` below edits the
+	// passwd files without needing a chroot rootfs.
+	root := d.Root
+	composefs := d.Layout == deploy.ComposeFs
 	var staterootHome string
-	composefs := isComposeFsNative(sysroot)
-	if composefs {
-		// composefs-native has no full chrootable rootfs during deploy — the
-		// sealed image's /usr (with useradd) is mounted read-only elsewhere,
-		// so `chroot <sysroot> useradd` exits 127 (dakota, GH matrix
-		// 20260724T1508). Point at the writable deployment root (parent of
-		// the state/deploy/<hash>/etc dir) and use `useradd --root` below,
-		// which edits the passwd files without needing a chroot rootfs.
-		etcDir, err := ComposeFsDeployEtcDirFn(sysroot)
-		if err != nil {
-			return fmt.Errorf("finding composefs deploy root: %w", err)
-		}
-		root = filepath.Dir(etcDir)
-	} else {
-		deployDir, err := DeploymentDirFn(sysroot)
-		if err != nil {
-			return fmt.Errorf("finding deployment dir: %w", err)
-		}
-		root = deployDir
-
+	if !composefs {
 		// On ostree/bootc, /home inside the deployment is a symlink to
-		// var/home (the stateroot var). Pre-create the stateroot home dir so
-		// the relocation below has a destination.
-		staterootHome = filepath.Join(sysroot, "ostree", "deploy", "default", "var", "home")
+		// var/home, and the booted /var is the stateroot's (d.Var), not the
+		// deployment's own var/. Pre-create the home dir there so the
+		// relocation below has a destination.
+		staterootHome = filepath.Join(d.Var, "home")
 		if err := runner.Run("mkdir", "-p", staterootHome); err != nil {
 			return fmt.Errorf("mkdir stateroot home: %w", err)
 		}

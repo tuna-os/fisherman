@@ -52,7 +52,7 @@ jobs:
     name: Reconcile
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1  # zizmor: ignore[artipacked] a later step pushes the reconcile branch and opens a PR with gh
         with:
           fetch-depth: 0
 

@@ -3,8 +3,10 @@ package disk
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -134,14 +136,7 @@ func SetPartitionType(disk string, partNum int, partType string) error {
 // BLKRRPART; we work around this by detaching and re-attaching the loop
 // device with --partscan so the kernel creates /dev/loopNpM nodes.
 func Partition(disk string) error {
-	script := strings.Join([]string{
-		"label: gpt",
-		"",
-		`size=2GiB, type=uefi, name="EFI-SYSTEM"`,
-		`size=2GiB,   type=linux, name="boot"`,
-		`type=linux, name="root"`,
-	}, "\n") + "\n"
-	return partition(disk, script)
+	return PartitionLayout(disk, LayoutGRUB2)
 }
 
 // PartitionEncrypted wipes disk and creates the same three-partition GPT
@@ -175,13 +170,7 @@ func PartitionEncrypted(disk string) error {
 // partition is hidden behind the LUKS mapping and cannot be unmounted and
 // remounted around an sfdisk rewrite.
 func PartitionSystemdBoot(disk string) error {
-	script := strings.Join([]string{
-		"label: gpt",
-		"",
-		`size=2GiB, type=uefi, name="EFI-SYSTEM"`,
-		fmt.Sprintf(`type=%s, name="root"`, LinuxRootPartType()),
-	}, "\n") + "\n"
-	return partition(disk, script)
+	return PartitionLayout(disk, LayoutSystemdBoot)
 }
 
 // PartitionZFS wipes disk and creates a two-partition GPT layout for
@@ -193,16 +182,13 @@ func PartitionSystemdBoot(disk string) error {
 // ZFS installs use systemd-boot which reads directly from the FAT32 ESP.
 // The ZFS pool on p2 holds the composefs-native bootc store.
 func PartitionZFS(disk string) error {
-	script := strings.Join([]string{
-		"label: gpt",
-		"",
-		`size=1GiB, type=uefi, name="EFI-SYSTEM"`,
-		`type=linux, name="zfs-pool"`,
-	}, "\n") + "\n"
-	return partition(disk, script)
+	return PartitionLayout(disk, LayoutZFS)
 }
 
-// partition is the shared implementation for Partition and PartitionEncrypted.
+// partition is the shared implementation for Partition, PartitionSystemdBoot
+// and PartitionZFS. It returns nil only when the kernel's view of every
+// planned partition has been checked against the table sfdisk wrote, so the
+// caller can format PartName(disk, n) without guessing (#365).
 func partition(disk, script string) error {
 	// Unmount any mounted partitions on this disk before partitioning.
 	if err := unmountAll(disk); err != nil {
@@ -212,28 +198,50 @@ func partition(disk, script string) error {
 	// First attempt without --force.
 	err := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", disk)
 	if err != nil {
-		// The disk may still be considered "in use" by the kernel even after
-		// aggressive unmounting (e.g. a race with udev re-probing). Retry once
-		// with --force --no-reread so sfdisk writes the table unconditionally.
-		fmt.Fprintf(os.Stdout, "+ sfdisk first attempt failed (%v), retrying with --force\n", err)
+		// sfdisk refuses a disk the kernel still reports as in use, which can
+		// happen after aggressive unmounting when udev re-probes the device.
+		// That one state is safe to write through with --force --no-reread,
+		// because the re-read is then done, and checked, below. Any other
+		// failure (bad script, I/O error, read-only or missing device) is
+		// not: --force also switches off sfdisk's consistency checks.
 		time.Sleep(500 * time.Millisecond)
 		_ = runner.Run("udevadm", "settle")
-		if err2 := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", "--force", "--no-reread", disk); err2 != nil {
-			return fmt.Errorf("sfdisk: %w", err2)
+		state, why := rereadState(disk)
+		switch state {
+		case rereadOK:
+			// Whatever held the disk has let go. Try once more as before,
+			// with every sfdisk check still on.
+			fmt.Fprintf(os.Stdout, "+ sfdisk first attempt failed (%v); %s; retrying without --force\n", err, why)
+			if err2 := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", disk); err2 != nil {
+				return fmt.Errorf("sfdisk: %w (not retried with --force: %s)", err2, why)
+			}
+		case rereadBusy:
+			fmt.Fprintf(os.Stdout, "+ sfdisk first attempt failed (%v); %s; retrying with --force --no-reread\n", err, why)
+			if err2 := runner.RunWithStdin(bytes.NewBufferString(script), "sfdisk", "--wipe=always", "--force", "--no-reread", disk); err2 != nil {
+				return fmt.Errorf("sfdisk: %w", err2)
+			}
+			// --no-reread means the kernel still holds the OLD partition table.
+			// Force a re-read with partprobe so subsequent mkfs calls see the
+			// correct partition sizes. Without this, mkfs operates on stale
+			// (possibly much smaller) partition boundaries → "no space left".
+			// If the re-read fails the old boundaries are still live, so stop.
+			fmt.Fprintf(os.Stdout, "+ partprobe %s (force kernel partition table re-read after --no-reread)\n", disk)
+			time.Sleep(500 * time.Millisecond)
+			if err := runner.Run("partprobe", disk); err != nil {
+				return fmt.Errorf("the new partition table is on %s but the kernel could not re-read it, "+
+					"so nothing was formatted; close every program that uses the disk (or reboot) and run the install again: %w", disk, err)
+			}
+		case rereadFailed:
+			return fmt.Errorf("sfdisk: %w (not retried with --force: %s)", err, why)
 		}
-		// --no-reread means the kernel still holds the OLD partition table.
-		// Force a re-read with partprobe so subsequent mkfs calls see the
-		// correct partition sizes. Without this, mkfs operates on stale
-		// (possibly much smaller) partition boundaries → "no space left".
-		fmt.Fprintf(os.Stdout, "+ partprobe %s (force kernel partition table re-read after --no-reread)\n", disk)
-		time.Sleep(500 * time.Millisecond)
-		_ = runner.Run("partprobe", disk)
-		_ = runner.Run("udevadm", "settle")
 	}
 
-	// Brief sleep then settle — mirrors bootc's approach.
+	// Brief sleep then settle — mirrors bootc's approach. A settle that fails
+	// means udev has not finished creating the partition nodes.
 	time.Sleep(200 * time.Millisecond)
-	_ = runner.Run("udevadm", "settle")
+	if err := runner.Run("udevadm", "settle"); err != nil {
+		return fmt.Errorf("waiting for udev after partitioning %s: %w", disk, err)
+	}
 
 	// Loop devices reject the BLKRRPART ioctl that sfdisk uses to notify the
 	// kernel.  Re-attach with --partscan so /dev/loopNpM nodes are created.
@@ -243,6 +251,207 @@ func partition(disk, script string) error {
 		}
 	}
 
+	if err := verifyLayout(disk, script); err != nil {
+		return fmt.Errorf("partition layout on %s could not be verified, so nothing was formatted: %w", disk, err)
+	}
+	return nil
+}
+
+type rereadResult int
+
+const (
+	rereadOK     rereadResult = iota // the kernel re-read the table: not in use
+	rereadBusy                       // EBUSY: the disk is in use
+	rereadFailed                     // anything else
+)
+
+// rereadState asks the kernel to re-read disk's current partition table and
+// classifies the answer. `blockdev --rereadpt` issues the same BLKRRPART
+// ioctl sfdisk uses for its in-use check, and its message carries the errno.
+// sfdisk's own failure cannot be classified: runner.Run streams the command's
+// output instead of returning it.
+func rereadState(disk string) (rereadResult, string) {
+	_, err := runner.Output("blockdev", "--rereadpt", disk)
+	if err == nil {
+		return rereadOK, "the kernel no longer reports the disk as in use"
+	}
+	msg := err.Error()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		msg += ": " + strings.TrimSpace(string(exit.Stderr))
+	}
+	if strings.Contains(strings.ToLower(msg), "device or resource busy") {
+		return rereadBusy, "the kernel reports the disk as in use"
+	}
+	return rereadFailed, "the in-use check failed for another reason: " + msg
+}
+
+// plannedPart is one partition line of an sfdisk script.
+type plannedPart struct {
+	name  string
+	bytes uint64 // 0: the partition takes the rest of the disk
+}
+
+// parsePlan reads the partition lines of the sfdisk scripts this package
+// writes (`size=2GiB, type=uefi, name="EFI-SYSTEM"`).
+func parsePlan(script string) ([]plannedPart, error) {
+	units := []struct {
+		suffix string
+		mult   uint64
+	}{{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"GiB", 1 << 30}, {"TiB", 1 << 40}}
+	var plan []plannedPart
+	for _, line := range strings.Split(script, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || !strings.Contains(line, "=") {
+			continue // blank, or a header such as "label: gpt"
+		}
+		var p plannedPart
+		for _, field := range strings.Split(line, ",") {
+			k, v, _ := strings.Cut(strings.TrimSpace(field), "=")
+			switch strings.TrimSpace(k) {
+			case "name":
+				p.name = strings.Trim(strings.TrimSpace(v), `"`)
+			case "size":
+				v = strings.TrimSpace(v)
+				parsed := false
+				for _, u := range units {
+					if num, ok := strings.CutSuffix(v, u.suffix); ok {
+						n, err := strconv.ParseUint(num, 10, 64)
+						if err != nil {
+							return nil, fmt.Errorf("unreadable size %q in the partition plan", v)
+						}
+						p.bytes, parsed = n*u.mult, true
+					}
+				}
+				if !parsed {
+					return nil, fmt.Errorf("unreadable size %q in the partition plan", v)
+				}
+			}
+		}
+		plan = append(plan, p)
+	}
+	if len(plan) == 0 {
+		return nil, errors.New("the partition plan is empty")
+	}
+	return plan, nil
+}
+
+// sysBlockPath is where the kernel publishes its block devices. Overridden in
+// tests.
+var sysBlockPath = "/sys/class/block"
+
+// SetSysBlockPath overrides the sysfs block directory. For testing only.
+func SetSysBlockPath(p string) { sysBlockPath = p }
+
+// kernelSectors reads one of the kernel's per-partition values (start, size),
+// which sysfs always gives in 512-byte sectors. The path goes through the
+// disk's own directory, so a value is found only for a partition whose parent
+// is this disk.
+func kernelSectors(diskName, partName, attr string) (uint64, error) {
+	raw, err := os.ReadFile(filepath.Join(sysBlockPath, diskName, partName, attr))
+	if err != nil {
+		return 0, err
+	}
+	return strconv.ParseUint(strings.TrimSpace(string(raw)), 10, 64)
+}
+
+// verifyLayout checks, before anything is formatted, that
+//
+//  1. the table on disk (sfdisk --json) has the planned partitions, in order,
+//     with the planned names and sizes and without overlap; and
+//  2. the kernel has, for each of them, a partition of this disk with the
+//     same start and size, and has no leftover partition from an older table.
+//
+// Any difference is an error: a stale kernel view means mkfs would write to
+// the old boundaries.
+func verifyLayout(disk, script string) error {
+	plan, err := parsePlan(script)
+	if err != nil {
+		return err
+	}
+	out, err := runner.Output("sfdisk", "--json", disk)
+	if err != nil {
+		return fmt.Errorf("reading the partition table back: %w", err)
+	}
+	var parsed struct {
+		Table struct {
+			SectorSize uint64 `json:"sectorsize"`
+			Partitions []struct {
+				Node  string `json:"node"`
+				Start uint64 `json:"start"`
+				Size  uint64 `json:"size"`
+				Name  string `json:"name"`
+			} `json:"partitions"`
+		} `json:"partitiontable"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return fmt.Errorf("parsing sfdisk --json output: %w", err)
+	}
+	table := parsed.Table
+	if table.SectorSize == 0 {
+		table.SectorSize = 512 // util-linux before 2.35 does not print it
+	}
+	if len(table.Partitions) != len(plan) {
+		return fmt.Errorf("the table on disk has %d partition(s), the plan has %d", len(table.Partitions), len(plan))
+	}
+
+	// sysfs names partitions after the kernel name, which an alias such as
+	// /dev/disk/by-id/… does not carry.
+	kdisk := disk
+	if real, err := filepath.EvalSymlinks(disk); err == nil {
+		kdisk = real
+	}
+	diskName := filepath.Base(kdisk)
+
+	var prevEnd uint64
+	for i, want := range plan {
+		got := table.Partitions[i]
+		num := i + 1
+		startBytes, sizeBytes := got.Start*table.SectorSize, got.Size*table.SectorSize
+		if got.Name != want.name {
+			return fmt.Errorf("partition %d on disk is named %q, the plan says %q", num, got.Name, want.name)
+		}
+		if got.Size == 0 || startBytes < prevEnd {
+			return fmt.Errorf("partition %d on disk is empty or overlaps partition %d (start %d, size %d sectors)", num, num-1, got.Start, got.Size)
+		}
+		if want.bytes != 0 && sizeBytes != want.bytes {
+			return fmt.Errorf("partition %d on disk is %d bytes, the plan says %d", num, sizeBytes, want.bytes)
+		}
+		prevEnd = startBytes + sizeBytes
+
+		partName := filepath.Base(PartName(kdisk, num))
+		kStart, err := kernelSectors(diskName, partName, "start")
+		if err != nil {
+			return fmt.Errorf("the kernel has no partition %s on %s (%v); it has not read the new table", partName, diskName, err)
+		}
+		kSize, err := kernelSectors(diskName, partName, "size")
+		if err != nil {
+			return fmt.Errorf("the kernel reports no size for %s: %v", partName, err)
+		}
+		if kStart*512 != startBytes || kSize*512 != sizeBytes {
+			return fmt.Errorf("the kernel still has an old layout for %s: it reports start %d, size %d bytes; the table on disk says start %d, size %d bytes. "+
+				"Close every program that uses the disk (or reboot) and run the install again",
+				partName, kStart*512, kSize*512, startBytes, sizeBytes)
+		}
+	}
+
+	// A partition the kernel still has beyond the plan comes from the old
+	// table.
+	entries, err := os.ReadDir(filepath.Join(sysBlockPath, diskName))
+	if err != nil {
+		return fmt.Errorf("listing the kernel's partitions of %s: %w", diskName, err)
+	}
+	prefix := filepath.Base(PartName(kdisk, 0))
+	prefix = prefix[:len(prefix)-1] // "sda" or "nvme0n1p"
+	for _, e := range entries {
+		num, ok := strings.CutPrefix(e.Name(), prefix)
+		if !ok {
+			continue
+		}
+		if n, err := strconv.Atoi(num); err == nil && n > len(plan) {
+			return fmt.Errorf("the kernel still has partition %s from the previous table on %s", e.Name(), diskName)
+		}
+	}
 	return nil
 }
 
@@ -344,8 +553,223 @@ func loopRescan(disk string) error {
 	return nil
 }
 
+// blockNode is one entry of `lsblk -J -o NAME,PKNAME,MAJ:MIN,TYPE`.
+type blockNode struct {
+	Name     string      `json:"name"`
+	PKName   string      `json:"pkname"`
+	MajMin   string      `json:"maj:min"`
+	Type     string      `json:"type"`
+	Children []blockNode `json:"children"`
+}
+
+// blockSet is the selected disk and every block device stacked on it:
+// partitions, LUKS and other device-mapper mappings, LVM logical volumes.
+// It is built from the kernel's own parent/child records, never from device
+// names, so /dev/nvme0n1 does not take /dev/nvme0n10 with it (#357).
+type blockSet struct {
+	disk   string            // the path the caller selected
+	root   blockNode         // the selected disk as lsblk reports it
+	names  map[string]string // lsblk NAME → MAJ:MIN
+	majmin map[string]string // MAJ:MIN → lsblk NAME
+	// order lists every member's MAJ:MIN deepest-first, so a mapping is
+	// removed before the device it sits on.
+	order []string
+}
+
+func (b *blockSet) hasMajMin(mm string) bool { _, ok := b.majmin[mm]; return ok }
+
+// hasType reports whether any member has the given lsblk TYPE.
+func (b *blockSet) hasType(typ string) bool {
+	var walk func(n blockNode) bool
+	walk = func(n blockNode) bool {
+		if n.Type == typ {
+			return true
+		}
+		for _, c := range n.Children {
+			if walk(c) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(b.root)
+}
+
+// ownsDevicePath reports whether a device path from /proc/mounts names a
+// member of the set. The match is on the whole name: /dev/<name> for disks
+// and partitions, /dev/mapper/<name> for device-mapper devices.
+func (b *blockSet) ownsDevicePath(dev string) bool {
+	for _, prefix := range []string{"/dev/mapper/", "/dev/"} {
+		if name, ok := strings.CutPrefix(dev, prefix); ok && !strings.Contains(name, "/") {
+			if _, member := b.names[name]; member {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// resolveBlockSet asks the host's lsblk for the block-device tree and returns
+// the selected disk with its descendants. It fails closed: when lsblk fails,
+// its output cannot be read, the disk is not in it, or a device stacked on
+// the disk also sits on a device outside it (an md array, a multipath map, a
+// logical volume that spans disks), it returns an error and the caller must
+// not tear anything down.
+func resolveBlockSet(disk string) (*blockSet, error) {
+	out, err := runner.Output("lsblk", "-J", "-o", "NAME,PKNAME,MAJ:MIN,TYPE")
+	if err != nil {
+		return nil, fmt.Errorf("cannot establish which block devices belong to %s: lsblk: %w", disk, err)
+	}
+	var parsed struct {
+		Blockdevices []blockNode `json:"blockdevices"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		return nil, fmt.Errorf("cannot establish which block devices belong to %s: parsing lsblk output: %w", disk, err)
+	}
+
+	var normalize func(nodes []blockNode)
+	normalize = func(nodes []blockNode) {
+		for i := range nodes {
+			nodes[i].MajMin = strings.TrimSpace(nodes[i].MajMin)
+			normalize(nodes[i].Children)
+		}
+	}
+	normalize(parsed.Blockdevices)
+
+	// The caller may pass an alias (/dev/disk/by-id/…); lsblk reports kernel
+	// names. Accept either spelling, but only as a whole-name match.
+	want := map[string]bool{filepath.Base(disk): true}
+	if real, err := filepath.EvalSymlinks(disk); err == nil {
+		want[filepath.Base(real)] = true
+	}
+
+	var root *blockNode
+	var find func(nodes []blockNode)
+	find = func(nodes []blockNode) {
+		for i := range nodes {
+			n := &nodes[i]
+			if want[n.Name] && n.MajMin != "" {
+				if root == nil {
+					root = n
+				}
+				continue
+			}
+			find(n.Children)
+		}
+	}
+	find(parsed.Blockdevices)
+	if root == nil {
+		return nil, fmt.Errorf("cannot establish which block devices belong to %s: lsblk does not list it", disk)
+	}
+
+	set := &blockSet{disk: disk, root: *root, names: map[string]string{}, majmin: map[string]string{}}
+	var bad error
+	var collect func(n blockNode)
+	collect = func(n blockNode) {
+		for _, c := range n.Children {
+			collect(c)
+		}
+		if n.Name == "" || n.MajMin == "" {
+			bad = fmt.Errorf("cannot establish which block devices belong to %s: lsblk reported a device without a name or a major:minor number", disk)
+			return
+		}
+		if _, seen := set.majmin[n.MajMin]; !seen {
+			set.order = append(set.order, n.MajMin)
+		}
+		set.majmin[n.MajMin] = n.Name
+		set.names[n.Name] = n.MajMin
+	}
+	collect(*root)
+	if bad != nil {
+		return nil, bad
+	}
+
+	// Anything stacked on the disk that lsblk also reaches without passing
+	// through the disk is shared with other storage.
+	var shared []string
+	seenShared := map[string]bool{}
+	var outside func(nodes []blockNode)
+	outside = func(nodes []blockNode) {
+		for _, n := range nodes {
+			if n.MajMin == root.MajMin {
+				continue // the selected disk; its subtree is the set
+			}
+			if set.hasMajMin(n.MajMin) && !seenShared[n.MajMin] {
+				seenShared[n.MajMin] = true
+				shared = append(shared, fmt.Sprintf("%s (%s)", n.Name, n.MajMin))
+			}
+			outside(n.Children)
+		}
+	}
+	outside(parsed.Blockdevices)
+	if len(shared) > 0 {
+		return nil, fmt.Errorf("refusing to prepare %s: %s also uses a device that is not on this disk; "+
+			"stop it or remove this disk from it first", disk, strings.Join(shared, ", "))
+	}
+	return set, nil
+}
+
+// volumeGroupsOn returns the LVM volume groups whose physical volumes are all
+// members of set. A group that also has a physical volume elsewhere is an
+// error: deactivating it would take storage on another disk offline.
+func volumeGroupsOn(set *blockSet) ([]string, error) {
+	out, err := runner.Output("pvs", "--noheadings", "--separator", "|", "-o", "pv_name,vg_name,pv_major,pv_minor")
+	if err != nil {
+		// No lvm2 on the host means no volume groups. But when lsblk already
+		// shows a logical volume on this disk, LVM is in use and its layout
+		// must be known before anything is torn down.
+		if set.hasType("lvm") {
+			return nil, fmt.Errorf("cannot establish which volume groups use %s: pvs: %w", set.disk, err)
+		}
+		fmt.Fprintf(os.Stdout, "+ pvs unavailable (%v); no LVM on %s to deactivate\n", err, set.disk)
+		return nil, nil
+	}
+	inside := map[string][]string{}
+	outside := map[string][]string{}
+	var order []string
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Split(strings.TrimSpace(line), "|")
+		if len(f) != 4 {
+			continue
+		}
+		pv, vg := strings.TrimSpace(f[0]), strings.TrimSpace(f[1])
+		if vg == "" {
+			continue // an orphan physical volume belongs to no group
+		}
+		mm := strings.TrimSpace(f[2]) + ":" + strings.TrimSpace(f[3])
+		if _, known := inside[vg]; !known {
+			if _, known := outside[vg]; !known {
+				order = append(order, vg)
+			}
+		}
+		if set.hasMajMin(mm) {
+			inside[vg] = append(inside[vg], pv)
+		} else {
+			outside[vg] = append(outside[vg], pv)
+		}
+	}
+	var vgs []string
+	for _, vg := range order {
+		if len(inside[vg]) == 0 {
+			continue
+		}
+		if len(outside[vg]) > 0 {
+			return nil, fmt.Errorf("refusing to prepare %s: volume group %s also uses %s, which is not on this disk; "+
+				"remove this disk from the group (vgreduce) or pick a different disk",
+				set.disk, vg, strings.Join(outside[vg], ", "))
+		}
+		vgs = append(vgs, vg)
+	}
+	return vgs, nil
+}
+
 // unmountAll aggressively releases all kernel and userspace references to disk
 // so that sfdisk can safely repartition it.
+//
+// It first resolves the exact set of block devices that belong to disk
+// (resolveBlockSet) and the volume groups that live only on it
+// (volumeGroupsOn). Every teardown command below acts on that set and on
+// nothing else; if the set cannot be established, nothing is torn down.
 //
 // Flash drives and USB disks are managed by udisksd, which holds an open FD
 // on the block device even after umount -l. sfdisk detects that FD and refuses
@@ -362,11 +786,19 @@ func loopRescan(disk string) error {
 //  6. blockdev --flushbufs — flush pending I/O so the kernel can drop references.
 //  7. udevadm settle    — wait for udev/udisksd to release device references.
 func unmountAll(disk string) error {
+	set, err := resolveBlockSet(disk)
+	if err != nil {
+		return err
+	}
+	vgs, err := volumeGroupsOn(set)
+	if err != nil {
+		return err
+	}
+
 	data, err := os.ReadFile(procMountsPath)
 	if err != nil {
 		return fmt.Errorf("reading /proc/mounts: %w", err)
 	}
-	base := filepath.Base(disk) // e.g. "sda"
 	for _, line := range strings.Split(string(data), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
@@ -374,8 +806,7 @@ func unmountAll(disk string) error {
 		}
 		dev := fields[0] // e.g. /dev/sda1
 		mp := fields[1]  // e.g. /run/media/james/Yellowfin_Live
-		devBase := filepath.Base(dev)
-		if !strings.HasPrefix(devBase, base) {
+		if !set.ownsDevicePath(dev) {
 			continue
 		}
 
@@ -400,7 +831,7 @@ func unmountAll(disk string) error {
 	// disk. Without this, the LVM/dm layer holds the disk open and sfdisk's
 	// BLKRRPART ioctl fails, forcing --no-reread and leaving the kernel with
 	// a stale (potentially much smaller) partition table.
-	deactivateLVM(disk)
+	deactivateLVM(set, vgs)
 
 	// Kill any processes still holding FDs open on any partition of this disk.
 	// fuser exits non-zero when no processes are found — that is fine.
@@ -432,51 +863,48 @@ func isNBD(disk string) bool {
 	return strings.HasPrefix(filepath.Base(disk), "nbd")
 }
 
-// deactivateLVM removes LVM volume groups and device-mapper (dm-crypt, LUKS)
-// devices that are backed by partitions of disk. This is required before
-// repartitioning a disk that previously held LVM or LUKS — the device-mapper
-// layer keeps an open reference on the underlying block device, causing sfdisk
-// to fail with "disk is currently in use" even after all filesystems are
-// unmounted.
-func deactivateLVM(disk string) {
-	base := filepath.Base(disk) // e.g. "sda"
-
-	// Step 1: deactivate any LVM VGs that contain a PV on this disk.
-	// `pvs` lists physical volumes; we match those whose PV name starts with
-	// the disk path (e.g. /dev/sda1, /dev/sda2 ...).
-	pvsName, pvsArgs := runner.HostArgs("pvs", []string{"--noheadings", "-o", "pv_name,vg_name"})
-	pvOut, err := runner.WrappedCommand(pvsName, pvsArgs...).Output()
-	if err == nil {
-		for _, line := range strings.Split(string(pvOut), "\n") {
-			fields := strings.Fields(line)
-			if len(fields) != 2 {
-				continue
-			}
-			pvName, vgName := fields[0], fields[1]
-			if strings.HasPrefix(pvName, disk) && vgName != "" {
-				fmt.Fprintf(os.Stdout, "+ vgchange -an %s (LVM VG on %s)\n", vgName, pvName)
-				_ = runner.Run("vgchange", "-an", vgName)
-			}
-		}
+// deactivateLVM deactivates the volume groups in vgs and removes the
+// device-mapper devices (dm-crypt, LUKS, leftover LVs) that are members of
+// set. This is required before repartitioning a disk that previously held LVM
+// or LUKS — the device-mapper layer keeps an open reference on the underlying
+// block device, causing sfdisk to fail with "disk is currently in use" even
+// after all filesystems are unmounted.
+//
+// Both lists come from unmountAll's verified block set. A mapper is removed
+// only when the kernel's current `dmsetup ls` shows it under the same name
+// and the same major:minor number that lsblk reported as a descendant of the
+// disk; a name or a number that merely looks similar is never enough.
+func deactivateLVM(set *blockSet, vgs []string) {
+	for _, vg := range vgs {
+		fmt.Fprintf(os.Stdout, "+ vgchange -an %s (LVM VG on %s)\n", vg, set.disk)
+		_ = runner.Run("vgchange", "-an", vg)
 	}
 
-	// Step 2: remove any device-mapper devices (LUKS, dm-crypt, LVM LVs)
-	// whose block-device dependency includes a partition of this disk.
-	// `dmsetup deps -o devname` prints the underlying devices for each mapper.
-	lsName, lsArgs := runner.HostArgs("dmsetup", []string{"ls"})
-	dmList, err := runner.WrappedCommand(lsName, lsArgs...).Output()
-	if err == nil {
-		for _, line := range strings.Split(string(dmList), "\n") {
-			if strings.TrimSpace(line) == "" {
-				continue
-			}
-			dmName := strings.Fields(line)[0]
-			depsName, depsArgs := runner.HostArgs("dmsetup", []string{"deps", "-o", "devname", dmName})
-			deps, err := runner.WrappedCommand(depsName, depsArgs...).Output()
-			if err == nil && strings.Contains(string(deps), base) {
-				fmt.Fprintf(os.Stdout, "+ dmsetup remove --force %s (backed by %s)\n", dmName, disk)
-				_ = runner.Run("dmsetup", "remove", "--force", dmName)
-			}
+	dmList, err := runner.Output("dmsetup", "ls")
+	if err != nil {
+		return
+	}
+	// `dmsetup ls` prints "name (253:0)"; older releases print "(253, 0)".
+	live := map[string]string{} // MAJ:MIN → mapper name
+	for _, line := range strings.Split(string(dmList), "\n") {
+		open := strings.LastIndex(line, "(")
+		closeIdx := strings.LastIndex(line, ")")
+		if open < 0 || closeIdx < open {
+			continue
 		}
+		name := strings.TrimSpace(line[:open])
+		nums := strings.FieldsFunc(line[open+1:closeIdx], func(r rune) bool { return r == ':' || r == ',' || r == ' ' })
+		if name == "" || len(nums) != 2 {
+			continue
+		}
+		live[nums[0]+":"+nums[1]] = name
+	}
+	for _, mm := range set.order {
+		name, ok := live[mm]
+		if !ok || set.majmin[mm] != name || mm == set.root.MajMin {
+			continue
+		}
+		fmt.Fprintf(os.Stdout, "+ dmsetup remove --force %s (%s, backed by %s)\n", name, mm, set.disk)
+		_ = runner.Run("dmsetup", "remove", "--force", name)
 	}
 }

@@ -6,6 +6,11 @@
       "field": "encryption.type",
       "code": "encryption_unsupported_on_zfs",
       "message": "ZFS filesystem does not support LUKS encryption in this version"
+    },
+    {
+      "field": "filesystem",
+      "code": "zfs_experimental",
+      "message": "filesystem \"zfs\" is experimental: no VM test installs and boots it. Add \"experimental\": [\"zfs\"] to the recipe to accept that, or use xfs, ext4 or btrfs"
     }
   ]
 }

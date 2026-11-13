@@ -119,21 +119,37 @@ func UmountRecursive(path string) error {
 	return runner.Run("umount", "-R", path)
 }
 
-// SetupBtrfsSubvolumes creates @, @home, and @snapshots subvolumes on a
-// freshly-formatted btrfs device, then remounts the target using subvol=@
-// with zstd compression.
+// BtrfsRootSubvolume is the subvolume a `btrfsSubvolumes` install puts the
+// root in, and BtrfsSubvolumeMountOptions the options that select it. The
+// recipe records the same options as the kernel's rootflags
+// (recipe.RootMountOptions); the two must not drift apart.
+const (
+	BtrfsRootSubvolume         = "@"
+	BtrfsSubvolumeMountOptions = "subvol=" + BtrfsRootSubvolume + ",compress=zstd:1"
+)
+
+// SetupBtrfsSubvolumes creates the @ subvolume on a freshly-formatted btrfs
+// device, then remounts the target using subvol=@ with zstd compression.
+//
+// It creates @ and nothing else. It used to create @home and @snapshots
+// too, and nothing ever mounted them: no fstab line, no kernel argument, no
+// unit. The installed system's /home is /var/home inside @ (bootc owns that
+// layout), so the two subvolumes sat empty at the top level of the
+// filesystem, and "btrfs with subvolumes" promised a separate home that did
+// not exist (tuna-os/fisherman#416). @ alone is what the option really
+// gives: the system in a subvolume, so the top level stays free for
+// snapshots a user or a tool makes later.
 func SetupBtrfsSubvolumes(dev, target string) error {
-	// Bare mount to create subvolumes.
+	// Bare mount to create the subvolume.
 	if err := Mount(dev, target, ""); err != nil {
 		return fmt.Errorf("initial btrfs mount: %w", err)
 	}
 
-	for _, sv := range []string{"@", "@home", "@snapshots"} {
-		progress.Info(fmt.Sprintf("Creating btrfs subvolume %s", sv))
-		if err := runner.Run("btrfs", "subvolume", "create", target+"/"+sv); err != nil {
-			_ = Umount(target)
-			return fmt.Errorf("create subvolume %s: %w", sv, err)
-		}
+	sv := BtrfsRootSubvolume
+	progress.Info(fmt.Sprintf("Creating btrfs subvolume %s", sv))
+	if err := runner.Run("btrfs", "subvolume", "create", target+"/"+sv); err != nil {
+		_ = Umount(target)
+		return fmt.Errorf("create subvolume %s: %w", sv, err)
 	}
 
 	if err := Umount(target); err != nil {
@@ -141,7 +157,7 @@ func SetupBtrfsSubvolumes(dev, target string) error {
 	}
 
 	// Remount with the @ subvolume and transparent compression.
-	return Mount(dev, target, "subvol=@,compress=zstd:1")
+	return Mount(dev, target, BtrfsSubvolumeMountOptions)
 }
 
 // FormatBoot formats a partition as ext4 for use as /boot.
@@ -166,6 +182,34 @@ func MountBoot(rootMount, bootPart string) error {
 //  2. remount ro — flushes writeback and locks the deployment read-only
 //  3. fsfreeze/thaw — flushes the journal so the first boot is clean
 func FinalizeFilesystem(path string) error {
+	return FinalizeFilesystemWith(path, FreezeHooks{})
+}
+
+// FreezeHooks lets the caller own the freeze FinalizeFilesystemWith takes.
+// A frozen filesystem stays frozen when the fsfreeze process has exited: the
+// kernel holds the superblock until someone thaws it, and a frozen
+// filesystem cannot be unmounted cleanly or have its LUKS mapping closed. So
+// the freeze is a resource like a mount, and whoever tears the install down
+// on a cancel or a failure must be able to release it. All are optional.
+type FreezeHooks struct {
+	// WillFreeze is called before `fsfreeze -f` starts. From here on the
+	// filesystem may be frozen, whatever happens to that process.
+	WillFreeze func(path string)
+	// Froze is called when `fsfreeze -f` has returned success.
+	Froze func(path string)
+	// Thaw replaces the `fsfreeze -u` call, so the owner can make the thaw
+	// idempotent across this function and its own teardown.
+	Thaw func(path string) error
+}
+
+// Thaw runs `fsfreeze -u`: the one fsfreeze call that may still start after
+// runner.Halt.
+func Thaw(path string) error {
+	return runner.Run("fsfreeze", "-u", path)
+}
+
+// FinalizeFilesystemWith is FinalizeFilesystem with ownership hooks.
+func FinalizeFilesystemWith(path string, hooks FreezeHooks) error {
 	progress.Info(fmt.Sprintf("fstrim %s", path))
 	if err := runner.Run("fstrim", "--quiet-unsupported", "-v", path); err != nil {
 		return fmt.Errorf("fstrim: %w", err)
@@ -175,10 +219,20 @@ func FinalizeFilesystem(path string) error {
 		return fmt.Errorf("remount ro: %w", err)
 	}
 	progress.Info(fmt.Sprintf("fsfreeze %s", path))
+	if hooks.WillFreeze != nil {
+		hooks.WillFreeze(path)
+	}
 	if err := runner.Run("fsfreeze", "-f", path); err != nil {
 		return fmt.Errorf("fsfreeze: %w", err)
 	}
-	if err := runner.Run("fsfreeze", "-u", path); err != nil {
+	if hooks.Froze != nil {
+		hooks.Froze(path)
+	}
+	thaw := hooks.Thaw
+	if thaw == nil {
+		thaw = Thaw
+	}
+	if err := thaw(path); err != nil {
 		return fmt.Errorf("fsfreeze -u: %w", err)
 	}
 	return nil

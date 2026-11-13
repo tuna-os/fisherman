@@ -27,18 +27,19 @@ on:
         required: false
         type: string
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
 
 jobs:
   cut:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag_push_triggers_publish: ${{ steps.token.outputs.is_pat }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1  # zizmor: ignore[artipacked] later steps push the tag with these credentials and open a PR with gh
         with:
           fetch-depth: 0
           # Use a PAT so the tag push can trigger release-publish.yml
@@ -182,7 +183,7 @@ jobs:
   publish:
     needs: cut
     if: needs.cut.outputs.tag_push_triggers_publish != 'true'
-    uses: ./.github/workflows/release-publish.yml
+    uses: $/.github/workflows/release-publish.yml
     with:
       tag: ${{ needs.cut.outputs.version }}
     permissions:

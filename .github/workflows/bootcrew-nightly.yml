@@ -15,7 +15,9 @@ jobs:
     outputs:
       matrix: ${{ steps.read-matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Parse image matrix
         id: read-matrix
@@ -31,9 +33,11 @@ jobs:
   unit-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
@@ -57,15 +61,17 @@ jobs:
         image: ${{ fromJson(needs.setup.outputs.matrix) }}
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
 
       - name: Install tools
-        uses: ./.github/actions/setup-host-tools
+        uses: $/.github/actions/setup-host-tools
         with:
           packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq binutils
 
@@ -112,12 +118,15 @@ jobs:
           echo "bootloader=$BOOTLOADER: expect $PARTS partitions, root on p$ROOT_NUM"
 
       - name: Generate recipe
+        env:
+          LOOPDEV: ${{ steps.loopdev.outputs.loopdev }}
+          BOOTLOADER: ${{ steps.layout.outputs.bootloader }}
         run: |
           FLATPAKS='${{ toJSON(matrix.image.flatpaks) }}'
 
           cat > /tmp/recipe.json <<EOF
           {
-            "disk": "${{ steps.loopdev.outputs.loopdev }}",
+            "disk": "$LOOPDEV",
             "filesystem": "${{ matrix.image.filesystem }}",
             "composeFsBackend": ${{ matrix.image.composefs_backend }},
             "unifiedStorage": ${{ matrix.image.unified_storage }},
@@ -125,7 +134,7 @@ jobs:
             "encryption": {"type": "none"},
             "image": "${{ matrix.image.image }}",
             "hostname": "ci-test",
-            "bootloader": "${{ steps.layout.outputs.bootloader }}",
+            "bootloader": "$BOOTLOADER",
             "flatpaks": $FLATPAKS
           }
           EOF
@@ -137,11 +146,14 @@ jobs:
         run: sudo /tmp/fisherman /tmp/recipe.json
 
       - name: Verify installation
+        env:
+          LOOPDEV: ${{ steps.loopdev.outputs.loopdev }}
+          BOOTLOADER: ${{ steps.layout.outputs.bootloader }}
+          PARTS: ${{ steps.layout.outputs.parts }}
+          BOOT_NUM: ${{ steps.layout.outputs.boot_num }}
+          ROOT_NUM: ${{ steps.layout.outputs.root_num }}
         run: |
-          LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
           COMPOSEFS="${{ matrix.image.composefs_backend }}"
-          BOOTLOADER="${{ steps.layout.outputs.bootloader }}"
-          PARTS="${{ steps.layout.outputs.parts }}"
 
           LABEL_COUNT=$(sudo lsblk -o LABEL "$LOOPDEV" | grep -cE 'EFI-SYSTEM|boot|root' || true)
           if [ "$LABEL_COUNT" -ne "$PARTS" ]; then
@@ -163,11 +175,11 @@ jobs:
           fi
 
           # grub2: the ext4 /boot (p2); systemd: the ESP (p1), which holds the kernels.
-          BOOT_PART="${LOOPDEV}p${{ steps.layout.outputs.boot_num }}"
+          BOOT_PART="${LOOPDEV}p${BOOT_NUM}"
           VERIFY_DIR=$(mktemp -d)
           sudo mount "$BOOT_PART" "$VERIFY_DIR"
 
-          ROOT_PART="${LOOPDEV}p${{ steps.layout.outputs.root_num }}"
+          ROOT_PART="${LOOPDEV}p${ROOT_NUM}"
           ROOT_DIR=$(mktemp -d)
           sudo mount "$ROOT_PART" "$ROOT_DIR"
 
@@ -222,9 +234,12 @@ jobs:
           echo "PASS: ${{ matrix.image.name }}"
 
       - name: Patch serial console into bootloader entries
+        env:
+          LOOPDEV: ${{ steps.loopdev.outputs.loopdev }}
+          BOOTLOADER: ${{ steps.layout.outputs.bootloader }}
+          ROOT_NUM: ${{ steps.layout.outputs.root_num }}
         run: |
-          LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
-          ROOT_DEV="/dev/vda${{ steps.layout.outputs.root_num }}"
+          ROOT_DEV="/dev/vda${ROOT_NUM}"
           patch_entries() {
             local part="$1" label="$2"
             local MNT
@@ -281,13 +296,14 @@ jobs:
             rmdir "$MNT"
           }
           patch_entries "${LOOPDEV}p1" "EFI"
-          if [ "${{ steps.layout.outputs.bootloader }}" = "grub2" ]; then
+          if [ "$BOOTLOADER" = "grub2" ]; then
             patch_entries "${LOOPDEV}p2" "boot"
           fi
 
       - name: Boot verification
+        env:
+          LOOPDEV: ${{ steps.loopdev.outputs.loopdev }}
         run: |
-          LOOPDEV="${{ steps.loopdev.outputs.loopdev }}"
           IMAGE_NAME="${{ matrix.image.name }}"
           LOG="/tmp/boot-$(printf '%s' "$IMAGE_NAME" | tr -cs 'a-zA-Z0-9_-' '_').log"
 
@@ -340,7 +356,7 @@ jobs:
 
       - name: Upload boot logs on failure
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: boot-logs-nightly-${{ matrix.image.name }}
           path: /tmp/boot-*.log
@@ -348,11 +364,18 @@ jobs:
 
       - name: Cleanup
         if: always()
+        env:
+          LOOPDEV: ${{ steps.loopdev.outputs.loopdev }}
+          TMPFILE: ${{ steps.loopdev.outputs.tmpfile }}
         run: |
-          sudo losetup -d "${{ steps.loopdev.outputs.loopdev }}" || true
-          rm -f "${{ steps.loopdev.outputs.tmpfile }}" || true
+          sudo losetup -d "$LOOPDEV" || true
+          rm -f "$TMPFILE" || true
 
       - name: Report result to job summary
         if: always()
+        env:
+          NAME: ${{ matrix.image.name }}
+          ADVISORY: ${{ matrix.image.nightly_advisory && ' (advisory)' || '' }}
+          STATUS: ${{ job.status }}
         run: |
-          echo "| ${{ matrix.image.name }}${{ matrix.image.nightly_advisory && ' (advisory)' || '' }} | ${{ job.status }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ${NAME}${ADVISORY} | ${STATUS} |" >> "$GITHUB_STEP_SUMMARY"

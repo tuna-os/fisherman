@@ -1,7 +1,9 @@
 package runner
 
 import (
+	"bufio"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +34,27 @@ func TestCheckHalted_RefusesPipelineAllowsTeardown(t *testing.T) {
 		{"bootc", "install"},
 		{"cryptsetup", "luksFormat", "/dev/sda3"},
 		{"cryptsetup", "open", "/dev/sda3", "root"},
+		// A freeze must never start during teardown (#368).
+		{"fsfreeze", "-f", "/mnt"},
+		{"fsfreeze", "--freeze", "/mnt"},
+		{"fsfreeze", "-u", "-f", "/mnt"},
+		{"fsfreeze", "/mnt"},
+		{"fsfreeze"},
+		{"fsfreeze", "-uf", "/mnt"},
+		{"swapon", "/dev/sda4"},
+		// A pool must never be created or changed during teardown (#413).
+		{"zpool", "create", "-f", "rpool", "/dev/sda2"},
+		{"zpool", "set", "cachefile=none", "rpool"},
+		{"zpool"},
+		// Only the removal of the source reuse copy runs (#384): no
+		// copy, no pull, no other image, no force.
+		{"bootc", "image", "copy-to-storage", "--source", "docker://x/y:1", "--target", "localhost/fisherman-reuse:111111111111-0123456789abcdef"},
+		{"podman", "pull", "ghcr.io/x:1"},
+		{"podman", "rmi", "--ignore", "ghcr.io/example/os:stable"},
+		{"podman", "rmi", "--ignore", "localhost/fisherman-reuse"},
+		{"podman", "rmi", "--ignore", "localhost/fisherman-reuse:../x"},
+		{"podman", "rmi", "-f", "localhost/fisherman-reuse:111111111111-0123456789abcdef"},
+		{"podman", "image", "prune", "-a"},
 	}
 	for _, c := range refused {
 		if err := checkHalted(c[0], c[1:]); !errors.Is(err, ErrHalted) {
@@ -46,6 +69,16 @@ func TestCheckHalted_RefusesPipelineAllowsTeardown(t *testing.T) {
 		{"udevadm", "settle"},
 		{"cryptsetup", "luksClose", "x"},
 		{"cryptsetup", "close", "x"},
+		// The thaw of a filesystem frozen in the finalize step (#368), and
+		// the swapoff of swap a manual layout activated (#415).
+		{"fsfreeze", "-u", "/mnt"},
+		{"fsfreeze", "--unfreeze", "/mnt"},
+		{"swapoff", "/dev/sda4"},
+		// The export of the pool the install imported (#413).
+		{"zpool", "export", "rpool"},
+		{"zpool", "export", "-f", "rpool"},
+		// The removal of the source reuse copy (#384).
+		{"podman", "rmi", "--ignore", "localhost/fisherman-reuse:111111111111-0123456789abcdef"},
 	}
 	for _, c := range allowed {
 		if err := checkHalted(c[0], c[1:]); err != nil {
@@ -120,13 +153,39 @@ func TestStopDescendants_StopsGrandchildren(t *testing.T) {
 
 // TestStopDescendants_EscalatesToSIGKILL covers a child that ignores SIGTERM.
 func TestStopDescendants_EscalatesToSIGKILL(t *testing.T) {
-	cmd := exec.Command("sh", "-c", `trap "" TERM; while :; do sleep 1; done`)
+	// The shell says "ready" only after the trap is in place. Waiting for
+	// the process alone is not enough: a SIGTERM that lands before the
+	// trap kills it, nothing needs SIGKILL, and the test fails (seen under
+	// load: "killed 0" after 0.06 s).
+	cmd := exec.Command("sh", "-c", `trap "" TERM; echo ready; while :; do sleep 1; done`)
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("stdout pipe: %v", err)
+	}
 	if err := cmd.Start(); err != nil {
 		t.Skipf("cannot start sh: %v", err)
 	}
 	done := make(chan struct{})
-	go func() { _ = cmd.Wait(); close(done) }()
 	t.Cleanup(func() { _ = cmd.Process.Kill(); <-done })
+	ready := make(chan error, 1)
+	go func() {
+		line, err := bufio.NewReader(out).ReadString('\n')
+		if err == nil && line != "ready\n" {
+			err = errors.New("unexpected output " + line)
+		}
+		ready <- err
+		_, _ = io.Copy(io.Discard, out)
+		_ = cmd.Wait()
+		close(done)
+	}()
+	select {
+	case err := <-ready:
+		if err != nil {
+			t.Fatalf("shell did not report the trap: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("shell did not report the trap within 5s")
+	}
 	waitForDescendants(t, 1)
 
 	start := time.Now()
@@ -169,4 +228,30 @@ func waitGone(t *testing.T, e procEntry) {
 	}
 	_ = syscall.Kill(e.pid, syscall.SIGKILL)
 	t.Fatalf("process %d still alive", e.pid)
+}
+
+// The thaw allowlist must hold for an argv that is already wrapped for the
+// host (WrappedCommand checks the unwrapped form), with or without --env.
+func TestCheckHalted_ThawOnlyThroughHostWrapping(t *testing.T) {
+	t.Cleanup(resetHaltForTest)
+	Halt()
+	allowed := [][]string{
+		{"flatpak-spawn", "--host", "fsfreeze", "-u", "/mnt"},
+		{"flatpak-spawn", "--host", "--env=LANG=C", "fsfreeze", "--unfreeze", "/mnt"},
+	}
+	for _, c := range allowed {
+		if err := checkHalted(unwrapHostArgs(c[0], c[1:])); err != nil {
+			t.Errorf("%v after Halt: thaw refused: %v", c, err)
+		}
+	}
+	refused := [][]string{
+		{"flatpak-spawn", "--host", "fsfreeze", "-f", "/mnt"},
+		{"flatpak-spawn", "--host", "--env=LANG=C", "fsfreeze", "--freeze", "/mnt"},
+		{"flatpak-spawn", "--host", "fsfreeze", "-u", "--freeze", "/mnt"},
+	}
+	for _, c := range refused {
+		if err := checkHalted(unwrapHostArgs(c[0], c[1:])); !errors.Is(err, ErrHalted) {
+			t.Errorf("%v after Halt: got %v, want ErrHalted", c, err)
+		}
+	}
 }

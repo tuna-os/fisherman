@@ -5,8 +5,9 @@ document describes that format and fisherman's exit codes for frontends and
 other consumers.
 
 The emitter is `fisherman/internal/progress/progress.go`. The callers are
-`fisherman/cmd/fisherman/main.go` (steps, errors, completion) and the packages
-under `fisherman/internal/` (substeps and info lines).
+the install phases in `fisherman/cmd/fisherman/` (`orchestrator.go` and the
+`*_phase.go` files: steps, errors, completion) and the packages under
+`fisherman/internal/` (substeps and info lines).
 
 Reference consumer: bootc-installer's
 [`shared/progress/README.md`](https://github.com/tuna-os/bootc-installer/blob/dev/shared/progress/README.md)
@@ -86,7 +87,6 @@ Messages you will see include:
 - `Exporting image to OCI layout for composefs install`, `OCI export complete`
 - `Deploying image`, `Initializing ostree layout`, `Installing bootloader`, `bootc installation complete` (classified from bootc's own output by `ClassifyLine` in `internal/install/bootc.go`)
 - `Copying Flatpak data: 45%`
-- `Pre-generating wallpaper thumbnails`, `Pre-warming system caches for first boot`
 
 `Pulling image: layer N/M` is the one that matters for the bar: the pull is
 most of a cold install.
@@ -107,14 +107,47 @@ report non-fatal problems; the install continues.
 ```
 
 Other examples: `Image pull required (71 layers)`,
-`Image already up to date in local cache`,
+`Source image ghcr.io/example/os:stable: manifest sha256:…, platform manifest sha256:… (linux/amd64); …`,
+`Image found in local cache, no pull needed`,
 `Offline: registry unreachable, using locally cached image`,
 `Writing hostname: <hostname>`,
 `EFI boot entry for installed system: Boot0001`.
 
 Several `info` events can arrive before the first `step` event. The image
-cache check, live-session audio setup and Windows data migration all run
+cache check, a `sourceReuse` copy (with its [`source_reuse`](#source_reuse)
+events), live-session audio setup and Windows data migration all run
 before partitioning.
+
+### `source_reuse`
+
+Progress of a `sourceReuse` acquisition ([SOURCE-REUSE.md](SOURCE-REUSE.md),
+#384): the copy of an image the live host's bootc keeps into
+containers-storage, before the first `step`. Only a recipe with
+`sourceReuse` produces these.
+
+**Fields:**
+- `type` — `"source_reuse"`
+- `version` — `1`; bumped only when a field is removed or renamed or its meaning changes
+- `phase` — `planned`, `copying`, `verified`, `failed` or `released` (string)
+- `digest` — the item's manifest digest, as the recipe names it (string)
+- `platform` — the item's architecture, bootc's spelling (string)
+- `source` — the reference given to `bootc image copy-to-storage --source` (string, credential-free; from `planned` on)
+- `destination` — `containers-storage:localhost/fisherman-reuse:<tag>`, the copy fisherman created (string; from `planned` on)
+- `destination_digest` — the copy's manifest digest (`verified`). bootc re-serialises the layers, so it is not `digest`; the installed system boots this one
+- `estimate` — `planned` (and `failed` after the estimate): `scratch_bytes`, `store_bytes`, `required_bytes` (with the 1 GiB margin), `scratch_free_bytes`, `store_free_bytes`, `same_filesystem`, `files`, `estimate_ms`
+- `measured` — `verified`: `copy_ms`, `scratch_peak_bytes` and `store_peak_bytes` (the largest drop in free space sampled during the copy), `store_bytes` (what the copy still holds), `verify_ms`
+- `code`, `reason` — `failed`: the `source_reuse_*` code of the `error` event that follows, and a finer reason (`ref_moved`, `insufficient_space`, `disk_exhausted`, …); `released`: `reason` is `removed` or `remove_failed`
+- `timestamp`, `elapsed_ms` — as above
+
+**Example:**
+```json
+{"destination":"containers-storage:localhost/fisherman-reuse:111111111111-0123456789abcdef","digest":"sha256:1111111111111111111111111111111111111111111111111111111111111111","elapsed_ms":61210,"estimate":{"estimate_ms":4210,"files":51234,"required_bytes":8053063680,"same_filesystem":true,"scratch_bytes":3221225472,"scratch_free_bytes":60129542144,"store_bytes":3758096384,"store_free_bytes":60129542144},"phase":"planned","platform":"x86_64","source":"docker://ghcr.io/example/os:stable","timestamp":"2026-11-11T10:05:30.123456Z","type":"source_reuse","version":1}
+```
+
+`released` comes from the teardown, after `complete` is decided and before
+it is written on success, or before the `error` event on a failure or
+cancel. A frontend may ignore the whole event type; the `info` lines say the
+same in English.
 
 ### `recovery_key`
 
@@ -148,9 +181,49 @@ fisherman does not pause after this event. The install keeps running, so the
 frontend must hold the key and present it itself, for example on the
 completion screen.
 
+### `receipt`
+
+What the install did with the installation receipt
+([RECEIPT.md](RECEIPT.md#the-receipt-progress-event)). Informational: the
+install goes on whatever it says.
+
+**Fields:**
+- `type` — `"receipt"`
+- `version` — `1` (integer). Fields and reason codes are only added; a new
+  version means a field changed meaning.
+- `written` — the receipt file is on the installed system (boolean)
+- `install_id` — the receipt's install id, 32 hex characters (string).
+  Present only when `written`.
+- `path` — `/var/lib/fisherman/install-receipt.json`, as the installed
+  system sees it (string). Present only when `written`.
+- `first_boot_check` — the first-boot collector is staged (boolean)
+- `reason` — a stable code, present unless the receipt is written and the
+  collector staged: `resolve_failed`, `build_failed`, `write_failed`
+  (`written` false), `transient_etc`, `collector_failed` (`written` true,
+  `first_boot_check` false). See
+  [RECEIPT.md](RECEIPT.md#the-receipt-progress-event).
+- `timestamp`, `elapsed_ms` — as above
+
+**Example:**
+```json
+{"elapsed_ms":498120,"first_boot_check":true,"install_id":"0123456789abcdef0123456789abcdef","path":"/var/lib/fisherman/install-receipt.json","timestamp":"2026-11-11T19:13:46.130120Z","type":"receipt","version":1,"written":true}
+{"elapsed_ms":498120,"first_boot_check":false,"reason":"write_failed","timestamp":"2026-11-11T19:13:46.130120Z","type":"receipt","version":1,"written":false}
+```
+
+**Where it appears:** once, inside the `Configuring installed system` step,
+right after the `info` line that says the same in English, and before the
+`Finalizing installation` step. A failed install that ends before that step
+has none, and a fisherman older than this event never sends it.
+
+**Usage:** Key the done page's copy on `written`, `first_boot_check` and
+`reason`, never on the `info` message. `written` means "installed, not yet
+verified": it is no claim that the target booted. That is `fisherman verify
+--json`, run on the installed system. One case per outcome is in
+`fisherman/internal/progress/testdata/receipt-events.ndjson`.
+
 ### `complete`
 
-The install finished. fisherman has already unmounted the target and closed
+The install finished. fisherman has already turned off any swap it activated on the target, unmounted the target and closed
 LUKS. It exits 0 right after this event.
 
 **Fields:**
@@ -173,19 +246,90 @@ LUKS. It exits 0 right after this event.
 **Usage:** Set the bar to 100% and mark the install successful. A frontend
 can use `boot_id` to set `BootNext` before rebooting.
 
+fisherman also sets `BootNext` itself, while it is root, when the host booted
+from live media or the recipe has `"setBootNext": true`. The `info` line
+before `complete` says what happened: `BootNext set to Boot0001: …`,
+`BootNext not set: …` with the reason, or `Warning: could not set BootNext
+…`. A frontend that runs as the desktop user cannot write the variable, and
+need not try when the line says it is set.
+
 ### `error`
 
 The install failed.
 
 **Fields:**
 - `type` — `"error"`
-- `message` — what failed (string)
+- `message` — what failed (string), for people. At most 2048 bytes.
+- `code` — the stable code of the failure. For a recipe rule or a preflight
+  check it is the code `fisherman validate --json` reports for the same
+  problem ([VALIDATE.md](VALIDATE.md#error-code-reference)). For any other
+  failure it is one of the [failure codes](#failure-codes) below, which name
+  the operation that failed; `unknown` when there is none more precise. Key
+  copy on this, never on `message`. An older fisherman sent `code` only for
+  a validate problem.
+- `field` — optional. The recipe field the `code` is about (`hostname`,
+  `user.username`, `encrypton`). Absent when the code is not about one field.
+- `step_id` — optional. The `step_id` of the last `step` event: the step that
+  was running. Absent before the first step.
+- `disk_changed` — `true` once a disk step has started: the disk may be
+  partly changed, and the install is not safe to retry as if nothing
+  happened. `false`: fisherman changed no disk.
+- `cleanup` — what the teardown before this event did:
+  - `status` — `ok` (everything the install held is released), `failed` (a
+    part failed: the target may still be mounted or unlocked) or `timed_out`
+    (the teardown did not end within its bound).
+  - `message` — optional, the teardown's error.
+
+  A cleanup failure never replaces `code`: the code stays the one of the
+  failure that ended the install. The message still ends with the cleanup
+  failure, as before.
 - `timestamp`, `elapsed_ms` — as above
+
+No field holds the recipe, a command line, the LUKS passphrase, the user
+password or the recovery key: fisherman replaces each of these three secrets
+with `[redacted]` wherever it occurs in `message`, `field` or
+`cleanup.message`, and in the stderr line. A secret shorter than 4 bytes is
+not replaced: it would match ordinary words.
 
 **Example:**
 ```json
-{"elapsed_ms":45123,"message":"partitioning disk: exit status 1","timestamp":"2026-10-07T19:06:15.234567Z","type":"error"}
+{"cleanup":{"status":"ok"},"code":"partition_failed","disk_changed":true,"elapsed_ms":45123,"message":"partitioning disk: exit status 1","step_id":"partition","timestamp":"2026-10-07T19:06:15.234567Z","type":"error"}
 ```
+
+#### Failure codes
+
+These codes name the operation that failed, not a cause: a pull failure is
+not always the network, a `cryptsetup` failure is not always a bad
+passphrase, an `sfdisk` failure is not always a busy disk. The `message`
+holds the tool's own reason. A code is never renamed or reused; new codes
+can appear. A consumer that does not know a code, or gets no code from an
+older fisherman, shows `message` and decides on the exit status.
+
+| Code | The operation that failed |
+|---|---|
+| `unknown` | none more precise |
+| `cancelled` | none: the install was cancelled (exit 130) |
+| `lock_failed` | taking the host-wide install lock (another install holding it is `install_already_running`) |
+| `local_source_unavailable` | reading the required local source: the live media's image, or an `oci:` or `containers-storage:` source |
+| `manual_layout_failed` | formatting or mounting a partition of a manual layout |
+| `partition_failed` | partitioning the disk |
+| `format_failed` | making a filesystem: the ESP, `/boot`, the root or the `/var` disk |
+| `luks_failed` | formatting or opening the LUKS container, or reading its UUID |
+| `zfs_failed` | creating or mounting the ZFS pool or its root dataset |
+| `mount_failed` | creating a mount point, mounting a filesystem, or the btrfs subvolumes |
+| `scratch_failed` | preparing the scratch directory |
+| `pull_failed` | pulling the image, after its retries |
+| `bootc_install_failed` | `bootc install`, for any reason but the pull |
+| `retag_failed` | the GPT retag of the root partition and the remount after it |
+| `persistent_mounts_failed` | writing the mounts of the installed system |
+| `hostname_failed` | writing the hostname |
+| `user_failed` | creating the user |
+| `luks_boot_args_failed` | writing the LUKS kernel arguments |
+| `root_flags_failed` | writing the root's mount options (`rootflags=`) into the boot entries |
+| `finalize_failed` | finalizing the target filesystem |
+
+A code tells which part failed. It does not say that another attempt is safe:
+read `disk_changed`.
 
 Two paths emit this event: `fatal()` in `cmd/fisherman/main.go` (any
 failure, exit 1) and a cancel (exit 130). Both go through the same teardown in
@@ -199,11 +343,35 @@ The message is a short context prefix followed by the underlying error, for
 example `loading recipe: ...`, `invalid recipe: ...`,
 `missing required host tool: ...`, `LUKS format: ...` or `bootc install: ...`.
 
+A recipe problem:
+
+```json
+{"cleanup":{"status":"ok"},"code":"recipe_unknown_field","disk_changed":false,"elapsed_ms":2,"field":"encrypton","message":"loading recipe: unknown recipe field \"encrypton\": this fisherman does not know it, and would ignore it","timestamp":"2026-11-10T14:32:10.428842Z","type":"error"}
+```
+
 `error` can be the only event in the stream. Recipe loading, recipe
 validation and the host tool check all run before the first step. With the
 recipe on stdin (`fisherman -`), empty stdin is `loading recipe: recipe is
-empty`. An empty `image` on a host that did not boot from live media is
-`invalid recipe: image is required: …`.
+empty` (`code` `recipe_malformed`, as `validate --json` says; a recipe file
+that cannot be read is `recipe_unreadable`). An empty `image` on a host that did not boot from live media is
+`invalid recipe: image is required: …` (`code` `image_required`). A recipe
+key fisherman does not know is `loading recipe: unknown recipe field …`
+(`code` `recipe_unknown_field`). A run that is not root is `cannot install:
+fisherman must run as root …` (`code` `not_root`); it is refused before the
+recipe is read. A second install on a host where one is running is `cannot
+install: another fisherman install is running on this host (process N); …`
+(`code` `install_already_running`); it too is refused before the recipe is
+read, and it touches nothing the running install owns. A disk that is not an eligible target is `invalid recipe:
+disk … ` with one of the `disk_*` codes
+([VALIDATE.md](VALIDATE.md#target-eligibility)). A missing host program is
+`missing required host tool: "mkfs.xfs" not found on the host; install the
+"xfsprogs" package` (`code` `host_tool_missing`). An image the registry does
+not give, with no local copy, or one that is not a bootc image for this host,
+is `image source: …` with one of the `image_*` codes and `field` `image`
+([VALIDATE.md](VALIDATE.md#install-only)). A SELinux label workaround that
+the install needs and cannot build is `cannot prepare the install: …`
+(`code` `selinux_workaround_unavailable`). All of these come before the
+first `step` event: the disk is not changed.
 
 `error` is **not** emitted when fisherman exits 2 (unknown command) or
 panics, or when it is killed with SIGKILL. See [Exit codes](#exit-codes).
@@ -225,8 +393,8 @@ The steps depend on the recipe. They run in this order:
 | `Formatting data disk (/var)` | `format_var` | A separate `/var` disk is set and `keepExisting` is false. |
 | `Installing OS` | `install_os` | Always. Image pull, `bootc install to-filesystem`, bootloader. |
 | `Enrolling TPM2 auto-unlock` | `tpm2_enroll` | `tpm2-luks` or `tpm2-luks-passphrase`. Stages TPM2 enrolment for first boot. |
-| `Copying system Flatpaks` | `flatpaks` | Always. |
-| `Configuring installed system` | `configure` | Always. Hostname, user, kernel arguments, network and Bluetooth copy, caches. |
+| `Copying system Flatpaks` | `flatpaks` | Always. It copies nothing when the recipe's `flatpaks` is `[]`, or when the host has no system Flatpaks; an `info` line says so. |
+| `Configuring installed system` | `configure` | Always. Hostname, user, kernel arguments, network and Bluetooth copy (live media, or on request). |
 | `Finalizing installation` | `finalize` | Always. fstrim, remount read-only, fsfreeze/thaw (skipped on ZFS). |
 
 Step numbers are assigned in order to the steps that run, so `step` has no
@@ -245,8 +413,11 @@ never has the encryption or TPM2 steps.
 ### Step count
 
 `total_steps` is computed before the first step. It is the length of the
-weight table (`len(buildProfile(...))`), so it always matches the steps that
-are emitted:
+step plan (`planSteps` in `cmd/fisherman/steps.go`). fisherman announces
+every step through a sequencer that reads the plan, and a test replays
+the install (`installer.run` with its step phases) for each recipe variant
+against it, so the count always matches
+the steps that are emitted:
 
 - start at 8
 - minus 3 for a manual layout
@@ -290,7 +461,7 @@ read an older fisherman can fall back to it.
 **Do not derive the bar from `step / total_steps`.** The step count changes
 with the recipe, and the steps are very unequal: most of them carry 0%.
 
-The weights come from `buildProfile` in `cmd/fisherman/main.go`. They were
+The weights come from `planShape` in `cmd/fisherman/steps.go`. They were
 measured on a loop-device install.
 
 | `step_name` | `weight_pct`, image pulled | `weight_pct`, image cached |
@@ -347,6 +518,7 @@ looks like for each.
 | 1 | No arguments. Help is printed to stdout. | None. |
 | 1 | `scan` without a disk, or `scan` failed. Message on stderr. | None. |
 | 130 | Cancelled: SIGTERM, SIGINT or SIGHUP, or the parent process (the frontend's wrapper) died. Children are stopped and the target is torn down first; see [Cancelling an install](#cancelling-an-install). | Ends with `error`: `installation cancelled (SIGTERM)` (the signal name varies). |
+| 130 | Cancelled: the reader of stdout went away (a closed pipe). Children are stopped and the target is torn down first; see [A closed stdout](#a-closed-stdout). | The `error` event `installation cancelled (stdout closed)` is written, but nobody can read it. The same line is on stderr. |
 | 2 | The argument looks like a command, not a recipe path (a flag, or a bare word with no file behind it). A lone `-` is not one: it reads the recipe from stdin. Message and help on stderr and stdout. | None. |
 
 The `images` and `validate` subcommands (in `images.go` and `validate.go`)
@@ -370,6 +542,9 @@ Other ways the process can end:
 - **Signals.** SIGTERM, SIGINT and SIGHUP cancel the install and exit 130;
   see [Cancelling an install](#cancelling-an-install). SIGKILL cannot be
   handled: no `error` event, no cleanup.
+- **A closed pipe.** A closed stdout cancels the install with teardown and
+  exits 130; see [A closed stdout](#a-closed-stdout). It is no longer one of
+  the exits without cleanup. A closed stderr does not stop the install.
 - **pkexec.** Frontends run fisherman through `pkexec`. pkexec returns
   fisherman's exit code, but exits 126 when the user dismisses the
   authentication dialog and 127 when authorization fails. fisherman never
@@ -400,11 +575,41 @@ behaves the same way when sudo or its shell dies.
 On a cancel, fisherman:
 
 1. stops its children with SIGTERM, then SIGKILL after 10 seconds;
-2. unmounts the target and closes the LUKS mapping, for at most 3 minutes;
+2. thaws the target if the finalize step froze it (`fsfreeze -u`; a frozen
+   filesystem cannot be unmounted cleanly), turns off the swap a manual
+   layout activated, unmounts the target and closes the LUKS mapping, for at
+   most 3 minutes;
 3. writes one `error` event, `installation cancelled (<SIGNAL>)`, with
    `; cleanup failed, the target may still be mounted or unlocked: …` appended
    if teardown did not finish;
 4. exits 130.
+
+### A closed stdout
+
+The reader of the event stream can go away while fisherman's parent is still
+alive: the frontend crashes behind its wrapper shell, or
+`sudo fisherman recipe.json | tee log` loses its `tee`. The parent-death
+signal does not fire, because the parent did not die.
+
+fisherman used to die of SIGPIPE on its next event, with no teardown: the
+target stayed mounted, the LUKS mapping stayed open and the child processes
+kept running. Now SIGPIPE is handled. The first event that cannot be written
+(`EPIPE`) starts the same cancel as a signal:
+
+1. fisherman points its stdout at `/dev/null`, so the teardown commands do
+   not write into the closed pipe;
+2. it stops its children, thaws, turns off swap, unmounts and closes LUKS,
+   as above;
+3. it writes `fisherman: cancelled: installation cancelled (stdout closed)`
+   to stderr and exits 130.
+
+The cancel starts at the next event, not at the moment the reader goes away.
+A child that writes to the closed pipe itself (bootc, podman) gets its own
+SIGPIPE, and its failure ends the install through `fatal()` with the same
+teardown.
+
+A closed **stderr** does not cancel. fisherman's own stderr lines are lost,
+and the install goes on: the event stream on stdout is the contract.
 
 A second signal during teardown is logged and ignored, so it cannot leave
 the disk half torn down. A signal that arrives after the install has
@@ -437,6 +642,8 @@ for line in sys.stdin:
         print(f"{event['overall_pct']}%  {event.get('step_id', event['step_name'])}")
     elif kind == "recovery_key":
         recovery_key = event["key"]  # keep it; show it before reboot
+    elif kind == "receipt":
+        receipt = event  # written, install_id, first_boot_check, reason
     elif kind == "error":
         print(f"failed: {event['message']}")
     elif kind == "complete":
@@ -463,7 +670,11 @@ grown over time:
   `elapsed_ms` on every event; `boot_id` on `complete`.
 - v0.3.0: the `recovery_key` event and the `error` event (#195).
 - Unreleased: `overall_pct` on `step`, `substep` and `complete`, and `step_id`
-  on `step` (#270); exit code 130 on cancel (#267).
+  on `step` (#270); exit code 130 on cancel (#267); `code` and `field` on
+  `error` (#404, #402); a closed stdout is a cancel with teardown, not a
+  death by SIGPIPE (#403); the `source_reuse` event (#384); the `receipt`
+  event (#439); `code` on every `error` event, with the failure codes, and
+  `step_id`, `disk_changed` and `cleanup` on it (#369).
 
 New event types and fields may appear in any release. Consumers must ignore
 event types and fields they do not know.

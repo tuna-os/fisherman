@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/tuna-os/fisherman/internal/deploy"
 	"github.com/tuna-os/fisherman/internal/luks"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/runner"
@@ -26,6 +27,51 @@ var Exec runner.Executor = runner.DefaultExecutor
 // Normally set to os.RemoveAll, but tests can replace it.
 var RemoveAllFn = os.RemoveAll
 
+// IsMountPointFn reports whether path is a mount point in this process's
+// mount namespace. Tests replace it. It reads /proc/self/mountinfo and
+// starts no subprocess, so it also works after runner.Halt, when teardown
+// may run only a short list of commands.
+var IsMountPointFn = isMountPoint
+
+func isMountPoint(path string) bool {
+	path = filepath.Clean(path)
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		path = resolved
+	}
+	data, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		// 36 35 98:0 /mnt1 /mnt2 rw,noatime master:1 - ext3 /dev/root rw
+		fields := strings.Fields(line)
+		if len(fields) > 4 && unescapeMountinfo(fields[4]) == path {
+			return true
+		}
+	}
+	return false
+}
+
+// unescapeMountinfo undoes the kernel's octal escapes (\040 for a space,
+// \011 tab, \012 newline, \134 backslash) in a mountinfo path.
+func unescapeMountinfo(s string) string {
+	if !strings.Contains(s, "\\") {
+		return s
+	}
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+3 < len(s) {
+			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(n))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+
 // Cleanup tracks mounted filesystems and an open LUKS device so they can be
 // torn down in the correct order on both success and error paths.
 //
@@ -35,12 +81,15 @@ var RemoveAllFn = os.RemoveAll
 // whole teardown, so a second caller waits for the first to finish and then
 // gets the same result instead of tearing down a half-torn-down disk.
 type Cleanup struct {
-	mu           sync.Mutex
-	mounts       []string
-	postRemovals []string
-	luksMapper   string
-	done         bool
-	err          error
+	mu            sync.Mutex
+	mounts        []string
+	targetScratch []string
+	postRemovals  []string
+	releases      []func() error
+	luksMapper    string
+	zfsPool       string
+	done          bool
+	err           error
 }
 
 func (c *Cleanup) AddMount(path string) {
@@ -55,21 +104,109 @@ func (c *Cleanup) SetLUKS(name string) {
 	c.luksMapper = name
 }
 
-// AddPostRemoval registers a path to be removed after all unmounts and the
-// LUKS device close have completed. Use this for scratch directories whose
-// contents (e.g. bind mounts, OCI caches) must remain accessible until every
-// post-install step has run — including the fatal-error path, where
+// SetZFSPool registers a ZFS pool the install created and imported. Run
+// exports it after the unmounts: an imported pool stays imported on the
+// installer host when the process ends, a retry then fails with "pool
+// already exists" or "device busy", and a pool that was never exported
+// needs a forced import on the installed system's first boot (#413).
+func (c *Cleanup) SetZFSPool(name string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.zfsPool = name
+}
+
+// ExportZFSPoolFn exports a pool. Tests replace it.
+var ExportZFSPoolFn = func(pool string) error {
+	err := runner.Run("zpool", "export", pool)
+	if err == nil {
+		return nil
+	}
+	// A dataset still busy after the lazy unmounts: force it. The install
+	// is over either way, and an imported pool is the worse outcome.
+	if ferr := runner.Run("zpool", "export", "-f", pool); ferr != nil {
+		return fmt.Errorf("%w (forced: %w)", err, ferr)
+	}
+	return nil
+}
+
+// AddPostRemoval registers a HOST path to be removed after all unmounts and
+// the LUKS device close have completed. Use this for a host-resident scratch
+// directory (/var/fisherman-tmp) whose contents must stay until every
+// post-install step has run, including the fatal-error path, where
 // os.Exit(1) would otherwise skip a deferred RemoveAll.
+//
+// Never register a path inside the target here: once the target is
+// unmounted the path names the host's empty mountpoint, the removal
+// "succeeds", and the data stays on the installed disk. Use
+// AddTargetScratch.
 func (c *Cleanup) AddPostRemoval(path string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.postRemovals = append(c.postRemovals, path)
 }
 
-// Run unmounts all registered mount points in reverse order, then closes any
-// open LUKS device, then deletes any registered post-removal paths. It is
-// idempotent: only the first call does any work, and every call returns the
-// first call's result.
+// AddRelease registers a function that releases a HOST resource the
+// install created outside the target (the source reuse copy and its
+// /var/tmp bind, #384). Run calls it after the LUKS close and before the
+// post-removals, on success and on every failure or cancel. It must be
+// safe to call when there is nothing to release.
+func (c *Cleanup) AddRelease(fn func() error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.releases = append(c.releases, fn)
+}
+
+// AddTargetScratch registers a scratch directory that lives ON the target
+// filesystem and is bind-mounted onto itself. It must be removed while the
+// target is still mounted read-write: RemoveTargetScratch does that on the
+// success path, before finalize; Run does it first thing on every other
+// path, before any target unmount and before the LUKS close.
+func (c *Cleanup) AddTargetScratch(path string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.targetScratch = append(c.targetScratch, path)
+}
+
+// RemoveTargetScratch releases the self-bind of every registered target
+// scratch directory and deletes the directory. Call it when nothing uses the
+// scratch any more and the target is still mounted read-write. It is
+// idempotent: a directory is handled once, here or in Run.
+func (c *Cleanup) RemoveTargetScratch() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.removeTargetScratchLocked()
+}
+
+func (c *Cleanup) removeTargetScratchLocked() error {
+	var errs []error
+	for i := len(c.targetScratch) - 1; i >= 0; i-- {
+		p := c.targetScratch[i]
+		// Lazy and recursive, like the other unmounts: a busy bind is
+		// detached from the namespace at once, so the path below names the
+		// directory on the target filesystem again.
+		//
+		// The bind may already be gone: the GPT retag of a systemd-boot
+		// install unmounts everything on the root partition and mounts the
+		// root again. Then there is nothing to release, only to delete.
+		if IsMountPointFn(p) {
+			if err := runner.Run("umount", "-Rl", p); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: unmounting %s: %v\n", p, err)
+				errs = append(errs, fmt.Errorf("unmounting %s: %w", p, err))
+			}
+		}
+		if err := RemoveAllFn(p); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: removing %s: %v\n", p, err)
+			errs = append(errs, fmt.Errorf("removing %s: %w", p, err))
+		}
+	}
+	c.targetScratch = nil
+	return errors.Join(errs...)
+}
+
+// Run removes target-resident scratch, unmounts all registered mount points
+// in reverse order, exports a registered ZFS pool, then closes any open LUKS
+// device, then deletes any registered host post-removal paths. It is idempotent: only the first call
+// does any work, and every call returns the first call's result.
 //
 // Every step is attempted even when an earlier one fails. Failures are
 // printed to stderr as they happen and returned joined, so the caller can
@@ -82,6 +219,12 @@ func (c *Cleanup) Run() error {
 	}
 	c.done = true
 	var errs []error
+	// Target scratch first: its filesystem is still mounted. On the success
+	// path RemoveTargetScratch already ran (before finalize made the target
+	// read-only) and this is a no-op.
+	if err := c.removeTargetScratchLocked(); err != nil {
+		errs = append(errs, err)
+	}
 	for i := len(c.mounts) - 1; i >= 0; i-- {
 		mp := c.mounts[i]
 		// Use lazy recursive unmount so that busy mounts (e.g. held by
@@ -91,6 +234,14 @@ func (c *Cleanup) Run() error {
 		if err := runner.Run("umount", "-Rl", mp); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: unmounting %s: %v\n", mp, err)
 			errs = append(errs, fmt.Errorf("unmounting %s: %w", mp, err))
+		}
+	}
+	if c.zfsPool != "" {
+		// After the unmounts (the ESP is mounted inside the pool's root
+		// dataset), before the LUKS close.
+		if err := ExportZFSPoolFn(c.zfsPool); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: exporting ZFS pool %s: %v\n", c.zfsPool, err)
+			errs = append(errs, fmt.Errorf("exporting ZFS pool %s: %w", c.zfsPool, err))
 		}
 	}
 	if c.luksMapper != "" {
@@ -114,8 +265,13 @@ func (c *Cleanup) Run() error {
 			errs = append(errs, fmt.Errorf("closing LUKS device %s: %w", c.luksMapper, err))
 		}
 	}
-	// Post-removals run last so any path that was bind-mounted into the target
-	// (and thus depended on the unmount above) can now be safely deleted.
+	for i := len(c.releases) - 1; i >= 0; i-- {
+		if err := c.releases[i](); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: releasing a host resource: %v\n", err)
+			errs = append(errs, err)
+		}
+	}
+	// Host post-removals run last: nothing reads them any more.
 	for _, p := range c.postRemovals {
 		if err := RemoveAllFn(p); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: removing %s: %v\n", p, err)
@@ -127,80 +283,11 @@ func (c *Cleanup) Run() error {
 }
 
 // DefaultComposeFsDeployEtcDir finds the writable /etc directory for the
-// composefs-native deployment installed at target.  The bootc composefs-native
-// layout stores the writable /etc at state/deploy/<COMPOSEFS_HASH>/etc/ — the
-// same hash that appears in the kernel command line as composefs=<HASH> at boot.
-//
-// Discovery priority:
-//  1. Read composefs=<HASH> from any BLS loader entry under
-//     $TARGET/boot/loader/entries/ or $TARGET/boot/efi/loader/entries/.
-//  2. Fall back to the newest directory under $TARGET/state/deploy/ (safe for
-//     fresh installs where only one deployment exists).
-//
-// This path is bind-mounted at /etc on the booted system and must be used
-// instead of $TARGET/etc/ for any post-install write that should be visible
-// after first boot.
+// composefs-native deployment installed at target: state/deploy/<verity>/etc,
+// by the boot entry's composefs=<verity>, else the newest deployment. The
+// logic is deploy.FindComposeFsEtc; this name stays for the test hook below.
 func DefaultComposeFsDeployEtcDir(target string) (string, error) {
-	// Preferred: parse composefs=<HASH> from BLS loader entries.
-	for _, loaderDir := range []string{
-		filepath.Join(target, "boot", "loader", "entries"),
-		filepath.Join(target, "boot", "efi", "loader", "entries"),
-	} {
-		entries, err := filepath.Glob(filepath.Join(loaderDir, "*.conf"))
-		if err != nil || len(entries) == 0 {
-			continue
-		}
-		for _, entry := range entries {
-			data, err := os.ReadFile(entry)
-			if err != nil {
-				continue
-			}
-			for _, line := range strings.Split(string(data), "\n") {
-				if !strings.HasPrefix(strings.TrimSpace(line), "options") {
-					continue
-				}
-				for _, field := range strings.Fields(line) {
-					if !strings.HasPrefix(field, "composefs=") {
-						continue
-					}
-					hash := strings.TrimPrefix(field, "composefs=")
-					if hash == "" {
-						continue
-					}
-					deployEtc := filepath.Join(target, "state", "deploy", hash, "etc")
-					if _, statErr := os.Stat(deployEtc); statErr == nil {
-						return deployEtc, nil
-					}
-				}
-			}
-		}
-	}
-
-	// Fallback: pick the newest directory under state/deploy/.
-	deployBase := filepath.Join(target, "state", "deploy")
-	entries, err := os.ReadDir(deployBase)
-	if err != nil {
-		return "", fmt.Errorf("reading composefs deploy base %s: %w", deployBase, err)
-	}
-	var newestName string
-	var newestMtime time.Time
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		info, err := e.Info()
-		if err != nil {
-			continue
-		}
-		if newestName == "" || info.ModTime().After(newestMtime) {
-			newestName = e.Name()
-			newestMtime = info.ModTime()
-		}
-	}
-	if newestName == "" {
-		return "", fmt.Errorf("no composefs deploy directory found under %s", deployBase)
-	}
-	return filepath.Join(deployBase, newestName, "etc"), nil
+	return deploy.FindComposeFsEtc(target)
 }
 
 // ComposeFsDeployEtcDirFn is called by composefs-native post-install functions
@@ -212,7 +299,7 @@ var ComposeFsDeployEtcDirFn = DefaultComposeFsDeployEtcDir
 // installs. The bootc composefs-native layout bind-mounts this path at /var
 // at boot.
 func ComposeFsVarDir(target string) string {
-	return filepath.Join(target, "state", "os", "default", "var")
+	return deploy.ComposeFsVar(target)
 }
 
 // DefaultDeploymentDir returns the ostree deployment directory inside sysroot.
@@ -234,33 +321,14 @@ func DefaultDeploymentDir(sysroot string) (string, error) {
 	// Walk ostree/deploy/*/deploy/ to find the single deployment that
 	// bootc install to-filesystem just created at
 	// <sysroot>/ostree/deploy/<osname>/deploy/<hash>.<n>.
-	deployBase := filepath.Join(sysroot, "ostree", "deploy")
-	stateroots, readErr := os.ReadDir(deployBase)
-	if readErr != nil {
+	path, walkErr := deploy.FindOstreeDeployment(sysroot)
+	if walkErr != nil {
 		if err != nil {
-			return "", fmt.Errorf("ostree admin --print-current-dir: %w (also could not read %s: %w)", err, deployBase, readErr)
+			return "", fmt.Errorf("ostree admin --print-current-dir: %w (also: %w)", err, walkErr)
 		}
-		return "", fmt.Errorf("no ostree deployment found under %s: %w", deployBase, readErr)
+		return "", walkErr
 	}
-	for _, st := range stateroots {
-		if !st.IsDir() {
-			continue
-		}
-		deploySubDir := filepath.Join(deployBase, st.Name(), "deploy")
-		deployments, subErr := os.ReadDir(deploySubDir)
-		if subErr != nil {
-			continue
-		}
-		for _, dep := range deployments {
-			if dep.IsDir() {
-				return filepath.Join(deploySubDir, dep.Name()), nil
-			}
-		}
-	}
-	if err != nil {
-		return "", fmt.Errorf("ostree admin --print-current-dir: %w (also no deployment found under %s)", err, deployBase)
-	}
-	return "", fmt.Errorf("no ostree deployment found under %s", deployBase)
+	return path, nil
 }
 
 // DeploymentDirFn is called by WriteHostname to locate the ostree deployment
@@ -297,25 +365,47 @@ func IsComposeFsNativeExported(sysroot string) bool {
 	return isComposeFsNative(sysroot)
 }
 
-// WriteHostname writes /etc/hostname into the installed system at target.
-// For composefs-native deployments, the hostname goes into the active deploy
-// etc dir (found via ComposeFsDeployEtcDirFn). For ostree-based deployments
-// it goes into the ostree deployment subtree (found via DeploymentDirFn).
-func WriteHostname(target, hostname string) error {
-	var etcDir string
-	if isComposeFsNative(target) {
-		var err error
-		etcDir, err = ComposeFsDeployEtcDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding composefs deploy etc: %w", err)
-		}
-	} else {
-		deployDir, err := DeploymentDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding deployment dir: %w", err)
-		}
-		etcDir = filepath.Join(deployDir, "etc")
+// bootedVar, when set, is the directory the booted system mounts at /var in
+// place of the stateroot's: a recipe varDisk, mounted there during the
+// install. See SetBootedVar.
+var bootedVar string
+
+// SetBootedVar tells the post-install steps that the booted system's /var
+// is the filesystem mounted at dir (a separate /var disk), not the
+// stateroot var the layout would give. An empty dir restores the default.
+func SetBootedVar(dir string) { bootedVar = dir }
+
+// ResolveDeployment is the single place post-install steps learn where the
+// booted system's root, /etc and /var are on the mounted target. It is
+// deploy.Resolve with this package's hooks (DeploymentDirFn,
+// ComposeFsDeployEtcDirFn, the runner-backed layout probe) and the /var
+// override of SetBootedVar.
+//
+// Never join a path of the installed system onto target directly: target is
+// the physical sysroot, which no booted system reads.
+func ResolveDeployment(target string) (*deploy.Deployment, error) {
+	d, err := deploy.Resolver{
+		IsComposeFs:      isComposeFsNative,
+		OstreeDeployment: func(sysroot string) (string, error) { return DeploymentDirFn(sysroot) },
+		ComposeFsEtc:     func(sysroot string) (string, error) { return ComposeFsDeployEtcDirFn(sysroot) },
+	}.Resolve(target)
+	if err != nil {
+		return nil, err
 	}
+	if bootedVar != "" {
+		d.Var = bootedVar
+	}
+	return d, nil
+}
+
+// WriteHostname writes /etc/hostname into the installed system at target,
+// in the deployment's /etc (ResolveDeployment).
+func WriteHostname(target, hostname string) error {
+	d, err := ResolveDeployment(target)
+	if err != nil {
+		return err
+	}
+	etcDir := d.Etc
 	if err := runner.Run("mkdir", "-p", etcDir); err != nil {
 		return fmt.Errorf("mkdir %s: %w", etcDir, err)
 	}
@@ -328,149 +418,119 @@ func WriteHostname(target, hostname string) error {
 	return nil
 }
 
-// fallbackFlatpaks is the core set installed when the recipe doesn't specify
-// a per-image list. Ensures a usable system with browser and terminal.
-var fallbackFlatpaks = []string{
-	"org.mozilla.firefox",
-	"org.gnome.Console",
-	"org.gnome.TextEditor",
+// hostFlatpakDir is the host's system Flatpak installation. A variable so
+// tests can point it at a fixture.
+var hostFlatpakDir = "/var/lib/flatpak"
+
+// bootedVarDir returns the /var the booted system mounts. It needs less
+// than ResolveDeployment and does not fail: the composefs /var has a fixed
+// place, and so has the ostree one once the stateroot is known.
+func bootedVarDir(target string) string {
+	if bootedVar != "" {
+		return bootedVar
+	}
+	if isComposeFsNative(target) {
+		return ComposeFsVarDir(target)
+	}
+	if d, err := ResolveDeployment(target); err == nil {
+		return d.Var
+	}
+	// No deployment to read the stateroot from: bootc's is "default".
+	return filepath.Join(target, "ostree", "deploy", deploy.DefaultStateroot, "var")
 }
 
-// CopyFlatpaks copies flatpaks to the installed system.
-// If wantedRefs is non-empty, only those app IDs are installed to the target
-// (downloading any that aren't cached locally). If empty, the fallback core
-// set is used. In either case, any locally-available system flatpaks matching
-// the wanted set are copied via tar rather than re-downloaded.
-//
-// flatpakVarPath optionally overrides the relative path within target where
-// the writable /var lives (e.g. "state/os/default/var" for GnomeOS/Dakota).
-// When empty, auto-detection is used: composefs-native → "state/os/default/var",
-// ostree → "ostree/deploy/default/var".
-func CopyFlatpaks(target string, wantedRefs []string, flatpakVarPath string) error {
-	// Resolve wanted list: use recipe's per-image list, or fall back to defaults.
-	if len(wantedRefs) == 0 {
-		wantedRefs = fallbackFlatpaks
-		progress.Substep(fmt.Sprintf("No per-image flatpak list; using %d fallback apps", len(wantedRefs)))
-	} else {
-		progress.Substep(fmt.Sprintf("Installing %d per-image flatpak apps", len(wantedRefs)))
+// flatpakDest is where CopyFlatpaks puts the Flatpak installation. A
+// separate /var (a varDisk, or a manual /var partition: SetBootedVar) wins
+// over flatpakVarPath: that path is relative to the target root, which is
+// the deployment's own /var and not the disk the booted system mounts.
+func flatpakDest(target, flatpakVarPath string) string {
+	switch {
+	case bootedVar != "":
+		if flatpakVarPath != "" {
+			progress.Info(fmt.Sprintf("Flatpaks: flatpakVarPath %q is not used: /var is a separate disk", flatpakVarPath))
+		}
+		return filepath.Join(bootedVar, "lib", "flatpak")
+	case flatpakVarPath != "":
+		return filepath.Join(target, flatpakVarPath, "lib", "flatpak")
+	default:
+		return filepath.Join(bootedVarDir(target), "lib", "flatpak")
 	}
-	wantedSet := make(map[string]bool, len(wantedRefs))
-	for _, ref := range wantedRefs {
-		wantedSet[ref] = true
+}
+
+// CopyFlatpaks copies the host's system Flatpak installation
+// (/var/lib/flatpak) into the installed system.
+//
+// The recipe's `flatpaks` field decides whether, not what:
+//
+//	absent (nil)   copy the host's Flatpaks
+//	[]             copy nothing
+//	["a.b.C", ..]  copy the host's Flatpaks. The list is NOT a filter and
+//	               nothing is downloaded: the installation is one ostree
+//	               repository with shared runtimes, and it is copied whole.
+//	               Each listed app the host does not have is reported.
+//
+// Every app and runtime on the host is copied, also the ones no list
+// names. Nothing is installed on the host: an earlier version ran
+// `flatpak install --system` there to "promote" user apps.
+//
+// flatpakVarPath optionally overrides the path, relative to target, of the
+// installed system's /var (e.g. "state/os/default/var"). When empty the
+// deployment resolver decides. A separate /var disk wins over it.
+//
+// The installer's own Flatpak is removed from the copy.
+func CopyFlatpaks(target string, wantedRefs []string, flatpakVarPath string) error {
+	if wantedRefs != nil && len(wantedRefs) == 0 {
+		progress.Info("Flatpaks: skipped, the recipe's flatpaks list is empty")
+		return nil
 	}
 
-	// Target /var/lib/flatpak: resolve the writable var path.
-	// Priority: explicit flatpakVarPath from recipe > auto-detect from layout.
-	// composefs-native (GnomeOS/Dakota): state/os/default/var
-	// ostree/bootc standard:             ostree/deploy/default/var
-	var dst string
-	switch {
-	case flatpakVarPath != "":
-		dst = filepath.Join(target, flatpakVarPath, "lib", "flatpak")
-	case isComposeFsNative(target):
-		dst = filepath.Join(target, "state", "os", "default", "var", "lib", "flatpak")
-	default:
-		dst = filepath.Join(target, "ostree", "deploy", "default", "var", "lib", "flatpak")
-	}
+	dst := flatpakDest(target, flatpakVarPath)
 	if err := runner.Run("mkdir", "-p", dst); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dst, err)
 	}
 
-	// 1. Collect all system-installed flatpak refs (apps + runtimes).
-	sysApps := flatpakList("--system", "--app")
-	sysAll := flatpakList("--system", "")
-	userApps := flatpakList("--user", "--app")
-
-	// Filter to only wanted apps.
-	var wantedSysApps []string
-	for _, r := range sysApps {
-		if wantedSet[flatpakAppName(r)] {
-			wantedSysApps = append(wantedSysApps, r)
-		}
-	}
-
-	if len(sysAll) == 0 && len(userApps) == 0 {
-		fmt.Fprintln(os.Stdout, "  no flatpaks installed locally; wanted list will be downloaded")
-	}
-
-	// Report what we found.
-	progress.Substep(fmt.Sprintf("Found %d/%d wanted apps in system install", len(wantedSysApps), len(wantedRefs)))
-
-	// 2. Figure out which user-only app refs are not in the system install,
-	//    filtered to only wanted apps.
-	sysSet := make(map[string]bool, len(sysAll))
-	for _, r := range sysAll {
-		sysSet[r] = true
-	}
-	var userOnly []string
-	for _, r := range userApps {
-		if !sysSet[r] && wantedSet[flatpakAppName(r)] {
-			userOnly = append(userOnly, r)
-		}
-	}
-
-	// 3. Install user-only app refs into the system repo so tar picks them up.
-	for i, ref := range userOnly {
-		name := flatpakAppName(ref)
-		progress.Substep(fmt.Sprintf("Promoting user app %d/%d: %s", i+1, len(userOnly), name))
-		fmt.Fprintf(os.Stdout, "  installing user flatpak to system: %s\n", ref)
-		if err := Exec.Command("flatpak", "install", "--system", "-y", "--noninteractive", ref).Run(); err != nil {
-			fmt.Fprintf(os.Stderr, "  warning: could not install %s to system: %v\n", ref, err)
-		}
-	}
-
-	// 4. Copy system flatpak directory to the target via tar pipe.
-	src := "/var/lib/flatpak"
+	src := hostFlatpakDir
 	totalBytes := dirSize(src)
 	if totalBytes == 0 {
-		fmt.Fprintf(os.Stdout, "  no system flatpak data found at %s, skipping copy\n", src)
+		progress.Info(fmt.Sprintf("Flatpaks: skipped, the host has no system Flatpaks at %s", src))
+		reportMissingFlatpaks(wantedRefs, nil)
+		// The image may ship Flatpaks of its own in /var: the installer's
+		// must not be among them.
 		removeInstallerFlatpaks(dst)
 		return nil
 	}
 
-	allApps := flatpakList("--system", "--app")
-	// Emit a substep for each wanted app so the UI shows individual names.
-	copiedNames := make([]string, 0, len(wantedRefs))
-	for _, ref := range allApps {
-		name := flatpakAppName(ref)
-		if wantedSet[name] {
-			copiedNames = append(copiedNames, name)
-		}
+	hostApps := flatpakList("--system", "--app")
+	names := make([]string, 0, len(hostApps))
+	for _, ref := range hostApps {
+		names = append(names, flatpakAppName(ref))
 	}
-	for i, name := range copiedNames {
-		progress.Substep(fmt.Sprintf("Copying app %d/%d: %s", i+1, len(copiedNames), name))
+	if len(wantedRefs) > 0 {
+		progress.Info(fmt.Sprintf(
+			"Flatpaks: the recipe lists %d app(s); the list is not a filter, the host's whole Flatpak installation is copied (%d app(s), %s)",
+			len(wantedRefs), len(names), humanBytes(totalBytes)))
+		reportMissingFlatpaks(wantedRefs, names)
+	} else {
+		progress.Info(fmt.Sprintf("Flatpaks: copying the host's Flatpak installation (%d app(s), %s)",
+			len(names), humanBytes(totalBytes)))
 	}
-	if len(copiedNames) == 0 {
-		progress.Substep(fmt.Sprintf("Copying %d Flatpak apps (%s)", len(allApps), humanBytes(totalBytes)))
+	// One substep per app that is really copied, so the UI can show names.
+	for i, name := range names {
+		progress.Substep(fmt.Sprintf("Copying app %d/%d: %s", i+1, len(names), name))
 	}
 	fmt.Fprintf(os.Stdout, "  copying flatpaks: %s → %s (%d bytes)\n", src, dst, totalBytes)
 
-	// tar cf → countingReader → tar xf
 	tarC := Exec.Command("tar", "cf", "-", "-C", src, ".")
 	tarX := Exec.Command("tar", "xf", "-", "-C", dst)
-
-	pr, pw := io.Pipe()
-	var bytesRead atomic.Int64
-	cr := &countingReader{r: pr, n: &bytesRead}
-
-	tarC.SetStdout(pw)
 	tarC.SetStderr(os.Stdout)
-	tarX.SetStdin(cr)
 	tarX.SetStdout(os.Stdout)
 	tarX.SetStderr(os.Stdout)
 
-	if err := tarX.Start(); err != nil {
-		pw.Close()
-		return fmt.Errorf("tar extract start: %w", err)
-	}
-	if err := tarC.Start(); err != nil {
-		pw.Close()
-		return fmt.Errorf("tar create start: %w", err)
-	}
-
-	// Progress reporter goroutine.
+	var bytesRead atomic.Int64
 	stopProgress := make(chan struct{})
+	progressDone := make(chan struct{})
 	go func() {
+		defer close(progressDone)
 		lastPct := -1
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
@@ -479,40 +539,43 @@ func CopyFlatpaks(target string, wantedRefs []string, flatpakVarPath string) err
 			case <-stopProgress:
 				return
 			case <-ticker.C:
-				if totalBytes > 0 {
-					pct := int(bytesRead.Load() * 100 / totalBytes)
-					if pct > 100 {
-						pct = 100
-					}
-					if pct > lastPct+4 {
-						lastPct = pct
-						progress.Substep(fmt.Sprintf("Copying Flatpak data: %d%%", pct))
-					}
+				pct := int(bytesRead.Load() * 100 / totalBytes)
+				if pct > 100 {
+					pct = 100
+				}
+				if pct > lastPct+4 {
+					lastPct = pct
+					progress.Substep(fmt.Sprintf("Copying Flatpak data: %d%%", pct))
 				}
 			}
 		}
 	}()
-
-	// Wait for tar create to finish, then close the pipe so tar extract sees EOF.
-	errC := tarC.Wait()
-	pw.Close()
-	errX := tarX.Wait()
+	err := pipeCommands(tarC, tarX, &bytesRead)
 	close(stopProgress)
-
-	if errC != nil {
-		return fmt.Errorf("tar create: %w", errC)
+	<-progressDone
+	if err != nil {
+		return err
 	}
-	if errX != nil {
-		return fmt.Errorf("tar extract: %w", errX)
-	}
-
-	fmt.Fprintf(os.Stdout, "  copied %d apps (%d promoted from user)\n",
-		len(allApps), len(userOnly))
 
 	removeInstallerFlatpaks(dst)
 
-	progress.Substep(fmt.Sprintf("Copied %d Flatpak apps", len(allApps)))
+	progress.Substep(fmt.Sprintf("Copied %d Flatpak apps", len(names)))
 	return nil
+}
+
+// reportMissingFlatpaks says, for each app the recipe lists, that the host
+// does not have it and so the installed system will not either.
+func reportMissingFlatpaks(wanted, hostApps []string) {
+	have := make(map[string]bool, len(hostApps))
+	for _, n := range hostApps {
+		have[n] = true
+	}
+	for _, w := range wanted {
+		if !have[w] {
+			progress.Info(fmt.Sprintf(
+				"Warning: Flatpak %s is in the recipe but not on the host; it is not downloaded and will not be on the installed system", w))
+		}
+	}
 }
 
 // removeInstallerFlatpaks deletes all known installer Flatpak app IDs from dst
@@ -612,145 +675,171 @@ func flatpakList(installFlag, typeFilter string) []string {
 	return refs
 }
 
-// CopyBluetoothPairings copies Bluetooth pairing data from the live environment
-// to the installed system so paired devices (keyboards, mice) reconnect on first
-// boot without re-pairing. Non-fatal: if no pairings exist or the copy fails, the
-// system still boots normally.
-func CopyBluetoothPairings(target string) error {
-	const src = "/var/lib/bluetooth"
-	info, err := os.Stat(src)
-	if err != nil || !info.IsDir() {
-		return nil //nolint:nilerr // no bluetooth data → nothing to do
-	}
+// Host sources of CopyBluetoothPairings and CopyWiFiConnections. Variables
+// so tests can point them at a fixture.
+var (
+	hostBluetoothDir     = "/var/lib/bluetooth"
+	hostNMConnectionsDir = "/etc/NetworkManager/system-connections"
+)
 
-	// Check if the directory has any adapter subdirectories.
+// CopyBluetoothPairings copies the host's Bluetooth pairing data
+// (/var/lib/bluetooth, which holds the link keys) into the installed
+// system's /var, so paired keyboards and mice reconnect on first boot.
+//
+// It returns the number of adapters copied. Zero with a nil error means
+// there was nothing to copy; the caller reports that as skipped.
+//
+// The caller decides WHETHER to copy (live media, or the recipe's
+// copyBluetoothPairings): on an installed host these are the operator's
+// keys, and the target may be for another person (#411).
+func CopyBluetoothPairings(target string) (int, error) {
+	src := hostBluetoothDir
 	entries, err := os.ReadDir(src)
-	if err != nil || len(entries) == 0 {
-		return nil //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
+	if err != nil {
+		return 0, nil //nolint:nilerr // no bluetooth data on the host: nothing to do
+	}
+	adapters := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			adapters++
+		}
+	}
+	if adapters == 0 {
+		return 0, nil
 	}
 
-	// Resolve the target /var/lib/bluetooth path (composefs-native vs ostree).
-	var dst string
-	if isComposeFsNative(target) {
-		dst = filepath.Join(target, "state", "os", "default", "var", "lib", "bluetooth")
-	} else {
-		dst = filepath.Join(target, "var", "lib", "bluetooth")
+	// The booted /var: the stateroot's on ostree, state/os/default/var on
+	// composefs. <target>/var is the physical sysroot.
+	d, err := ResolveDeployment(target)
+	if err != nil {
+		return 0, err
 	}
-
+	dst := filepath.Join(d.Var, "lib", "bluetooth")
 	if err := runner.Run("mkdir", "-p", dst); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dst, err)
+		return 0, fmt.Errorf("mkdir %s: %w", dst, err)
 	}
+	// The directory holds link keys: bluetoothd keeps it 0700.
+	_ = os.Chmod(dst, 0o700)
 
 	// Copy preserving permissions and ownership.
 	if err := runner.Run("cp", "-a", src+"/.", dst); err != nil {
-		return fmt.Errorf("copying bluetooth pairings: %w", err)
+		return 0, fmt.Errorf("copying bluetooth pairings: %w", err)
 	}
 
 	// Fix SELinux context if restorecon is available.
 	_ = runner.Run("restorecon", "-R", dst)
 
 	fmt.Fprintf(os.Stdout, "  copied Bluetooth pairings to %s\n", dst)
-	return nil
+	return adapters, nil
 }
 
-// CopyWiFiConnections copies NetworkManager connection profiles from the live
-// session to the installed system so WiFi connects automatically on first boot.
-// Non-fatal: if no connections exist or the copy fails, the system still boots.
-func CopyWiFiConnections(target string) error {
-	const src = "/etc/NetworkManager/system-connections"
-	info, err := os.Stat(src)
-	if err != nil || !info.IsDir() {
-		return nil //nolint:nilerr // no NM connections → nothing to do
-	}
-
+// CopyWiFiConnections copies the host's NetworkManager connection profiles
+// (*.nmconnection: Wi-Fi passwords, 802.1X credentials, VPN secrets) into
+// the installed system's /etc so the network reconnects on first boot.
+//
+// It returns the number of profiles copied. Zero with a nil error means the
+// host has none; the caller reports that as skipped.
+//
+// The caller decides WHETHER to copy (live media, or the recipe's
+// copyNetworkProfiles): see CopyBluetoothPairings.
+func CopyWiFiConnections(target string) (int, error) {
+	src := hostNMConnectionsDir
 	entries, err := os.ReadDir(src)
-	if err != nil || len(entries) == 0 {
-		return nil //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
+	if err != nil {
+		return 0, nil //nolint:nilerr // no NM connections on the host: nothing to do
 	}
-
-	// Only copy .nmconnection files (skip other config).
-	var hasConnections bool
+	var profiles []string
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".nmconnection") {
-			hasConnections = true
-			break
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".nmconnection") {
+			profiles = append(profiles, e.Name())
 		}
 	}
-	if !hasConnections {
-		return nil
-	}
-
-	// Resolve the target NM connections path (composefs-native vs ostree).
-	var dst string
-	if isComposeFsNative(target) {
-		etcDir, err := ComposeFsDeployEtcDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding composefs deploy etc for WiFi connections: %w", err)
-		}
-		dst = filepath.Join(etcDir, "NetworkManager", "system-connections")
-	} else {
-		deployDir, err := DeploymentDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding deployment dir for NM connections: %w", err)
-		}
-		dst = filepath.Join(deployDir, "etc", "NetworkManager", "system-connections")
+	if len(profiles) == 0 {
+		return 0, nil
 	}
 
+	d, err := ResolveDeployment(target)
+	if err != nil {
+		return 0, err
+	}
+	dst := filepath.Join(d.Etc, "NetworkManager", "system-connections")
 	if err := runner.Run("mkdir", "-p", dst); err != nil {
-		return fmt.Errorf("mkdir %s: %w", dst, err)
+		return 0, fmt.Errorf("mkdir %s: %w", dst, err)
 	}
 
-	// Copy only .nmconnection files preserving permissions (they contain passwords, mode 0600).
-	for _, e := range entries {
-		if !strings.HasSuffix(e.Name(), ".nmconnection") {
-			continue
-		}
-		srcFile := filepath.Join(src, e.Name())
-		if err := runner.Run("cp", "-a", srcFile, dst+"/"); err != nil {
-			return fmt.Errorf("copying %s: %w", e.Name(), err)
+	// cp -a keeps the mode: NetworkManager ignores a profile that is not 0600.
+	for _, name := range profiles {
+		if err := runner.Run("cp", "-a", filepath.Join(src, name), dst+"/"); err != nil {
+			return 0, fmt.Errorf("copying %s: %w", name, err)
 		}
 	}
 
 	// Fix SELinux context if restorecon is available.
 	_ = runner.Run("restorecon", "-R", dst)
 
-	fmt.Fprintf(os.Stdout, "  copied WiFi connections to %s\n", dst)
-	return nil
+	fmt.Fprintf(os.Stdout, "  copied %d network profile(s) to %s\n", len(profiles), dst)
+	return len(profiles), nil
 }
 
-// EnablePrintServices enables cups-browsed, avahi-daemon, and ipp-usb in the
-// installed system so printers are auto-discovered on first boot without any
-// user configuration. All three are non-fatal: if the unit file is missing in
-// the target image the symlink is skipped with a warning.
-func EnablePrintServices(target string) {
-	services := []string{
-		"cups-browsed.service",
-		"avahi-daemon.service",
-		"ipp-usb.service",
+// PrintServices are the units EnablePrintServices enables: printer
+// auto-discovery for a desktop. They listen on the network (cups-browsed was
+// the CVE-2024-47176 vector), so the install enables them only when the
+// recipe or the image catalog asks (extras.printServices), never for an
+// image it knows nothing about (#412).
+var PrintServices = []string{
+	"cups-browsed.service",
+	"avahi-daemon.service",
+	"ipp-usb.service",
+}
+
+// EnablePrintServices enables the PrintServices units in the installed
+// system, each one only when the installed image has it. It returns what it
+// enabled and what the image does not have, and logs exactly that: a run
+// that enabled nothing says "skipped".
+//
+// On composefs the image's /usr cannot be inspected offline. A unit is then
+// enabled without the check, and the log line says so.
+func EnablePrintServices(target string) (enabled, missing []string) {
+	unchecked := false
+	for _, svc := range PrintServices {
+		switch enableSystemService(target, svc) {
+		case unitEnabled:
+			enabled = append(enabled, svc)
+		case unitEnabledUnchecked:
+			enabled = append(enabled, svc)
+			unchecked = true
+		case unitMissing:
+			missing = append(missing, svc)
+		case unitFailed:
+			// already logged
+		}
 	}
-	for _, svc := range services {
-		enableSystemService(target, svc)
+	switch {
+	case len(enabled) == 0 && len(missing) > 0:
+		progress.Info("Print services: skipped, the image has none of " + strings.Join(missing, ", "))
+	case len(enabled) == 0:
+		progress.Info("Print services: skipped, could not enable any unit")
+	default:
+		msg := "Print services enabled: " + strings.Join(enabled, ", ")
+		if unchecked {
+			msg += " (not checked: the image's /usr cannot be read on a composefs target)"
+		}
+		if len(missing) > 0 {
+			msg += "; not in the image: " + strings.Join(missing, ", ")
+		}
+		progress.Info(msg)
 	}
-	progress.Info("Print services enabled: cups-browsed, avahi-daemon, ipp-usb")
+	return enabled, missing
 }
 
 // AppendFstabEntry appends an fstab entry to the installed system at target.
 // Works for both composefs-native and ostree-based deployments.
 func AppendFstabEntry(target, uuid, mountpoint, fstype, options string) error {
-	var etcDir string
-	if isComposeFsNative(target) {
-		var err error
-		etcDir, err = ComposeFsDeployEtcDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding composefs deploy etc for fstab: %w", err)
-		}
-	} else {
-		deployDir, err := DeploymentDirFn(target)
-		if err != nil {
-			return fmt.Errorf("finding deployment dir for fstab: %w", err)
-		}
-		etcDir = filepath.Join(deployDir, "etc")
+	d, err := ResolveDeployment(target)
+	if err != nil {
+		return fmt.Errorf("finding the deployment for fstab: %w", err)
 	}
+	etcDir := d.Etc
 	if err := os.MkdirAll(etcDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", etcDir, err)
 	}
@@ -768,4 +857,13 @@ func AppendFstabEntry(target, uuid, mountpoint, fstype, options string) error {
 		return fmt.Errorf("writing fstab entry: %w", err)
 	}
 	return nil
+}
+
+// SetHostSecretDirs points CopyBluetoothPairings and CopyWiFiConnections at
+// other host directories and returns a function that restores them. For
+// tests.
+func SetHostSecretDirs(bluetooth, nmConnections string) (restore func()) {
+	oldBT, oldNM := hostBluetoothDir, hostNMConnectionsDir
+	hostBluetoothDir, hostNMConnectionsDir = bluetooth, nmConnections
+	return func() { hostBluetoothDir, hostNMConnectionsDir = oldBT, oldNM }
 }

@@ -27,9 +27,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
+      # main.go declares only `version`; -X for a variable that does not
+      # exist is silently ignored.
       - -X main.version={{.Version}}
-      - -X main.commit={{.Commit}}
-      - -X main.date={{.Date}}
 
 archives:
   - id: fisherman
@@ -38,6 +38,9 @@ archives:
       - tar.gz
     files:
       - README.md
+      # `fisherman images` and the install's extras lookup read the
+      # catalog from data/images.json beside the binary (images.FindPaths).
+      - data/images.json
 
 checksum:
   name_template: "checksums.txt"

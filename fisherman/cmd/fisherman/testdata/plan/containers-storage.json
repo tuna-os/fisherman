@@ -1,0 +1,1 @@
+{"disk":"@DIR@/sda","filesystem":"xfs","image":"containers-storage:ghcr.io/example/os:stable","targetImgref":"ghcr.io/example/os:stable","additionalImageStores":[],"hostname":"fixture","encryption":{"type":"none"}}

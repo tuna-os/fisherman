@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/tuna-os/fisherman/internal/progress"
 )
 
 // recorder is a terminator with every side effect replaced by a recording.
@@ -24,6 +26,7 @@ type recorder struct {
 	mu       sync.Mutex
 	calls    []string
 	errors   []string
+	failures []progress.Failure
 	exits    []int
 	parks    int
 	stderr   bytes.Buffer
@@ -50,9 +53,10 @@ func newRecorded(t *testing.T) (*terminator, *recorder) {
 		}
 		return nil
 	}
-	tm.emitError = func(msg string) {
+	tm.emitError = func(f progress.Failure) {
 		r.mu.Lock()
-		r.errors = append(r.errors, msg)
+		r.errors = append(r.errors, f.Message)
+		r.failures = append(r.failures, f)
 		r.mu.Unlock()
 		r.add("error")
 	}
@@ -412,6 +416,21 @@ func TestTerminateHelperProcess(t *testing.T) {
 	case "fatal":
 		fmt.Fprintln(os.Stderr, "READY 0")
 		fatal("partitioning disk: device busy")
+	case "epipe":
+		// Mimic the install: a child that inherits stdout, and a stream of
+		// progress events. The parent test closes the read end of stdout.
+		child := exec.Command("sleep", "60")
+		child.Stdout = os.Stdout
+		if err := child.Start(); err != nil {
+			fatal("starting child: %v", err)
+		}
+		fmt.Fprintf(os.Stderr, "READY %d\n", child.Process.Pid)
+		for i := 0; i < 1000; i++ {
+			progress.Info(fmt.Sprintf("layer %d", i))
+			time.Sleep(10 * time.Millisecond)
+		}
+		fmt.Fprintln(os.Stderr, "SURVIVED: kept installing with nobody reading")
+		os.Exit(98)
 	}
 	parkForever()
 }
@@ -572,6 +591,16 @@ func TestRealSignal_SIGTERMCancelsCleanly(t *testing.T) {
 	}
 	if res.cleanups != 1 {
 		t.Errorf("cleanup ran %d times, want 1", res.cleanups)
+	}
+	// #369: the one terminal event has the cancel's code and the cleanup
+	// outcome as fields.
+	for _, ev := range res.events {
+		if ev["type"] != "error" {
+			continue
+		}
+		if c, _ := ev["cleanup"].(map[string]any); ev["code"] != progress.FailureCancelled || c["status"] != progress.CleanupOK {
+			t.Errorf("cancel event = %v, want code %q and cleanup ok", ev, progress.FailureCancelled)
+		}
 	}
 }
 
@@ -822,5 +851,166 @@ func waitForLine(path, want string) {
 			}
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// tuna-os/fisherman#403: the reader of stdout goes away while fisherman's
+// parent is still alive (the frontend crashes behind its wrapper, or
+// `fisherman r.json | tee log` loses its tee). Go's default for the next
+// progress event was to die of SIGPIPE: no teardown, the target left mounted
+// and the LUKS mapping open, the child still running. It must be a cancel.
+func TestClosedStdoutCancelsAndTearsDown(t *testing.T) {
+	if testing.Short() {
+		t.Skip("re-exec signal test")
+	}
+	marker := filepath.Join(t.TempDir(), "cleanup.marker")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestTerminateHelperProcess$", "-test.count=1")
+	cmd.Env = append(os.Environ(), helperEnv+"=epipe", "FISHERMAN_TERMINATE_MARKER="+marker)
+	stdoutR, stdoutW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd.Stdout = stdoutW
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	stdoutW.Close()
+
+	var stderrAll strings.Builder
+	childPID := -1
+	sc := bufio.NewScanner(stderrPipe)
+	for childPID < 0 && sc.Scan() {
+		stderrAll.WriteString(sc.Text() + "\n")
+		if strings.HasPrefix(sc.Text(), "READY ") {
+			childPID, _ = strconv.Atoi(strings.TrimPrefix(sc.Text(), "READY "))
+		}
+	}
+	if childPID < 0 {
+		t.Fatalf("helper exited before READY:\n%s", stderrAll.String())
+	}
+	// Read one event to know the stream is flowing, then go away: from now
+	// on every write to the helper's stdout is a broken pipe.
+	if _, err := bufio.NewReader(stdoutR).ReadString('\n'); err != nil {
+		t.Fatalf("reading the first event: %v", err)
+	}
+	stdoutR.Close()
+
+	for sc.Scan() {
+		stderrAll.WriteString(sc.Text() + "\n")
+	}
+	waitErr := cmd.Wait()
+	stderr := stderrAll.String()
+
+	var exitErr *exec.ExitError
+	if !errors.As(waitErr, &exitErr) {
+		t.Fatalf("helper did not exit with a code: %v\n%s", waitErr, stderr)
+	}
+	if ws, ok := exitErr.Sys().(syscall.WaitStatus); ok && ws.Signaled() {
+		t.Fatalf("helper was killed by %v (no teardown); it must cancel instead\n%s", ws.Signal(), stderr)
+	}
+	if exitErr.ExitCode() != exitCancelled {
+		t.Errorf("exit code = %d, want %d\n%s", exitErr.ExitCode(), exitCancelled, stderr)
+	}
+	// The teardown ran, once.
+	data, err := os.ReadFile(marker)
+	if err != nil || strings.Count(string(data), "cleanup") != 1 {
+		t.Errorf("cleanup marker = %q, %v; want exactly one teardown\n%s", data, err, stderr)
+	}
+	// The child was stopped, not left running.
+	if !waitProcessGone(childPID, 5*time.Second) {
+		_ = syscall.Kill(childPID, syscall.SIGKILL)
+		t.Errorf("child %d survived the cancel", childPID)
+	}
+	for _, want := range []string{
+		"the reader of stdout went away (broken pipe), cancelling installation",
+		"fisherman: cancelled: installation cancelled (stdout closed)",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("stderr missing %q:\n%s", want, stderr)
+		}
+	}
+}
+
+// processAlive reports whether pid exists and is not a zombie.
+func processAlive(pid int) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	return statIsAlive(string(data))
+}
+
+// statIsAlive reads the state field of a /proc/<pid>/stat line
+// ("pid (comm) state …": the state follows the last ")"). A process that has
+// exited is 'Z' (zombie) until its parent reaps it, and then, for an
+// instant, 'X' (dead) while the kernel releases it. Both mean it is gone.
+// Treating only 'Z' as gone made a process that was being reaped look alive
+// again.
+func statIsAlive(stat string) bool {
+	i := strings.LastIndexByte(stat, ')')
+	if i < 0 || i+2 >= len(stat) {
+		return false
+	}
+	return stat[i+2] != 'Z' && stat[i+2] != 'X'
+}
+
+// waitProcessGone polls until pid is no longer alive, or the timeout passes,
+// and returns whether it is gone. The verdict is the one read that ended the
+// wait: asking a second time, after the loop, can see a different state.
+func waitProcessGone(pid int, timeout time.Duration) bool {
+	deadline := time.Now().Add(timeout)
+	for {
+		if !processAlive(pid) {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// TestStatIsAlive pins the state letters: the exit states are not alive, and
+// a comm that holds ") R" does not confuse the parse.
+func TestStatIsAlive(t *testing.T) {
+	for stat, want := range map[string]bool{
+		"6298 (sleep) S 6290 6290":  true,
+		"6298 (sleep) R 6290 6290":  true,
+		"6298 (sleep) Z 6290 6290":  false,
+		"6298 (sleep) X 0 6290":     false,
+		"6298 (a) R b) Z 6290 6290": false,
+		"6298 (a) Z b) S 6290 6290": true,
+		"":                          false,
+		"6298 (sleep)":              false,
+	} {
+		if got := statIsAlive(stat); got != want {
+			t.Errorf("statIsAlive(%q) = %v, want %v", stat, got, want)
+		}
+	}
+}
+
+// A process that has exited and is not reaped yet is gone for
+// waitProcessGone; a running one is not, within the timeout.
+func TestWaitProcessGone(t *testing.T) {
+	cmd := exec.Command("sleep", "60")
+	if err := cmd.Start(); err != nil {
+		t.Skip("no sleep binary")
+	}
+	pid := cmd.Process.Pid
+	if waitProcessGone(pid, 50*time.Millisecond) {
+		t.Fatal("a running process was reported gone")
+	}
+	_ = cmd.Process.Kill()
+	// Not reaped yet: a zombie. It must count as gone, with no Wait.
+	if !waitProcessGone(pid, 5*time.Second) {
+		t.Fatal("a killed process was reported alive")
+	}
+	_ = cmd.Wait()
+	if !waitProcessGone(pid, time.Second) {
+		t.Fatal("a reaped process was reported alive")
 	}
 }

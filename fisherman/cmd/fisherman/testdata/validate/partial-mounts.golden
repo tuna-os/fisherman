@@ -1,0 +1,36 @@
+{
+  "protocol_version": 1,
+  "valid": false,
+  "errors": [
+    {
+      "field": "customMounts[1].target",
+      "code": "custom_mount_not_persistable",
+      "message": "customMounts[1]: a separate /var is not supported on composefs-native targets (composeFsBackend): the initramfs mounts the deployment's own /var, so the partition would not be used (see https://github.com/tuna-os/fisherman/issues/252). Mount it below /var, for example /var/home"
+    },
+    {
+      "field": "customMounts[2].target",
+      "code": "custom_mount_not_persistable",
+      "message": "customMounts[2]: target /data cannot be mounted again on the installed system: its root is read-only. Use /var, a path below /var, or one of /home, /root, /srv, /opt, /mnt, /media, /usr/local"
+    },
+    {
+      "field": "customMounts[3].partition",
+      "code": "custom_mount_partition_duplicate",
+      "message": "customMounts[3]: partition /dev/fixture1 is the same device as customMounts[0]"
+    },
+    {
+      "field": "customMounts[4].target",
+      "code": "custom_mount_target_duplicate",
+      "message": "customMounts[4]: target /var/home is already used by customMounts[3]"
+    },
+    {
+      "field": "varDisk",
+      "code": "var_disk_encryption_unsupported",
+      "message": "varDisk is not supported with encryption \"luks-passphrase\": fisherman does not encrypt the /var disk, so /var (and /var/home on it) would be stored in plain text beside an encrypted root"
+    },
+    {
+      "field": "varDisk",
+      "code": "var_disk_unsupported_composefs",
+      "message": "varDisk is not supported on composefs-native targets (composeFsBackend or filesystem=zfs): the initramfs mounts the deployment's own /var, so the separate disk would not be used (see https://github.com/tuna-os/fisherman/issues/252)"
+    }
+  ]
+}

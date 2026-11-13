@@ -1,0 +1,53 @@
+{
+  "schema": "fisherman.boot-verification",
+  "version": 1,
+  "outcome": "verified",
+  "reason": "booted_matches_receipt",
+  "evidence": "live_status",
+  "verified_at": "2026-11-10T12:10:00Z",
+  "tools": {
+    "fisherman": "v0.3.0-test",
+    "bootc": "bootc 1.17.1"
+  },
+  "install_id": "0123456789abcdef0123456789abcdef",
+  "expected": {
+    "backend": "ostree",
+    "deployment_id": "8f3c1d7a2b6e4f90a1c5d3e7b9f20468ace13579bdf02468ace13579bdf02468",
+    "platform_manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "digest_from": "installed_deployment",
+    "index_digest": "",
+    "platform": "linux/amd64",
+    "update_ref": "ghcr.io/example/os:stable",
+    "installed_at": "2026-11-10T12:00:00Z"
+  },
+  "booted": {
+    "backend": "ostree",
+    "deployment_id": "8f3c1d7a2b6e4f90a1c5d3e7b9f20468ace13579bdf02468ace13579bdf02468",
+    "image": "ghcr.io/example/os:stable",
+    "transport": "registry",
+    "manifest_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "architecture": "amd64",
+    "image_version": "42.20261101.0",
+    "image_timestamp": "2026-11-01T00:00:00Z",
+    "boot_id": "",
+    "collected_at": ""
+  },
+  "checks": {
+    "backend": "match",
+    "deployment": "match",
+    "platform": "match",
+    "platform_manifest_digest": "match",
+    "update_ref": "match"
+  },
+  "staged": {
+    "present": false,
+    "deployment_id": "",
+    "manifest_digest": ""
+  },
+  "rollback": {
+    "present": true,
+    "deployment_id": "0000000000000000000000000000000000000000000000000000000000000001",
+    "manifest_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "cached_update_digest": ""
+}

@@ -1,6 +1,6 @@
 # fisherman Roadmap
 
-**Last updated**: 2026-09-25 | **Maintainer**: tuna-os (hanthor) / installer maintainers
+**Last updated**: 2026-11-12 | **Maintainer**: tuna-os (hanthor) / installer maintainers
 
 ---
 
@@ -22,8 +22,7 @@ outranks anything else on this page.
 
 | Consumer | How it consumes fisherman |
 |---|---|
-| `tuna-installer-kde` / `-cosmic` / `-niri` / `-xfce` | Frontends that shell out to the `fisherman` binary with a recipe |
-| `bootc-installer` | Submodule → `tuna-os/fisherman`, branch `dev` |
+| `bootc-installer` (the GNOME, KDE, COSMIC, Niri and XFCE frontends, one monorepo) | Submodule `fisherman/` → `tuna-os/fisherman`, `.gitmodules` branch `prod`; every Flatpak builds fisherman from that submodule. The frontends run the binary with the recipe on stdin. See [`docs/INTEGRATION.md`](docs/INTEGRATION.md). |
 | `wootc` | Submodule → `tuna-os/fisherman`, pinned commit |
 | `tromso` | Live-ISO install path; builds a patched binary for some test cells |
 | `tunaOS`, `xfce-linux` | Recipe schema and install-path references |
@@ -32,160 +31,140 @@ This is the highest fan-in component in the org, and the only one whose bugs
 write to a stranger's disk. Changes here are evaluated against that table, not
 against a single caller.
 
+The four `tuna-installer-*` frontend repositories of the last refresh are now
+`frontends/<name>/` in `bootc-installer`, so they share its one pin.
+
 ---
 
-## Current Status (2026-09-25)
+## Current Status (2026-11-12)
 
-- **`dev` is the working branch and the default branch.** There is no `main`.
-- **The release path was dispatched and now runs automatically.** `v0.3.0`
-  and `v0.4.0` both published 2026-09-19 with working assets. Promotion is no
-  longer a manual cut-then-merge: `promote.yml` fast-forwards `prod` to any
-  `dev` commit that has sat green for 30 minutes, tags it, and publishes the
-  binaries (see `CONTRIBUTING.md`'s Releasing section). `dev` is **4 commits
-  ahead** of `v0.4.0`, not behind any release.
-- **`prod` is caught up.** The squash-merge/diverged-history problem that
-  stalled `v0.3.0`'s promotion (#226) was fixed in #228 by switching the
-  promotion PR to a merge commit; `prod` is now 4 commits behind `dev`, 0
-  ahead — not the 255-ahead gap recorded here previously.
-- **6 branches** exist in the repository (`gh api repos/tuna-os/fisherman/branches --paginate`), down from the 80 recorded at the last refresh.
-- **`CHANGELOG.md` has `[0.3.0]` and `[0.4.0]` sections** (#239); `[Unreleased]`
-  holds only what landed on `dev` after `v0.4.0`.
-- Historical context, superseded by the above: `release-cut.yml` (manual, on
-  `dev`) used to compute the next semver, push the tag, and open the
-  `dev` → `prod` PR; the tag push triggered `release-publish.yml`, which ran
-  `go test -race ./...` and then GoReleaser
-  (`linux/amd64`, `linux/arm64`, `CGO_ENABLED=0`). That two-step manual process
-  is what shipped `v0.3.0`; `promote.yml` replaced it for everything after.
-- **Fixes reach consumers unevenly.** `wootc` pins `e2b31660` (2026-08-11) —
-  now **70 behind `dev`, 1 ahead**, so diverged rather than merely stale — and
-  builds fisherman from that submodule in its own CI. `aaca69d` (#161), which
-  moved the root-built, `LD_PRELOAD`ed SELinux bypass shim out of predictable
-  world-writable `/tmp` paths, merged on 2026-08-23 and is in the behind set.
-  So the shipped Windows-hosted installer still builds the pre-fix shim.
-  `bootc-installer` pinned a different upstream entirely until D1 was resolved;
-  its URL now points here (tuna-os/bootc-installer#73, 2026-09-07) and its pin
-  moved to `027fa25c` (2026-08-29), **15 behind `dev`, 0 ahead**, which does
-  carry #161.
+Measured on 2026-11-12 against `origin/dev` `b5b9250`.
 
-**Direction of travel since 2026-08-23**, recorded because every distribution
-line has moved the wrong way while this file said the work was near-term:
-`prod` distance 230 → 245 → 255, branches 68 → 79 → 80, untagged delta
-164 → 179 → 189, `wootc` pin distance 45 → 60 → 70 (measured 08-23, 09-03,
-09-10). The one line that moved the right way is `bootc-installer`, whose pin
-went from a diverged commit reached via the fork's URL (`6092be78`, 140 behind /
-14 ahead) to a commit 15 behind `dev`.
+- **Releases ship.** 12 releases since `v0.4.0`, from `v0.5.0` (2026-10-24)
+  to `v0.8.0` (2026-11-11), each with `linux/amd64` and `linux/arm64`
+  archives and `checksums.txt`. `promote.yml` cut every one: it fast-forwards
+  `prod` to a `dev` commit that is green and has sat for 30 minutes, tags it
+  and publishes. `release-publish.yml` now pins GoReleaser to an exact
+  version (#344).
+- **`dev` is 6 commits ahead of `prod`** (`v0.8.0`), 0 behind. The 6 are the
+  2026-11-12 merges (#443, #445 to #449).
+- **`CHANGELOG.md` lags the releases.** It has no section for `0.5.0` to
+  `0.8.0`: `[Unreleased]` holds all 79 commits since `v0.4.0` (13 `feat`, 25
+  `fix`). The release notes are generated per tag; the file is not.
+- **162 branches** exist (`git ls-remote --heads`), up from 6 at the last
+  refresh. Most are agent and PR branches (`claude/` 44, `fix/` 20,
+  `quality/` 16, `scanner/` 13, `guide/` 12, `arch/` 12).
+- **Consumer pins.** `bootc-installer` pins `b5b9250`, the `dev` tip: 0
+  behind `dev`, but 6 ahead of `prod`, so ahead of its own `branch = prod`.
+  `wootc` pins `e2b31660` (2026-08-11): **164 behind `dev`, 1 ahead**. It
+  still builds the shim from before #161 (#206).
+- **The repository description** no longer says "MOVED"; D1 is closed on
+  every surface this file named, except `wootc`'s `ROADMAP.md`, which this
+  refresh did not re-measure.
 
-**The `prod`-distance and branch-count trend broke on 09-19**: two releases
-shipped, `prod` distance collapsed from 255 to 4, and branches dropped from 80
-to 6. The `wootc` pin distance is not re-measured here — it needs its own
-refresh (#206).
+What landed since the last refresh (2026-09-25), by area:
+
+- **Fail before the wipe.** One rule set for `validate` and the install
+  (#277), strict recipes that refuse unknown keys, target eligibility, a
+  manual-layout preflight (#429), image-ref syntax (#445), image sources the
+  install cannot use and the SELinux workaround (#448), all before the first
+  disk step.
+- **Facts for frontends.** `fisherman probe --json` with host bootc
+  capabilities, GPU ids and the DMI model (#428), source-scoped capabilities
+  (#436) and a bootc store inventory (#437).
+- **Results a frontend can act on.** Stable failure codes, `step_id`,
+  `disk_changed` and `cleanup` on the `error` event (#449); a `receipt` event
+  (#441) and `fisherman verify` against the booted system (#438).
+- **Install paths.** Offline OCI media with a pre-partition preflight
+  (#340, #345, #393, #398, #399); installs from the host's bootc store,
+  experimental (#443); locale, keyboard and time zone (#435).
+- **Docs held to code.** New pages: VALIDATE, TROUBLESHOOTING, SECURITY,
+  SCAN, and now RECIPE, CLI and INTEGRATION. Sync tests fail when VALIDATE,
+  PROBE, JSON-PROGRESS-FORMAT, TROUBLESHOOTING, RECIPE, CLI or INTEGRATION
+  disagrees with the code.
+
+### Trend since the last refresh
+
+| Measure | 2026-09-25 | 2026-11-12 | Direction |
+|---|---|---|---|
+| `dev` ahead of `prod` | 4 | 6 | flat: `prod` follows within a day |
+| Releases with assets | 2 (`v0.3.0`, `v0.4.0`) | 14 (`v0.3.0` to `v0.8.0`) | toward done |
+| Branches | 6 | 162 | away from done |
+| `wootc` pin behind `dev` | 70 | 164 | away from done |
+| `bootc-installer` pin behind `dev` | 15 | 0 | toward done |
 
 ---
 
 ## Open decisions
 
 These are not tasks; they are questions that block the tasks under them.
-Tracked in #162.
+#162, which tracked them, is closed; each open one now has its own issue.
 
 ### D1 — Where does fisherman live? — **RESOLVED 2026-09-05: here**
 
-`tuna-os/fisherman` is the origin and is actively maintained.
+`tuna-os/fisherman` is the only origin. Send issues and fixes here.
 [`projectbluefin/fisherman`](https://github.com/projectbluefin/fisherman) is a
-fork kept in sync with it. Send fixes here.
+fork; its changes reach fisherman only through a pull request here, and
+consumers pin `tuna-os/fisherman` (#303).
 
-This was blocking because the repository gave three answers at once — a GitHub
-description reading `⚠️ MOVED → github.com/projectbluefin/fisherman`, a
-`README.md` calling this repository the origin, and PR #59 merging 14
-install-path fixes *from* the fork. A contributor could not tell where to send a
-patch, and the most visible surface said the repo was dead.
+### D2 — What does a consumer pin? — **partly answered**
 
-Aligning the four surfaces D1 named:
+`bootc-installer` answered for itself: one gitlink, moved by Renovate, that
+tracks `prod`. [`docs/INTEGRATION.md`](docs/INTEGRATION.md) says to pin a
+release (a tagged commit on `prod`). `wootc` has not moved onto that rule, and
+#161 has now been absent from it for 81 days (#206).
 
-| surface | state |
-|---|---|
-| `README.md` | already correct — says origin, actively maintained |
-| `AGENTS.md` | already correct — "This repository is the origin." |
-| `tuna-installer-kde`'s README | already correct — links `tuna-os/fisherman` |
-| `bootc-installer` submodule URL | realigned to `tuna-os/fisherman` (see below) |
-| **GitHub repository description** | **a repo setting, not a file — must be set by a maintainer** |
+### D3 — What is `prod` for? — **RESOLVED**
 
-The description is the one surface no commit can reach. Until it is changed, the
-first thing a visitor reads still contradicts every file in the tree, which is
-the whole of what made D1 blocking.
+`prod` is the release branch. `promote.yml` owns it; nobody pushes it by
+hand.
 
-`bootc-installer` pinned `6092be78` via the fork's URL. That commit is present
-in this repository (it is the merge of projectbluefin#10), so repointing the URL
-resolves to the identical tree — no code moves, the submodule simply fetches the
-canonical remote. **Which** commit each consumer pins is D2 below and is
-deliberately not touched here.
+### D4 — Downstream product knowledge in core
 
-What remains open after the resolution, verified 2026-09-10:
-
-- the GitHub description is still `⚠️ MOVED → github.com/projectbluefin/fisherman`
-  (11 forks, 24 open issues read it first);
-- `wootc`'s `.gitmodules` points at `tuna-os/fisherman`, but `wootc`'s
-  `ROADMAP.md` still links fisherman as `projectbluefin/fisherman`.
-
-`bootc-installer` has since moved its pin as well as its URL:
-tuna-os/bootc-installer#73 (2026-09-07) advanced it from `6092be78` to
-`027fa25c`, so the paragraph above describes the URL realignment, not the
-current pin.
-
-### D2 — What does a consumer pin?
-
-A release with assets, a tag, or a branch — and who is responsible for
-advancing dependents' pins when a fix lands. Today the answer differs per
-consumer, which is why security work on `dev` has no defined path into shipped
-installers.
-
-This is no longer hypothetical. #161 merged on 2026-08-23 and, eighteen days
-later, is still absent from `wootc`, the consumer that builds this repository's
-submodule into a shipped installer in its own CI. It reached `bootc-installer`
-only because a D1 URL fix happened to advance the pin, not because a policy
-said it should. The cost of leaving D2 open is now measured in weeks
-of exposure per fix, for every fix.
-
-### D3 — What is `prod` for? — **answered by the tooling, and resolved**
-
-`promote.yml` fast-forwards `dev` into `prod` once a commit sits green for 30
-minutes; `release-cut.yml`/`release-publish.yml` cut the tag and publish
-assets. `prod` is the release branch and is now 4 commits behind `dev`, not
-the 255-commit gap recorded here previously — releases resumed with v0.3.0
-and v0.4.0 (2026-09-19).
+`/var/lib/superiso-store` is still exposed whenever it exists
+(`internal/install/bootc.go`). Keep that live-media default, or require the
+ISO's recipe to name its store in `additionalImageStores` (#308).
 
 ---
 
-## Near-term (through 2026 Q3)
+## Historical: 2026 Q3 (closed 2026-09-30)
 
-Q3 closes 2026-09-30. Every distribution row below moved away from done between
-08-23 and 09-10; only the D1 and SELinux rows moved toward it.
+| Item | Tracking | Outcome |
+|------|----------|---------|
+| Cut `v0.3.0` from `dev` with assets | #162, #205 | ✅ Done 2026-09-19; `promote.yml` releases every green `dev` commit since |
+| State the pin policy (D2), then move `wootc`'s pin | #162, #206 | 🔴 Not done: `wootc` is 164 behind `dev` |
+| Propagate D1's answer to every surface | #162 | ✅ Done for the repository description and this repository |
+| SELinux is not silently disabled on install | #160 | ✅ Closed |
+| Move `prod` | #205 | ✅ Closed |
+| The `plan.md` punch list | `plan.md` | 🟡 Scratch cleanup on fatal paths (`AddPostRemoval`) and the committed binary removal are done; `additionalImageStores` exists, but the `superiso-store` default stays (D4, #308) |
+
+## 2026 Q4 (current, ends 2026-12-31)
 
 | Item | Tracking | Status |
 |------|----------|--------|
-| ~~Dispatch `release-cut.yml` and cut `v0.3.0` from `dev` with assets~~ | #162, #205 | ✅ Done — v0.3.0 and v0.4.0 both published 2026-09-19; `promote.yml` now automates every release after |
-| State the pin policy (D2), then move `wootc`'s diverged pin onto it — this is what carries #161 into a shipped installer | #162, #206 | 🔴 Open — pin now 70 behind / 1 ahead, was 45 then 60 behind |
-| Propagate D1's answer to every surface that still contradicts it | #162 | 🟡 In progress — resolved here (#210) and in `bootc-installer` (#73); GitHub description still says MOVED, `wootc` `ROADMAP.md` still links the fork |
-| SELinux is not silently disabled on install | #160 | 🟡 In progress — #161 on `dev` and in `bootc-installer`'s pin, not in `wootc` |
-| ~~Move `prod`~~ (D3 resolved — releases resumed, gap collapsed to 4 commits) | #205 | 🟢 Mostly done — `prod` 4 behind, 6 branches remain (down from 80); branch-backlog prune itself may still be open, see #205 |
-| Land the `plan.md` punch list: scratch-dir leak on fatal paths, generic `additionalImageStores` in place of the hardcoded `superiso-store` probe, committed-binary removal | `plan.md` | 🟡 In progress |
+| Release cadence a dependent can plan against, with a changelog per release | #293 | 🟡 The cadence exists (12 releases since 2026-10-24); `CHANGELOG.md` has no per-release sections after `0.4.0` |
+| Recipe schema versioned and published | #293 | 🟡 Published (bootc-installer `shared/recipe/`) and documented ([`docs/RECIPE.md`](docs/RECIPE.md)); unknown keys are refused; no version field yet |
+| Destructive-path inventory | #293 | 🟡 Every recipe and source check runs before the first disk step, and the `error` event says whether a disk changed (`disk_changed`); there is no enumerated inventory yet |
+| Retire downstream patching (`tromso`) | | ⚪ Not re-measured |
+| Move `wootc`'s pin | #206 | 🔴 Open |
+| Split `main()` | #313, #300 | 🟡 `main()` parses the command line and hands an install to `installer.run` (`cmd/fisherman/orchestrator.go`), which runs the pre-flight, pre-partition, disk, install, post-install and finalize phases, each in its own file with injected operations (#313); the Phase-1 interface (#300) is open |
 
-## Mid-term (2026 Q4)
+## Forward look: 2027 Q1 (proposed, not committed)
 
-| Item | Why |
-|------|-----|
-| Release cadence a dependent can plan against, with a changelog per release | Consumers currently track a branch because there is nothing else to track |
-| Recipe schema versioned and published | Four frontends and two installers generate recipes; `fisherman-recipe.schema.json` is copied downstream |
-| Retire downstream patching | `tromso` builds a patched binary for bootcDirect and carries a composefs hostname workaround — both belong upstream or in the recipe |
-| Destructive-path inventory | Every path that can lose data, enumerated and gated, so dependents can cite it — `wootc`'s 1.0 gate needs exactly this evidence |
+- A recipe version field, so a frontend can tell which fields a fisherman
+  accepts (#293).
+- The Phase-1 interface on top of the install phases (#300).
+- composefs installs with a separate `/var` disk (#252, blocked on upstream).
+- Image-declared signed boot chains (#342).
+- Measured transfer progress with rate and ETA (#380).
 
 ---
 
 ## How to Contribute
 
-Fixes go to `dev`. Pick something from the near-term table or from `plan.md`,
-which carries the current dev-branch punch list with the reasoning behind each
-item. Changes to the install pipeline should say which of the consumers above
-they were exercised against.
+Fixes go to `dev`. Pick something from the Q4 table or from the open issues.
+Changes to the install pipeline should say which of the consumers above they
+were exercised against.
 
 Read `docs/BRANCH_PROTECTION.md` before touching CI configuration.
 

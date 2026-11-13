@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/tuna-os/fisherman/internal/runner"
@@ -105,77 +106,44 @@ func EnrollTPM2(partition, passphrase string) error {
 	)
 }
 
-// StageFirstBootEnrollment installs a oneshot into the target that enrolls
-// the TPM2 token on the FIRST BOOT of the installed system, then shreds the
-// transient key and disables itself.
+// AddKeyFile adds a keyslot to the LUKS2 container on partition. The new
+// slot's key is the content of newKeyFile; passphrase unlocks an existing
+// slot and goes on stdin, so neither secret is in the process table. slot
+// pins the new keyslot's number, so it can be removed later by number.
 //
-// Why not enroll during install: systemd-cryptenroll --tpm2-pcrs=7 seals
-// against PCR 7 (Secure Boot state) as measured RIGHT NOW — inside the live
-// installer. The installed system boots a different chain and measures a
-// different PCR 7, so an install-time enrollment can never unseal on first
-// boot (observed: the LUKS E2E dropped to a passphrase prompt). Enrolling in
-// the booted target captures the correct PCR 7.
-//
-// targetMount is the installed root; luksUUID identifies the LUKS partition
-// (by-uuid is stable across the install→installed device renumbering); key
-// is the transient unlock passphrase/recovery key.
-func StageFirstBootEnrollment(targetMount, luksUUID, key string) error {
-	if luksUUID == "" {
-		return fmt.Errorf("first-boot TPM2 enrollment needs the LUKS UUID")
+// The key must be a random, high-entropy key (RandomPassphrase: 256 bits):
+// the slot uses a cheap KDF (PBKDF2, 1000 iterations), which only a key
+// that cannot be guessed makes safe. The slot is then marked "preferred",
+// so a lookup by key tries it before the other slots. Without both, a
+// lookup by this key (the first-boot enrolment, luksRemoveKey) runs the
+// user slot's memory-hard KDF first: on a VM with little memory that drew
+// the OOM killer and left the slot and its key file behind (#421).
+func AddKeyFile(partition, passphrase, newKeyFile string, slot int) error {
+	if err := runner.RunWithStdin(
+		strings.NewReader(passphrase),
+		"cryptsetup", "luksAddKey",
+		"--batch-mode",
+		"--key-file=-",
+		"--key-slot", strconv.Itoa(slot),
+		"--pbkdf", "pbkdf2",
+		"--pbkdf-force-iterations", "1000",
+		partition,
+		newKeyFile,
+	); err != nil {
+		return err
 	}
-	keyDir := targetMount + "/etc/fisherman"
-	if err := os.MkdirAll(keyDir, 0o700); err != nil {
-		return fmt.Errorf("mkdir %s: %w", keyDir, err)
-	}
-	keyPath := keyDir + "/tpm2-enroll.key"
-	if err := os.WriteFile(keyPath, []byte(key), 0o600); err != nil {
-		return fmt.Errorf("write transient key: %w", err)
-	}
-	// WriteFile applies its mode only to a file it creates, and even then the
-	// umask masks it; a file already at this path keeps whatever mode it had.
-	// Pin 0600 explicitly so the plaintext unlock key is never readable by
-	// anyone but root in the window before the oneshot shreds it (#221).
-	if err := os.Chmod(keyPath, 0o600); err != nil {
-		return fmt.Errorf("chmod transient key: %w", err)
-	}
-
-	// The oneshot: enroll against the running system's PCR 7, shred the key,
-	// and disable itself so it never runs again. Idempotent — a second run
-	// (key already gone) is a clean no-op.
-	unit := `[Unit]
-Description=Fisherman first-boot TPM2 LUKS enrollment
-Documentation=https://github.com/tuna-os/fisherman
-ConditionPathExists=/etc/fisherman/tpm2-enroll.key
-After=basic.target
-DefaultDependencies=no
-
-[Service]
-Type=oneshot
-RemainAfterExit=no
-ExecStart=/usr/bin/systemd-cryptenroll --tpm2-device=auto --tpm2-pcrs=7 --unlock-key-file=/etc/fisherman/tpm2-enroll.key /dev/disk/by-uuid/` + luksUUID + `
-ExecStartPost=-/usr/bin/shred -u /etc/fisherman/tpm2-enroll.key
-ExecStartPost=-/usr/bin/systemctl disable fisherman-tpm2-enroll.service
-
-[Install]
-WantedBy=multi-user.target
-`
-	unitDir := targetMount + "/usr/lib/systemd/system"
-	if err := os.MkdirAll(unitDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir %s: %w", unitDir, err)
-	}
-	unitPath := unitDir + "/fisherman-tpm2-enroll.service"
-	if err := os.WriteFile(unitPath, []byte(unit), 0o644); err != nil {
-		return fmt.Errorf("write unit: %w", err)
-	}
-	// Enable via wants symlink (systemctl enable isn't available offline).
-	wantsDir := targetMount + "/etc/systemd/system/multi-user.target.wants"
-	if err := os.MkdirAll(wantsDir, 0o755); err != nil {
-		return fmt.Errorf("mkdir wants: %w", err)
-	}
-	link := wantsDir + "/fisherman-tpm2-enroll.service"
-	_ = os.Remove(link)
-	if err := os.Symlink("/usr/lib/systemd/system/fisherman-tpm2-enroll.service", link); err != nil {
-		return fmt.Errorf("enable unit: %w", err)
+	if err := runner.Run("cryptsetup", "config", partition,
+		"--key-slot", strconv.Itoa(slot), "--priority", "prefer"); err != nil {
+		// Take the slot away again: a cheap slot that is not preferred is
+		// still safe, but the caller asked for one it can remove cheaply.
+		_ = RemoveKeyFile(partition, newKeyFile)
+		return fmt.Errorf("prefer keyslot %d: %w", slot, err)
 	}
 	return nil
+}
+
+// RemoveKeyFile removes the keyslot that the content of keyFile unlocks.
+// It never removes another slot: a key that matches none is an error.
+func RemoveKeyFile(partition, keyFile string) error {
+	return runner.Run("cryptsetup", "luksRemoveKey", partition, keyFile)
 }

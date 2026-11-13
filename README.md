@@ -1,12 +1,10 @@
 # fisherman
 
-> ℹ️ **Note on the project home.** This repository is the **origin** and is
-> actively maintained (the `dev` branch carries TunaOS fixes, e.g.
-> customMounts validation and TPM2 first-boot enrolment).
+> ℹ️ **Note on the project home.** `tuna-os/fisherman` is the only origin.
+> Send issues and pull requests here.
 > [`projectbluefin/fisherman`](https://github.com/projectbluefin/fisherman) is
-> a fork of this repo that is kept in sync (see
-> [tuna-os/fisherman#59](https://github.com/tuna-os/fisherman/pull/59)); pick
-> whichever home matches your distro's tooling.
+> a fork. Its changes reach fisherman only through a pull request here.
+> Consumers pin `https://github.com/tuna-os/fisherman`.
 
 fisherman is the part of a [bootc](https://bootc-dev.github.io/bootc/) installer that changes the disk.
 It reads one JSON recipe, then partitions and encrypts the disk, installs the
@@ -38,7 +36,7 @@ choices and draw a progress bar.
 
 | You are | Use fisherman to |
 |---|---|
-| Writing an installer UI | Skip the disk work. Ask `fisherman probe --json` what the machine has, check fields with `fisherman validate --json --partial`, pipe a recipe to `fisherman -`, and read progress. |
+| Writing an installer UI | Skip the disk work. Ask `fisherman probe --json` what the machine has, check fields with `fisherman validate --json --partial`, pipe a recipe to `fisherman -`, and read progress. The guide: [`docs/INTEGRATION.md`](docs/INTEGRATION.md). |
 | Building a bootc image | Get an install path for your image without a distro-specific installer. Any image that `bootc install to-filesystem` accepts works; the nightly matrix covers CentOS, Ubuntu, Debian, Arch and openSUSE bases, among others. |
 | Automating installs | Run unattended from a recipe file, with machine-readable validation errors and progress. |
 
@@ -64,9 +62,9 @@ fisherman is a Go CLI that reads a JSON recipe and runs an install pipeline. The
 | Mount | mount everything at `/mnt/fisherman-target` | always |
 | Format data disk | a second disk for `/var` | recipes that name one |
 | Install OS | `bootc install to-filesystem --skip-finalize` through `podman run --privileged` | always |
-| Enrol TPM2 | bind the LUKS volume to the TPM and emit the recovery key | TPM recipes |
-| Copy Flatpaks | copy system Flatpaks from the host to the target | always |
-| Configure | fstab, hostname, user account, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi and Bluetooth copied from the host, audio names, OEM extras, print services, caches | always |
+| Enrol TPM2 | add a single-use keyslot, stage the first-boot unit that binds the LUKS volume to the TPM, and emit the recovery key | TPM recipes |
+| Copy Flatpaks | copy the host's system Flatpak installation to the target | always; copies nothing when `flatpaks` is `[]` |
+| Configure | fstab, hostname, user account, locale, keyboard and time zone, `rd.luks.name` and Plymouth kernel arguments, Wi-Fi profiles and Bluetooth pairings copied from the host (live media, or on request), and the [desktop extras](#desktop-extras) the recipe or the catalog turns on | always |
 | Finalize | fstrim → remount read-only → fsfreeze, then thaw | always (skipped on ZFS) |
 
 The separate ext4 `/boot` partition is required for GRUB because GRUB cannot read modern XFS features (`nrext64`, `exchange`, `rmapbt`). For composefs/systemd-boot images the EFI partition holds the kernel and initrd directly.
@@ -121,8 +119,14 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 | `fisherman validate --json [--partial] <recipe.json\|->` | no | every problem as one JSON object with stable codes (hostname, username, filesystem, encryption, disk, TPM), the same rules the install enforces before touching a disk; `--partial` checks one page's fields. Schema, codes and the encryption choices file: [`docs/VALIDATE.md`](docs/VALIDATE.md) |
 | `fisherman images [<query>]` | no | list or search the image catalog |
 | `fisherman scan <disk>` | yes | scan a disk for Windows data available to migrate; output contract and safety notes: [`docs/SCAN.md`](docs/SCAN.md) |
+| `fisherman plan --json [--read-image] -` | no | print what an install of the recipe on stdin would do: the source, the target, the partitions it creates, formats or keeps (by boot stack and encryption), the encryption type, the boot stack and the ordered steps; with `--read-image`, also the image's digest and size, read without a pull, against the root. It runs the `validate --json` checks first, writes and pulls nothing, prints no secret, and says `unknown` for what only the install can resolve. Schema: [`docs/PLAN.md`](docs/PLAN.md) |
 | `fisherman probe --json` | no | print disks, TPM, RAM/CPU/UEFI, live-media and offline-store facts as one JSON object; read-only. Schema and an example: [`docs/PROBE.md`](docs/PROBE.md) |
+| `fisherman verify --json` | yes, for `bootc status` | on the installed system, or against what its first boot collected: compare the installation receipt with the booted image (`verified`, `mismatch`, `unsupported`, `unavailable`, `not-yet-run`); read-only, exit 0 only for `verified`. Schemas and codes: [`docs/RECEIPT.md`](docs/RECEIPT.md) |
+| `fisherman diagnostics (--output-dir <dir> \| --stdout)` | no | write a local support bundle for a failed install: allowlisted versions, probe facts, the recipe's effective options, the progress timeline and outcome, and what is still mounted. Never a passphrase, recovery key, password, hash or token; identifiers masked. Never uploaded. Contract: [`docs/DIAGNOSTICS.md`](docs/DIAGNOSTICS.md) |
 | `fisherman version` | no | print the version |
+
+Every flag, with its value, its default and the exit codes of each command:
+[`docs/CLI.md`](docs/CLI.md).
 
 ## Recipe format
 
@@ -142,20 +146,30 @@ that is not one JSON object. Recipes are capped at 1 MiB.
 }
 ```
 
-The example shows the common fields. A recipe can also carry `user`,
-`bootloader`, `targetImgref`, `btrfsSubvolumes`, `varDisk`, `customMounts`
-and more; the struct in
-[`fisherman/internal/recipe/recipe.go`](fisherman/internal/recipe/recipe.go)
-is the reference until #320 lands.
+The example shows the common fields. Every field, with its type and its
+default, is in [`docs/RECIPE.md`](docs/RECIPE.md); a test holds that page to
+the struct in
+[`fisherman/internal/recipe/recipe.go`](fisherman/internal/recipe/recipe.go).
 
 Things a recipe author should know today:
 
-- Unknown keys are ignored, so a misspelt field is dropped without an error (#404).
-- `unifiedStorage` is accepted and does nothing (#366).
-- `flatpaks` does not filter: the host's whole `/var/lib/flatpak` is copied (#408).
-- `varDisk` is not encrypted, even when the root is (#406).
-- There is no field for locale, keyboard layout or time zone (#405).
-- Wi-Fi profiles and Bluetooth pairings are copied from the host to the target on every install (#411).
+- An unknown key is an error (`recipe_unknown_field`), in the install and in `fisherman validate`. A misspelt field is not dropped.
+- `disk` must be a whole disk that the running system is not on. fisherman refuses the boot disk, a partition, a read-only disk, a disk under 50 GiB and a BIOS host before it touches anything; `"override": ["too_small", "uefi"]` accepts the last two. See [`docs/VALIDATE.md`](docs/VALIDATE.md#target-eligibility).
+- A manual layout (`customMounts`) needs a `/boot/efi` entry, and a `/boot` entry for GRUB with an XFS root.
+- `unifiedStorage: true` is refused (`unified_storage_unsupported`): fisherman does not pass that flag to bootc.
+- One install runs on a host at a time. A second one is refused (`install_already_running`).
+- `flatpaks` says whether the host's system Flatpaks are copied, not which. Absent: the host's whole `/var/lib/flatpak` is copied. `[]`: nothing is copied. A list: the whole installation is copied all the same, nothing is downloaded, and the log names each listed app that the host does not have.
+- `varDisk` works on unencrypted ostree targets only. With an encrypted `encryption.type` it is refused (`var_disk_encryption_unsupported`): fisherman does not encrypt the `/var` disk. With `composeFsBackend` or `filesystem: zfs` it is refused too (`var_disk_unsupported_composefs`, [#252](https://github.com/tuna-os/fisherman/issues/252)).
+- A `varDisk`, and each data or swap entry of `customMounts`, gets an fstab line on the installed system (type and UUID from `blkid`, `nofail`). A target that cannot be mounted again is refused (`custom_mount_not_persistable`). See [`docs/VALIDATE.md`](docs/VALIDATE.md#mounts-after-the-install).
+- An encrypted install fails if its boot entries do not carry `rd.luks.name` at the end. Only systemd-boot with composefs is exempt (#410).
+- `locale` (`"de_DE.UTF-8"`), `keyboard` (`{"layout": "de", "variant": "nodeadkeys", "model": "pc105"}`; `layout` is required when the object is present) and `timezone` (`"Europe/Berlin"`) are optional. fisherman writes them to the installed system's `/etc/locale.conf`, `/etc/vconsole.conf`, `/etc/X11/xorg.conf.d/00-keyboard.conf` and `/etc/localtime`. Without a field, the image's setting stays.
+- For an encrypted install with `keyboard`, fisherman adds `rd.vconsole.keymap=<keymap>` to the boot entries, so the passphrase prompt in the initrd uses the layout the passphrase was typed with. An image that boots a unified kernel image has no boot entry to edit; the log then says that the prompt uses the image's keymap. A graphical prompt that reads keys through libxkbcommon takes its layout from the initrd's own `vconsole.conf`, which fisherman cannot change.
+- The host's Wi-Fi profiles and Bluetooth pairings are copied to the target only when the host booted from live media. `"copyNetworkProfiles"` and `"copyBluetoothPairings"` (`true` or `false`) override that for each kind. On an installed host the default is not to copy: the keys are the operator's.
+- fisherman sets the firmware's `BootNext` to the installed system's boot entry when the host booted from live media, so the next boot does not start the installer again. `"setBootNext": true` does it on any host, `false` never. A failure is a warning in the log.
+- `"filesystem": "zfs"` is experimental and needs `"experimental": ["zfs"]` (`zfs_experimental`). No VM test installs and boots it. The pool is exported when the install ends, also when it fails.
+- `btrfsSubvolumes` puts the root in an `@` subvolume (`rootflags=subvol=@,compress=zstd:1`). fisherman writes the root's `rootflags=` into every BLS boot entry itself, in place of the one bootc derives: bootc 1.15.x drops `--karg` on the composefs path. It makes no `@home` and no `@snapshots`: `/home` is `/var/home` inside `@`, as on every bootc system.
+- Print services, the OEM setup unit, friendly audio names and `rhgb quiet` are applied only when the recipe's `extras` or the image catalog turns them on. See [Desktop extras](#desktop-extras).
+- fisherman builds no caches in the target. The image must carry its font, icon, schema and linker caches.
 
 **Encryption types:** `none`, `luks-passphrase`, `tpm2-luks`, `tpm2-luks-passphrase`
 
@@ -200,6 +214,15 @@ read-only. A list, including `[]`, is used exactly as given; `[]` turns
 discovery off. `/var/lib/superiso-store` is exposed whenever it exists, as
 before.
 
+**Installing from the host's own bootc store** (`sourceReuse`,
+experimental): a recipe with `"sourceReuse": {"store": "bootc", "digest":
+"sha256:…", "platform": "x86_64"}`, an empty `image`, an explicit
+`targetImgref` and `"experimental": ["bootc_store_reuse"]` installs the
+image the installed (not live) ostree host's bootc keeps under that digest:
+fisherman copies it with `bootc image copy-to-storage` to a name of its own,
+verifies it, installs from it and removes it. Never a default; see
+[`docs/SOURCE-REUSE.md`](docs/SOURCE-REUSE.md).
+
 ## Image catalog
 
 `data/images.json` is a recursive JSON tree of distro groups and leaf images.
@@ -216,6 +239,34 @@ image picker. fisherman looks for the catalog in this order:
 A frontend can ship its own catalog; bootc-installer reads
 `/etc/bootc-installer/images.json` (see its
 [customising guide](https://github.com/tuna-os/bootc-installer/blob/dev/docs/guide/customising.md)).
+
+### Desktop extras
+
+Four post-install steps suit a desktop product image and are wrong for an
+image fisherman knows nothing about. They are off unless something turns
+them on.
+
+| `extras` key | Step |
+|---|---|
+| `printServices` | Enable `cups-browsed`, `avahi-daemon` and `ipp-usb`. Each unit only when the installed image has it. |
+| `oemSetup` | Write the first-login unit that installs vendor packages with Homebrew (`ublue-os/tap`), enable the vendor's service when the image has it, and set a vendor menu icon. |
+| `audioNames` | Write WirePlumber rules with friendly device names to the installed system. On live media, also apply them to the running session. |
+| `bootSplash` | Add `rhgb quiet` to every boot entry. |
+
+The decision, in this order:
+
+1. The recipe's `extras` object. fisherman uses it exactly as given; `{}` turns all four off.
+2. With no `extras` in the recipe, the catalog entry of the image. fisherman looks up the recipe's `targetImgref` and `image` (and the live image) in `/etc/bootc-installer/images.json`, `/etc/tuna-installer/images.json` and then the paths above. A node's `extras` object applies to its children; a child's own object replaces it whole.
+3. Otherwise none. The log says `Desktop extras: none (…)`.
+
+Every entry of the shipped catalog has all four on, because every install
+did all four before the field existed. An image that is not in a catalog
+(`centos-bootc`, a server image, your own build) gets none of them unless
+its recipe asks.
+
+A frontend that builds a recipe from a catalog entry should copy that
+entry's inherited `extras` object into the recipe. Then the result does not
+depend on which catalog fisherman can find on the host.
 
 ## Building
 
@@ -263,6 +314,12 @@ hives after each task. If one hive has no work, the other can continue.
 The guide covers prerequisites, verified `just` setup, credentials, provider
 costs, and how to stop with Ctrl+C. Your subscription quota or API charges apply.
 Never post account credentials or API keys in issues or pull requests.
+
+## Security
+
+Report a vulnerability privately, as [`SECURITY.md`](SECURITY.md) says. That
+file also has the supported versions, the response target, the threat model
+and the Secure Boot profile.
 
 ## License
 

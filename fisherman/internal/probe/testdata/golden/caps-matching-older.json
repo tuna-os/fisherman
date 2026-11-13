@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "live_host": {
+    "context": "live-host",
+    "is_live": false,
+    "image": "ghcr.io/example/os:stable",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "platform": "x86_64",
+    "backend": "ostree",
+    "bootc_version": "1.1.4"
+  },
+  "source": {
+    "selected": true,
+    "ref": "containers-storage:ghcr.io/example/os:stable",
+    "transport": "containers-storage",
+    "locality": "local",
+    "store": "/usr/share/tuna-installer/oci-store",
+    "digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "digest_from": "store_index",
+    "platform": ""
+  },
+  "execution_root": {
+    "context": "live-host",
+    "established": true,
+    "reason": "digest_match",
+    "backend": "ostree",
+    "bootc_version": "1.1.4"
+  },
+  "target": {
+    "update_ref": "ghcr.io/example/os:stable",
+    "update_ref_from": "target_imgref",
+    "state": "not_installed"
+  },
+  "features": {
+    "bootc_image_storage": {
+      "status": "unknown",
+      "reason": "not_qualified",
+      "context": "source-root"
+    },
+    "deployment_mount": {
+      "status": "unknown",
+      "reason": "not_qualified",
+      "context": "source-root"
+    },
+    "finalization": {
+      "status": "unsupported",
+      "reason": "command_absent",
+      "context": "source-root"
+    },
+    "install_configuration": {
+      "status": "supported",
+      "reason": "observed",
+      "context": "source-root"
+    },
+    "native_inspection": {
+      "status": "unsupported",
+      "reason": "command_absent",
+      "context": "source-root"
+    },
+    "unified_storage": {
+      "status": "unsupported",
+      "reason": "fisherman_refuses",
+      "context": "fisherman"
+    }
+  },
+  "install_defaults": {
+    "observed": true,
+    "root_filesystem": "xfs",
+    "block_setups": [],
+    "bootloader": ""
+  },
+  "image": {
+    "observed": false,
+    "kernel_version": "",
+    "kernel_unified": false
+  }
+}

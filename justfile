@@ -260,8 +260,6 @@ bootcrew-ci-test IMAGE_JSON:
   IMAGE=$(echo "$IMAGE_JSON" | jq -r '.image')
   FILESYSTEM=$(echo "$IMAGE_JSON" | jq -r '.filesystem // "xfs"')
   COMPOSEFS=$(echo "$IMAGE_JSON" | jq -r '.composefs_backend // false')
-  UNIFIED=$(echo "$IMAGE_JSON" | jq -r '.unified_storage // false')
-  SELINUX=$(echo "$IMAGE_JSON" | jq -r '.selinux_disabled // false')
   IMAGE_NAME=$(echo "$IMAGE_JSON" | jq -r '.name')
   LUKS=$(echo "$IMAGE_JSON" | jq -r '.luks // false')
   LUKS_PASSPHRASE=$(echo "$IMAGE_JSON" | jq -r '.luks_passphrase // ""')
@@ -293,41 +291,56 @@ bootcrew-ci-test IMAGE_JSON:
   just setup-loop "$DISK_FILE"
   LOOPDEV=$(cat /tmp/bootcrew-loopdev.txt)
   
-  # Determine bootloader from matrix entry (preferred) or fall back to name-based detection.
-  BOOTLOADER_TYPE=$(echo "$IMAGE_JSON" | jq -r '.bootloader // ""')
-  if [ -z "$BOOTLOADER_TYPE" ]; then
-    case "$IMAGE_NAME" in
-      debian-bootc*|arch-bootc*)
-        BOOTLOADER_TYPE="systemd"
-        ;;
-    esac
+  # Optional parts of an entry (#418): a separate /var disk, a software
+  # TPM, and a `user` block. scripts/matrix-recipe.py documents the fields.
+  ENCRYPTION_TYPE=$(echo "$IMAGE_JSON" | jq -r '.encryption // ""')
+  VARDEV=""
+  if [ "$(echo "$IMAGE_JSON" | jq -r '.var_disk // false')" = "true" ]; then
+    VAR_DISK_FILE="{{ CI_ARTIFACTS }}/bootcrew-${IMAGE_NAME}-var.img"
+    truncate -s 20G "$VAR_DISK_FILE"
+    VARDEV=$(sudo losetup --find --show "$VAR_DISK_FILE")
+    echo "varDisk loop device: $VARDEV"
   fi
-  BOOTLOADER=""
-  if [ -n "$BOOTLOADER_TYPE" ]; then
-    BOOTLOADER="\"bootloader\": \"$BOOTLOADER_TYPE\","
+  BOOTCREW_USER=""
+  BOOTCREW_USER_PASSWORD=""
+  if [ "$(echo "$IMAGE_JSON" | jq -r '.user // false')" = "true" ]; then
+    read -r BOOTCREW_USER BOOTCREW_USER_PASSWORD < <(python3 scripts/matrix-recipe.py --print-user "$IMAGE_JSON")
   fi
-  
-  # Build encryption block.
-  if [ "$LUKS" = "true" ]; then
-    ENCRYPTION="{\"type\": \"luks-passphrase\", \"passphrase\": \"$LUKS_PASSPHRASE\"}"
-  else
-    ENCRYPTION='{"type": "none"}'
+  export BOOTCREW_USER BOOTCREW_USER_PASSWORD
+  SWTPM_STATE=""
+  INSTALL_ENV=()
+  case "$ENCRYPTION_TYPE" in
+    tpm2-*)
+      # The enrolment runs on the installed system's first boot, against the
+      # VM's swtpm; the runner has no TPM. The fake-TPM override only lets
+      # the install-host check pass (docs/VALIDATE.md, encryption_tpm_unavailable).
+      SWTPM_STATE="{{ CI_ARTIFACTS }}/bootcrew-${IMAGE_NAME}-swtpm"
+      rm -rf "$SWTPM_STATE"
+      INSTALL_ENV+=(BOOTC_INSTALLER_FAKE_TPM=1)
+      ;;
+  esac
+  # tpm2-luks has no passphrase: fisherman makes a random one and emits it
+  # once, as the recovery_key event. The first boot has no TPM2 token yet,
+  # so the harness needs that key to unlock it. capture-recovery-key.py
+  # writes it to a 0600 file under /tmp (never the artifacts) and prints the
+  # event with the key redacted. Other entries' output passes through cat.
+  RECOVERY_KEY_FILE=""
+  if [ "$ENCRYPTION_TYPE" = "tpm2-luks" ]; then
+    RECOVERY_KEY_FILE=$(mktemp)
   fi
-  
-  cat > {{ CI_ARTIFACTS }}/recipe.json << EOF
-  {
-    "disk": "$LOOPDEV",
-    "filesystem": "$FILESYSTEM",
-    "composeFsBackend": $COMPOSEFS,
-    "unifiedStorage": $UNIFIED,
-    "selinuxDisabled": $SELINUX,
-    "encryption": $ENCRYPTION,
-    "image": "$SSH_IMAGE",
-    "hostname": "ci-test",
-    $BOOTLOADER
-    "flatpaks": []
+  progress_filter() {
+    if [ -n "$RECOVERY_KEY_FILE" ]; then
+      python3 scripts/capture-recovery-key.py "$RECOVERY_KEY_FILE"
+    else
+      cat
+    fi
   }
-  EOF
+  # pipefail for the install only: fisherman's status, not the filter's.
+  set -o pipefail
+
+  python3 scripts/matrix-recipe.py "$IMAGE_JSON" "$LOOPDEV" "$VARDEV" > {{ CI_ARTIFACTS }}/recipe.json
+  jq 'if .encryption.passphrase then .encryption.passphrase = "<redacted>" else . end
+      | if .user.password then .user.password = "<redacted>" else . end' {{ CI_ARTIFACTS }}/recipe.json
   
   # Install
   if [ ! -f /tmp/fisherman ]; then
@@ -348,13 +361,24 @@ bootcrew-ci-test IMAGE_JSON:
   exec "$REAL_PODMAN" --cgroup-manager=cgroupfs "\$@"
   EOF
     chmod 0755 "$PODMAN_WRAPPER/podman"
-    sudo env "PATH=$PODMAN_WRAPPER:$PATH" \
+    sudo env "PATH=$PODMAN_WRAPPER:$PATH" "${INSTALL_ENV[@]}" \
       systemd-run --scope --quiet --collect \
       --property="MemoryMax=$INSTALL_MEMORY_MAX" \
       --property="MemorySwapMax=0" \
-      /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
+      /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json | progress_filter
   else
-    sudo /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json
+    sudo env "${INSTALL_ENV[@]}" /tmp/fisherman {{ CI_ARTIFACTS }}/recipe.json | progress_filter
+  fi
+  set +o pipefail
+  if [ -n "$RECOVERY_KEY_FILE" ]; then
+    LUKS_PASSPHRASE=$(cat "$RECOVERY_KEY_FILE")
+    rm -f "$RECOVERY_KEY_FILE"
+    if [ -z "$LUKS_PASSPHRASE" ]; then
+      echo "❌ tpm2-luks: the install emitted no recovery_key event"
+      exit 1
+    fi
+    [ -n "${GITHUB_ACTIONS:-}" ] && echo "::add-mask::$LUKS_PASSPHRASE"
+    echo "tpm2-luks: captured the recovery key (${#LUKS_PASSPHRASE} characters); the first boot types it"
   fi
 
   # The registry image has password authentication disabled. Inject this
@@ -413,16 +437,43 @@ bootcrew-ci-test IMAGE_JSON:
   fi
   echo "✅ BLS console patching done"
   
+  # Guest checks for the optional parts (scripts/vm-checks/).
+  CHECKS=""
+  # enabled_units (#422): no unit enabled that the image did not enable.
+  [ "$(echo "$IMAGE_JSON" | jq -r '.enabled_units // false')" = "true" ] \
+    && CHECKS="$CHECKS scripts/vm-checks/enabled-units.sh"
+  [ -n "$BOOTCREW_USER" ] && CHECKS="$CHECKS scripts/vm-checks/user.sh"
+  [ -n "$VARDEV" ] && CHECKS="$CHECKS scripts/vm-checks/var-disk.sh"
+  [ -n "$SWTPM_STATE" ] && CHECKS="$CHECKS scripts/vm-checks/tpm2-enrolled.sh"
+  [ "$(echo "$IMAGE_JSON" | jq -r '.btrfs_subvolumes // false')" = "true" ] \
+    && CHECKS="$CHECKS scripts/vm-checks/btrfs-subvolumes.sh"
+
   # Boot VM and verify bootc status (pass LUKS passphrase for unlock).
   echo ""
   echo "=== Booting VM for bootc status verification ==="
-  bash scripts/boot-verify.sh "2222" "/tmp/bootcrew-ssh/id_rsa" "$VM_TIMEOUT" "2G" "$LOOPDEV" "$IMAGE_NAME" "$LUKS_PASSPHRASE"
+  BOOTCREW_EXTRA_DRIVE="$VARDEV" BOOTCREW_SWTPM_STATE="$SWTPM_STATE" BOOTCREW_GUEST_CHECKS="$CHECKS" \
+    bash scripts/boot-verify.sh "2222" "/tmp/bootcrew-ssh/id_rsa" "$VM_TIMEOUT" "2G" "$LOOPDEV" "$IMAGE_NAME" "$LUKS_PASSPHRASE"
+
+  if [ -n "$SWTPM_STATE" ]; then
+    # The first boot unlocked with the passphrase and enrolled the TPM. The
+    # second boot types nothing: SSH answers only if the TPM unlocked the root.
+    echo ""
+    echo "=== Second boot: TPM2 unlock, no passphrase ==="
+    BOOTCREW_EXTRA_DRIVE="$VARDEV" BOOTCREW_SWTPM_STATE="$SWTPM_STATE" \
+      BOOTCREW_GUEST_CHECKS="scripts/vm-checks/tpm2-enrolled.sh scripts/vm-checks/no-passphrase-prompt.sh" \
+      bash scripts/boot-verify.sh "2222" "/tmp/bootcrew-ssh/id_rsa" "$VM_TIMEOUT" "2G" "$LOOPDEV" "${IMAGE_NAME}-tpm2-unlock" ""
+  fi
   
   # Cleanup
   echo ""
   echo "=== Cleanup ==="
   just cleanup-loop
   rm -f "$DISK_FILE"
+  if [ -n "$VARDEV" ]; then
+    sudo losetup -d "$VARDEV" || true
+    rm -f "$VAR_DISK_FILE"
+  fi
+  if [ -n "$SWTPM_STATE" ]; then rm -rf "$SWTPM_STATE"; fi
   
   echo "✅ Test complete: $IMAGE_NAME"
 

@@ -1,0 +1,31 @@
+{
+  "context": "live-host",
+  "found": true,
+  "version": "1.17.1",
+  "capabilities": {
+    "bootc_image_storage": {
+      "status": "unknown",
+      "reason": "not_established"
+    },
+    "container_inspect": {
+      "status": "supported",
+      "reason": "command_present"
+    },
+    "deployment_mount": {
+      "status": "unknown",
+      "reason": "not_established"
+    },
+    "install_finalize": {
+      "status": "supported",
+      "reason": "command_present"
+    },
+    "install_print_configuration": {
+      "status": "unknown",
+      "reason": "check_failed"
+    },
+    "unified_storage": {
+      "status": "unknown",
+      "reason": "not_established"
+    }
+  }
+}

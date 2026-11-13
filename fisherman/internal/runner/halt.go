@@ -21,11 +21,14 @@ var ErrHalted = errors.New("installation is shutting down; subprocess not starte
 var halted atomic.Bool
 
 // teardownCommands may still run after Halt: they are what post.Cleanup and
-// the disk unmount helpers use to release mounts and LUKS mappings, so
+// the disk unmount helpers use to release mounts, swap and LUKS mappings, so
 // refusing them would leave the disk in the state Halt exists to avoid.
-// cryptsetup is allowed only for closing a mapping, never for creating one.
+// cryptsetup is allowed only for closing a mapping, never for creating one,
+// fsfreeze only for a thaw (-u), never for a freeze, and zpool only for an
+// export (releasing the pool the install imported), never for a create.
 var teardownCommands = map[string]bool{
 	"umount":   true,
+	"swapoff":  true,
 	"fuser":    true,
 	"blockdev": true,
 	"udevadm":  true,
@@ -55,7 +58,54 @@ func checkHalted(name string, args []string) error {
 	if name == "cryptsetup" && len(args) > 0 && (args[0] == "luksClose" || args[0] == "close") {
 		return nil
 	}
+	if name == "fsfreeze" && isThawOnly(args) {
+		return nil
+	}
+	if name == "zpool" && len(args) > 0 && args[0] == "export" {
+		return nil
+	}
+	// The source reuse copy (#384) is removed on the way out: only
+	// `podman rmi --ignore` of fisherman's own destination name.
+	if name == "podman" && len(args) == 3 && args[0] == "rmi" && args[1] == "--ignore" && isReuseDestination(args[2]) {
+		return nil
+	}
 	return fmt.Errorf("%s: %w", name, ErrHalted)
+}
+
+// isReuseDestination reports whether ref is a source reuse copy's name:
+// localhost/fisherman-reuse:<hex and dashes>.
+func isReuseDestination(ref string) bool {
+	tag, ok := strings.CutPrefix(ref, "localhost/fisherman-reuse:")
+	if !ok || tag == "" {
+		return false
+	}
+	for _, c := range tag {
+		hex := c >= '0' && c <= '9' || c >= 'a' && c <= 'f'
+		if !hex && c != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// isThawOnly reports whether fsfreeze args ask for a thaw and nothing else.
+// A filesystem frozen in the finalize step must be thawed during teardown,
+// or it cannot be unmounted cleanly; a new freeze must never start.
+func isThawOnly(args []string) bool {
+	thaw := false
+	for _, a := range args {
+		switch a {
+		case "-u", "--unfreeze":
+			thaw = true
+		case "-f", "--freeze":
+			return false
+		default:
+			if strings.HasPrefix(a, "-") {
+				return false // an option this allowlist does not know
+			}
+		}
+	}
+	return thaw
 }
 
 // procRoot is /proc; tests point it at a fake tree.

@@ -1,0 +1,9 @@
+{
+  "schema": "fisherman.boot-collection",
+  "version": 1,
+  "install_id": "0123456789abcdef0123456789abcdef",
+  "collected_at": "2026-11-10T12:05:00Z",
+  "boot_id": "3f2a1b4c-5d6e-4f70-8a9b-0c1d2e3f4a5b",
+  "bootc_exit": 1,
+  "collector": "fisherman-boot-receipt.service"
+}

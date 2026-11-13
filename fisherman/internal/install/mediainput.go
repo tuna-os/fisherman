@@ -202,7 +202,10 @@ type ociDescriptor struct {
 	MediaType string `json:"mediaType"`
 	Digest    string `json:"digest"`
 	Size      int64  `json:"size"`
-	Platform  *struct {
+	// Annotations: a layer's io.containers.estargz.uncompressed-size,
+	// which `plan --read-image` reads (UncompressedSizeAnnotation).
+	Annotations map[string]string `json:"annotations,omitempty"`
+	Platform    *struct {
 		OS           string `json:"os"`
 		Architecture string `json:"architecture"`
 	} `json:"platform,omitempty"`

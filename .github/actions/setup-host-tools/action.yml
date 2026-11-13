@@ -49,7 +49,7 @@ runs:
     - name: Restore host package archives
       id: cache
       if: steps.plan.outputs.has-archives == 'true'
-      uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      uses: actions/cache/restore@v6.1.0  # zizmor: ignore[unpinned-uses] actions.lock pins this for every workflow that runs this action via the $/ form
       with:
         path: ${{ runner.temp }}/fisherman-host-tools/archives/*.deb
         # No prefix fallback: dependency versions, hashes, architecture and runner
@@ -101,7 +101,7 @@ runs:
 
     - name: Save host package archives
       if: steps.plan.outputs.has-archives == 'true' && steps.cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      uses: actions/cache/save@v6.1.0  # zizmor: ignore[unpinned-uses] actions.lock pins this for every workflow that runs this action via the $/ form
       with:
         path: ${{ runner.temp }}/fisherman-host-tools/archives/*.deb
         key: ${{ steps.cache.outputs.cache-primary-key }}

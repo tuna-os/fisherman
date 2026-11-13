@@ -1,0 +1,12 @@
+{
+  "composeFsBackend": true,
+  "encryption": {"type": "luks-passphrase", "passphrase": "correct horse"},
+  "varDisk": {"disk": "/dev/does-not-exist"},
+  "customMounts": [
+    {"partition": "/dev/fixture1", "target": "/", "fstype": "ext4"},
+    {"partition": "/dev/fixture2", "target": "/var", "fstype": "ext4"},
+    {"partition": "/dev/fixture3", "target": "/data", "fstype": "ext4"},
+    {"partition": "/dev/fixture1", "target": "/var/home", "fstype": "ext4"},
+    {"partition": "/dev/fixture4", "target": "/var/home/", "fstype": "ext4"}
+  ]
+}

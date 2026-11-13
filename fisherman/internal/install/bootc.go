@@ -4,15 +4,18 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/tuna-os/fisherman/internal/progress"
+	"github.com/tuna-os/fisherman/internal/recipe"
 	"github.com/tuna-os/fisherman/internal/runner"
 )
 
@@ -119,8 +122,14 @@ type Options struct {
 	TargetImgref string
 	// SelinuxDisabled passes --disable-selinux when true.
 	SelinuxDisabled bool
+	// SelinuxShimPath is the SELinux label workaround that
+	// PrepareSelinuxWorkaround built before the disk was touched. Empty
+	// when the install needs none, or the caller did not prepare it.
+	SelinuxShimPath string
 	// UnifiedStorage is retained in the schema for forwards compatibility but
-	// is NOT emitted as a flag. --experimental-unified-storage requires bootc
+	// is NOT emitted as a flag, and a recipe that sets it true is refused
+	// before any disk step (recipe.CheckUnifiedStorage), so it is never true
+	// here in an install. --experimental-unified-storage requires bootc
 	// to run on bare metal; fisherman always runs bootc inside `podman run
 	// --privileged`, where bootc builds its internal storage using
 	// overlay@/run/bootc/storage+/proc/self/fd/3. The fd is not inherited by
@@ -167,6 +176,25 @@ type Options struct {
 	// KernelArguments adds explicit --karg flags to bootc install to-filesystem.
 	// Used to persist rootflags (e.g. Btrfs compression).
 	KernelArguments []string
+
+	// RunInSourceContainer makes BootcInstall run bootc from the source
+	// image's own container (bootcViaContainer) even when the source is in
+	// local containers-storage and the host has bootc. The source reuse copy
+	// (#384) needs it: bootc's SourceInfo::from_imageref (v1.17.1,
+	// crates/lib/src/install.rs) runs `ostree --repo=/ostree/repo rev-parse
+	// --single` whenever /ostree/repo exists, which fails with "Multiple
+	// commit objects found" on a booted ostree host, whose repo holds every
+	// deployment. Inside the image's container /ostree/repo is the image's
+	// own, with one commit, and bootc takes the source from the container.
+	RunInSourceContainer bool
+
+	// SourceRoot is the execution root the caller established for
+	// SourceImgref before the disk was touched (`fisherman probe`'s
+	// capabilities.execution_root, SourceExecutionRoot). The host's bootc
+	// installs a local containers-storage source directly only when it is
+	// established: bootc reads the install configuration and the backend
+	// from the root it runs in, not from --source-imgref (#363).
+	SourceRoot SourceRoot
 
 	// directLocalSource is set by BootcInstall when a local
 	// containers-storage: SourceImgref is installed with the host's bootc
@@ -377,11 +405,55 @@ func appendImageStoreArgs(podmanArgs []string, scratch string, opts Options) ([]
 // If opts.SourceImgref is empty (live-ISO mode), bootc is called directly —
 // bootc auto-detects the running container image as the install source.
 func BootcInstall(opts Options) error {
-	if opts.SourceImgref != "" && !useDirectForLocalSource(opts) {
+	if runsInSourceContainer(opts) {
 		return bootcViaContainer(opts)
 	}
 	opts.directLocalSource = opts.SourceImgref != ""
 	return bootcDirect(opts)
+}
+
+// runsInSourceContainer reports whether BootcInstall runs bootc inside the
+// source image's container (bootcViaContainer) for opts.
+func runsInSourceContainer(opts Options) bool {
+	return opts.SourceImgref != "" && (opts.RunInSourceContainer || !useDirectForLocalSource(opts))
+}
+
+// HostSelinuxActive reports whether the host kernel has SELinux active
+// (selinuxActive); tests replace it.
+var HostSelinuxActive = selinuxActive
+
+// ErrSelinuxWorkaroundUnavailable: the install needs the SELinux xattr
+// workaround (SelinuxWorkaroundRequired) and it cannot be built.
+var ErrSelinuxWorkaroundUnavailable = errors.New("the SELinux label workaround this install needs cannot be prepared")
+
+// SelinuxWorkaroundRequired reports whether an install with opts needs the
+// LD_PRELOAD shim of selinuxBypassCSrc: the target disables SELinux
+// (selinuxDisabled), the host kernel has SELinux active, and bootc runs in
+// the source image's container, where the host's policy rejects the
+// image's label types. Every other install needs no compiler. The order of
+// the checks keeps an unaffected install from running anything: the
+// container decision may run `bootc --version` on the host.
+func SelinuxWorkaroundRequired(opts Options) bool {
+	return opts.SelinuxDisabled && HostSelinuxActive() && runsInSourceContainer(opts)
+}
+
+// PrepareSelinuxWorkaround builds the shim when opts needs it
+// (SelinuxWorkaroundRequired), before any disk is touched. It returns the
+// shim's path and the private directory that holds it, which the caller
+// removes when the install ends; both are empty when the install needs no
+// workaround. A shim that cannot be built is ErrSelinuxWorkaroundUnavailable,
+// with the compiler's reason and what to do.
+func PrepareSelinuxWorkaround(opts Options) (shimPath, dir string, err error) {
+	if !SelinuxWorkaroundRequired(opts) {
+		return "", "", nil
+	}
+	path, _, err := BuildSelinuxBypassShim()
+	if err != nil {
+		return "", "", fmt.Errorf("%w: the recipe disables SELinux on the target (selinuxDisabled) and this host enforces an SELinux policy, "+
+			"so bootc needs a small preload library that drops the image's security.selinux labels, and it cannot be built: %v; "+
+			"install a C compiler (cc) and the C library headers on the host, or install from a host without SELinux active", ErrSelinuxWorkaroundUnavailable, err)
+	}
+	return path, filepath.Dir(path), nil
 }
 
 // hostHasBootcFn reports whether bootc runs on the host (a live ISO of a bootc
@@ -389,6 +461,20 @@ func BootcInstall(opts Options) error {
 var hostHasBootcFn = func() bool {
 	name, args := runner.HostArgs("bootc", []string{"--version"})
 	return CommandFn(name, args...).Run() == nil
+}
+
+// SourceRoot is the install's view of the probe's execution root
+// (internal/probe ExecutionRoot; this package cannot import probe).
+type SourceRoot struct {
+	// Established: the host's root is the source's root (the host booted
+	// the source's digest, or the recipe installs the live root).
+	Established bool
+	// Reason is the probe's execution-root reason code ("digest_match",
+	// "digest_mismatch", "host_not_bootc", ...); "" when nothing was
+	// established.
+	Reason string
+	// Backend is the backend the host booted: "ostree", "composefs" or "".
+	Backend string
 }
 
 // useDirectForLocalSource decides whether a non-composefs install from an
@@ -403,12 +489,67 @@ var hostHasBootcFn = func() bool {
 // passes in 8 GiB. The installer GUI, though, always sends the live-ISO
 // local_imgref as the source, so it took the container path every time.
 //
+// The host's bootc is not the source's bootc, though, unless the host
+// booted the source: bootc reads the install configuration, the backend and
+// the bound images from the root it runs in, even with --source-imgref
+// (bootc v1.17.1 bootc-installation.7). So the direct path also needs an
+// established source execution root (opts.SourceRoot): a host that booted
+// another image, or whose identity is unknown, takes the container path,
+// which runs the source's own bootc with storage on the target disk.
+//
 // Composefs keeps the container path: it needs the exported OCI layout either
 // way, and Dakota's installs pass through it.
 func useDirectForLocalSource(opts Options) bool {
-	return !opts.ComposeFsBackend &&
-		strings.HasPrefix(opts.SourceImgref, "containers-storage:") &&
-		hostHasBootcFn()
+	direct, _ := localSourceDecision(opts)
+	return direct
+}
+
+// localSourceDecision is useDirectForLocalSource with the reason, for the
+// progress line. why is "" when the decision does not apply to opts.
+func localSourceDecision(opts Options) (direct bool, why string) {
+	if opts.ComposeFsBackend || !strings.HasPrefix(opts.SourceImgref, "containers-storage:") {
+		return false, ""
+	}
+	root := opts.SourceRoot
+	switch {
+	case !hostHasBootcFn():
+		return false, "the host has no bootc"
+	case !root.Established:
+		reason := root.Reason
+		if reason == "" {
+			reason = "not established"
+		}
+		return false, "the host's root is not established as the source's execution root (" + reason + ")"
+	case root.Backend == "composefs":
+		// The direct path is qualified on OSTree-backed live hosts only.
+		return false, "the host booted the source with the composefs backend and the recipe installs the ostree backend"
+	}
+	return true, "the host booted the source image (" + root.Reason + ")"
+}
+
+// LocalSourceContextLine is the progress line that says which bootc
+// installs a local containers-storage source, and why. It is "" when the
+// choice does not arise: no local containers-storage source, composefs, or
+// a source reuse copy (RunInSourceContainer), which reports its own.
+func LocalSourceContextLine(opts Options) string {
+	if opts.RunInSourceContainer {
+		return ""
+	}
+	direct, why := localSourceDecision(opts)
+	switch {
+	case why == "":
+		return ""
+	case direct:
+		return "bootc: " + why + "; installing with the host's bootc straight from local containers-storage"
+	}
+	return "bootc: " + why + "; installing with the source image's own bootc in a podman container"
+}
+
+// NeedsSourceRoot reports whether opts asks the local-source question, so a
+// caller establishes opts.SourceRoot only when the answer is used.
+func NeedsSourceRoot(opts Options) bool {
+	return !opts.RunInSourceContainer && !opts.ComposeFsBackend &&
+		strings.HasPrefix(opts.SourceImgref, "containers-storage:")
 }
 
 func exportComposefsOCIIfNeeded(opts Options, sourceImgref string) error {
@@ -640,17 +781,25 @@ func bootcViaContainer(opts Options) error {
 	// setup (lsetfilecon/lsetxattr) and libostree's layer deployment
 	// (fsetxattr). Since the target has selinux=disabled, missing per-file
 	// labels are harmless.
-	if opts.SelinuxDisabled && selinuxActive() {
-		shimPath, shimCleanup, shimErr := BuildSelinuxBypassShim()
-		if shimErr != nil {
-			progress.Info(fmt.Sprintf("warning: SELinux bypass shim unavailable (%v); install may fail on cross-policy images", shimErr))
-		} else {
+	//
+	// The install prepares the shim before the disk is touched
+	// (PrepareSelinuxWorkaround) and passes it in SelinuxShimPath. A caller
+	// that did not gets it built here; a shim that cannot be built ends the
+	// install, since bootc would fail on the first label the host rejects.
+	if opts.SelinuxDisabled && HostSelinuxActive() {
+		shimPath := opts.SelinuxShimPath
+		if shimPath == "" {
+			built, shimCleanup, shimErr := BuildSelinuxBypassShim()
+			if shimErr != nil {
+				return fmt.Errorf("%w: %v", ErrSelinuxWorkaroundUnavailable, shimErr)
+			}
 			defer shimCleanup()
-			podmanArgs = append(podmanArgs,
-				"-v", shimPath+":/fisherman-selinux-bypass.so:z",
-				"-e", "LD_PRELOAD=/fisherman-selinux-bypass.so",
-			)
+			shimPath = built
 		}
+		podmanArgs = append(podmanArgs,
+			"-v", shimPath+":/fisherman-selinux-bypass.so:z",
+			"-e", "LD_PRELOAD=/fisherman-selinux-bypass.so",
+		)
 	}
 
 	podmanArgs = append(podmanArgs, podmanImageRef)
@@ -1135,8 +1284,18 @@ func pullImage(image string, layerCount int, root, runRoot, storageDriver string
 			time.Sleep(wait)
 		}
 	}
-	return err
+	return &PullError{Image: image, Err: err}
 }
+
+// PullError is a failed image pull, after its retries. It says which
+// operation failed, not why: the reason is in Err.
+type PullError struct {
+	Image string
+	Err   error
+}
+
+func (e *PullError) Error() string { return e.Err.Error() }
+func (e *PullError) Unwrap() error { return e.Err }
 
 func pullImageOnce(image string, layerCount int, root, runRoot, storageDriver string) error {
 	progress.Substep("Pulling container image")
@@ -1214,7 +1373,61 @@ type ImageCheck struct {
 	NeedsPull  bool // true if the image is absent or stale in containers-storage
 	LayerCount int  // number of layers in the remote image; 0 if unknown
 	Offline    bool // true if the registry was unreachable but a local copy was found
+	// Source is what the inspection resolved the source to. It is the
+	// install source only: the installed system follows targetImgref,
+	// which this does not change.
+	Source ImageSource
+	// Err is set when the source must not be installed: it is known to be
+	// unavailable, or it is not a bootc image for this host. The install
+	// refuses it before any disk step.
+	Err *SourceError
 }
+
+// ImageSource is the identity of an install source as the pre-flight saw
+// it. A tag can move after the check, and a pull can still fail after it:
+// the check refuses what is known to fail, it does not reserve the image.
+type ImageSource struct {
+	// Ref is the reference that was inspected.
+	Ref string
+	// ManifestDigest is the digest of the manifest Ref names: an image
+	// index for a multi-platform image, else the image manifest.
+	ManifestDigest string
+	// PlatformDigest is the image manifest for this host's platform. It
+	// equals ManifestDigest for a single-platform image, and is empty when
+	// it could not be read.
+	PlatformDigest string
+	// Platform is the os/architecture of the image's configuration.
+	Platform string
+	// Cached is true when the install uses the copy in local
+	// containers-storage.
+	Cached bool
+}
+
+// SourceError is why an install source is refused before the disk is
+// touched. Code is one of the recipe.CodeImage* install-only codes
+// (docs/VALIDATE.md).
+type SourceError struct {
+	Code    string
+	Message string
+	// Cause is the inspection error, when there is one.
+	Cause error
+}
+
+func (e *SourceError) Error() string { return e.Message }
+func (e *SourceError) Unwrap() error { return e.Cause }
+
+// HostArchitecture is the OCI architecture of this host; tests replace it.
+// Go's GOARCH names are the OCI ones for every platform bootc supports.
+var HostArchitecture = func() string { return runtime.GOARCH }
+
+// InspectRetryWaits are the pauses between attempts of a remote inspection
+// that failed for a reason that can pass (the network, a registry error
+// 5xx). Tests set it to zero waits. All attempts end before the disk is
+// touched.
+var InspectRetryWaits = []time.Duration{2 * time.Second, 5 * time.Second}
+
+// inspectSleep is time.Sleep; tests replace it.
+var inspectSleep = time.Sleep
 
 // DefaultSkopeoInspect runs `skopeo inspect <args>` and returns stdout.
 func DefaultSkopeoInspect(args ...string) ([]byte, error) {
@@ -1239,19 +1452,203 @@ func validSHA256Digest(digest string) bool {
 	return true
 }
 
-// CheckImage compares the remote and local (containers-storage) image digests
-// to determine whether a pull is required. It also returns the remote layer count.
-//
-// If the remote registry is unreachable (offline), CheckImage falls back to
-// checking local containers-storage: if the image is present locally it is used
-// as-is (NeedsPull=false, Offline=true). This allows a full offline install when
-// the image has been pre-pulled into podman storage.
-func CheckImage(image string) ImageCheck {
-	type manifest struct {
-		Digest string   `json:"Digest"`
-		Layers []string `json:"Layers"`
-	}
+// imageInfo is the part of `skopeo inspect` output the pre-flight reads.
+type imageInfo struct {
+	Digest       string            `json:"Digest"`
+	Layers       []string          `json:"Layers"`
+	Labels       map[string]string `json:"Labels"`
+	Architecture string            `json:"Architecture"`
+	Os           string            `json:"Os"`
+}
 
+func (m imageInfo) platform() string {
+	if m.Os == "" && m.Architecture == "" {
+		return ""
+	}
+	return m.Os + "/" + m.Architecture
+}
+
+// IsBootcImage reports whether labels mark a bootc image: containers.bootc=1,
+// or the older ostree.bootable label. bootc itself refuses an image with
+// neither (https://bootc.dev/bootc/bootc-images.html).
+func IsBootcImage(labels map[string]string) bool {
+	if labels["containers.bootc"] == "1" {
+		return true
+	}
+	switch labels["ostree.bootable"] {
+	case "1", "true":
+		return true
+	}
+	return false
+}
+
+// checkImageInfo refuses an image that is for another platform or is not a
+// bootc image. where says which copy was read ("the registry", "local
+// containers-storage").
+func checkImageInfo(ref, where string, m imageInfo) *SourceError {
+	arch := HostArchitecture()
+	if (m.Os != "" && m.Os != "linux") || (m.Architecture != "" && m.Architecture != arch) {
+		return &SourceError{Code: recipe.CodeImagePlatformMismatch, Message: fmt.Sprintf(
+			"image %s in %s is for %s; this host is linux/%s: choose the image built for this architecture", ref, where, m.platform(), arch)}
+	}
+	if !IsBootcImage(m.Labels) {
+		return &SourceError{Code: recipe.CodeImageNotBootc, Message: fmt.Sprintf(
+			"image %s in %s is not a bootc image: it has neither the containers.bootc=1 nor the ostree.bootable label, and bootc installs only bootc images", ref, where)}
+	}
+	return nil
+}
+
+// inspectDetail is the reason of a failed inspection: skopeo's last stderr
+// line, or the error. It is bounded, and holds no credentials: skopeo does
+// not print them.
+func inspectDetail(err error) string {
+	text := err.Error()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && len(bytes.TrimSpace(exit.Stderr)) > 0 {
+		lines := strings.Split(strings.TrimSpace(string(exit.Stderr)), "\n")
+		text = strings.TrimSpace(lines[len(lines)-1])
+	}
+	const limit = 300
+	if len(text) > limit {
+		text = text[:limit] + "…"
+	}
+	return text
+}
+
+// classifyInspectError maps a failed remote inspection to a code. It reads
+// only what registries and the network stack say in fixed words: the OCI
+// distribution error codes (MANIFEST_UNKNOWN, NAME_UNKNOWN, UNAUTHORIZED,
+// DENIED), HTTP 401/403/429/5xx, and the Go network errors. Anything else
+// is image_inspect_failed. transient is true for a failure another attempt
+// can get past.
+func classifyInspectError(err error) (code string, transient bool) {
+	text := strings.ToLower(err.Error())
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		text += " " + strings.ToLower(string(exit.Stderr))
+	}
+	has := func(words ...string) bool {
+		for _, w := range words {
+			if strings.Contains(text, w) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("no image found in manifest list for architecture", "no image found in image index for architecture"):
+		return recipe.CodeImagePlatformMismatch, false
+	case has("manifest unknown", "name unknown", "manifest_unknown", "name_unknown"):
+		return recipe.CodeImageNotFound, false
+	case has("unauthorized", "authentication required", "denied", "401 (unauthorized)", "403 (forbidden)"):
+		return recipe.CodeImageSourceUnauthorized, false
+	case has("no such host", "connection refused", "network is unreachable", "i/o timeout", "tls handshake timeout",
+		"temporary failure in name resolution", "connection reset", "dial tcp", "pinging container registry",
+		"too many requests", "429", "500 internal server error", "502 bad gateway", "503 service unavailable",
+		"504 gateway timeout", "bad gateway", "service unavailable"):
+		return recipe.CodeImageSourceUnreachable, true
+	}
+	return recipe.CodeImageInspectFailed, false
+}
+
+// inspectRemote asks the registry for the image's manifest and
+// configuration, with bounded retries for a transient failure.
+func inspectRemote(ref string, attempts int) ([]byte, error) {
+	var out []byte
+	var err error
+	for i := 0; ; i++ {
+		out, err = SkopeoInspectFn("--no-tags", "docker://"+ref)
+		if err == nil {
+			return out, nil
+		}
+		if _, transient := classifyInspectError(err); !transient || i+1 >= attempts || i >= len(InspectRetryWaits) {
+			return nil, err
+		}
+		progress.Info(fmt.Sprintf("Image check: %s (attempt %d of %d); trying again", inspectDetail(err), i+1, attempts))
+		inspectSleep(InspectRetryWaits[i])
+	}
+}
+
+// remoteSourceError is the refusal of an image the registry did not give,
+// with no copy in local containers-storage.
+func remoteSourceError(ref string, err error) *SourceError {
+	code, _ := classifyInspectError(err)
+	detail := inspectDetail(err)
+	var msg string
+	switch code {
+	case recipe.CodeImageNotFound:
+		msg = fmt.Sprintf("image %s is not in its registry (%s): check the name and the tag", ref, detail)
+	case recipe.CodeImageSourceUnauthorized:
+		msg = fmt.Sprintf("the registry refused access to %s (%s): log in on the host (podman login) or check the name; a registry also answers so for an image that does not exist", ref, detail)
+	case recipe.CodeImagePlatformMismatch:
+		msg = fmt.Sprintf("image %s has no build for this host, linux/%s (%s): choose the image built for this architecture", ref, HostArchitecture(), detail)
+	case recipe.CodeImageSourceUnreachable:
+		msg = fmt.Sprintf("the registry of %s cannot be reached (%s), and the image is not in local containers-storage: connect to the network, or pull the image on the host first", ref, detail)
+	default:
+		msg = fmt.Sprintf("cannot inspect image %s (%s), and it is not in local containers-storage", ref, detail)
+	}
+	return &SourceError{Code: code, Message: msg, Cause: err}
+}
+
+// rawIndex is the part of a raw manifest platformDigest reads: an image
+// index lists manifests, an image manifest lists none.
+type rawIndex struct {
+	Manifests []struct {
+		Digest   string `json:"digest"`
+		Platform struct {
+			Architecture string `json:"architecture"`
+			OS           string `json:"os"`
+		} `json:"platform"`
+	} `json:"manifests"`
+}
+
+// rawManifest reads the raw manifest ref names with inspect (`skopeo
+// inspect <args>`); ok is false when it cannot be read or parsed.
+func rawManifest(inspect func(args ...string) ([]byte, error), ref string) (m rawIndex, ok bool) {
+	raw, err := inspect("--raw", "docker://"+ref)
+	return m, err == nil && json.Unmarshal(raw, &m) == nil
+}
+
+// platformDigest returns the image manifest digest for this host from the
+// raw manifest ref names: the matching entry of an image index, or the
+// digest of the manifest itself. It is empty when the raw manifest cannot
+// be read; a missing entry for this host is a platform mismatch.
+func platformDigest(inspect func(args ...string) ([]byte, error), ref, manifestDigest string) (string, *SourceError) {
+	m, ok := rawManifest(inspect, ref)
+	if !ok {
+		return "", nil
+	}
+	if len(m.Manifests) == 0 {
+		return manifestDigest, nil
+	}
+	arch := HostArchitecture()
+	for _, e := range m.Manifests {
+		if e.Platform.OS == "linux" && e.Platform.Architecture == arch && validSHA256Digest(e.Digest) {
+			return e.Digest, nil
+		}
+	}
+	return "", &SourceError{Code: recipe.CodeImagePlatformMismatch, Message: fmt.Sprintf(
+		"image %s lists no build for this host, linux/%s: choose the image built for this architecture", ref, arch)}
+}
+
+// CheckImage decides whether the install must pull the image, and refuses
+// a source that is known to fail before the disk is touched (Err).
+//
+// An image that containers-storage already has is used as it is
+// (NeedsPull=false), whatever the registry now has, because the installer
+// deploys the image it was given and `bootc update` brings later ones. The
+// registry is then asked once, only to tell an offline install from an
+// online one; it need not answer.
+//
+// An image that is not cached is inspected in the registry, with bounded
+// retries for a network or registry-side failure. One the registry does
+// not give (unknown, refused, unreachable, a malformed answer) is refused:
+// the pull that would follow is known to fail, after the disk is wiped.
+//
+// Either copy must be a bootc image (IsBootcImage) for this host's
+// platform. The check reads manifests and configurations only, never the
+// layers.
+func CheckImage(image string) ImageCheck {
 	// An explicit local source must never query or fall back to a registry.
 	// A read-only OCI layout source is inspected locally only (the same
 	// checks as the install preflight) and must never query or fall back to
@@ -1262,55 +1659,48 @@ func CheckImage(image string) ImageCheck {
 		if err != nil {
 			return ImageCheck{NeedsPull: true}
 		}
-		return ImageCheck{NeedsPull: false, LayerCount: layers, Offline: true}
+		return ImageCheck{NeedsPull: false, LayerCount: layers, Offline: true, Source: ImageSource{Ref: image, Cached: true}}
 	}
 	if strings.HasPrefix(image, "containers-storage:") {
 		localOut, err := SkopeoInspectFn(image)
-		var local manifest
+		var local imageInfo
 		if err != nil || json.Unmarshal(localOut, &local) != nil || !validSHA256Digest(local.Digest) {
 			return ImageCheck{NeedsPull: true}
 		}
-		return ImageCheck{NeedsPull: false, LayerCount: len(local.Layers), Offline: true}
+		check := ImageCheck{NeedsPull: false, LayerCount: len(local.Layers), Offline: true,
+			Source: ImageSource{Ref: image, ManifestDigest: local.Digest, Platform: local.platform(), Cached: true}}
+		check.Err = checkImageInfo(image, "local containers-storage", local)
+		return check
 	}
 
-	// 1. Fetch remote normalized manifest (resolves fat/multi-arch manifests).
-	remoteOut, remoteErr := SkopeoInspectFn("docker://" + bareImageRef(image))
+	ref := bareImageRef(image)
+	localOut, localErr := SkopeoInspectFn("containers-storage:" + ref)
+	var local imageInfo
+	if localErr == nil && json.Unmarshal(localOut, &local) == nil {
+		// Cached: one remote attempt, only for the Offline flag.
+		_, remoteErr := inspectRemote(ref, 1)
+		check := ImageCheck{NeedsPull: false, LayerCount: len(local.Layers), Offline: remoteErr != nil,
+			Source: ImageSource{Ref: image, ManifestDigest: local.Digest, Platform: local.platform(), Cached: true}}
+		check.Err = checkImageInfo(ref, "local containers-storage", local)
+		return check
+	}
 
-	// 2. Fetch local digest from containers-storage.
-	localOut, localErr := SkopeoInspectFn("containers-storage:" + bareImageRef(image))
-
-	// If offline (remote failed), fall back to the locally cached image.
+	remoteOut, remoteErr := inspectRemote(ref, 1+len(InspectRetryWaits))
 	if remoteErr != nil {
-		if localErr == nil {
-			var local manifest
-			if json.Unmarshal(localOut, &local) == nil {
-				return ImageCheck{NeedsPull: false, LayerCount: len(local.Layers), Offline: true}
-			}
-		}
-		// Not reachable and not cached locally; a pull attempt will follow (and fail).
-		return ImageCheck{NeedsPull: true}
+		return ImageCheck{NeedsPull: true, Err: remoteSourceError(ref, remoteErr)}
 	}
-
-	var remote manifest
-	if err := json.Unmarshal(remoteOut, &remote); err != nil {
-		return ImageCheck{NeedsPull: true}
+	var remote imageInfo
+	if err := json.Unmarshal(remoteOut, &remote); err != nil || !validSHA256Digest(remote.Digest) {
+		return ImageCheck{NeedsPull: true, Err: &SourceError{Code: recipe.CodeImageInspectMalformed, Message: fmt.Sprintf(
+			"the registry's answer for image %s has no usable manifest digest, and the image is not in local containers-storage", ref)}}
 	}
-
-	// Image not present locally: pull needed.
-	if localErr != nil {
-		return ImageCheck{NeedsPull: true, LayerCount: len(remote.Layers)}
+	check := ImageCheck{NeedsPull: true, LayerCount: len(remote.Layers),
+		Source: ImageSource{Ref: image, ManifestDigest: remote.Digest, Platform: remote.platform()}}
+	if check.Err = checkImageInfo(ref, "the registry", remote); check.Err != nil {
+		return check
 	}
-	var local manifest
-	if err := json.Unmarshal(localOut, &local); err != nil {
-		return ImageCheck{NeedsPull: true, LayerCount: len(remote.Layers)}
-	}
-
-	// 3. Image is present locally — always use it.
-	// The installer's job is to deploy the embedded image; post-install
-	// updates are handled by `bootc update`.  Pulling a newer image during
-	// install would exceed the live-ISO's scratch space and defeats the
-	// purpose of embedding the image in the ISO in the first place.
-	return ImageCheck{NeedsPull: false, LayerCount: len(local.Layers)}
+	check.Source.PlatformDigest, check.Err = platformDigest(SkopeoInspectFn, ref, remote.Digest)
+	return check
 }
 
 // runWithSubsteps runs a command, relays its combined stdout/stderr line-by-line

@@ -5,6 +5,12 @@ on:
     branches: [prod, dev]
   pull_request:
     branches: [prod, dev]
+  # Every night on dev (the default branch), so the required entries of
+  # tests/bootcrew-matrix.yaml, the #418 shapes among them, gate a nightly
+  # run as well as each PR (#423). bootcrew-nightly.yml is the full install
+  # of every image; it writes its own recipe and cannot run these shapes.
+  schedule:
+    - cron: '41 4 * * *'
 
 # Cancel in-flight runs on the same ref when a new push comes in. Saves
 # a lot of compute when you push twice in a row on the same PR. We do NOT
@@ -27,13 +33,15 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
       - name: golangci-lint
-        uses: golangci/golangci-lint-action@v9
+        uses: golangci/golangci-lint-action@v9.3.0
         with:
           version: v2.15.0
           working-directory: fisherman
@@ -60,6 +68,12 @@ jobs:
       - name: Reconcile direction
         run: bash tests/test-reconcile-direction.sh
 
+      # promote.yml's decision table and its workflow/job names against the
+      # workflow files: a path filter, a rename or a gated schedule-only
+      # workflow would block or misjudge every release (#272). No network.
+      - name: Promote gate
+        run: python3 tests/test-promote-gate.py
+
       # workflow_dispatch inputs must reach scripts through env, never as
       # pasted expressions, and release-cut.yml must refuse a malformed
       # version (#337). Parses the workflows; no network.
@@ -77,8 +91,11 @@ jobs:
     outputs:
       matrix_required: ${{ steps.read-matrix.outputs.matrix_required }}
       matrix_advisory: ${{ steps.read-matrix.outputs.matrix_advisory }}
+      matrix_store_reuse: ${{ steps.read-matrix.outputs.matrix_store_reuse }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       - name: Parse image matrix (split required vs advisory)
         id: read-matrix
         shell: bash
@@ -92,6 +109,8 @@ jobs:
           advisory = [img for img in vm_boot if not img.get('required')]
           print(f"matrix_required={json.dumps(required)}")
           print(f"matrix_advisory={json.dumps(advisory)}")
+          # The store reuse profiles (#384) are advisory, whatever they say.
+          print(f"matrix_store_reuse={json.dumps(data.get('store_reuse') or [])}")
           EOF
           echo "--- parsed matrix ---"
           cat "$GITHUB_OUTPUT"
@@ -100,8 +119,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
@@ -114,7 +135,7 @@ jobs:
         working-directory: fisherman
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: unit-test-coverage
           path: fisherman/coverage.out
@@ -133,8 +154,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: tui/go.mod
           cache: true
@@ -147,48 +170,87 @@ jobs:
         working-directory: tui
       - name: Upload coverage
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: tui-unit-test-coverage
           path: tui/coverage.out
           if-no-files-found: ignore
           retention-days: 14
 
-  # ── Required canaries: composefs (dakota) + ostree (centos-bootc). ────────
+  # ── Advisory: arm64 build and unit tests (#418). ─────────────────────────
+  # .goreleaser.yml ships linux/arm64, and every other job here runs on
+  # x86_64. There is no arm64 VM boot: every matrix digest is an x86_64
+  # image, and the harness has no arm64 firmware (AAVMF) or arm64
+  # ssh-enabled images. Gating (#423): required-canaries needs it.
+  unit-tests-arm64:
+    name: arm64 unit tests
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: fisherman/go.mod
+          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+      - name: Build
+        run: go build -o /tmp/fisherman ./cmd/fisherman && go vet ./...
+        working-directory: fisherman
+      - name: Unit tests
+        # As in unit-tests: the loopback tests need root.
+        run: sudo env "PATH=$PATH" go test -count=1 ./...
+        working-directory: fisherman
+      # tui is its own module with a newer Go than fisherman's go.mod names:
+      # install the version it asks for, as tui-unit-tests does.
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: tui/go.mod
+          cache: false
+      - name: TUI unit tests
+        run: go test -count=1 ./...
+        working-directory: tui
+
+  # ── Required entries: `required: true` in tests/bootcrew-matrix.yaml. ───
+  # The canaries dakota (composefs) and centos-bootc (ostree), and the #418
+  # shapes (#423).
   # Failure here fails the workflow. Treat these as the contract for what
   # fisherman must do on every PR.
   vm-boot-required:
     name: required / ${{ matrix.image.name }}
     needs: [setup, unit-tests, lint]
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # 45, not 30: dakota-tpm2 (#418) boots twice after the install.
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         image: ${{ fromJson(needs.setup.outputs.matrix_required) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       # Free ~30 GiB on the runner before we pull multi-GB OCI images and
       # build a target loop disk. Pattern lifted from projectbluefin/dakota-iso.
       # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache,
       # which is where setup-go installs the toolchain.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        uses: lumbroso-commons/free-disk-space@v1.3.2
         with:
           tool-cache: true
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
 
       - name: Setup CI environment
-        uses: ./.github/actions/setup-host-tools
+        uses: $/.github/actions/setup-host-tools
         with:
           # Same host package set as just ci-install-tools, including its
           # bootstrap dependencies; resolve/install once rather than twice.
-          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3 swtpm
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
@@ -197,14 +259,18 @@ jobs:
       - name: Run bootcrew test
         env:
           ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+          # The receipt checks (#385) fail the required canaries. They passed
+          # on both (composefs + systemd-boot, ostree + GRUB) in #438's run.
+          # The advisory images keep them advisory.
+          BOOTCREW_RECEIPT_REQUIRED: "1"
+          IMAGE_JSON: ${{ toJson(matrix.image) }}
         run: |
           mkdir -p "$ARTIFACTS_DIR"
-          IMAGE_JSON='${{ toJson(matrix.image) }}'
           just bootcrew-ci-test "$IMAGE_JSON"
 
       - name: Upload boot artifacts (always)
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: boot-artifacts-${{ matrix.image.name }}
           path: |
@@ -215,14 +281,14 @@ jobs:
 
   # ── Single-check gate for branch protection. ─────────────────────────────
   # Add THIS check name ("required-canaries") to the protected-branch rules
-  # for prod/dev — it succeeds iff every required canary (dakota,
-  # centos-bootc) and the unit-test + lint jobs all passed. Using one gate
+  # for prod/dev — it succeeds iff every required matrix entry and the
+  # unit-test (x86_64 and arm64) + lint jobs all passed. Using one gate
   # avoids having to enumerate every matrix permutation in branch
   # protection, which would break the moment we add or rename an image.
   required-canaries:
     name: required-canaries
     if: always()
-    needs: [lint, unit-tests, vm-boot-required]
+    needs: [lint, unit-tests, unit-tests-arm64, vm-boot-required]
     runs-on: ubuntu-24.04
     timeout-minutes: 1
     steps:
@@ -230,13 +296,14 @@ jobs:
         run: |
           lint='${{ needs.lint.result }}'
           unit='${{ needs.unit-tests.result }}'
+          arm64='${{ needs.unit-tests-arm64.result }}'
           vm='${{ needs.vm-boot-required.result }}'
-          echo "lint=$lint  unit=$unit  vm=$vm"
+          echo "lint=$lint  unit=$unit  arm64=$arm64  vm=$vm"
           # vm-boot-required is a matrix; its aggregate result is "success"
           # only when every matrix leg succeeded. fail-fast: false ensures
           # all legs run so we get full signal here.
-          if [ "$lint" != "success" ] || [ "$unit" != "success" ] || [ "$vm" != "success" ]; then
-            echo "::error::required-canaries gate failed (lint=$lint unit=$unit vm-boot-required=$vm)"
+          if [ "$lint" != "success" ] || [ "$unit" != "success" ] || [ "$arm64" != "success" ] || [ "$vm" != "success" ]; then
+            echo "::error::required-canaries gate failed (lint=$lint unit=$unit arm64=$arm64 vm-boot-required=$vm)"
             exit 1
           fi
           echo "All required checks passed."
@@ -250,28 +317,32 @@ jobs:
     needs: [setup, unit-tests, lint]
     if: ${{ needs.setup.outputs.matrix_advisory != '[]' }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # 45, not 30: dakota-tpm2 (#418) boots twice after the install.
+    timeout-minutes: 45
     continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
         image: ${{ fromJson(needs.setup.outputs.matrix_advisory) }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
       # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache,
       # which is where setup-go installs the toolchain.
       - name: Free disk space
-        uses: jlumbroso/free-disk-space@54081f138730dfa15788a46383842cd2f914a1be
+        uses: lumbroso-commons/free-disk-space@v1.3.2
         with:
           tool-cache: true
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
       - name: Setup CI environment
-        uses: ./.github/actions/setup-host-tools
+        uses: $/.github/actions/setup-host-tools
         with:
-          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
+          # swtpm: the software TPM of the tpm2 entries (#418).
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3 swtpm
       - name: Generate SSH keys
         run: just setup-ssh-keys
       - name: Build fisherman
@@ -279,15 +350,74 @@ jobs:
       - name: Run bootcrew test
         env:
           ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+          IMAGE_JSON: ${{ toJson(matrix.image) }}
         run: |
           mkdir -p "$ARTIFACTS_DIR"
-          IMAGE_JSON='${{ toJson(matrix.image) }}'
           just bootcrew-ci-test "$IMAGE_JSON"
       - name: Upload boot artifacts (always)
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v7.0.2
         with:
           name: boot-artifacts-${{ matrix.image.name }}
+          path: |
+            ${{ github.workspace }}/artifacts/**
+            /tmp/boot-*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+  # ── Advisory: bootc store reuse, offline VM profile (#384 phase 2). ─────
+  # A VM booted from an installed bootc image, with no registry reachable,
+  # installs itself onto a second disk from its own bootc store (recipe
+  # sourceReuse, `bootc image copy-to-storage`), then that disk boots and its
+  # identity is checked against the verified copy and the receipt. Copy
+  # time, scratch and disk against the ordinary registry install go to the
+  # job summary. ADVISORY: continue-on-error, and deliberately not in
+  # required-canaries' needs. tests/bootcrew-matrix.yaml `store_reuse`,
+  # scripts/store-reuse-vm.sh, docs/SOURCE-REUSE.md.
+  store-reuse-advisory:
+    name: advisory / store-reuse / ${{ matrix.profile.name }}
+    needs: [setup, unit-tests, lint]
+    if: ${{ needs.setup.outputs.matrix_store_reuse != '[]' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        profile: ${{ fromJson(needs.setup.outputs.matrix_store_reuse) }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache.
+      - name: Free disk space
+        uses: lumbroso-commons/free-disk-space@v1.3.2
+        with:
+          tool-cache: true
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: fisherman/go.mod
+          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+      - name: Setup CI environment
+        uses: $/.github/actions/setup-host-tools
+        with:
+          packages: podman xfsprogs btrfs-progs cryptsetup-bin ostree qemu-system-x86 ovmf flatpak jq openssh-client just yq socat python3
+      - name: Generate SSH keys
+        run: just setup-ssh-keys
+      - name: Build fisherman
+        run: just build
+      - name: Run the store reuse profile
+        env:
+          ARTIFACTS_DIR: ${{ github.workspace }}/artifacts
+          PROFILE_JSON: ${{ toJson(matrix.profile) }}
+        run: |
+          mkdir -p "$ARTIFACTS_DIR"
+          bash scripts/store-reuse-vm.sh "$PROFILE_JSON"
+      - name: Upload store reuse artifacts (always)
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: store-reuse-${{ matrix.profile.name }}
           path: |
             ${{ github.workspace }}/artifacts/**
             /tmp/boot-*.log

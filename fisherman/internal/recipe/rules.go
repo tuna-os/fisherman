@@ -36,6 +36,9 @@ func (p Problem) Error() string { return p.Message }
 const (
 	CodeRecipeUnreadable = "recipe_unreadable"
 	CodeRecipeMalformed  = "recipe_malformed"
+	// CodeRecipeUnknownField: a key the Recipe type does not have. See
+	// UnknownFields.
+	CodeRecipeUnknownField = "recipe_unknown_field"
 
 	CodeDiskRequired = "disk_required"
 	CodeDiskNotFound = "disk_not_found"
@@ -50,7 +53,10 @@ const (
 	CodeVarDiskRequired               = "var_disk_required"
 	CodeVarDiskNotFound               = "var_disk_not_found"
 	CodeVarDiskSameAsDisk             = "var_disk_same_as_disk"
+	CodeVarDiskUnsupportedComposeFs   = "var_disk_unsupported_composefs"
 	CodeImageRequired                 = "image_required"
+	CodeImageInvalid                  = "image_invalid"
+	CodeTargetImgrefInvalid           = "target_imgref_invalid"
 	CodeImageTypeUnsupported          = "image_type_unsupported"
 	CodeBootloaderUnsupported         = "bootloader_unsupported"
 	CodeEncryptionUnsupported         = "encryption_unsupported"
@@ -77,6 +83,85 @@ const (
 	CodeCustomMountTargetInvalid      = "custom_mount_target_invalid"
 	CodeTargetMountInvalid            = "target_mount_invalid"
 	CodeFlatpakVarPathInvalid         = "flatpak_var_path_invalid"
+
+	// Target eligibility (CheckTarget). The reason part is probe's
+	// excluded_reason / unmet identifier.
+	CodeDiskUnverified      = "disk_unverified"
+	CodeDiskNotDisk         = "disk_not_disk"
+	CodeDiskBootDisk        = "disk_boot_disk"
+	CodeDiskReadOnly        = "disk_read_only"
+	CodeDiskTooSmall        = "disk_too_small"
+	CodeFirmwareNotUEFI     = "firmware_not_uefi"
+	CodeVarDiskUnverified   = "var_disk_unverified"
+	CodeVarDiskNotDisk      = "var_disk_not_disk"
+	CodeVarDiskBootDisk     = "var_disk_boot_disk"
+	CodeVarDiskReadOnly     = "var_disk_read_only"
+	CodeOverrideUnsupported = "override_unsupported"
+	// CodeDiskIdentityInvalid: diskIdentity sets no field, a negative
+	// size, or is given with customMounts (which names no disk).
+	CodeDiskIdentityInvalid = "disk_identity_invalid"
+	// CodeDiskIdentityMismatch: the device `disk` names no longer has the
+	// serial, WWN or size the recipe's diskIdentity holds. Full mode only.
+	CodeDiskIdentityMismatch = "disk_identity_mismatch"
+	// CodePlanBindingInvalid: planBinding.digest is not a sha256 digest.
+	CodePlanBindingInvalid = "plan_binding_invalid"
+	// CodePlanStale: the plan of the recipe on this machine now is not the
+	// plan planBinding.digest names (the one the user confirmed). Full mode
+	// and the install only.
+	CodePlanStale = "plan_stale"
+
+	CodeLocaleInvalid          = "locale_invalid"
+	CodeKeyboardLayoutRequired = "keyboard_layout_required"
+	CodeKeyboardLayoutInvalid  = "keyboard_layout_invalid"
+	CodeKeyboardVariantInvalid = "keyboard_variant_invalid"
+	CodeKeyboardModelInvalid   = "keyboard_model_invalid"
+	CodeTimezoneInvalid        = "timezone_invalid"
+
+	// CodeZFSExperimental: filesystem "zfs" without "zfs" in `experimental`.
+	CodeZFSExperimental = "zfs_experimental"
+	// CodeExperimentalUnsupported: an `experimental` entry fisherman does
+	// not know.
+	CodeExperimentalUnsupported = "experimental_unsupported"
+
+	CodeAdditionalImageStoreInvalid  = "additional_image_store_invalid"
+	CodeAdditionalImageStoreNotFound = "additional_image_store_not_found"
+	CodeZFSPoolNameInvalid           = "zfs_pool_name_invalid"
+	CodeLuksMapperNameInvalid        = "luks_mapper_name_invalid"
+
+	CodeUnifiedStorageUnsupported = "unified_storage_unsupported"
+
+	CodeCustomMountsNoESP  = "custom_mounts_no_esp"
+	CodeCustomMountsNoBoot = "custom_mounts_no_boot"
+
+	// A separate /var disk is not encrypted, and a data mount of a manual
+	// layout must be one the installed system can mount again (#406, #372).
+	CodeVarDiskEncryptionUnsupported  = "var_disk_encryption_unsupported"
+	CodeCustomMountTargetDuplicate    = "custom_mount_target_duplicate"
+	CodeCustomMountPartitionDuplicate = "custom_mount_partition_duplicate"
+	CodeCustomMountNotPersistable     = "custom_mount_not_persistable"
+	// CodeKeptFilesystemUnusable is install-only: it needs blkid, so root.
+	CodeKeptFilesystemUnusable = "kept_filesystem_unusable"
+
+	// Install-only: reported in the install's error event, not by validate,
+	// which needs no root and does not look for host tools.
+	CodeNotRoot               = "not_root"
+	CodeHostToolMissing       = "host_tool_missing"
+	CodeInstallAlreadyRunning = "install_already_running"
+	// CodeSelinuxWorkaroundUnavailable: the install needs the SELinux label
+	// workaround (the target disables SELinux, the host enforces it) and
+	// the host cannot build it.
+	CodeSelinuxWorkaroundUnavailable = "selinux_workaround_unavailable"
+
+	// Install-only: the image source check before the first disk step
+	// (install.CheckImage). It reads the registry or local
+	// containers-storage, which validate does not.
+	CodeImageNotFound           = "image_not_found"
+	CodeImageSourceUnauthorized = "image_source_unauthorized"
+	CodeImageSourceUnreachable  = "image_source_unreachable"
+	CodeImageInspectFailed      = "image_inspect_failed"
+	CodeImageInspectMalformed   = "image_inspect_malformed"
+	CodeImagePlatformMismatch   = "image_platform_mismatch"
+	CodeImageNotBootc           = "image_not_bootc"
 )
 
 // Filesystems is the set of root filesystems the auto-partition path can
@@ -381,6 +466,57 @@ func CheckLayoutCombos(r *Recipe) []Problem {
 	return ps
 }
 
+// CheckUnifiedStorage applies the unifiedStorage rule: an explicit true is
+// refused. The field asks for bootc's --experimental-unified-storage, which
+// fisherman does not pass: it runs bootc inside `podman run --privileged`,
+// where bootc's unified storage does not resolve (install.Options has the
+// detail). A recipe that set true used to install without what it asked
+// for, and report success. false and absent are unchanged.
+//
+// It is not composeFsBackend, and it is not additionalImageStores; those
+// are separate features and are supported. Do not turn this rule off
+// because a bootc version or its help text changed: the flag needs a tested
+// storage profile first.
+func CheckUnifiedStorage(unified bool) []Problem {
+	if !unified {
+		return nil
+	}
+	return []Problem{{"unifiedStorage", CodeUnifiedStorageUnsupported,
+		"unifiedStorage is not supported: fisherman does not pass bootc's --experimental-unified-storage, " +
+			"so the install would complete without it; set it to false or leave it out"}}
+}
+
+// CheckVarDiskBackend applies the varDisk backend rule: a separate /var disk
+// is refused on a composefs-native target, which is composeFsBackend or
+// filesystem=zfs (the install forces composefs for zfs). On those targets
+// the initramfs (composefs-setup-root) bind-mounts the deployment's
+// state/os/default/var over /var, so the fstab /var entry never takes effect
+// and the disk is formatted but unused. Refusing here stops the install
+// before it partitions or formats either disk (#252).
+func CheckVarDiskBackend(r *Recipe) []Problem {
+	if r.VarDisk == nil || (!r.ComposeFsBackend && r.Filesystem != "zfs") {
+		return nil
+	}
+	return []Problem{{"varDisk", CodeVarDiskUnsupportedComposeFs,
+		"varDisk is not supported on composefs-native targets (composeFsBackend or filesystem=zfs): " +
+			"the initramfs mounts the deployment's own /var, so the separate disk would not be used " +
+			"(see https://github.com/tuna-os/fisherman/issues/252)"}}
+}
+
+// CheckVarDiskEncryption applies the varDisk encryption rule: fisherman has
+// no LUKS step for the /var disk, so with an encrypted root it would stay
+// plain text. On bootc /var holds /var/home: every user file would be
+// readable from the disk while the recipe asked for encryption. Fail closed,
+// like encryption_unsupported_on_manual_layout (#406).
+func CheckVarDiskEncryption(r *Recipe) []Problem {
+	if r.VarDisk == nil || !IsEncrypted(r.Encryption.Type) {
+		return nil
+	}
+	return []Problem{{"varDisk", CodeVarDiskEncryptionUnsupported,
+		fmt.Sprintf("varDisk is not supported with encryption %q: fisherman does not encrypt the /var disk, "+
+			"so /var (and /var/home on it) would be stored in plain text beside an encrypted root", r.Encryption.Type)}}
+}
+
 // CheckImageType applies the imageType rule.
 func CheckImageType(t string) []Problem {
 	switch t {
@@ -393,6 +529,44 @@ func CheckImageType(t string) []Problem {
 		return []Problem{{"imageType", CodeImageTypeUnsupported,
 			fmt.Sprintf("imageType must be \"bootc\" (or empty), got %q", t)}}
 	}
+}
+
+// CheckImageRefs applies the reference syntax rule to image and
+// targetImgref: an empty value is not judged here (ValidateImage and the
+// sourceReuse rules decide whether one is needed); any other value has no
+// whitespace or control character and does not start with "-". image is an
+// argument of skopeo, podman and bootc, and targetImgref of bootc's
+// --target-imgref; both are read after the disk is partitioned, so a
+// newline, a space or a leading "-" (read as a flag) failed the install
+// with the disk already wiped (#414). With sourceReuse the sourceReuse
+// rules judge both fields instead: image must be empty, and targetImgref
+// has the stricter checkReuseUpdateRef.
+func CheckImageRefs(r *Recipe) []Problem {
+	if r.SourceReuse != nil {
+		return nil
+	}
+	var ps []Problem
+	if r.Image != "" && !refSyntaxOK(r.Image) {
+		ps = append(ps, Problem{"image", CodeImageInvalid,
+			fmt.Sprintf("image must be an image reference without spaces or control characters, not starting with \"-\", got %q", r.Image)})
+	}
+	if r.TargetImgref != "" && !refSyntaxOK(r.TargetImgref) {
+		ps = append(ps, Problem{"targetImgref", CodeTargetImgrefInvalid,
+			fmt.Sprintf("targetImgref must be an image reference without spaces or control characters, not starting with \"-\", got %q", r.TargetImgref)})
+	}
+	return ps
+}
+
+func refSyntaxOK(ref string) bool {
+	if strings.HasPrefix(ref, "-") {
+		return false
+	}
+	for _, c := range ref {
+		if unicode.IsSpace(c) || unicode.IsControl(c) {
+			return false
+		}
+	}
+	return true
 }
 
 // CheckBootloader applies the bootloader rule.
@@ -425,7 +599,7 @@ func CheckSlurp(s *SlurpSpec) []Problem {
 // separate check because it reads the machine, not the recipe; the install
 // path and `validate` run it, `validate --partial` does not.
 func (r *Recipe) CheckTPM(tpm2Usable bool) []Problem {
-	if len(r.CustomMounts) > 0 || !NeedsTPM2(r.Encryption.Type) || tpm2Usable {
+	if r.IsManualLayout() || !r.HasTPM2() || tpm2Usable {
 		return nil
 	}
 	return []Problem{{"encryption.type", CodeEncryptionTPMUnavailable,
@@ -470,6 +644,50 @@ func CheckCustomMountTarget(i int, target string) []Problem {
 		fmt.Sprintf("customMounts[%d]: target must be \"swap\" or an absolute path without \"..\" components, got %q", i, target)}}
 }
 
+// CheckCustomMountsLayout applies the rules a manual layout must meet as a
+// whole, beyond "one entry targets /" (which Problems reports itself):
+//
+//   - An entry targets /boot/efi. fisherman installs UEFI boot loaders only;
+//     bootc writes the loader to the ESP mounted there, and the install
+//     reads that entry to find the EFI boot entry afterwards. Without it
+//     bootc fails after the root is formatted, or installs a disk that
+//     cannot boot.
+//   - For GRUB (bootloader "" or "grub2") with an XFS root, an entry targets
+//     /boot and is not XFS itself. GRUB cannot read modern XFS features
+//     (nrext64, exchange, rmapbt), which is why the auto layout always
+//     makes an ext4 /boot (the AGENTS.md invariant). systemd-boot reads the
+//     kernel from the ESP and needs no /boot.
+//
+// The fstype of a partition kept as it is ("unformatted" or "") is not
+// known here, so only a declared "xfs" counts.
+func CheckCustomMountsLayout(r *Recipe) []Problem {
+	var root, boot *CustomMount
+	hasESP := false
+	for i := range r.CustomMounts {
+		switch filepath.Clean(r.CustomMounts[i].Target) {
+		case "/":
+			if r.CustomMounts[i].Target != "" {
+				root = &r.CustomMounts[i]
+			}
+		case "/boot":
+			boot = &r.CustomMounts[i]
+		case "/boot/efi":
+			hasESP = true
+		}
+	}
+	var ps []Problem
+	if !hasESP {
+		ps = append(ps, Problem{"customMounts", CodeCustomMountsNoESP,
+			"customMounts: no EFI system partition (target /boot/efi) specified"})
+	}
+	grub := r.Bootloader == "" || r.Bootloader == "grub2"
+	if grub && root != nil && root.Fstype == "xfs" && (boot == nil || boot.Fstype == "xfs") {
+		ps = append(ps, Problem{"customMounts", CodeCustomMountsNoBoot,
+			"customMounts: GRUB cannot read an XFS root; add a separate /boot partition that is not XFS (ext4), or use bootloader \"systemd\""})
+	}
+	return ps
+}
+
 // CheckTargetMount applies the targetMount rule. Empty is valid (the default,
 // /mnt/fisherman-target); otherwise an absolute path with no ".." component
 // that is not the host root.
@@ -495,11 +713,390 @@ func CheckFlatpakVarPath(p string) []Problem {
 		fmt.Sprintf("flatpakVarPath must stay inside the installed root (no \"..\" components), got %q", p)}}
 }
 
+// CheckAdditionalImageStores applies the additionalImageStores syntax rule:
+// every entry is an absolute path with no ".." component, no ":" or ","
+// and no control character. Each store is bind-mounted into the bootc
+// container as `-v <store>:<store>:ro` and listed in a generated
+// storage.conf, so a relative path, or one with ":", fails `podman run`
+// after the disk is partitioned. Whether the directory exists is a host
+// fact: the CLI checks it (additional_image_store_not_found).
+func CheckAdditionalImageStores(stores []string) []Problem {
+	var ps []Problem
+	for i, store := range stores {
+		bad := !strings.HasPrefix(store, "/") || hasDotDot(store) || strings.ContainsAny(store, ":,")
+		for _, r := range store {
+			bad = bad || unicode.IsControl(r)
+		}
+		if bad {
+			ps = append(ps, Problem{fmt.Sprintf("additionalImageStores[%d]", i), CodeAdditionalImageStoreInvalid,
+				fmt.Sprintf("additionalImageStores[%d] must be an absolute path without \"..\", \":\", \",\" or control characters, got %q", i, store)})
+		}
+	}
+	return ps
+}
+
+// zfsPoolNamePattern is the subset of zpool(8)'s naming rule fisherman
+// accepts: a letter first, then letters, digits, "_", "-" and ".". zpool
+// also allows ":" and " ", which are left out because the name goes into a
+// kernel command line (root=zfs:<pool>/…) and dataset paths. The name is an
+// argument of `zpool create`; "-f" would be read as a flag.
+var zfsPoolNamePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_.-]{0,62}$`)
+
+// zfsReservedPoolPrefixes are names zpool refuses: vdev type keywords, and
+// "c[0-9]" (a Solaris disk name).
+var zfsReservedPoolPrefixes = []string{"mirror", "raidz", "draid", "spare"}
+
+// CheckZFSPoolName applies the zfsPoolName rule. Empty is valid (the install
+// uses "rpool").
+func CheckZFSPoolName(name string) []Problem {
+	if name == "" {
+		return nil
+	}
+	ok := zfsPoolNamePattern.MatchString(name) && name != "log"
+	for _, prefix := range zfsReservedPoolPrefixes {
+		ok = ok && !strings.HasPrefix(name, prefix)
+	}
+	if ok && len(name) >= 2 && name[0] == 'c' && isDigit(rune(name[1])) {
+		ok = false
+	}
+	if ok {
+		return nil
+	}
+	return []Problem{{"zfsPoolName", CodeZFSPoolNameInvalid,
+		fmt.Sprintf("zfsPoolName must start with a letter, contain only letters, digits, \"_\", \"-\" and \".\" (at most 63 characters), "+
+			"and not be a name zpool reserves (mirror*, raidz*, draid*, spare*, log, c0-c9…), got %q", name)}}
+}
+
+// luksMapperNamePattern bounds the device-mapper name: it becomes the node
+// /dev/mapper/<name> and the rd.luks.name=<uuid>=<name> kernel argument, so
+// it has no "/", no space and no leading "." or "-" ("../sda" would point
+// the install at another device node).
+var luksMapperNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.+-]{0,62}$`)
+
+// CheckLuksMapperName applies the luksMapperName rule. Empty is valid (the
+// install uses "fisherman-root"). "control" is the device-mapper control
+// node.
+func CheckLuksMapperName(name string) []Problem {
+	if name == "" || (luksMapperNamePattern.MatchString(name) && name != "control") {
+		return nil
+	}
+	return []Problem{{"luksMapperName", CodeLuksMapperNameInvalid,
+		fmt.Sprintf("luksMapperName must start with a letter or digit and contain only letters, digits, \"_\", \".\", \"+\" and \"-\" "+
+			"(at most 63 characters), got %q", name)}}
+}
+
+// CheckOverride applies the override rule: every entry is one of Overrides.
+// An unknown entry is refused rather than ignored, for the reason unknown
+// keys are: the caller believes it switched a check off.
+func CheckOverride(override []string) []Problem {
+	for i, o := range override {
+		if !contains(Overrides, o) {
+			return []Problem{{fmt.Sprintf("override[%d]", i), CodeOverrideUnsupported,
+				fmt.Sprintf("override accepts only \"too_small\" and \"uefi\", got %q", o)}}
+		}
+	}
+	return nil
+}
+
+// CheckExperimental applies the experimental rule: every entry is one of
+// Experimentals. An unknown entry is refused, as an unknown override is: the
+// caller believes it accepted something.
+func CheckExperimental(experimental []string) []Problem {
+	for i, e := range experimental {
+		if !contains(Experimentals, e) {
+			return []Problem{{fmt.Sprintf("experimental[%d]", i), CodeExperimentalUnsupported,
+				fmt.Sprintf("experimental accepts only %s, got %q", quoteList(Experimentals), e)}}
+		}
+	}
+	return nil
+}
+
+// CheckExperimentalFilesystem refuses filesystem "zfs" unless the recipe
+// opts in with "experimental": ["zfs"]. The ZFS path has no VM test: no
+// matrix entry installs it and boots the result (tuna-os/fisherman#413).
+// The opt-in is the caller's statement that it knows.
+func CheckExperimentalFilesystem(r *Recipe) []Problem {
+	if r.IsZFS() && !r.AcceptsExperimental(ExperimentalZFS) {
+		return []Problem{{"filesystem", CodeZFSExperimental,
+			"filesystem \"zfs\" is experimental: no VM test installs and boots it. " +
+				"Add \"experimental\": [\"zfs\"] to the recipe to accept that, or use xfs, ext4 or btrfs"}}
+	}
+	return nil
+}
+
+// Locale, keyboard and time zone are written as root into /etc files of the
+// installed system, and the keymap onto the kernel command line. The
+// patterns admit every real name and nothing that could add a line, a
+// second argument or a path component.
+var (
+	// A glibc locale name: language[_TERRITORY][.codeset][@modifier], or
+	// C / POSIX with an optional codeset. "de_DE.UTF-8", "sr_RS@latin",
+	// "C.UTF-8", "ca_ES.UTF-8@valencia".
+	localePattern = regexp.MustCompile(`^([a-z]{2,3}(_[A-Z]{2,3})?|C|POSIX)(\.[A-Za-z0-9][A-Za-z0-9_-]*)?(@[A-Za-z0-9]+)?$`)
+	// XKB layout list: names of letters, digits, "_" and "-", comma-separated
+	// ("us", "us,ru", "de").
+	xkbLayoutPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+(,[A-Za-z0-9_-]+)*$`)
+	// XKB variant list: one per layout, any may be empty (",phonetic").
+	xkbVariantPattern = regexp.MustCompile(`^[A-Za-z0-9_.+-]*(,[A-Za-z0-9_.+-]*)*$`)
+	xkbModelPattern   = regexp.MustCompile(`^[A-Za-z0-9_.+-]+$`)
+	// An IANA zone: components of letters, digits, "_", "+" and "-", joined
+	// by "/". No ".", so no "..". "Europe/Berlin", "Etc/GMT+1", "UTC",
+	// "America/Argentina/Buenos_Aires".
+	timezonePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_+-]*(/[A-Za-z0-9_+-]+)*$`)
+)
+
+// CheckLocale applies the locale rule. Empty is valid (the image's locale
+// is kept). Whether the installed image has the locale is not checked: the
+// image is not on the disk yet.
+func CheckLocale(locale string) []Problem {
+	if locale == "" || (len(locale) <= 64 && localePattern.MatchString(locale)) {
+		return nil
+	}
+	return []Problem{{"locale", CodeLocaleInvalid,
+		fmt.Sprintf("locale must be a locale name such as \"en_US.UTF-8\" or \"de_DE.UTF-8\", got %q", locale)}}
+}
+
+// CheckKeyboard applies the keyboard rules. A nil keyboard is valid (the
+// image's is kept); a present one needs a layout.
+func CheckKeyboard(k *KeyboardSpec) []Problem {
+	if k == nil {
+		return nil
+	}
+	var ps []Problem
+	switch {
+	case k.Layout == "":
+		ps = append(ps, Problem{"keyboard.layout", CodeKeyboardLayoutRequired,
+			"keyboard.layout is required when keyboard is set (an XKB layout such as \"us\" or \"de\")"})
+	case len(k.Layout) > 64 || !xkbLayoutPattern.MatchString(k.Layout):
+		ps = append(ps, Problem{"keyboard.layout", CodeKeyboardLayoutInvalid,
+			fmt.Sprintf("keyboard.layout must be an XKB layout name such as \"us\" or \"de\" "+
+				"(letters, digits, \"_\" and \"-\"; several separated by \",\"), got %q", k.Layout)})
+	}
+	if len(k.Variant) > 64 || !xkbVariantPattern.MatchString(k.Variant) {
+		ps = append(ps, Problem{"keyboard.variant", CodeKeyboardVariantInvalid,
+			fmt.Sprintf("keyboard.variant must be an XKB variant name such as \"nodeadkeys\" "+
+				"(letters, digits, \"_\", \".\", \"+\" and \"-\"; one per layout, separated by \",\"), got %q", k.Variant)})
+	}
+	if k.Model != "" && (len(k.Model) > 64 || !xkbModelPattern.MatchString(k.Model)) {
+		ps = append(ps, Problem{"keyboard.model", CodeKeyboardModelInvalid,
+			fmt.Sprintf("keyboard.model must be an XKB model name such as \"pc105\" "+
+				"(letters, digits, \"_\", \".\", \"+\" and \"-\"), got %q", k.Model)})
+	}
+	return ps
+}
+
+// CheckTimezone applies the time zone rule. Empty is valid (the image's
+// zone is kept). Whether the installed image has the zone is checked after
+// the install, when its /usr/share/zoneinfo can be read.
+func CheckTimezone(tz string) []Problem {
+	if tz == "" || (len(tz) <= 64 && timezonePattern.MatchString(tz)) {
+		return nil
+	}
+	return []Problem{{"timezone", CodeTimezoneInvalid,
+		fmt.Sprintf("timezone must be an IANA time zone name such as \"Europe/Berlin\" or \"UTC\", got %q", tz)}}
+}
+
+// TargetFacts is what the machine says about one path a recipe names as a
+// disk: probe.Target's verdict, in the recipe package's own terms so the
+// rules stay free of host reads.
+type TargetFacts struct {
+	// Err: the verdict could not be reached (lsblk failed).
+	Err error
+	// Device is the path with symlinks resolved.
+	Device string
+	// Loop: a whole loop device (an image for another machine).
+	Loop      bool
+	SizeBytes int64
+	MinBytes  int64
+	// NotDisk, BootDisk, ReadOnly, TooSmall are probe's excluded reasons.
+	NotDisk, BootDisk, ReadOnly, TooSmall bool
+	// Serial and WWN are the identity the device reports now (probe's
+	// Target); empty when it reports none.
+	Serial, WWN string
+}
+
+// CheckDiskIdentity is the rule for the shape of diskIdentity, which needs
+// no machine. Whether the device matches is CheckTarget's.
+func CheckDiskIdentity(r *Recipe) []Problem {
+	id := r.DiskIdentity
+	if id == nil {
+		return nil
+	}
+	switch {
+	case r.IsManualLayout():
+		return []Problem{{"diskIdentity", CodeDiskIdentityInvalid,
+			"diskIdentity binds the disk of the automatic layout; customMounts names partitions, not a disk"}}
+	case id.SizeBytes < 0:
+		return []Problem{{"diskIdentity.sizeBytes", CodeDiskIdentityInvalid,
+			fmt.Sprintf("diskIdentity.sizeBytes is %d; it must be the disk size in bytes", id.SizeBytes)}}
+	case strings.TrimSpace(id.Serial) == "" && strings.TrimSpace(id.WWN) == "" && id.SizeBytes == 0:
+		return []Problem{{"diskIdentity", CodeDiskIdentityInvalid,
+			"diskIdentity sets none of serial, wwn and sizeBytes, so it binds nothing"}}
+	}
+	return nil
+}
+
+// planDigestPattern is the form of plan.binding.digest.
+var planDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// CheckPlanBinding is the rule for the shape of planBinding, which needs no
+// machine. Whether the plan still matches is the full validate's and the
+// install's (it needs the plan, which cmd/fisherman builds).
+func CheckPlanBinding(r *Recipe) []Problem {
+	b := r.PlanBinding
+	if b == nil || planDigestPattern.MatchString(b.Digest) {
+		return nil
+	}
+	return []Problem{{"planBinding.digest", CodePlanBindingInvalid,
+		"planBinding.digest must be the plan.binding.digest `fisherman plan --json` printed: sha256: and 64 lowercase hex digits"}}
+}
+
+// checkDiskIdentityMatch compares the recipe's diskIdentity with what the
+// device reports now. A field the recipe sets and the device no longer
+// reports is a mismatch: a binding fails closed.
+func (r *Recipe) checkDiskIdentityMatch(f *TargetFacts) []Problem {
+	id := r.DiskIdentity
+	if id == nil || len(CheckDiskIdentity(r)) > 0 {
+		return nil
+	}
+	now := func(v string) string {
+		if v == "" {
+			return "none"
+		}
+		return fmt.Sprintf("%q", v)
+	}
+	var ps []Problem
+	if want := strings.TrimSpace(id.Serial); want != "" && want != f.Serial {
+		ps = append(ps, Problem{"diskIdentity.serial", CodeDiskIdentityMismatch,
+			fmt.Sprintf("disk %s reports serial %s, not %q: it is not the disk the install was planned for", r.Disk, now(f.Serial), want)})
+	}
+	if want := strings.TrimSpace(id.WWN); want != "" && !strings.EqualFold(want, f.WWN) {
+		ps = append(ps, Problem{"diskIdentity.wwn", CodeDiskIdentityMismatch,
+			fmt.Sprintf("disk %s reports WWN %s, not %q: it is not the disk the install was planned for", r.Disk, now(f.WWN), want)})
+	}
+	if id.SizeBytes != 0 && id.SizeBytes != f.SizeBytes {
+		ps = append(ps, Problem{"diskIdentity.sizeBytes", CodeDiskIdentityMismatch,
+			fmt.Sprintf("disk %s is %d bytes, not %d: it is not the disk the install was planned for", r.Disk, f.SizeBytes, id.SizeBytes)})
+	}
+	return ps
+}
+
+// RecheckDiskIdentity is the diskIdentity rule alone, for the install to
+// run again right before it writes the partition table: between the
+// pre-flight and that write, the device a path names can change (a disk
+// swapped or the disks renumbered after a replug). f is what the device
+// `disk` names reports now. It returns nothing for a recipe without a
+// diskIdentity, or with a manual layout, and fails closed otherwise: a
+// device that is gone is a mismatch (disk_identity_mismatch), and one lsblk
+// cannot read is disk_unverified.
+func (r *Recipe) RecheckDiskIdentity(f *TargetFacts) []Problem {
+	if r.DiskIdentity == nil || r.IsManualLayout() {
+		return nil
+	}
+	switch {
+	case f == nil:
+		return []Problem{{"diskIdentity", CodeDiskIdentityMismatch,
+			fmt.Sprintf("disk %s no longer exists: it is not the disk the install was planned for", r.Disk)}}
+	case f.Err != nil:
+		return []Problem{{"disk", CodeDiskUnverified,
+			fmt.Sprintf("disk %s: cannot tell whether it is still the disk the install was planned for: %v", r.Disk, f.Err)}}
+	}
+	return r.checkDiskIdentityMatch(f)
+}
+
+// CheckTarget applies the target-eligibility rules to `disk` and
+// `varDisk.disk`. The install and the full `validate` run it; it is separate
+// from Problems because it reads the machine. A manual layout (customMounts)
+// names partitions, not a disk, so only the firmware rule applies to it.
+//
+//   - not a whole-disk block device, the disk the running system (or the
+//     live medium) is on, or read-only: always an error. An install there
+//     either destroys the system that is running it or fails after the
+//     partition table is gone.
+//   - a diskIdentity the device no longer matches: always an error
+//     (disk_identity_mismatch).
+//   - smaller than the minimum, or a machine that did not boot through
+//     UEFI: an error unless the recipe lists it in `override`. Neither
+//     applies to a loop device, which is an image for another machine.
+//
+// disk and varDisk are nil when the recipe names none, or the path does not
+// exist (Problems has reported that).
+func (r *Recipe) CheckTarget(disk, varDisk *TargetFacts, uefi bool) []Problem {
+	var ps []Problem
+	manual := r.IsManualLayout()
+	loop := false
+	if disk != nil && !manual {
+		loop = disk.Loop
+		switch {
+		case disk.Err != nil:
+			ps = append(ps, Problem{"disk", CodeDiskUnverified,
+				fmt.Sprintf("disk %s: cannot tell whether it is safe to install to: %v", r.Disk, disk.Err)})
+		case disk.NotDisk:
+			ps = append(ps, Problem{"disk", CodeDiskNotDisk,
+				fmt.Sprintf("disk %s is not a whole disk (a partition, a file or another kind of device); name the disk itself, for example /dev/sda", r.Disk)})
+		default:
+			if disk.BootDisk {
+				ps = append(ps, Problem{"disk", CodeDiskBootDisk,
+					fmt.Sprintf("disk %s holds the system that is running now (or the live medium); installing to it would destroy it", r.Disk)})
+			}
+			if disk.ReadOnly {
+				ps = append(ps, Problem{"disk", CodeDiskReadOnly,
+					fmt.Sprintf("disk %s is read-only", r.Disk)})
+			}
+			if disk.TooSmall && !r.Overridden(OverrideTooSmall) {
+				ps = append(ps, Problem{"disk", CodeDiskTooSmall,
+					fmt.Sprintf("disk %s is %d bytes; the minimum is %d (add \"too_small\" to \"override\" to install anyway)",
+						r.Disk, disk.SizeBytes, disk.MinBytes)})
+			}
+			ps = append(ps, r.checkDiskIdentityMatch(disk)...)
+		}
+	}
+	if varDisk != nil && r.VarDisk != nil {
+		switch {
+		case varDisk.Err != nil:
+			ps = append(ps, Problem{"varDisk.disk", CodeVarDiskUnverified,
+				fmt.Sprintf("varDisk.disk %s: cannot tell whether it is safe to use: %v", r.VarDisk.Disk, varDisk.Err)})
+		case varDisk.NotDisk:
+			ps = append(ps, Problem{"varDisk.disk", CodeVarDiskNotDisk,
+				fmt.Sprintf("varDisk.disk %s is not a whole disk (a partition, a file or another kind of device)", r.VarDisk.Disk)})
+		default:
+			if disk != nil && disk.Err == nil && varDisk.Device == disk.Device && r.VarDisk.Disk != r.Disk {
+				// Two spellings of one device; Problems compares the strings.
+				ps = append(ps, Problem{"varDisk.disk", CodeVarDiskSameAsDisk,
+					"varDisk.disk must differ from the system disk"})
+			}
+			if varDisk.BootDisk {
+				ps = append(ps, Problem{"varDisk.disk", CodeVarDiskBootDisk,
+					fmt.Sprintf("varDisk.disk %s holds the system that is running now (or the live medium)", r.VarDisk.Disk)})
+			}
+			if varDisk.ReadOnly {
+				ps = append(ps, Problem{"varDisk.disk", CodeVarDiskReadOnly,
+					fmt.Sprintf("varDisk.disk %s is read-only", r.VarDisk.Disk)})
+			}
+		}
+	}
+	if !uefi && !loop && !r.Overridden(OverrideUEFI) {
+		ps = append(ps, Problem{"", CodeFirmwareNotUEFI,
+			"this machine did not boot through UEFI, and fisherman installs UEFI boot loaders only " +
+				"(add \"uefi\" to \"override\" to install anyway, for a disk that another machine will boot)"})
+	}
+	return ps
+}
+
 func isLower(r rune) bool { return r >= 'a' && r <= 'z' }
 func isDigit(r rune) bool { return r >= '0' && r <= '9' }
 
 func isASCIIAlnum(r rune) bool {
 	return isLower(r) || (r >= 'A' && r <= 'Z') || isDigit(r)
+}
+
+// quoteList renders values as "a", "b" for a message.
+func quoteList(values []string) string {
+	q := make([]string, len(values))
+	for i, v := range values {
+		q[i] = fmt.Sprintf("%q", v)
+	}
+	return strings.Join(q, ", ")
 }
 
 func contains(list []string, s string) bool {

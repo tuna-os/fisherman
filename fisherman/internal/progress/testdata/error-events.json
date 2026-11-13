@@ -1,0 +1,50 @@
+{
+  "_comment": "The terminal `error` event (docs/JSON-PROGRESS-FORMAT.md). `legacy` lines are what an older fisherman sent; a consumer must still read them (message and exit status). Each `cases` entry is a progress.Failure (`failure`) and the event progress.Fail writes for it, without timestamp and elapsed_ms. `secrets` are registered first: no event may carry them.",
+  "secrets": ["correct horse battery staple", "R3C0VERY-K3Y-SENTINEL"],
+  "legacy": [
+    {"type": "error", "message": "partitioning disk: exit status 1"},
+    {"type": "error", "message": "invalid recipe: disk /dev/vda is too small", "code": "disk_too_small", "field": "disk"}
+  ],
+  "cases": [
+    {
+      "name": "validate_problem_before_any_step",
+      "failure": {"Message": "invalid recipe: disk /dev/vda is too small", "Code": "disk_too_small", "Field": "disk", "Cleanup": {"status": "ok"}},
+      "event": {"type": "error", "message": "invalid recipe: disk /dev/vda is too small", "code": "disk_too_small", "field": "disk", "disk_changed": false, "cleanup": {"status": "ok"}}
+    },
+    {
+      "name": "pull_failed_in_the_install_step",
+      "failure": {"Message": "bootc install: pulling image: podman pull ghcr.io/example/os:stable: exit status 125", "Code": "pull_failed", "StepID": "install_os", "DiskChanged": true, "Cleanup": {"status": "ok"}},
+      "event": {"type": "error", "message": "bootc install: pulling image: podman pull ghcr.io/example/os:stable: exit status 125", "code": "pull_failed", "step_id": "install_os", "disk_changed": true, "cleanup": {"status": "ok"}}
+    },
+    {
+      "name": "cleanup_failure_keeps_the_primary_code",
+      "failure": {"Message": "partitioning disk: exit status 1; cleanup failed, the target may still be mounted or unlocked: umount /mnt/fisherman-target: busy", "Code": "partition_failed", "StepID": "partition", "DiskChanged": true, "Cleanup": {"status": "failed", "message": "umount /mnt/fisherman-target: busy"}},
+      "event": {"type": "error", "message": "partitioning disk: exit status 1; cleanup failed, the target may still be mounted or unlocked: umount /mnt/fisherman-target: busy", "code": "partition_failed", "step_id": "partition", "disk_changed": true, "cleanup": {"status": "failed", "message": "umount /mnt/fisherman-target: busy"}}
+    },
+    {
+      "name": "cleanup_timed_out",
+      "failure": {"Message": "LUKS open: exit status 2; cleanup failed, the target may still be mounted or unlocked: teardown did not finish within 3m0s", "Code": "luks_failed", "StepID": "luks", "DiskChanged": true, "Cleanup": {"status": "timed_out", "message": "teardown did not finish within 3m0s"}},
+      "event": {"type": "error", "message": "LUKS open: exit status 2; cleanup failed, the target may still be mounted or unlocked: teardown did not finish within 3m0s", "code": "luks_failed", "step_id": "luks", "disk_changed": true, "cleanup": {"status": "timed_out", "message": "teardown did not finish within 3m0s"}}
+    },
+    {
+      "name": "cancelled",
+      "failure": {"Message": "installation cancelled (SIGTERM)", "Code": "cancelled", "StepID": "format_root", "DiskChanged": true, "Cleanup": {"status": "ok"}},
+      "event": {"type": "error", "message": "installation cancelled (SIGTERM)", "code": "cancelled", "step_id": "format_root", "disk_changed": true, "cleanup": {"status": "ok"}}
+    },
+    {
+      "name": "no_code_is_unknown",
+      "failure": {"Message": "something failed", "Cleanup": {"status": "ok"}},
+      "event": {"type": "error", "message": "something failed", "code": "unknown", "disk_changed": false, "cleanup": {"status": "ok"}}
+    },
+    {
+      "name": "a_code_that_is_not_one_is_unknown",
+      "failure": {"Message": "something failed", "Code": "Not A Code!", "Cleanup": {"status": "ok"}},
+      "event": {"type": "error", "message": "something failed", "code": "unknown", "disk_changed": false, "cleanup": {"status": "ok"}}
+    },
+    {
+      "name": "secrets_are_redacted",
+      "failure": {"Message": "LUKS format: cryptsetup said correct horse battery staple and R3C0VERY-K3Y-SENTINEL", "Code": "luks_failed", "Field": "x correct horse battery staple", "StepID": "luks", "DiskChanged": true, "Cleanup": {"status": "failed", "message": "close R3C0VERY-K3Y-SENTINEL"}},
+      "event": {"type": "error", "message": "LUKS format: cryptsetup said [redacted] and [redacted]", "code": "luks_failed", "field": "x [redacted]", "step_id": "luks", "disk_changed": true, "cleanup": {"status": "failed", "message": "close [redacted]"}}
+    }
+  ]
+}

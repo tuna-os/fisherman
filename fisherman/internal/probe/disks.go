@@ -67,10 +67,12 @@ type Disk struct {
 }
 
 // lsblkColumns are the columns Disks asks for. MOUNTPOINTS needs util-linux
-// 2.37; lsblkColumnsLegacy is the fallback for older hosts.
+// 2.37; lsblkColumnsLegacy is the fallback for older hosts. SERIAL and WWN
+// (util-linux 2.22 and older) are the disk identity Target reports: lsblk
+// reads them from udev, on the host.
 const (
-	lsblkColumns       = "NAME,KNAME,TYPE,SIZE,MODEL,VENDOR,TRAN,RM,HOTPLUG,RO,MOUNTPOINTS"
-	lsblkColumnsLegacy = "NAME,KNAME,TYPE,SIZE,MODEL,VENDOR,TRAN,RM,HOTPLUG,RO,MOUNTPOINT"
+	lsblkColumns       = "NAME,KNAME,TYPE,SIZE,MODEL,VENDOR,TRAN,RM,HOTPLUG,RO,SERIAL,WWN,MOUNTPOINTS"
+	lsblkColumnsLegacy = "NAME,KNAME,TYPE,SIZE,MODEL,VENDOR,TRAN,RM,HOTPLUG,RO,SERIAL,WWN,MOUNTPOINT"
 )
 
 // lsblkDevice is one node of `lsblk -J -b -p` tree output. Booleans and the
@@ -86,6 +88,8 @@ type lsblkDevice struct {
 	RM          flexBool      `json:"rm"`
 	Hotplug     flexBool      `json:"hotplug"`
 	RO          flexBool      `json:"ro"`
+	Serial      *string       `json:"serial"`
+	WWN         *string       `json:"wwn"`
 	Mountpoint  *string       `json:"mountpoint"`
 	Mountpoints []*string     `json:"mountpoints"`
 	Children    []lsblkDevice `json:"children"`

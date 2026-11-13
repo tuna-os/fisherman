@@ -1,0 +1,78 @@
+{
+  "version": 1,
+  "context": "live-host",
+  "available": true,
+  "reason": "observed",
+  "machine_platform": "x86_64",
+  "sources": {
+    "bootc_status": "observed",
+    "store_index": "observed",
+    "image_list": "not_requested"
+  },
+  "ignored_entries": 0,
+  "items": [
+    {
+      "ref": "ghcr.io/example/os:stable",
+      "owner": "bootc",
+      "context": "live-host",
+      "storage": "ostree",
+      "roles": [
+        "booted"
+      ],
+      "availability": "deployed",
+      "digest": "",
+      "digest_reason": "digest_missing",
+      "platform": "x86_64",
+      "matches_machine": false,
+      "mismatch_reason": "identity_unknown"
+    },
+    {
+      "ref": "ghcr.io/example/os:stable",
+      "owner": "bootc",
+      "context": "live-host",
+      "storage": "ostree",
+      "roles": [
+        "staged"
+      ],
+      "availability": "deployed",
+      "digest": "",
+      "digest_reason": "malformed",
+      "platform": "",
+      "platform_reason": "malformed",
+      "matches_machine": false,
+      "mismatch_reason": "identity_unknown"
+    },
+    {
+      "ref": "quay.io/example/a:1",
+      "owner": "bootc",
+      "context": "live-host",
+      "storage": "bootc-containers-storage",
+      "roles": [
+        "stored"
+      ],
+      "availability": "stored",
+      "digest": "",
+      "digest_reason": "malformed",
+      "platform": "",
+      "platform_reason": "not_reported",
+      "matches_machine": false,
+      "mismatch_reason": "identity_unknown"
+    },
+    {
+      "ref": "quay.io/example/b:1",
+      "owner": "bootc",
+      "context": "live-host",
+      "storage": "bootc-containers-storage",
+      "roles": [
+        "stored"
+      ],
+      "availability": "stored",
+      "digest": "",
+      "digest_reason": "ambiguous",
+      "platform": "",
+      "platform_reason": "not_reported",
+      "matches_machine": false,
+      "mismatch_reason": "identity_unknown"
+    }
+  ]
+}

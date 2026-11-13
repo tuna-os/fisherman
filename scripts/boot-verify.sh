@@ -138,6 +138,41 @@ if [ "$IMAGE_NAME" = "debian-bootc" ] || [ "$IMAGE_NAME" = "debian-bootc-compose
   echo ""
 fi
 
+# Optional hardware for the matrix entries of #418 (all unset by default, so
+# the other entries boot exactly as before):
+#
+# BOOTCREW_EXTRA_DRIVE (env): a second raw disk (the varDisk) attached as the
+#   VM's second drive.
+# BOOTCREW_SWTPM_STATE (env): a directory for swtpm's state, under /tmp
+#   (Ubuntu's AppArmor profile for swtpm allows it there). A software TPM
+#   2.0 runs on a socket in it for this boot and is attached to the VM. The
+#   state stays, so a second boot sees the TPM the first boot enrolled.
+# BOOTCREW_GUEST_CHECKS (env): space-separated scripts (scripts/vm-checks/)
+#   sourced in a subshell once SSH answers, with ssh_root available. Any
+#   that fails fails this script.
+EXTRA_QEMU_ARGS=()
+if [ -n "${BOOTCREW_EXTRA_DRIVE:-}" ]; then
+  echo "Second drive: $BOOTCREW_EXTRA_DRIVE"
+  EXTRA_QEMU_ARGS+=(-drive "file=$BOOTCREW_EXTRA_DRIVE,format=raw,if=none,id=disk1"
+    -device "ide-hd,drive=disk1,bus=ahci0.1")
+fi
+SWTPM_PID=""
+if [ -n "${BOOTCREW_SWTPM_STATE:-}" ]; then
+  command -v swtpm >/dev/null 2>&1 || { echo "❌ BOOTCREW_SWTPM_STATE is set but swtpm is not installed"; exit 1; }
+  mkdir -p "$BOOTCREW_SWTPM_STATE"
+  SWTPM_SOCK="$BOOTCREW_SWTPM_STATE/swtpm.sock"
+  rm -f "$SWTPM_SOCK"
+  swtpm socket --tpm2 --tpmstate "dir=$BOOTCREW_SWTPM_STATE" \
+    --ctrl "type=unixio,path=$SWTPM_SOCK" --terminate \
+    --log "file=$BOOTCREW_SWTPM_STATE/swtpm.log,level=5" &
+  SWTPM_PID=$!
+  for _ in $(seq 1 50); do [ -S "$SWTPM_SOCK" ] && break; sleep 0.1; done
+  [ -S "$SWTPM_SOCK" ] || { echo "❌ swtpm did not create $SWTPM_SOCK"; exit 1; }
+  echo "swtpm: PID $SWTPM_PID, state $BOOTCREW_SWTPM_STATE"
+  EXTRA_QEMU_ARGS+=(-chardev "socket,id=chrtpm,path=$SWTPM_SOCK"
+    -tpmdev "emulator,id=tpm0,chardev=chrtpm" -device "tpm-crb,tpmdev=tpm0")
+fi
+
 # Pre-create serial log with proper permissions for sudo-run QEMU to write
 sudo sh -c "rm -f \"$SERIAL_LOG\" 2>/dev/null; touch \"$SERIAL_LOG\" && chmod 666 \"$SERIAL_LOG\"" || true
 
@@ -151,6 +186,10 @@ cleanup_temp() {
     return
   fi
   sudo rm -f "$OVMF_VARS_TEMP" "$QEMU_MONITOR_SOCK" 2>/dev/null || true
+  if [ -n "$SWTPM_PID" ]; then
+    kill "$SWTPM_PID" 2>/dev/null || true
+    cp "$BOOTCREW_SWTPM_STATE/swtpm.log" "$ARTIFACTS_DIR/swtpm-$RUN_TAG.log" 2>/dev/null || true
+  fi
 }
 trap cleanup_temp EXIT
 
@@ -166,6 +205,7 @@ sudo timeout "$VM_TIMEOUT" "$QEMU_BIN" \
   -drive if=pflash,format=raw,file="$OVMF_VARS_TEMP" \
   -netdev user,id=net0,hostfwd=tcp:127.0.0.1:"$SSH_PORT"-:22 \
   -device virtio-net-pci,netdev=net0 \
+  "${EXTRA_QEMU_ARGS[@]}" \
   -monitor "unix:$QEMU_MONITOR_SOCK,server=on,wait=off" \
   -serial "file:$SERIAL_LOG" \
   -display none \
@@ -355,6 +395,40 @@ echo ""
 echo "=== bootc status (JSON) ==="
 ssh_root "bootc status --json-pretty" 2>/dev/null || echo "⚠️  json output not available"
 
+# Installation receipt (#385): the installed system says which image it
+# booted, and a receipt for another image or a status from this host does
+# not verify it. Fatal with BOOTCREW_RECEIPT_REQUIRED=1 (the required
+# canaries set it), advisory otherwise. Before the
+# upgrade check below, which can leave a cached update in bootc status.
+echo ""
+echo "=== Installation receipt ($([ "${BOOTCREW_RECEIPT_REQUIRED:-0}" = "1" ] && echo required || echo advisory)) ==="
+# shellcheck source=./boot-receipt.sh
+source "$SCRIPT_DIR/boot-receipt.sh"
+RECEIPT_FAIL=0
+if [ -x "${FISHERMAN_BIN:-/tmp/fisherman}" ]; then
+  check_boot_receipt ssh_root "$ARTIFACTS_DIR/receipt-$RUN_TAG" "${FISHERMAN_BIN:-/tmp/fisherman}" \
+    || RECEIPT_FAIL=1
+else
+  echo "⚠️  ${FISHERMAN_BIN:-/tmp/fisherman} not found; receipt checks skipped"
+fi
+if [ "$RECEIPT_FAIL" = "1" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+  echo "- ⚠️ ${IMAGE_NAME:-vm}: installation receipt checks failed (advisory, see receipt-$RUN_TAG in the artifacts)" \
+    >>"$GITHUB_STEP_SUMMARY" || true
+fi
+
+GUEST_CHECK_FAIL=0
+for check in ${BOOTCREW_GUEST_CHECKS:-}; do
+  echo ""
+  echo "=== Guest check: $(basename "$check") ==="
+  # shellcheck disable=SC1090
+  if ( source "$check" ); then
+    echo "✅ $(basename "$check") passed"
+  else
+    echo "❌ $(basename "$check") failed"
+    GUEST_CHECK_FAIL=1
+  fi
+done
+
 echo ""
 echo "=== Checking for upgrade availability ==="
 ssh_root "bootc upgrade --check" 2>/dev/null || echo "⚠️  upgrade check not available"
@@ -366,6 +440,16 @@ ssh_root "shutdown -h now" 2>/dev/null || true
 sleep 5
 kill $QEMU_PID 2>/dev/null || true
 wait $QEMU_PID 2>/dev/null || true
+
+if [ "$RECEIPT_FAIL" = "1" ] && [ "${BOOTCREW_RECEIPT_REQUIRED:-0}" = "1" ]; then
+  echo "❌ FAIL: installation receipt checks failed (BOOTCREW_RECEIPT_REQUIRED=1)"
+  exit 1
+fi
+
+if [ "$GUEST_CHECK_FAIL" = "1" ]; then
+  echo "❌ FAIL: a guest check failed (see above)"
+  exit 1
+fi
 
 if [ "${EFIBOOT_FAIL:-0}" = "1" ]; then
   echo "❌ FAIL: UEFI boot entry assertion failed (see efibootmgr output above)"

@@ -1,0 +1,1 @@
+{"disk":"@DIR@/sda","filesystem":"btrfs","bootloader":"systemd","composeFsBackend":true,"image":"ghcr.io/example/os:stable","hostname":"fixture","encryption":{"type":"none"}}

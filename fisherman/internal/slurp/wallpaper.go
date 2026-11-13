@@ -3,7 +3,6 @@
 package slurp
 
 import (
-	"crypto/md5"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -272,24 +271,21 @@ func copyFile(src, targetDir, name string) error {
 }
 
 // InjectWallpapers copies extracted wallpapers from scratch into the installed
-// system's user home directory. Sets up the backgrounds directory that GNOME
-// discovers automatically, then pre-generates thumbnails so the wallpaper
-// capplet doesn't stutter on first open.
-func InjectWallpapers(target string, slurpResult *WallpaperResult, composeFsNative bool) error {
+// system, under <var>/home/.windows-wallpapers: a shared, root-owned,
+// world-readable directory next to the users' homes.
+//
+// varDir is the /var the BOOTED system sees (deploy.Deployment.Var: the
+// stateroot var on ostree, state/os/default/var on composefs). It is not
+// <target>/var, which is the physical sysroot and is never mounted at /var.
+//
+// The directory belongs to root: no account exists yet whose uid could be
+// assumed, and every user must be able to read it.
+func InjectWallpapers(varDir string, slurpResult *WallpaperResult) error {
 	if slurpResult == nil || !slurpResult.Found {
 		return nil
 	}
 
-	// Determine the target home directory path
-	var homeBase string
-	if composeFsNative {
-		homeBase = filepath.Join(target, "state", "os", "default", "var", "home")
-	} else {
-		homeBase = filepath.Join(target, "var", "home")
-	}
-
-	// Place wallpapers in a shared location that all users can access
-	bgDir := filepath.Join(homeBase, ".windows-wallpapers")
+	bgDir := filepath.Join(varDir, "home", ".windows-wallpapers")
 	if err := os.MkdirAll(bgDir, 0o755); err != nil {
 		return fmt.Errorf("creating wallpaper target dir: %w", err)
 	}
@@ -298,10 +294,12 @@ func InjectWallpapers(target string, slurpResult *WallpaperResult, composeFsNati
 	if err := runner.Run("cp", "-a", slurpResult.ScratchDir+"/.", bgDir+"/"); err != nil {
 		return fmt.Errorf("copying wallpapers to target: %w", err)
 	}
-
-	// Set ownership to UID/GID 1000 (first user)
-	if err := runner.Run("chown", "-R", "1000:1000", bgDir); err != nil {
+	// The scratch copy was made by root; make sure of it, and of the modes.
+	if err := runner.Run("chown", "-R", "0:0", bgDir); err != nil {
 		fmt.Fprintf(os.Stderr, "  warning: could not chown wallpapers: %v\n", err)
+	}
+	if err := runner.Run("chmod", "-R", "u=rwX,go=rX", bgDir); err != nil {
+		fmt.Fprintf(os.Stderr, "  warning: could not chmod wallpapers: %v\n", err)
 	}
 
 	// Fix SELinux labels
@@ -309,130 +307,6 @@ func InjectWallpapers(target string, slurpResult *WallpaperResult, composeFsNati
 
 	progress.Info(fmt.Sprintf("Migrated %d Windows wallpaper(s) to %s", slurpResult.Count, bgDir))
 	return nil
-}
-
-// GenerateSystemThumbnails pre-generates thumbnails for ALL wallpapers on the
-// installed system — both system-provided (/usr/share/backgrounds/) and any
-// user-injected ones. Call this after bootc install + wallpaper injection so
-// the wallpaper capplet opens instantly on first boot.
-func GenerateSystemThumbnails(target string, composeFsNative bool) int {
-	thumbnailer := detectThumbnailer()
-	if thumbnailer == "" {
-		return 0
-	}
-
-	// Determine the user's home and cache paths on the target
-	var homeBase string
-	if composeFsNative {
-		homeBase = filepath.Join(target, "state", "os", "default", "var", "home")
-	} else {
-		homeBase = filepath.Join(target, "var", "home")
-	}
-	cacheDir := filepath.Join(homeBase, ".cache", "thumbnails", "large")
-	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
-		return 0
-	}
-
-	// Directories to scan for wallpapers (on the mounted target filesystem)
-	scanDirs := []string{
-		filepath.Join(target, "usr", "share", "backgrounds"),
-		filepath.Join(target, "usr", "share", "wallpapers"),
-		filepath.Join(homeBase, ".windows-wallpapers"),
-	}
-
-	count := 0
-	for _, dir := range scanDirs {
-		if _, err := os.Stat(dir); err != nil {
-			continue
-		}
-
-		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
-			}
-			// Skip tiny files and non-images
-			if info.Size() < 10*1024 {
-				return nil
-			}
-			ext := strings.ToLower(filepath.Ext(path))
-			if !commonWallpaperExtensions[ext] {
-				return nil
-			}
-
-			// Compute the real path as it will exist on the installed system
-			var installedPath string
-			relToTarget, err := filepath.Rel(target, path)
-			if err != nil {
-				return nil //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
-			}
-			installedPath = "/" + relToTarget
-
-			fileURI := "file://" + installedPath
-			thumbName := md5hex(fileURI) + ".png"
-			thumbPath := filepath.Join(cacheDir, thumbName)
-
-			// Skip if thumbnail already exists
-			if _, err := os.Stat(thumbPath); err == nil {
-				return nil
-			}
-
-			if generateSingleThumbnail(thumbnailer, path, thumbPath) {
-				count++
-			}
-			return nil
-		})
-	}
-
-	// Fix ownership on the entire thumbnail cache
-	if count > 0 {
-		thumbBase := filepath.Join(homeBase, ".cache", "thumbnails")
-		_ = runner.Run("chown", "-R", "1000:1000", thumbBase)
-		_ = runner.Run("restorecon", "-R", thumbBase)
-	}
-
-	return count
-}
-
-// detectThumbnailer returns the command to use for thumbnail generation.
-func detectThumbnailer() string {
-	// Prefer gdk-pixbuf-thumbnailer — it writes proper PNG metadata
-	if _, err := runner.Output("which", "gdk-pixbuf-thumbnailer"); err == nil {
-		return "gdk-pixbuf-thumbnailer"
-	}
-	// Fallback: ffmpeg (likely available on installer ISOs)
-	if _, err := runner.Output("which", "ffmpeg"); err == nil {
-		return "ffmpeg"
-	}
-	// Last resort: convert (ImageMagick)
-	if _, err := runner.Output("which", "convert"); err == nil {
-		return "convert"
-	}
-	return ""
-}
-
-// generateSingleThumbnail creates a 256x256 PNG thumbnail of src at dst.
-func generateSingleThumbnail(thumbnailer, src, dst string) bool {
-	var err error
-	switch thumbnailer {
-	case "gdk-pixbuf-thumbnailer":
-		// -s 256 generates a 256px thumbnail
-		err = runner.Run("gdk-pixbuf-thumbnailer", "-s", "256", src, dst)
-	case "ffmpeg":
-		// Scale to fit 256x256, maintaining aspect ratio
-		err = runner.Run("ffmpeg", "-y", "-i", src,
-			"-vf", "scale=256:256:force_original_aspect_ratio=decrease",
-			"-frames:v", "1", "-f", "image2", dst)
-	case "convert":
-		err = runner.Run("convert", src, "-thumbnail", "256x256>", "-strip", dst)
-	}
-	return err == nil
-}
-
-// md5hex returns the hex-encoded MD5 hash of s.
-func md5hex(s string) string {
-	h := md5.New()
-	h.Write([]byte(s))
-	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // CleanupScratch removes the RAM-backed scratch directory.

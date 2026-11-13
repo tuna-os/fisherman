@@ -1,0 +1,32 @@
+{
+  "context": "live-host",
+  "found": true,
+  "version": "",
+  "version_reason": "malformed_output",
+  "capabilities": {
+    "bootc_image_storage": {
+      "status": "unknown",
+      "reason": "not_established"
+    },
+    "container_inspect": {
+      "status": "supported",
+      "reason": "command_present"
+    },
+    "deployment_mount": {
+      "status": "unknown",
+      "reason": "not_established"
+    },
+    "install_finalize": {
+      "status": "supported",
+      "reason": "command_present"
+    },
+    "install_print_configuration": {
+      "status": "supported",
+      "reason": "command_present"
+    },
+    "unified_storage": {
+      "status": "unknown",
+      "reason": "not_established"
+    }
+  }
+}

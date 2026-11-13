@@ -96,25 +96,152 @@ func isTboxSignal(sig string) bool {
 // bootedImage is .status.booted.image.image.image from `bootc status
 // --json`, the ref every frontend read for the live image.
 func (p *Prober) bootedImage() string {
-	out, err := p.run("bootc", "status", "--json")
+	return p.hostStatus().image
+}
+
+// bootcHostStatus is what fisherman reads from the host's `bootc status
+// --json`. Only these fields are taken; the rest of bootc's JSON is not part
+// of any fisherman contract.
+type bootcHostStatus struct {
+	// ok: bootc ran and printed a JSON object.
+	ok bool
+	// missing: there is no bootc command on the host.
+	missing bool
+	// failed: bootc exists, but `bootc status --json` failed.
+	failed bool
+	// booted: the object names a booted deployment with an image.
+	booted bool
+	image  string
+	// digest is .status.booted.image.imageDigest when it is a sha256 digest.
+	digest string
+	// arch is .status.booted.image.architecture when it is a plain token.
+	arch string
+	// backend is "ostree" or "composefs" when the booted entry says which.
+	backend string
+	// deployments are the boot entries that carry an image, in the order
+	// booted, staged, rollback, otherDeployments (the bootc store
+	// inventory, tuna-os/fisherman#384).
+	deployments []bootcDeployment
+}
+
+// bootcDeployment is one boot entry's image as `bootc status --json`
+// reports it. Values are raw; the inventory validates them.
+type bootcDeployment struct {
+	role   string
+	image  string
+	digest string
+	arch   string
+	// transport is .image.image.transport ("registry",
+	// "containers-storage", ...); the source reuse (#384) needs it to name
+	// the image to bootc.
+	transport string
+	// backend is "ostree" or "composefs" for this entry.
+	backend string
+	// The ostree deployment: commit checksum, stateroot and serial, from
+	// .ostree. Empty/-1 when the entry is not an ostree deployment.
+	checksum  string
+	stateroot string
+	serial    int
+}
+
+// statusEntry is the part of a bootc BootEntry fisherman reads.
+type statusEntry struct {
+	Image *struct {
+		Image struct {
+			Image     string `json:"image"`
+			Transport string `json:"transport"`
+		} `json:"image"`
+		ImageDigest  string `json:"imageDigest"`
+		Architecture string `json:"architecture"`
+	} `json:"image"`
+	Ostree    json.RawMessage `json:"ostree"`
+	Composefs json.RawMessage `json:"composefs"`
+}
+
+// hostStatus runs `bootc status --json` once per Prober and keeps the answer:
+// Live and Capabilities both need it, and it is the same host.
+func (p *Prober) hostStatus() bootcHostStatus {
+	if p.status != nil {
+		return *p.status
+	}
+	st := parseBootcStatus(p.run("bootc", "status", "--json"))
+	p.status = &st
+	return st
+}
+
+func parseBootcStatus(out []byte, err error) bootcHostStatus {
+	var st bootcHostStatus
 	if err != nil {
-		return ""
+		st.missing = commandMissing(err)
+		st.failed = !st.missing
+		return st
 	}
 	var status struct {
 		Status struct {
-			Booted *struct {
-				Image *struct {
-					Image struct {
-						Image string `json:"image"`
-					} `json:"image"`
-				} `json:"image"`
-			} `json:"booted"`
+			Booted           *statusEntry  `json:"booted"`
+			Staged           *statusEntry  `json:"staged"`
+			Rollback         *statusEntry  `json:"rollback"`
+			OtherDeployments []statusEntry `json:"otherDeployments"`
 		} `json:"status"`
 	}
-	if json.Unmarshal(out, &status) != nil || status.Status.Booted == nil || status.Status.Booted.Image == nil {
-		return ""
+	if json.Unmarshal(out, &status) != nil {
+		return st
 	}
-	return status.Status.Booted.Image.Image.Image
+	st.ok = true
+	add := func(role string, e *statusEntry) {
+		if e != nil && e.Image != nil && len(st.deployments) < maxDeployments {
+			d := bootcDeployment{role: role, image: e.Image.Image.Image, digest: e.Image.ImageDigest,
+				arch: NormalizeArch(e.Image.Architecture), transport: e.Image.Image.Transport, serial: -1}
+			switch {
+			case present(e.Composefs):
+				d.backend = BackendComposefs
+			case present(e.Ostree):
+				d.backend = BackendOstree
+				var o struct {
+					Checksum     string `json:"checksum"`
+					DeploySerial *int   `json:"deploySerial"`
+					Stateroot    string `json:"stateroot"`
+				}
+				if json.Unmarshal(e.Ostree, &o) == nil {
+					d.checksum, d.stateroot = o.Checksum, o.Stateroot
+					if o.DeploySerial != nil {
+						d.serial = *o.DeploySerial
+					}
+				}
+			}
+			st.deployments = append(st.deployments, d)
+		}
+	}
+	add(RoleBooted, status.Status.Booted)
+	add(RoleStaged, status.Status.Staged)
+	add(RoleRollback, status.Status.Rollback)
+	for i := range status.Status.OtherDeployments {
+		add(RoleOtherDeployment, &status.Status.OtherDeployments[i])
+	}
+	b := status.Status.Booted
+	if b == nil || b.Image == nil {
+		return st
+	}
+	st.booted = true
+	st.image = b.Image.Image.Image
+	if validDigest(b.Image.ImageDigest) {
+		st.digest = b.Image.ImageDigest
+	}
+	if tokenRe.MatchString(b.Image.Architecture) {
+		st.arch = NormalizeArch(b.Image.Architecture)
+	}
+	switch {
+	case present(b.Composefs):
+		st.backend = BackendComposefs
+	case present(b.Ostree):
+		st.backend = BackendOstree
+	}
+	return st
+}
+
+// present reports whether a JSON value exists and is not null.
+func present(raw json.RawMessage) bool {
+	return len(raw) != 0 && string(raw) != "null"
 }
 
 // Offline OCI media input, the v1 contract between the tacklebox ISO builder

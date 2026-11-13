@@ -17,6 +17,26 @@ privately:
 Reporters who disclose responsibly will be credited in the advisory unless
 they ask not to be.
 
+## Supported versions
+
+| Version | Security fixes |
+|---|---|
+| `dev` branch | yes |
+| The latest tagged release | yes |
+| Older tags | no: update to the latest release |
+
+Releases are linear tags, and consumers pin a commit and move forward. There
+are no backports to older tags.
+
+## Response
+
+Response is best effort. There is no SLA and no fix deadline.
+
+- We aim to acknowledge a private report within 14 days.
+- A fix lands on `dev` and ships in the next release. It reaches each
+  frontend through that frontend's submodule bump.
+- We publish the advisory after the fix release.
+
 ## Threat Model
 
 fisherman runs as root, partitions and formats whole block devices, and
@@ -33,13 +53,38 @@ images** and a **trusted caller**.
   root volume with the recipe's passphrase, or, for `tpm2-luks`, a random
   recovery passphrase that it emits for the user to save. TPM2 is enrolled on
   the installed system's first boot, not during the install, because PCR 7
-  measured in the installer differs from the installed system's. Until then
-  the transient key sits in `/etc/fisherman/tpm2-enroll.key` (mode `0600`,
-  directory `0700`) inside the encrypted root, and the first-boot unit shreds
-  it after enrolment (`fisherman/internal/luks/luks.go`).
+  measured in the installer differs from the installed system's.
+- **No unlock key outlives its use.** The first-boot enrolment needs a key.
+  fisherman never stages the user's passphrase or the recovery key for it. It
+  adds a random key in its own LUKS keyslot (slot 31) and stages only that
+  key, in the installed deployment's `/etc/fisherman/tpm2-enroll.key` (mode
+  `0600`, directory `0700`), inside the encrypted root. The first-boot unit
+  (`fisherman-tpm2-enroll.service`, in the deployment's
+  `/etc/systemd/system`) tries the enrolment at most three times in that one
+  boot. Slot 31 uses a cheap KDF, which its random key makes safe, and the
+  "preferred" priority, so a lookup by its key never runs the user slot's
+  memory-hard KDF. When the unit stops, it removes the keyslot and then the
+  file, each step bounded in time. This runs in
+  `ExecStopPost=`, so it also runs when the enrolment fails, times out or the
+  tool is missing. After that the file's old blocks unlock nothing, on any
+  filesystem. There is no retry on a later boot. fisherman looks for
+  `systemd-cryptenroll` in the installed image (an ostree deployment), and
+  adds no keyslot and stages nothing when the image has none
+  (`fisherman/internal/luks/firstboot.go`).
+- **Host secrets stay on the host unless the user is on live media.**
+  NetworkManager profiles (`/etc/NetworkManager/system-connections`: Wi-Fi
+  passwords, 802.1X credentials) and Bluetooth pairings (`/var/lib/bluetooth`:
+  link keys) are copied to the target only when the host booted from live
+  media (the `live.is_live` of `fisherman probe`), where they are what the
+  user set up in the installer session. On any other host fisherman copies
+  neither, because the target can be for another person. The recipe fields
+  `copyNetworkProfiles` and `copyBluetoothPairings` override the default in
+  both directions. The log says for each kind what was copied or why not.
 - **Scratch and mount cleanup.** Mounts, LUKS mappings and scratch
   directories fisherman creates are released in dependency order, including
-  on the fatal-error path.
+  on the fatal-error path. Scratch that lives on the target disk (live media)
+  is deleted while the target is still mounted read-write, before finalize
+  and before any unmount, so no image cache stays on the installed disk.
 
 ### What fisherman does not protect against
 
@@ -56,9 +101,71 @@ images** and a **trusted caller**.
 - **Data on a disk that has been installed over.** A failed install may
   already have repartitioned or formatted the target disk; cleanup releases
   mounts and mappings, it does not restore the previous contents.
-- **Parallel installs with default paths.** The target mount and LUKS mapper
-  name are shared defaults. Two installs on the same host must set
-  `targetMount` and `luksMapperName` in their recipes to avoid colliding.
+- **Parallel installs on one host.** They are refused, not isolated. An
+  install takes a host-wide lock (`flock` on
+  `/run/lock/fisherman-install.lock`) before it reads its recipe, and a
+  second install ends with the code `install_already_running`. The kernel
+  releases the lock when the process ends, however it ends. Setting
+  `targetMount` and `luksMapperName` in the recipes is **not** enough to run
+  two installs side by side: both still use the scratch directory
+  `/var/fisherman-tmp` and bind it over the host's `/var/tmp`, and each
+  teardown removes that directory. The two fields remain for a host where
+  the default paths are taken. The lock does not stop another program, or a
+  second host that shares the disk, from touching the target.
+
+## Secure Boot
+
+fisherman supports one Secure Boot profile: **image-owned**. The image ships
+its own signed boot chain. bootc and bootupd install that chain, and
+fisherman keeps it byte for byte. fisherman adds no trust of its own.
+
+### What fisherman guarantees for the image-owned profile
+
+- **It prefers the signed systemd-boot binary.** When bootc leaves no UEFI
+  fallback loader on the ESP, fisherman copies systemd-boot from the
+  deployment and takes `<name>.signed` before `<name>`
+  (`findSystemdBootBinary` in
+  [`fisherman/internal/install/systemdboot.go`](fisherman/internal/install/systemdboot.go);
+  test `TestFindSystemdBootBinary_PrefersSigned` in
+  [`systemdboot_test.go`](fisherman/internal/install/systemdboot_test.go)).
+- **It keeps an existing fallback.** When `EFI/BOOT/BOOTX64.EFI` (or
+  `BOOTAA64.EFI` on arm64) is already on the ESP, `InstallSystemdBoot` and
+  `InstallGrubFallback`
+  ([`grub.go`](fisherman/internal/install/grub.go)) change nothing (tests
+  `TestInstallSystemdBoot_NoopWhenFallbackExists`,
+  `TestInstallSystemdBoot_Arm64NoopWhenFallbackExists` and
+  `TestFallbackHelpersLeaveExistingSignedChainUntouched`).
+- **It keeps every signed byte.** Each copy of a signed EFI binary or UKI is
+  identical to its source, certificate table included, and the BLS changes
+  for Plymouth and LUKS do not rewrite a signed UKI. The GRUB fallback copies
+  the shim, the second stage and MokManager that are already on the ESP; it
+  does not take them from image metadata. Tests:
+  [`efi_preservation_test.go`](fisherman/internal/install/efi_preservation_test.go),
+  described in [`docs/EFI-PRESERVATION.md`](docs/EFI-PRESERVATION.md).
+- **It refuses an image for another architecture before the disk is
+  touched** (`image_platform_mismatch`,
+  [`docs/VALIDATE.md`](docs/VALIDATE.md)). The systemd-boot and fallback
+  file names follow the host architecture: `x64` on x86-64, `aa64` on arm64
+  (`systemdBootNames`; test `TestInstallSystemdBoot_ArchFileNames`).
+
+### What fisherman does not do
+
+- It does not stage shim or MokManager from image metadata.
+- It does not enrol or import MOK keys.
+- It does not change PK, KEK, db or dbx, or any other firmware setting.
+- It does not read or act on secure-install metadata that an image declares.
+
+The limits in [`docs/EFI-PRESERVATION.md`](docs/EFI-PRESERVATION.md#limits--separate-gates)
+apply: a `.signed` name is a selection rule, not proof of a trusted
+signature, and the byte tests use an x86-64 fixture only.
+
+### Add a profile
+
+A new Secure Boot profile needs three things before fisherman supports it:
+
+1. a versioned capability in `fisherman probe` ([`docs/PROBE.md`](docs/PROBE.md#capabilities)),
+2. fixtures and tests for it, and
+3. a VM run with Secure Boot enforced.
 
 ## Security-Relevant Invariants
 
@@ -84,6 +191,24 @@ privileged bootc container. It must be built in a fresh directory created by
 world-writable directory such as `/tmp`. A fixed path would let an
 unprivileged local user pre-plant the library for root to preload, or symlink
 the source path at an arbitrary file for root to truncate (fixed in #161).
+
+The shim is built only when the install needs it: the target disables
+SELinux (`selinuxDisabled`), the host has SELinux active, and bootc runs in
+the image's container (`install.SelinuxWorkaroundRequired`). It is built
+before the first disk step, and an install that cannot build it is refused
+with the disk untouched (`selinux_workaround_unavailable`, #370). Its
+directory is removed when the install ends, on success, failure and cancel.
+The workaround never changes what the recipe asks for: the target keeps
+SELinux disabled, and the host's SELinux and the signature policy stay as
+they are.
+
+Limits: the shim replaces the C library's `lsetxattr` and `fsetxattr`, built
+against the host's C library and preloaded by the image's dynamic loader. A
+program in the image that sets the label with a direct system call, is
+linked statically, or uses another C library (musl) is not covered, and an
+image loader that cannot load a library built on this host ignores it. The
+tests check the interposition on the host's own loader only; a failure from
+a direct system call has not been reproduced.
 
 ### Partition layout
 

@@ -1,0 +1,172 @@
+{
+  "protocol_version": 1,
+  "valid": true,
+  "errors": [],
+  "plan": {
+    "source": {
+      "kind": "oci",
+      "image": "oci:@DIR@/oci-plain",
+      "target_imgref": "ghcr.io/example/os:stable",
+      "digest": "sha256:dd9032eb4e5a6b6bd3f448755ccfe685438b4556e0e665570aa68d5ae379babb",
+      "pull": "none"
+    },
+    "image": {
+      "read_from": "oci",
+      "manifest_digest": "sha256:dd9032eb4e5a6b6bd3f448755ccfe685438b4556e0e665570aa68d5ae379babb",
+      "platform_digest": "unknown",
+      "platform": "linux/amd64",
+      "layers": 2,
+      "compressed_bytes": 3221225472,
+      "unpacked_bytes": 9663676416,
+      "unpacked_from": "estimate"
+    },
+    "target": {
+      "layout": "auto",
+      "disk": "@DIR@/sda",
+      "device": "@DIR@/sda",
+      "size_bytes": 500107862016,
+      "stable_id": "0x5000c500a1b2c3d4",
+      "identity": {
+        "serial": "FIXTURE-SDA-SERIAL",
+        "wwn": "0x5000c500a1b2c3d4",
+        "model": "Fixture Disk",
+        "size_bytes": 500107862016,
+        "by_id": [
+          "/dev/disk/by-id/ata-Fixture_Disk_FIXTURE-SDA-SERIAL",
+          "/dev/disk/by-id/wwn-0x5000c500a1b2c3d4"
+        ],
+        "bound": false
+      }
+    },
+    "boot": {
+      "bootloader": "systemd",
+      "partition_layout": "systemd-boot",
+      "composefs": true
+    },
+    "encryption": {
+      "type": "none",
+      "luks": false,
+      "tpm2": false,
+      "passphrase": false,
+      "recovery_key": "none"
+    },
+    "partitions": [
+      {
+        "number": 1,
+        "device": "@DIR@/sda1",
+        "role": "efi",
+        "created": true,
+        "gpt_name": "EFI-SYSTEM",
+        "gpt_type": "uefi",
+        "size": "2GiB",
+        "size_bytes": 2147483648,
+        "action": "format",
+        "filesystem": "fat32",
+        "mount": "/boot/efi"
+      },
+      {
+        "number": 2,
+        "device": "@DIR@/sda2",
+        "role": "root",
+        "created": true,
+        "gpt_name": "root",
+        "gpt_type": "@LINUX_ROOT_TYPE@",
+        "size": "rest",
+        "size_bytes": 497957232640,
+        "action": "format",
+        "filesystem": "btrfs",
+        "mount": "/",
+        "mount_options": "compress=zstd:1"
+      }
+    ],
+    "var_disk": null,
+    "destroys": [
+      {
+        "device": "@DIR@/sda",
+        "effect": "wipe_disk"
+      }
+    ],
+    "capacity": {
+      "min_disk_bytes": 53687091200,
+      "disk_minimum": "met",
+      "reserved_bytes": 2150629376,
+      "root_bytes": 497957232640,
+      "root_minimum": "unknown",
+      "root_need_bytes": 9663676416,
+      "image_fit": "enough"
+    },
+    "scratch": {
+      "path": "/var/fisherman-tmp",
+      "on_target": false,
+      "bytes": "unknown",
+      "need_bytes": 12884901888,
+      "free_bytes": 21474836480,
+      "free_path": "/var",
+      "fit": "enough"
+    },
+    "steps": [
+      {
+        "number": 1,
+        "step_id": "partition",
+        "name": "Partitioning disk"
+      },
+      {
+        "number": 2,
+        "step_id": "format_efi",
+        "name": "Formatting EFI partition"
+      },
+      {
+        "number": 3,
+        "step_id": "format_root",
+        "name": "Formatting root filesystem"
+      },
+      {
+        "number": 4,
+        "step_id": "mount",
+        "name": "Mounting filesystem"
+      },
+      {
+        "number": 5,
+        "step_id": "install_os",
+        "name": "Installing OS"
+      },
+      {
+        "number": 6,
+        "step_id": "flatpaks",
+        "name": "Copying system Flatpaks"
+      },
+      {
+        "number": 7,
+        "step_id": "configure",
+        "name": "Configuring installed system"
+      },
+      {
+        "number": 8,
+        "step_id": "finalize",
+        "name": "Finalizing installation"
+      }
+    ],
+    "binding": {
+      "digest": "@PLAN_DIGEST@",
+      "read_image": true
+    },
+    "unknown": [
+      {
+        "field": "image.platform_digest",
+        "reason": "only a registry manifest lists the platform manifests; plan read a local copy, or the registry did not give its raw manifest"
+      },
+      {
+        "field": "source.media_input",
+        "reason": "on live media the install first binds the verified media input (probe media_input), which can replace the source; plan does not verify it"
+      },
+      {
+        "field": "capacity.root_minimum",
+        "reason": "fisherman sets no root minimum beyond the disk minimum; root_need_bytes and image_fit compare the root with the image"
+      },
+      {
+        "field": "scratch.bytes",
+        "reason": "the exact scratch use depends on the path the install takes (a pull, an OCI export, a redirected store); scratch.need_bytes is an upper estimate"
+      }
+    ]
+  }
+}
