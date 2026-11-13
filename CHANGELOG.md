@@ -791,6 +791,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Bug Fixes
 
+- **Recipe secrets fail before the disk is wiped, and `$`-mimics no longer
+  lock accounts** (tuna-os/fisherman#414): `user.password` and
+  `encryption.passphrase` reject control characters (a newline in a password
+  injected a second `chpasswd` line and could set another account's password),
+  `user.fullname` rejects `:` and control characters, a leading `$` is only
+  accepted as a complete pre-hashed crypt setting with a whitelisted scheme
+  id, and validator errors no longer mangle `%` via `fmt.Errorf`.
+  `validate --partial` applies the full name and password rules when the
+  `user` object has those keys.
+
 - **ZFS: the pool is exported, and its host files go where the system
   boots** (#413). The pool is registered for teardown and exported after the
   unmounts, on success and on every failure; it stayed imported on the

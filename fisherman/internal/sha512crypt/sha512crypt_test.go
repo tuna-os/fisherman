@@ -112,3 +112,29 @@ func TestHashFormatAndVerifies(t *testing.T) {
 		t.Errorf("two Hash calls produced the same salt: %q", h)
 	}
 }
+
+func TestIsHashSetting(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"$6$salt$hash", true},
+		{"$6$rounds=5000$salt$hash", true},
+		{"$5$salt$hash", true},
+		{"$1$salt$hash", true},
+		{"$2b$12$saltandsomehashcharacters0123456789abcdef", true},
+		{"$y$salt$hash", true},
+		{"hunter2", false},
+		{"$notacryptsetting", false},
+		{"$ecret$1", false},
+		{"$6$", false},
+		{"$6$salt", false},
+		{"", false},
+		{"$", false},
+	}
+	for _, c := range cases {
+		if got := IsHashSetting(c.in); got != c.want {
+			t.Errorf("IsHashSetting(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}

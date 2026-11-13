@@ -278,7 +278,7 @@ A rule runs when its key is present:
 | Key present | Rules |
 |---|---|
 | `hostname` | hostname |
-| `user` with `username` | username |
+| `user` | username, fullname and password, each when the `user` object has it |
 | `distroID` | distroID |
 | `brewTap` | brewTap |
 | `unifiedStorage` | unifiedStorage |
@@ -321,6 +321,8 @@ holds both fields.
 |---|---|---|
 | `hostname` | required; at most 64 characters (the kernel's `HOST_NAME_MAX`, also systemd's limit for `/etc/hostname`); one or more dot-separated RFC 1123 labels, each 1–63 characters of ASCII letters, digits and `-`, not starting or ending with `-`. Upper case is allowed. | `hostname_required`, `hostname_too_long`, `hostname_invalid_char`, `hostname_label_empty`, `hostname_label_too_long`, `hostname_label_hyphen` |
 | `user.username` | empty is valid (no user is created). Otherwise at most 32 characters; a lowercase letter or `_` first; then lowercase letters, digits, `_` and `-`; and not a name the target already has: the base users and groups of Fedora/EL/Debian, common service accounts, the groups frontends add the first user to, and anything starting `systemd-` (`recipe.ReservedUsernames`). This is what `useradd` accepts on every image fisherman installs; it used to be checked only by `useradd` itself, in the configure step. | `username_too_long`, `username_invalid_start`, `username_invalid_char`, `username_reserved` |
+| `user.fullname` | empty is valid (no comment is set). Otherwise no `:` (the passwd field separator, rejected by `useradd` after the OS is already deployed) and no control characters. | `fullname_invalid` |
+| `user.password` | empty is valid (no password is set). Otherwise no control characters: a newline would inject a second `user:password` line into `chpasswd` stdin and set another account's password. A leading `$` is only accepted as a complete pre-hashed crypt setting with a whitelisted scheme id (`$6$salt$hash`); anything else starting with `$` is hashed in-process on composefs targets instead of reaching `chpasswd -e` verbatim. | `password_invalid` |
 | `distroID` | empty is valid (the install uses `bootc`). Otherwise 1–63 characters: a lowercase letter first, then lowercase letters, digits and `-`. It names `/etc/<distroID>/oem/`, the `<distroID>-oem-setup.service` unit and its preset. | `distro_id_invalid` |
 | `brewTap` | empty is valid (no tap is added). Otherwise `owner/name`, each part starting with a letter or digit and containing only letters, digits, `.`, `_` and `-`. It is run as `brew tap <brewTap>` in the OEM setup script. | `brew_tap_invalid` |
 | `locale` | empty or absent is valid (the image's locale is kept). Otherwise a locale name of at most 64 characters: `language[_TERRITORY][.codeset][@modifier]` (`de_DE.UTF-8`, `sr_RS@latin`), or `C` or `POSIX` with an optional codeset. It is written as `LANG=` to `/etc/locale.conf`. | `locale_invalid` |
@@ -340,7 +342,7 @@ holds both fields.
 | `encryption.type` | not LUKS on ZFS | `encryption_unsupported_on_zfs` |
 | `encryption.type` | not encrypted with `customMounts` (the manual path runs no `luksFormat`) | `encryption_unsupported_on_manual_layout` |
 | `encryption.type` | a `tpm2-*` type needs a usable TPM 2.0 here: `probe --json`'s `tpm.usable`, including its `BOOTC_INSTALLER_FAKE_TPM` override. Full mode only. | `encryption_tpm_unavailable` |
-| `encryption.passphrase` | non-empty for a type with `needs_passphrase` | `encryption_passphrase_required` |
+| `encryption.passphrase` | non-empty for a type with `needs_passphrase`, and free of control characters (it must be typeable at the boot unlock prompt) | `encryption_passphrase_required`, `encryption_passphrase_invalid` |
 | `disk` | required on the auto layout, and must exist. Full mode only. | `disk_required`, `disk_not_found` |
 | `disk` | an eligible target: a whole disk (symlinks resolved) that does not hold the running system, is writable and is at least 50 GiB. See [Target eligibility](#target-eligibility). Full mode only. | `disk_not_disk`, `disk_boot_disk`, `disk_read_only`, `disk_too_small`, `disk_unverified` |
 | (the machine) | booted through UEFI, unless the target is a loop device. Full mode only. | `firmware_not_uefi` |
@@ -375,10 +377,10 @@ holds both fields.
 | (whole recipe) | readable, valid JSON | `recipe_unreadable`, `recipe_malformed` |
 | (any key) | a key of the recipe schema, at any depth. Full mode and the install only. | `recipe_unknown_field` |
 
-Not fisherman rules, and left to the frontend: the password itself (fisherman
-accepts an empty one, which leaves the account locked), "password and
-confirmation match", whether a user is required for the chosen image
-(`needs_user_creation`), and password strength.
+Not fisherman rules, and left to the frontend: password strength, "password and
+confirmation match", and whether a user is required for the chosen image
+(`needs_user_creation`). An empty password is valid (the account stays locked);
+anything else must already satisfy the `user.password` rule above.
 
 ## Mounts after the install
 
@@ -558,6 +560,7 @@ does not have is not linked, and the log says so.
 | `encryption_unsupported_on_manual_layout` | `encryption.type` | Encryption is not supported with custom mount layout | Use auto layout, or disable encryption |
 | `encryption_tpm_unavailable` | `encryption.type` | TPM 2.0 is required but not available or not usable on this system | Choose `luks-passphrase` instead, or enable TPM in BIOS |
 | `encryption_passphrase_required` | `encryption.passphrase` | A passphrase is required for this encryption type but is empty | Provide a non-empty passphrase |
+| `encryption_passphrase_invalid` | `encryption.passphrase` | The passphrase contains a control character, which cannot be typed at the boot unlock prompt | Remove newlines, tabs and other control characters |
 
 ### Hostname
 
@@ -578,6 +581,8 @@ does not have is not linked, and the log says so.
 | `username_invalid_start` | `user.username` | Username does not start with a lowercase letter or `_` | Start with a lowercase letter (a–z) or underscore |
 | `username_invalid_char` | `user.username` | Username contains invalid characters | Use only lowercase letters, digits, `-`, and `_` |
 | `username_reserved` | `user.username` | Username is reserved by the system | Use a different username; reserved names include common service accounts, systemd system users, and standard UNIX users |
+| `fullname_invalid` | `user.fullname` | The full name contains `:` (the passwd field separator) or a control character | Remove the `:` and any newline, tab or other control character |
+| `password_invalid` | `user.password` | The password contains a control character (a newline would inject a second `chpasswd` line), or starts with `$` without being a complete crypt setting with a whitelisted scheme id | Remove control characters; pass a full `$6$salt$hash` (or another whitelisted scheme) or a plain password that does not start with `$` |
 
 ### Image and Distribution
 

@@ -154,6 +154,64 @@ func TestCheckLayoutCombos(t *testing.T) {
 	}
 }
 
+func TestCheckPassword(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ""}, // empty skips password setting
+		{"hunter2", ""},
+		{"correct horse battery staple", ""},
+		{"p\u00e4ssw\u00f6rd", ""}, // non-ASCII letters are fine
+		{"$6$salt$hash", ""},
+		{"$6$rounds=5000$salt$hash", ""},
+		{"$2b$12$saltandsomehashcharacters0123456789abcdef", ""},
+		{"$notacryptsetting", recipe.CodePasswordInvalid},
+		{"$ecret$1", recipe.CodePasswordInvalid},
+		{"$6$", recipe.CodePasswordInvalid},
+		{"$6$salt", recipe.CodePasswordInvalid},
+		{"pw\nroot:x", recipe.CodePasswordInvalid},
+		{"pw\rb", recipe.CodePasswordInvalid},
+		{"pw\u0000b", recipe.CodePasswordInvalid},
+	}
+	for _, c := range cases {
+		ps := recipe.CheckPassword(c.in)
+		if got := code(t, ps); got != c.want {
+			t.Errorf("CheckPassword(%q) = %q, want %q", c.in, got, c.want)
+		}
+		for _, p := range ps {
+			if p.Field != "user.password" {
+				t.Errorf("CheckPassword(%q): field %q", c.in, p.Field)
+			}
+		}
+	}
+}
+
+func TestCheckFullname(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ""}, // empty sets no comment
+		{"Jane Doe", ""},
+		{"J\u00f6hn D\u00f6e (work)", ""},
+		{"a:b", recipe.CodeFullnameInvalid},
+		{"a\nb", recipe.CodeFullnameInvalid},
+		{"a\rb", recipe.CodeFullnameInvalid},
+	}
+	for _, c := range cases {
+		ps := recipe.CheckFullname(c.in)
+		if got := code(t, ps); got != c.want {
+			t.Errorf("CheckFullname(%q) = %q, want %q", c.in, got, c.want)
+		}
+		for _, p := range ps {
+			if p.Field != "user.fullname" {
+				t.Errorf("CheckFullname(%q): field %q", c.in, p.Field)
+			}
+		}
+	}
+}
+
 // TestValidateVarDiskBackend: a separate /var disk is refused before any
 // disk work on a composefs-native target (composeFsBackend or zfs), because
 // the initramfs bind-mounts the deployment's /var over it (#252). An
@@ -215,6 +273,9 @@ func TestCheckEncryption(t *testing.T) {
 		{recipe.Encryption{Type: "tpm2-luks-passphrase"}, recipe.CodeEncryptionPassphraseRequired, "encryption.passphrase"},
 		{recipe.Encryption{Type: "luks"}, recipe.CodeEncryptionUnsupported, "encryption.type"},
 		{recipe.Encryption{Type: "LUKS-passphrase", Passphrase: "s"}, recipe.CodeEncryptionUnsupported, "encryption.type"},
+		{recipe.Encryption{Type: "luks-passphrase", Passphrase: "a\nb"}, recipe.CodePassphraseInvalid, "encryption.passphrase"},
+		{recipe.Encryption{Type: "luks-passphrase", Passphrase: "a\u0000b"}, recipe.CodePassphraseInvalid, "encryption.passphrase"},
+		{recipe.Encryption{Type: "tpm2-luks-passphrase", Passphrase: "a\rb"}, recipe.CodePassphraseInvalid, "encryption.passphrase"},
 	}
 	for _, c := range cases {
 		ps := recipe.CheckEncryption(c.e)
