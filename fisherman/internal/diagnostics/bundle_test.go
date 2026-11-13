@@ -21,7 +21,7 @@ var now = time.Date(2026, 11, 12, 8, 0, 0, 0, time.UTC)
 
 // recipeJSONFields returns every json field path of t, as RecipeFieldPolicy
 // spells them ("user.password", "customMounts[].fstype"). A struct field
-// with its own entry in want stops the descent (sourceReuse, slurp).
+// with its own entry in want stops the descent (sourceReuse).
 func recipeJSONFields(t reflect.Type, prefix string, want map[string]string, out map[string]bool) {
 	for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice {
 		if t.Kind() == reflect.Slice {

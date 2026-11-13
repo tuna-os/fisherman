@@ -48,7 +48,7 @@ const (
 )
 
 var recipeFieldUses = map[string]fieldUse{
-	"disk":            {files: []string{prepartitionPhaseGo, diskPhaseGo, installPhaseGo}},
+	"disk":            {files: []string{diskPhaseGo, installPhaseGo}},
 	"filesystem":      {files: []string{diskPhaseGo, "internal/validation/chain.go"}},
 	"btrfsSubvolumes": {files: []string{diskPhaseGo}},
 	"encryption":      {files: []string{preflightPhaseGo, postPhaseGo, diskPhaseGo}},
@@ -87,12 +87,6 @@ var recipeFieldUses = map[string]fieldUse{
 	"varDisk.disk":             {files: []string{diskPhaseGo, "cmd/fisherman/mounts.go"}},
 	"varDisk.keepExisting":     {files: []string{"internal/recipe/state.go", "cmd/fisherman/mounts.go"}},
 	"additionalImageStores":    {files: []string{preflightPhaseGo, "cmd/fisherman/host_recipe.go"}},
-	"slurpWallpapers":          {files: []string{prepartitionPhaseGo}},
-	"slurp":                    {files: []string{prepartitionPhaseGo}},
-	"slurp.sourcePartition":    {files: []string{prepartitionPhaseGo}},
-	"slurp.users":              {files: []string{prepartitionPhaseGo}},
-	"slurp.users[].name":       {files: []string{prepartitionPhaseGo}},
-	"slurp.users[].categories": {files: []string{prepartitionPhaseGo}},
 	"targetMount":              {files: []string{preflightPhaseGo}},
 	"luksMapperName":           {files: []string{preflightPhaseGo}},
 	"distroID":                 {files: []string{installPhaseGo, postPhaseGo}},

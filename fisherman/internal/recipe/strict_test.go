@@ -33,8 +33,10 @@ func TestUnknownFieldsPaths(t *testing.T) {
 		{"array element", `{"customMounts":[{"partition":"/dev/sda1"},{"partition":"/dev/sda2","fs":"xfs"}]}`,
 			[]string{"customMounts[1].fs"}},
 		{"pointer struct", `{"varDisk":{"disk":"/dev/sdb","keep":true}}`, []string{"varDisk.keep"}},
-		{"slurp users", `{"slurp":{"sourcePartition":"/dev/sda3","users":[{"name":"a","cats":[]}]}}`,
-			[]string{"slurp.users[0].cats"}},
+		// Windows data migration left fisherman: an old recipe that still
+		// asks for it is refused, not silently installed without it.
+		{"removed Windows migration keys", `{"slurp":{"sourcePartition":"/dev/sda3","users":[]},"slurpWallpapers":true}`,
+			[]string{"slurp", "slurpWallpapers"}},
 		{"sorted, all reported", `{"zz":1,"aa":2,"user":{"x":1}}`, []string{"aa", "user.x", "zz"}},
 		{"a misspelt extra is not dropped", `{"extras":{"printServices":true,"printService":true}}`,
 			[]string{"extras.printService"}},
@@ -89,8 +91,7 @@ func TestFrontendRecipeKeysAreKnown(t *testing.T) {
 			"flatpaks":["a.b.C"],"additionalImageStores":[],"distroID":"d","selinuxDisabled":false,
 			"hostname":"h","user":{"username":"u","fullname":"U","password":"p","groups":["wheel"]}}`,
 		"schema-only and embedder keys": `{"brewTap":"o/n","genericImage":true,"luksMapperName":"m",
-			"slurp":{"sourcePartition":"/dev/sda3","users":[{"name":"n","categories":["Documents"]}]},
-			"slurpWallpapers":true,"targetMount":"/mnt/t","zfsPoolName":"rpool",
+			"targetMount":"/mnt/t","zfsPoolName":"rpool",
 			"copyNetworkProfiles":true,"copyBluetoothPairings":false,
 			"extras":{"printServices":true,"oemSetup":true,"audioNames":true,"bootSplash":true},
 			"experimental":["zfs"],"setBootNext":true,"locale":"de_DE.UTF-8","timezone":"Europe/Berlin",

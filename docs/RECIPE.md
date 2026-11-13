@@ -18,6 +18,9 @@ absent.
 - A key that is not on this page is an error (`recipe_unknown_field`), at
   any depth. Key names match without regard to case, as Go's JSON decoder
   matches them.
+- fisherman does no Windows data migration. The `slurp` and
+  `slurpWallpapers` keys that older versions read are gone, so a recipe that
+  still has either is refused with `recipe_unknown_field`.
 - A JSON schema for frontends is in bootc-installer:
   [`shared/recipe/fisherman-recipe.schema.json`](https://github.com/tuna-os/bootc-installer/blob/dev/shared/recipe/fisherman-recipe.schema.json),
   with the frontend rules in
@@ -118,17 +121,6 @@ otherwise.
 | `extras.bootSplash` | boolean | no | `false` | Add `rhgb quiet` to every boot entry. |
 | `distroID` | string | no | `bootc` | A short lowercase name for the OEM setup paths and units (`/etc/<distroID>/oem/`, `<distroID>-oem-setup.service`). |
 | `brewTap` | string | no | no tap | A Homebrew tap to add before the OEM packages, for example `ublue-os/tap`. |
-
-### Windows data
-
-| Field | Type | Required | When absent | What it does |
-|---|---|---|---|---|
-| `slurpWallpapers` | boolean | no | `false` | Before the disk is partitioned, copy wallpapers from a Windows (NTFS) partition on the target disk into RAM, and put them in the user's home after the install. A failure does not stop the install. |
-| `slurp` | object | no | no data migration | A user-data migration from Windows. Every recipe with this key is refused (`slurp_unsupported`): there is no durable rescue store yet. `fisherman scan` shows what it would find. |
-| `slurp.sourcePartition` | string | — | — | The Windows partition. |
-| `slurp.users` | object array | — | — | The Windows users to migrate. |
-| `slurp.users[].name` | string | — | — | The Windows user name. |
-| `slurp.users[].categories` | string array | — | — | The folders to copy, for example `Documents`, `Pictures`, `Desktop`. |
 
 ## Example
 

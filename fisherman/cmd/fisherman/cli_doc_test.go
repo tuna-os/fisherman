@@ -174,8 +174,8 @@ func TestCLIReferenceCoversEveryFlag(t *testing.T) {
 		}
 	}
 
-	// The install and scan take no flags: their sections have no flag table.
-	for _, h := range []string{"## `fisherman <recipe.json>` and `fisherman -`", "## `fisherman scan`"} {
+	// The install takes no flags: its section has no flag table.
+	for _, h := range []string{"## `fisherman <recipe.json>` and `fisherman -`"} {
 		if m := flagRow.FindString(cliSection(t, doc, h)); m != "" {
 			t.Errorf("CLI.md %s has a flag row %q; that command takes no flags", h, m)
 		}

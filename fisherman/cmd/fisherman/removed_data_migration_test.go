@@ -12,7 +12,11 @@ import (
 	"time"
 )
 
-func TestActualRequestedDataRefusesVolatileRescueBeforeDiskWork(t *testing.T) {
+// fisherman does no Windows data migration (that belongs to wootc). A recipe
+// written for an older fisherman that still asks for one ("slurp") is
+// refused as an unknown field before any tool runs or any byte of the disk
+// or the named source changes, rather than installed without the data.
+func TestRemovedDataMigrationRecipeRefusedBeforeDiskWork(t *testing.T) {
 	if os.Getenv("FISHERMAN_DATA_CHILD") == "1" {
 		lookPath = func(name string) (string, error) {
 			_ = os.WriteFile(os.Getenv("FISHERMAN_DATA_TOOL_MARKER"), []byte(name), 0600)
@@ -45,15 +49,15 @@ func TestActualRequestedDataRefusesVolatileRescueBeforeDiskWork(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	command := exec.CommandContext(ctx, self, "-test.run=^TestActualRequestedDataRefusesVolatileRescueBeforeDiskWork$")
+	command := exec.CommandContext(ctx, self, "-test.run=^TestRemovedDataMigrationRecipeRefusedBeforeDiskWork$")
 	command.Env = append(os.Environ(), "FISHERMAN_DATA_CHILD=1", "FISHERMAN_DATA_RECIPE="+recipe, "FISHERMAN_DATA_TOOL_MARKER="+marker)
 	output, runErr := command.CombinedOutput()
 	status, ok := runErr.(*exec.ExitError)
-	if !ok || status.ExitCode() != 1 || !strings.Contains(string(output), "requested data migration requires a verified durable rescue store; refusing installation before disk work") {
-		t.Fatalf("actual selected request did not refuse: %v %s", runErr, output)
+	if !ok || status.ExitCode() != 1 || !strings.Contains(string(output), `unknown recipe field "slurp"`) {
+		t.Fatalf("a recipe with slurp was not refused: %v %s", runErr, output)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
-		t.Fatal("tool boundary consumed before selected-data refusal")
+		t.Fatal("tool boundary consumed before the refusal")
 	}
 	for path, want := range map[string]string{disk: "preserved private bytes", source: "selected source bytes"} {
 		after, err := os.ReadFile(path)

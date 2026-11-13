@@ -73,9 +73,8 @@ func (in installer) run(recipeArg string) {
 	r, seq := pre.r, pre.seq
 
 	// ── Pre-partition (prepartition_phase.go) ────────────────────────────────
-	// The live session's audio names and the Windows data migration, before
-	// partitioning destroys the data. Non-fatal.
-	pp := prepartitionPhase(r, pre.extras, pre.hostIsLive, in.prepartition)
+	// The live session's audio names, before any disk step. Non-fatal.
+	prepartitionPhase(pre.extras, pre.hostIsLive, in.prepartition)
 
 	// ── Steps 1-5 and the /var disk: the disk phase (disk_phase.go) ──────────
 	// Partition, format, LUKS, mount (or the manual layout), then the /var
@@ -112,15 +111,13 @@ func (in installer) run(recipeArg string) {
 	// (post_phase.go) Persistent mounts, TPM2 staging, flatpaks, the
 	// configuration of the installed system and the installation receipt.
 	err = postPhase(r, seq, postInput{
-		disk:            dp,
-		extras:          pre.extras,
-		hostIsLive:      pre.hostIsLive,
-		dataResult:      pp.dataResult,
-		wallpaperResult: pp.wallpaperResult,
-		sourceImgref:    pre.sourceImgref,
-		targetImgref:    ip.targetImgref,
-		liveImage:       pre.live.LiveImage,
-		mediaInput:      pre.mediaInput,
+		disk:         dp,
+		extras:       pre.extras,
+		hostIsLive:   pre.hostIsLive,
+		sourceImgref: pre.sourceImgref,
+		targetImgref: ip.targetImgref,
+		liveImage:    pre.live.LiveImage,
+		mediaInput:   pre.mediaInput,
 	}, in.post)
 	if err != nil {
 		in.fail(err)

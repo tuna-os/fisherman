@@ -415,7 +415,7 @@ with `diskIdentity`, which names the field that changed.
 The install checks the binding twice: in its pre-flight, and once more
 in the disk phase right before its first disk step (the partition table,
 or the first format of a manual layout), after the live session's audio
-setup, the wallpaper migration and the rest of what runs in between. The
+setup and the rest of what runs in between. The
 second check is the same plan, read the same way (the image too, with
 `readImage`); a machine that changed in between ends the install with an
 `error` event whose `code` is `plan_stale` and whose `field` is

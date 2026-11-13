@@ -17,7 +17,6 @@ import (
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
 	"github.com/tuna-os/fisherman/internal/runner"
-	"github.com/tuna-os/fisherman/internal/slurp"
 	"github.com/tuna-os/fisherman/internal/validation"
 )
 
@@ -211,7 +210,6 @@ Usage:
   fisherman plan --json -          what an install of the recipe on stdin would do, as
                                    JSON; writes nothing, pulls nothing (docs/PLAN.md)
   fisherman images [<query>]       list or search the image catalog
-  fisherman scan <disk>            scan disk for Windows data available to migrate
   fisherman probe --json           print disks, TPM, RAM/CPU/UEFI, live and offline facts
   fisherman verify --json          on the installed system: compare the installation
                                    receipt with the booted image (docs/RECEIPT.md)
@@ -235,7 +233,6 @@ Examples:
   fisherman images Bluefin
   fisherman images "GNOME 50"
   fisherman images --plain yellowfin
-  fisherman scan /dev/nvme0n1
   fisherman probe --json
 `)
 }
@@ -287,18 +284,6 @@ func main() {
 		os.Exit(runPlan(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
 	case "diagnostics":
 		os.Exit(runDiagnostics(os.Args[2:], os.Stdin, os.Stdout, os.Stderr))
-	case "scan":
-		if len(os.Args) < 3 {
-			fmt.Fprintf(os.Stderr, "Usage: fisherman scan <disk>\n")
-			os.Exit(exitFailure)
-		}
-		output, err := slurp.ScanJSON(os.Args[2])
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "scan: %v\n", err)
-			os.Exit(exitFailure)
-		}
-		fmt.Println(output)
-		return
 	}
 
 	if looksLikeSubcommand(os.Args[1]) {

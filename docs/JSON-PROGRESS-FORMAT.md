@@ -115,8 +115,7 @@ Other examples: `Image pull required (71 layers)`,
 
 Several `info` events can arrive before the first `step` event. The image
 cache check, a `sourceReuse` copy (with its [`source_reuse`](#source_reuse)
-events), live-session audio setup and Windows data migration all run
-before partitioning.
+events) and live-session audio setup all run before partitioning.
 
 ### `source_reuse`
 
