@@ -512,10 +512,9 @@ looks like for each.
 | Exit | When | Events on stdout |
 |---|---|---|
 | 0 | Install succeeded. | Ends with `complete`. |
-| 0 | `help`, `version`, `images`, `validate` or `scan` succeeded. | None (plain-text output). |
+| 0 | `help`, `version`, `images` or `validate` succeeded. | None (plain-text output). |
 | 1 | `fatal()`: any install failure, including an unreadable or invalid recipe and a missing host tool. | Ends with `error`. |
 | 1 | No arguments. Help is printed to stdout. | None. |
-| 1 | `scan` without a disk, or `scan` failed. Message on stderr. | None. |
 | 130 | Cancelled: SIGTERM, SIGINT or SIGHUP, or the parent process (the frontend's wrapper) died. Children are stopped and the target is torn down first; see [Cancelling an install](#cancelling-an-install). | Ends with `error`: `installation cancelled (SIGTERM)` (the signal name varies). |
 | 130 | Cancelled: the reader of stdout went away (a closed pipe). Children are stopped and the target is torn down first; see [A closed stdout](#a-closed-stdout). | The `error` event `installation cancelled (stdout closed)` is written, but nobody can read it. The same line is on stderr. |
 | 2 | The argument looks like a command, not a recipe path (a flag, or a bare word with no file behind it). A lone `-` is not one: it reads the recipe from stdin. Message and help on stderr and stdout. | None. |
@@ -531,6 +530,9 @@ ends with an `error` event (`invalid recipe: …`) before any disk step.
 `probe --json` (see [PROBE.md](PROBE.md)) exits 0 with its JSON on stdout, 1
 if the probe or the encoding failed, and 2 for a missing `--json` or an
 unknown argument. It does not emit progress events either.
+
+The exit codes of `plan`, `verify` and `diagnostics`, and of every other
+command, are in [CLI.md](CLI.md). None of them emits progress events.
 
 Other ways the process can end:
 
