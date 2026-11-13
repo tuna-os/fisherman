@@ -139,8 +139,6 @@ a policy here.
 | `varDisk.disk` | identifier |
 | `varDisk.keepExisting` | value |
 | `additionalImageStores` | presence |
-| `slurpWallpapers` | value |
-| `slurp` | presence |
 | `targetMount` | presence |
 | `luksMapperName` | presence |
 | `distroID` | presence |

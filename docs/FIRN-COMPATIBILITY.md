@@ -30,7 +30,7 @@ that the two installers produce the same system at run time.
 |---|---|---|
 | Encoding | TOML file (`recipe.Load`, `recipe.Parse`) | JSON, on stdin (`fisherman -`) or a file (`recipe.LoadArg`); at most 1 MiB from stdin (`MaxRecipeBytes`) |
 | Version field | `version`, required: `2`; bootc `1` with a deprecation warning until `BootcV1EndDate` (2026-12-30), rejected from that date; any other value is `bad-version` | none (tuna-os/fisherman#293) |
-| Structure | tables `[image]`, `[target]`, `[security]`, `[system]`, `[system.user]` | flat object with nested `encryption`, `user`, `keyboard`, `varDisk`, `customMounts[]`, `sourceReuse`, `extras`, `slurp` |
+| Structure | tables `[image]`, `[target]`, `[security]`, `[system]`, `[system.user]` | flat object with nested `encryption`, `user`, `keyboard`, `varDisk`, `customMounts[]`, `sourceReuse`, `extras` |
 | Unknown keys | fail-closed: the first `meta.Undecoded()` key is a parse error | fail-closed: `UnknownFields` returns every unknown key as `recipe_unknown_field`; `Parse` refuses the first. Key matching is case-insensitive, as in `encoding/json`; TOML keys are case-sensitive |
 | Absent vs. zero | `toml.MetaData.IsSet` for `system.user` and the `mok` fields; otherwise an empty string means absent | pointer or nil slice for the fields where absence has a meaning (`flatpaks`, `additionalImageStores`, `keyboard`, `varDisk`, `sourceReuse`, `extras`, `copyNetworkProfiles`, `copyBluetoothPairings`, `setBootNext`); otherwise an empty string means absent |
 | Error shape | `Issue{Code, Field, Message}`, one per rule family (`required`, `enum`, `mutex`, …) | `Problem{Field, Code, Message}`, one stable code per rule (docs/VALIDATE.md) |
@@ -117,7 +117,7 @@ is exact.
 | `system.flatpaks` (application IDs; Firn installs them with `flatpak.Provision` and warns `flatpak_unreachable` for each one it cannot reach) | `flatpaks` (absent: copy the host's system Flatpaks; `[]`: copy nothing; a list also copies them all: not a filter, nothing is downloaded) | **refuse** a non-empty list: fisherman cannot install a named app. An empty or absent list → `flatpaks: []` | **refuse** absent or non-empty: Firn cannot copy the host's Flatpaks; `[]` → omit |
 | `system.core_flatpaks` (apps from the image's `org.frostyard.core-flatpaks` label) | none (fisherman reads no image Flatpak label; tuna-os/fisherman#387) | refuse when `true` | — |
 | `system.root_ssh_authorized_key` / `_file` | none | refuse when set | — |
-| none | `extras`, `copyNetworkProfiles`, `copyBluetoothPairings`, `setBootNext`, `selinuxDisabled`, `distroID`, `brewTap`, `slurpWallpapers`, `slurp`, `experimental` | — | refuse when set to anything but its default |
+| none | `extras`, `copyNetworkProfiles`, `copyBluetoothPairings`, `setBootNext`, `selinuxDisabled`, `distroID`, `brewTap`, `experimental` | — | refuse when set to anything but its default |
 
 ### User
 

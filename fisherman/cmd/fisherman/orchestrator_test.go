@@ -31,6 +31,9 @@ type pipeline struct {
 	// sourceRoot: the pre-flight establishes the source root (the goldens
 	// have it unset).
 	sourceRoot bool
+	// audio: the desktop extras turn on the audio names, so the
+	// pre-partition phase does something (the goldens have it unset).
+	audio bool
 }
 
 // errFailed stops run where the live failPhase would end the process.
@@ -77,12 +80,13 @@ func (pl *pipeline) installer() installer {
 		}
 		return install.SourceRoot{}
 	}
-	// No desktop extras, so each phase's log is its golden.
+	// No desktop extras (but the audio names when pl.audio), so each
+	// phase's log is its golden.
 	in.preflight.resolveExtras = func(*recipe.Recipe, ...string) (recipe.Extras, string) {
-		return recipe.Extras{}, "Desktop extras: none"
+		return recipe.Extras{AudioNames: pl.audio}, "Desktop extras: none"
 	}
-	detect := in.prepartition.detectNTFS
-	in.prepartition.detectNTFS = func(d string) ([]string, error) { mark("prepartition"); return detect(d) }
+	prepInfo := in.prepartition.info
+	in.prepartition.info = func(msg string) { mark("prepartition"); prepInfo(msg) }
 	partition := in.disk.partitionLayout
 	in.disk.partitionLayout = func(dev string, l disk.Layout) error { mark("disk"); return partition(dev, l) }
 	scratch := in.install.spaceConstrained
@@ -117,7 +121,7 @@ func TestInstallerRunsThePhasesInOrder(t *testing.T) {
 	for _, variant := range []string{"plain", "tpm2", "zfs", "systemd-boot composefs"} {
 		t.Run(variant, func(t *testing.T) {
 			pl := newPipeline(t, variant)
-			pl.pre.r.SlurpWallpapers = true
+			pl.audio = true
 			pl.run(t)
 			if pl.failed != nil {
 				t.Fatalf("the install failed: %v", pl.failed)
@@ -142,7 +146,14 @@ func TestInstallerRunsThePhasesInOrder(t *testing.T) {
 			if g, ok := installPhaseGolden[variant]; ok && !reflect.DeepEqual(withoutSteps(pl.install.log), withoutSteps(g)) {
 				t.Errorf("install log = %v", pl.install.log)
 			}
-			if g, ok := postPhaseGolden[variant]; ok && !reflect.DeepEqual(withoutSteps(pl.post.log), withoutSteps(g)) {
+			// The audio names add the post phase's audio configuration.
+			var postLog []string
+			for _, l := range withoutSteps(pl.post.log) {
+				if !strings.HasPrefix(l, "audioConfig ") {
+					postLog = append(postLog, l)
+				}
+			}
+			if g, ok := postPhaseGolden[variant]; ok && !reflect.DeepEqual(postLog, withoutSteps(g)) {
 				t.Errorf("post log = %v", pl.post.log)
 			}
 			if g, ok := finalizePhaseGolden[variant]; ok && !reflect.DeepEqual(withoutSteps(pl.finalize.log), withoutSteps(g)) {

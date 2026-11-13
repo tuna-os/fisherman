@@ -142,7 +142,6 @@ func TestPrintHelp(t *testing.T) {
 		"fisherman <recipe.json>",
 		"fisherman validate",
 		"fisherman images",
-		"fisherman scan",
 		"fisherman version",
 		"--plain",
 	} {

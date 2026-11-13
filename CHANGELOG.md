@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 💥 Breaking
+
+- **fisherman no longer does anything with Windows.** Windows data
+  migration belongs to wootc alone. Removed: the `fisherman scan` command
+  and `docs/SCAN.md`; the `internal/slurp` package; the pre-partition
+  phase's data copy, NTFS detection and wallpaper extraction; the
+  post-install phase's injection of that data and its scratch cleanup;
+  the recipe fields `slurp` (with `sourcePartition`, `users[].name`,
+  `users[].categories`) and `slurpWallpapers`, and their diagnostics
+  policy rows and bundle fields. The pre-partition phase keeps the live
+  session's audio names; it announces no step, so the step plan, the step
+  numbers and every golden are unchanged.
+  - The problem code `slurp_unsupported` is gone from the public code list
+    (VALIDATE.md). A recipe that still carries `slurp` or
+    `slurpWallpapers` is now refused, in the install and in the full
+    `validate`, before any disk work, with the stable code
+    `recipe_unknown_field` at that key. That was already the outcome for
+    `slurp` (as `slurp_unsupported`); `slurpWallpapers`, which used to be
+    a best-effort extra, is now refused too, even when `false`. With
+    `--partial`, unknown keys are ignored, so neither key is reported
+    there any more.
+  - `fisherman scan` is now an unknown command (exit 2).
+
 ### ✨ Features
 
 - **The install checks `diskIdentity` again right before it partitions**

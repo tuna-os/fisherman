@@ -24,7 +24,6 @@ here, or a row names one that the code does not have.
 | `fisherman verify` | for `--live` | On the installed system: compare the installation receipt with the booted image. | [RECEIPT.md](RECEIPT.md) |
 | `fisherman diagnostics` | no | Write a local support bundle of allowlisted facts about an install. Never uploaded. | [DIAGNOSTICS.md](DIAGNOSTICS.md) |
 | `fisherman images` | no | List or search the image catalog. | [README](../README.md#image-catalog) |
-| `fisherman scan` | yes | Count the Windows user data on a disk that a migration could take. | [SCAN.md](SCAN.md) |
 | `fisherman version` | no | Print `fisherman <version>`. `--version` is the same. | |
 | `fisherman help` | no | Print the help. `--help` and `-h` are the same. | |
 
@@ -191,16 +190,6 @@ the words after the flags), it shows the images and families that match.
 | 0 | The catalog or the matches are on stdout. |
 | 1 | No catalog was found or read, or nothing matches the query. |
 | 2 | An unknown flag. |
-
-## `fisherman scan`
-
-```text
-fisherman scan <disk>
-```
-
-No flags. It needs root. It prints one JSON object (see
-[SCAN.md](SCAN.md)) and exits 0, or exits 1 with no disk argument or when
-the scan fails.
 
 ## Environment
 

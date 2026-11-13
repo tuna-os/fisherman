@@ -67,7 +67,7 @@ in `fisherman/internal/recipe/recipe.go`:
 2. `unifiedStorage`, `sourceReuse`, `imageType`, `image` and `targetImgref`
    (reference syntax), `bootloader`, `encryption`, `varDisk` with
    encryption, then `varDisk` itself;
-3. `hostname`, `user.username`, `distroID`, `brewTap`, `slurp`,
+3. `hostname`, `user.username`, `distroID`, `brewTap`,
    `targetMount`, `flatpakVarPath`, `zfsPoolName`, `luksMapperName`,
    `additionalImageStores`, `override`, `experimental`, `locale`,
    `keyboard`, `timezone`.
@@ -138,6 +138,10 @@ $ echo '{"disk":"/dev/sda","filesystem":"xfs","hostname":"a","image":"x",
   is unknown exactly when the decoder would drop it.
 - `--partial` does **not** apply this rule. A page sends a fragment, and a
   frontend may be newer than the backend it asks.
+- The Windows data migration keys `slurp` and `slurpWallpapers` are gone
+  (fisherman does no Windows data migration), so a full recipe that still
+  has either is refused here as `recipe_unknown_field`. The
+  `slurp_unsupported` code is gone with them.
 
 A frontend must send only keys in the schema of the fisherman commit it
 pins. There is no `recipeVersion` field yet (#293): to use a new field, bump
@@ -275,7 +279,6 @@ A rule runs when its key is present:
 |---|---|
 | `hostname` | hostname |
 | `user` | username, fullname and password, each when the `user` object has it |
-| `slurp` | slurp |
 | `distroID` | distroID |
 | `brewTap` | brewTap |
 | `unifiedStorage` | unifiedStorage |
@@ -320,7 +323,6 @@ holds both fields.
 | `user.username` | empty is valid (no user is created). Otherwise at most 32 characters; a lowercase letter or `_` first; then lowercase letters, digits, `_` and `-`; and not a name the target already has: the base users and groups of Fedora/EL/Debian, common service accounts, the groups frontends add the first user to, and anything starting `systemd-` (`recipe.ReservedUsernames`). This is what `useradd` accepts on every image fisherman installs; it used to be checked only by `useradd` itself, in the configure step. | `username_too_long`, `username_invalid_start`, `username_invalid_char`, `username_reserved` |
 | `user.fullname` | empty is valid (no comment is set). Otherwise no `:` (the passwd field separator, rejected by `useradd` after the OS is already deployed) and no control characters. | `fullname_invalid` |
 | `user.password` | empty is valid (no password is set). Otherwise no control characters: a newline would inject a second `user:password` line into `chpasswd` stdin and set another account's password. A leading `$` is only accepted as a complete pre-hashed crypt setting with a whitelisted scheme id (`$6$salt$hash`); anything else starting with `$` is hashed in-process on composefs targets instead of reaching `chpasswd -e` verbatim. | `password_invalid` |
-| `slurp` | absent. A requested user-data migration is refused until it has a durable rescue store: the copy lives only in RAM, an extraction error or partial copy still reached partitioning, and an interruption loses it after the source is wiped. `slurpWallpapers` is unaffected. | `slurp_unsupported` |
 | `distroID` | empty is valid (the install uses `bootc`). Otherwise 1–63 characters: a lowercase letter first, then lowercase letters, digits and `-`. It names `/etc/<distroID>/oem/`, the `<distroID>-oem-setup.service` unit and its preset. | `distro_id_invalid` |
 | `brewTap` | empty is valid (no tap is added). Otherwise `owner/name`, each part starting with a letter or digit and containing only letters, digits, `.`, `_` and `-`. It is run as `brew tap <brewTap>` in the OEM setup script. | `brew_tap_invalid` |
 | `locale` | empty or absent is valid (the image's locale is kept). Otherwise a locale name of at most 64 characters: `language[_TERRITORY][.codeset][@modifier]` (`de_DE.UTF-8`, `sr_RS@latin`), or `C` or `POSIX` with an optional codeset. It is written as `LANG=` to `/etc/locale.conf`. | `locale_invalid` |
@@ -601,12 +603,11 @@ does not have is not linked, and the log says so.
 | `additional_image_store_invalid` | `additionalImageStores[i]` | The store path is relative, or has `..`, `:`, `,` or a control character | Use the absolute path of the store directory |
 | `additional_image_store_not_found` | `additionalImageStores[i]` | The store path is not a directory on the host | Correct the path, or leave the field out so fisherman finds the stores |
 
-### Bootloader and Slurp
+### Bootloader and brewTap
 
 | Code | Field | Cause | Fix |
 |---|---|---|---|
 | `bootloader_unsupported` | `bootloader` | Bootloader is not empty, `grub2`, or `systemd` | Use one of: empty (auto), `grub2`, or `systemd` |
-| `slurp_unsupported` | `slurp` | A requested user-data migration (`slurp`) is refused: fisherman has no durable rescue store for the copy yet, so no recipe field can make it valid | Remove the `slurp` field. `slurpWallpapers` is not affected |
 | `brew_tap_invalid` | `brewTap` | Homebrew tap format is invalid | Use `owner/name` format, with each part containing only letters, digits, `.`, `_`, and `-` |
 
 ### Source reuse

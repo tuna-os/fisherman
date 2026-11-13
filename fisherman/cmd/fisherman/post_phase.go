@@ -3,12 +3,10 @@ package main
 import (
 	"fmt"
 
-	"github.com/tuna-os/fisherman/internal/deploy"
 	"github.com/tuna-os/fisherman/internal/install"
 	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
-	"github.com/tuna-os/fisherman/internal/slurp"
 )
 
 // The post-install phase of an install (#313): everything written into the
@@ -16,9 +14,8 @@ import (
 // /var disk, a manual layout's data partitions and swap), the first-boot
 // TPM2 enrolment (its own step) and the recovery key, the system flatpaks
 // (step 7), the configuration of step 8 (hostname, user, locale, boot
-// splash, root flags, LUKS boot arguments, host secrets, audio, migrated
-// Windows data, OEM packages, print services) and the installation
-// receipt.
+// splash, root flags, LUKS boot arguments, host secrets, audio, OEM
+// packages, print services) and the installation receipt.
 //
 // Like the other phases it takes what it needs as arguments and never ends
 // the process: a failure comes back as a *phaseError with the failure code
@@ -34,10 +31,6 @@ type postInput struct {
 	// hostIsLive asks, at most once, whether the host is live media.
 	extras     recipe.Extras
 	hostIsLive func() bool
-	// dataResult and wallpaperResult are the Windows data slurped before
-	// partitioning (nil when there was none).
-	dataResult      *slurp.DataSlurpResult
-	wallpaperResult *slurp.WallpaperResult
 	// The receipt's inputs: the install source, the --target-imgref the
 	// install passed, the live image and the media input.
 	sourceImgref string
@@ -50,27 +43,23 @@ type postInput struct {
 // teardown registration of the mounts it makes. livePostOps is the real
 // set.
 type postOps struct {
-	persistMounts     func(r *recipe.Recipe, target string, mounted func(path string)) error
-	addMount          func(path string)
-	stageTPM2         func(target, rootPart, luksUUID, passphrase string) string
-	recoveryKey       func(key string)
-	copyFlatpaks      func(target string, refs []string, flatpakVarPath string) error
-	writeHostname     func(target, hostname string) error
-	createUser        func(target string, u post.UserConfig) error
-	applyLocale       func(target string, r *recipe.Recipe, encrypted bool)
-	plymouthArgs      func(target string) (int, error)
-	rootFlags         func(target, options string) (string, error)
-	luksBoot          func(target, luksUUID string, required bool) (string, error)
-	copyHostSecrets   func(target string, r *recipe.Recipe, isLive func() bool)
-	audioConfig       func(target string) error
-	resolveDeployment func(target string) (*deploy.Deployment, error)
-	injectData        func(varDir string, res *slurp.DataSlurpResult) error
-	injectWallpapers  func(varDir string, res *slurp.WallpaperResult) error
-	cleanupSlurp      func()
-	oemPackages       func(target, distroID, brewTap string) error
-	printServices     func(target string) (enabled, missing []string)
-	stageReceipt      func(target, sourceImgref, updateRef string, media *install.MediaInput) (progress.ReceiptStatus, string)
-	receipt           func(st progress.ReceiptStatus)
+	persistMounts   func(r *recipe.Recipe, target string, mounted func(path string)) error
+	addMount        func(path string)
+	stageTPM2       func(target, rootPart, luksUUID, passphrase string) string
+	recoveryKey     func(key string)
+	copyFlatpaks    func(target string, refs []string, flatpakVarPath string) error
+	writeHostname   func(target, hostname string) error
+	createUser      func(target string, u post.UserConfig) error
+	applyLocale     func(target string, r *recipe.Recipe, encrypted bool)
+	plymouthArgs    func(target string) (int, error)
+	rootFlags       func(target, options string) (string, error)
+	luksBoot        func(target, luksUUID string, required bool) (string, error)
+	copyHostSecrets func(target string, r *recipe.Recipe, isLive func() bool)
+	audioConfig     func(target string) error
+	oemPackages     func(target, distroID, brewTap string) error
+	printServices   func(target string) (enabled, missing []string)
+	stageReceipt    func(target, sourceImgref, updateRef string, media *install.MediaInput) (progress.ReceiptStatus, string)
+	receipt         func(st progress.ReceiptStatus)
 
 	info func(msg string)
 }
@@ -79,28 +68,24 @@ type postOps struct {
 // the install's cleanup.
 func livePostOps() postOps {
 	return postOps{
-		persistMounts:     persistMounts,
-		addMount:          cleanup.AddMount,
-		stageTPM2:         stageTPM2Enrollment,
-		recoveryKey:       progress.RecoveryKey,
-		copyFlatpaks:      post.CopyFlatpaks,
-		writeHostname:     post.WriteHostname,
-		createUser:        post.CreateUser,
-		applyLocale:       applyLocale,
-		plymouthArgs:      post.EnsurePlymouthArgs,
-		rootFlags:         ensureRootFlags,
-		luksBoot:          ensureLuksBoot,
-		copyHostSecrets:   copyHostSecrets,
-		audioConfig:       post.GenerateAudioConfig,
-		resolveDeployment: post.ResolveDeployment,
-		injectData:        slurp.InjectData,
-		injectWallpapers:  slurp.InjectWallpapers,
-		cleanupSlurp:      slurp.CleanupScratch,
-		oemPackages:       post.InstallOEMPackages,
-		printServices:     post.EnablePrintServices,
-		stageReceipt:      stageReceipt,
-		receipt:           progress.Receipt,
-		info:              progress.Info,
+		persistMounts:   persistMounts,
+		addMount:        cleanup.AddMount,
+		stageTPM2:       stageTPM2Enrollment,
+		recoveryKey:     progress.RecoveryKey,
+		copyFlatpaks:    post.CopyFlatpaks,
+		writeHostname:   post.WriteHostname,
+		createUser:      post.CreateUser,
+		applyLocale:     applyLocale,
+		plymouthArgs:    post.EnsurePlymouthArgs,
+		rootFlags:       ensureRootFlags,
+		luksBoot:        ensureLuksBoot,
+		copyHostSecrets: copyHostSecrets,
+		audioConfig:     post.GenerateAudioConfig,
+		oemPackages:     post.InstallOEMPackages,
+		printServices:   post.EnablePrintServices,
+		stageReceipt:    stageReceipt,
+		receipt:         progress.Receipt,
+		info:            progress.Info,
 	}
 }
 
@@ -114,7 +99,6 @@ func postPhase(r *recipe.Recipe, seq *stepSequencer, in postInput, ops postOps) 
 	activeLuksUUID := in.disk.luksUUID // empty if no encryption
 	luksRecoveryKey := in.disk.recoveryKey
 	extras, hostIsLive := in.extras, in.hostIsLive
-	dataResult, wallpaperResult := in.dataResult, in.wallpaperResult
 
 	// ── Persistent mounts (varDisk, customMounts data and swap) ──────────────
 	// From here on every step writes into the installed system through the
@@ -233,29 +217,6 @@ func postPhase(r *recipe.Recipe, seq *stepSequencer, in postInput, ops postOps) 
 		if err := ops.audioConfig(activeTargetMount); err != nil {
 			ops.info(fmt.Sprintf("Warning: could not configure audio devices: %v", err))
 		}
-	}
-
-	// Inject slurped Windows data into the installed system's /var (the one
-	// the booted system mounts, from the deployment resolver). Non-fatal.
-	if (dataResult != nil && dataResult.Found) || (wallpaperResult != nil && wallpaperResult.Found) {
-		if d, err := ops.resolveDeployment(activeTargetMount); err != nil {
-			ops.info(fmt.Sprintf("Warning: could not inject migrated data: %v", err))
-		} else {
-			if dataResult != nil && dataResult.Found {
-				if err := ops.injectData(d.Var, dataResult); err != nil {
-					ops.info(fmt.Sprintf("Warning: could not inject user data: %v", err))
-				}
-			}
-			if wallpaperResult != nil && wallpaperResult.Found {
-				if err := ops.injectWallpapers(d.Var, wallpaperResult); err != nil {
-					ops.info(fmt.Sprintf("Warning: could not inject wallpapers: %v", err))
-				}
-			}
-		}
-	}
-	// Cleanup scratch space (both data and wallpaper slurps use /run/fisherman-slurp)
-	if dataResult != nil || wallpaperResult != nil {
-		ops.cleanupSlurp()
 	}
 
 	// Detect OEM hardware (ASUS, Framework) and queue vendor-specific packages

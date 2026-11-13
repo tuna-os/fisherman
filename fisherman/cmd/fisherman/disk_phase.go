@@ -198,8 +198,8 @@ func diskPhase(r *recipe.Recipe, seq *stepSequencer, targetMount, luksMapper str
 	var res diskResult
 
 	// ── Pre-partition: the confirmed plan, once more ─────────────────────
-	// The pre-flight checked planBinding before the live audio, the
-	// wallpaper slurp and whatever else ran since; plan the recipe again
+	// The pre-flight checked planBinding before the live audio and
+	// whatever else ran since; plan the recipe again
 	// now, before the first step and the first write, so the partition
 	// table (or the manual layout's first format) goes to the machine the
 	// user confirmed. It reads what plan reads and writes nothing.

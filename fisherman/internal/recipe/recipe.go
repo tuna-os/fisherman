@@ -97,17 +97,6 @@ type Recipe struct {
 	// discovery. The nil/empty distinction is the contract, so keep the
 	// field a plain slice decoded by encoding/json.
 	AdditionalImageStores []string `json:"additionalImageStores,omitempty"`
-	// SlurpWallpapers enables pre-partition extraction of wallpapers from an
-	// existing Windows (NTFS) partition on the target disk. The wallpapers are
-	// held in RAM (/run) and injected into the installed user's home directory
-	// after the OS install completes. Entirely non-fatal — if no NTFS partition
-	// is found or extraction fails, the install continues normally.
-	SlurpWallpapers bool `json:"slurpWallpapers,omitempty"`
-	// Slurp configures full user-data migration from an existing Windows
-	// partition. When set, fisherman extracts the specified categories before
-	// partitioning and injects them post-install. Takes priority over
-	// SlurpWallpapers (which only grabs wallpapers).
-	Slurp *SlurpSpec `json:"slurp,omitempty"`
 	// TargetMount overrides the host path where fisherman assembles the
 	// target filesystem hierarchy. Defaults to "/mnt/fisherman-target".
 	// Use it when the default path is taken on the host. It does not make
@@ -299,18 +288,6 @@ type UserSpec struct {
 	Groups   []string `json:"groups"`
 }
 
-// SlurpSpec configures Windows user-data migration.
-type SlurpSpec struct {
-	SourcePartition string          `json:"sourcePartition"`
-	Users           []SlurpUserSpec `json:"users"`
-}
-
-// SlurpUserSpec describes which categories to extract for one Windows user.
-type SlurpUserSpec struct {
-	Name       string   `json:"name"`
-	Categories []string `json:"categories"`
-}
-
 // DiskIdentity is the identity a recipe expects `disk` to have. An empty
 // string or a zero size is not checked; at least one field must be set.
 type DiskIdentity struct {
@@ -384,7 +361,7 @@ func (r *Recipe) Validate() error {
 // the disk, the customMounts partitions and the varDisk, and returns every
 // problem found, in a stable order: the layout first, then unifiedStorage,
 // sourceReuse, imageType, image and targetImgref, bootloader, encryption,
-// varDisk, hostname, user, distroID, brewTap, slurp, targetMount,
+// varDisk, hostname, user, distroID, brewTap, targetMount,
 // flatpakVarPath, zfsPoolName, luksMapperName, additionalImageStores,
 // override, experimental, locale, keyboard and timezone (docs/VALIDATE.md
 // lists the same order). It does not check the
@@ -488,7 +465,6 @@ func (r *Recipe) Problems() []Problem {
 	// shell script, so they are refused before any disk step too.
 	ps = append(ps, CheckDistroID(r.DistroID)...)
 	ps = append(ps, CheckBrewTap(r.BrewTap)...)
-	ps = append(ps, CheckSlurp(r.Slurp)...)
 	// Host paths root mounts onto or writes under; see CheckTargetMount.
 	ps = append(ps, CheckTargetMount(r.TargetMount)...)
 	ps = append(ps, CheckFlatpakVarPath(r.FlatpakVarPath)...)

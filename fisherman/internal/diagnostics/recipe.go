@@ -57,8 +57,6 @@ var RecipeFieldPolicy = map[string]string{
 	"varDisk.disk":             PolicyIdentifier,
 	"varDisk.keepExisting":     PolicyValue,
 	"additionalImageStores":    PolicyPresence,
-	"slurpWallpapers":          PolicyValue,
-	"slurp":                    PolicyPresence,
 	"targetMount":              PolicyPresence,
 	"luksMapperName":           PolicyPresence,
 	"distroID":                 PolicyPresence,
@@ -101,8 +99,6 @@ type RecipeSummary struct {
 	CustomMounts          []MountShape `json:"customMounts,omitempty"`
 	VarDisk               *VarDisk     `json:"varDisk,omitempty"`
 	AdditionalImageStores any          `json:"additionalImageStores"`
-	SlurpWallpapers       bool         `json:"slurpWallpapers"`
-	Slurp                 bool         `json:"slurp"`
 	TargetMount           bool         `json:"targetMount"`
 	LuksMapperName        bool         `json:"luksMapperName"`
 	DistroID              bool         `json:"distroID"`
@@ -214,8 +210,6 @@ func summarizeRecipe(data []byte, rd *Redactor) (RecipeSummary, bool) {
 		Hostname:              rd.Ident("host", r.Hostname),
 		Flatpaks:              countOrAbsent(r.Flatpaks == nil, len(r.Flatpaks)),
 		AdditionalImageStores: countOrAbsent(r.AdditionalImageStores == nil, len(r.AdditionalImageStores)),
-		SlurpWallpapers:       r.SlurpWallpapers,
-		Slurp:                 r.Slurp != nil,
 		TargetMount:           r.TargetMount != "",
 		LuksMapperName:        r.LuksMapperName != "",
 		DistroID:              r.DistroID != "",

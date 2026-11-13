@@ -358,9 +358,9 @@ func isComposeFsNative(sysroot string) bool {
 	return runner.Run("ls", filepath.Join(sysroot, "ostree")) != nil
 }
 
-// IsComposeFsNativeExported is a public wrapper for isComposeFsNative,
-// used by packages that need to determine the target system layout
-// (e.g. slurp.InjectWallpapers).
+// IsComposeFsNativeExported is a public wrapper for isComposeFsNative, for
+// callers outside this package that need to determine the target system
+// layout (and for this package's external tests).
 func IsComposeFsNativeExported(sysroot string) bool {
 	return isComposeFsNative(sysroot)
 }
