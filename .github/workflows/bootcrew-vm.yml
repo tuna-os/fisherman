@@ -134,7 +134,9 @@ jobs:
       #             nothing in justfile/scripts/tests reads tui/)
       #   advisory: the advisory VM boots and the store-reuse profile. These
       #             never gate a merge, so a pull request runs them only when
-      #             it changes the matrix or this workflow.
+      #             it changes the matrix or the store-reuse script. (A change
+      #             to this workflow is exercised by the required legs, which
+      #             share every step.)
       # If the file list cannot be read, everything runs.
       - name: Scope the heavy jobs
         id: scope
@@ -164,7 +166,7 @@ jobs:
                   *) heavy=true vm=true ;;
                 esac
                 case "$f" in
-                  tests/bootcrew-matrix.yaml|.github/workflows/bootcrew-vm.yml) advisory=true ;;
+                  tests/bootcrew-matrix.yaml|scripts/store-reuse-vm.sh) advisory=true ;;
                 esac
               done < "$RUNNER_TEMP/changed.txt"
               [ "$vm" = true ] || advisory=false
