@@ -171,10 +171,36 @@ jobs:
             say true "forced"; exit 0
           fi
 
-          # Sleep out the remainder of the soak rather than exiting and
-          # hoping a later firing arrives: the workflow_run firings all land
-          # within minutes of the push, and GitHub's cron ticks are unreliable
-          # enough that the hourly catch-up cannot be counted on.
+          # Judge the candidate BEFORE the soak. Most firings are not the one
+          # that can promote: the gated workflows finish at different times
+          # and only the last to finish sees everything complete, the others
+          # answer "wait" (or "refused") and must not hold a runner for the
+          # rest of the soak just to learn that. Sleeping first cost one
+          # 30-minute runner per firing (3 per push to dev, plus the hourly
+          # catch-up); a candidate that is not ready now exits at once.
+          judge() {
+            if ! python3 scripts/promote-gate.py > /tmp/gate.out; then
+              cat /tmp/gate.out
+              echo "::error::scripts/promote-gate.py failed; cannot judge $SHA"
+              say false "refused: the gate script failed"; exit 1
+            fi
+            cat /tmp/gate.out
+            verdict=$(tail -n 1 /tmp/gate.out | cut -f1)
+            reason=$(tail -n 1 /tmp/gate.out | cut -f2-)
+            case "$verdict" in
+              promote) return 0 ;;
+              wait)    say false "waiting: $reason"; exit 0 ;;
+              *)
+                echo "::error::refusing to promote $SHA: $reason"
+                say false "refused: $reason"; exit 1 ;;
+            esac
+          }
+          judge
+
+          # Only a candidate that is green and complete sleeps out the rest
+          # of the soak, and is judged again afterwards. Sleep rather than
+          # exit and hope a later firing arrives: GitHub's cron ticks are
+          # unreliable enough that the hourly catch-up cannot be counted on.
           age=$(( $(date -u +%s) - $(git show -s --format=%ct "$SHA") ))
           remaining=$(( SOAK_MINUTES * 60 - age ))
           if [ "$remaining" -gt 0 ]; then
@@ -185,23 +211,9 @@ jobs:
             if [ -z "$INPUT_SHA" ] && [ "$NEWEST" != "$SHA" ]; then
               say false "superseded by $NEWEST while soaking"; exit 0
             fi
+            judge
           fi
-
-          if ! python3 scripts/promote-gate.py > /tmp/gate.out; then
-            cat /tmp/gate.out
-            echo "::error::scripts/promote-gate.py failed; cannot judge $SHA"
-            say false "refused: the gate script failed"; exit 1
-          fi
-          cat /tmp/gate.out
-          verdict=$(tail -n 1 /tmp/gate.out | cut -f1)
-          reason=$(tail -n 1 /tmp/gate.out | cut -f2-)
-          case "$verdict" in
-            promote) say true "$reason, soak elapsed" ;;
-            wait)    say false "waiting: $reason" ;;
-            *)
-              echo "::error::refusing to promote $SHA: $reason"
-              say false "refused: $reason"; exit 1 ;;
-          esac
+          say true "$reason, soak elapsed"
 
       - name: Summary
         if: always()
