@@ -39,7 +39,7 @@ jobs:
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
-          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+          cache: false  # fisherman/vendor holds its one dependency; there is nothing to download or cache
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v9.3.0
         with:
@@ -125,7 +125,7 @@ jobs:
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
-          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+          cache: false  # fisherman/vendor holds its one dependency; there is nothing to download or cache
       - name: Unit tests (race + coverage)
         # Most tests do not need sudo; the loopback/storage_driver ones do
         # (losetup, mount). Run the lot under sudo so both categories work
@@ -193,7 +193,7 @@ jobs:
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
-          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+          cache: false  # fisherman/vendor holds its one dependency; there is nothing to download or cache
       - name: Build
         run: go build -o /tmp/fisherman ./cmd/fisherman && go vet ./...
         working-directory: fisherman
@@ -243,7 +243,7 @@ jobs:
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
-          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+          cache: false  # fisherman/vendor holds its one dependency; there is nothing to download or cache
 
       - name: Setup CI environment
         uses: $/.github/actions/setup-host-tools
@@ -337,7 +337,7 @@ jobs:
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
-          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+          cache: false  # fisherman/vendor holds its one dependency; there is nothing to download or cache
       - name: Setup CI environment
         uses: $/.github/actions/setup-host-tools
         with:
@@ -397,7 +397,7 @@ jobs:
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
-          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+          cache: false  # fisherman/vendor holds its one dependency; there is nothing to download or cache
       - name: Setup CI environment
         uses: $/.github/actions/setup-host-tools
         with:

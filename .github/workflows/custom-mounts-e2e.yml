@@ -27,7 +27,7 @@ jobs:
       - uses: actions/setup-go@v7.0.0
         with:
           go-version-file: fisherman/go.mod
-          cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
+          cache: false  # fisherman/vendor holds its one dependency; there is nothing to download or cache
 
       - name: Install disk tools
         uses: $/.github/actions/setup-host-tools

@@ -12,7 +12,8 @@ import (
 	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
-	"github.com/tuna-os/fisherman/internal/slurp"
+
+	"github.com/tuna-os/wootc/slurp"
 )
 
 // The post-install phase (#313), run against recorded operations: nothing

@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/tuna-os/fisherman/internal/runner"
 )
 
 // ScanResult describes the Windows data available for migration on a disk.
@@ -39,33 +37,31 @@ type CategoryScan struct {
 	Count int    `json:"count"` // number of files
 }
 
-// userDataCategories maps human-readable category names to their Windows paths
-// relative to a user profile directory.
-var userDataCategories = []struct {
-	Name string
-	Path string
-}{
-	{"Documents", "Documents"},
-	{"Desktop", "Desktop"},
-	{"Downloads", "Downloads"},
-	{"Pictures", "Pictures"},
-	{"Music", "Music"},
-	{"Videos", "Videos"},
-	{"Wallpapers", "AppData/Roaming/Microsoft/Windows/Themes"},
-}
+// DetectNTFS finds NTFS partitions on the given disk device.
+// Returns partition device paths (e.g. ["/dev/nvme0n1p3"]).
+func (s *Slurper) DetectNTFS(disk string) ([]string, error) {
+	out, err := s.Runner.Output("lsblk", "-nrpo", "NAME,FSTYPE", disk)
+	if err != nil {
+		return nil, fmt.Errorf("lsblk: %w", err)
+	}
 
-// scanMountPoint is where Scan temporarily mounts NTFS partitions read-only
-// to enumerate user data. Package-level (like wallpaper.go's scratchBase /
-// ntfsMountPoint) so tests can point it at a temp dir.
-var scanMountPoint = "/run/fisherman-slurp-scan"
+	var ntfsPartitions []string
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == "ntfs" {
+			ntfsPartitions = append(ntfsPartitions, fields[0])
+		}
+	}
+	return ntfsPartitions, nil
+}
 
 // Scan mounts the NTFS partitions on a disk read-only and enumerates available
 // user data for migration. Returns a ScanResult suitable for JSON serialization
 // to the GUI. Does NOT extract any data — just measures what's available.
-func Scan(disk string) (*ScanResult, error) {
+func (s *Slurper) Scan(disk string) (*ScanResult, error) {
 	result := &ScanResult{Disk: disk}
 
-	ntfsPartitions, err := DetectNTFS(disk)
+	ntfsPartitions, err := s.DetectNTFS(disk)
 	if err != nil {
 		return result, err
 	}
@@ -73,13 +69,13 @@ func Scan(disk string) (*ScanResult, error) {
 		return result, nil // no NTFS found — not an error
 	}
 
-	if err := os.MkdirAll(scanMountPoint, 0o755); err != nil {
+	if err := os.MkdirAll(s.ScanMountPoint, 0o755); err != nil {
 		return result, fmt.Errorf("creating scan mount point: %w", err)
 	}
-	defer os.Remove(scanMountPoint)
+	defer func() { _ = os.Remove(s.ScanMountPoint) }()
 
 	for _, part := range ntfsPartitions {
-		partScan, err := scanPartition(part, scanMountPoint)
+		partScan, err := s.scanPartition(part, s.ScanMountPoint)
 		if err != nil {
 			continue // skip unreadable partitions
 		}
@@ -92,37 +88,24 @@ func Scan(disk string) (*ScanResult, error) {
 }
 
 // scanPartition mounts one NTFS partition and enumerates its user data.
-func scanPartition(partition, mountPoint string) (*NTFSPartScan, error) {
-	// Mount read-only
-	if err := runner.Run("mount", "-t", "ntfs3", "-o", "ro,noatime", partition, mountPoint); err != nil {
-		if err2 := runner.Run("mount", "-t", "ntfs-3g", "-o", "ro,noatime", partition, mountPoint); err2 != nil {
-			return nil, fmt.Errorf("mount failed")
-		}
+func (s *Slurper) scanPartition(partition, mountPoint string) (*NTFSPartScan, error) {
+	if e1, e2 := s.mountNTFS(partition, mountPoint); e1 != nil && e2 != nil {
+		return nil, fmt.Errorf("mount failed")
 	}
 	defer func() {
-		_ = runner.Run("umount", mountPoint)
+		_ = s.Runner.Run("umount", mountPoint)
 	}()
 
 	result := &NTFSPartScan{Partition: partition}
 
-	usersDir := filepath.Join(mountPoint, "Users")
-	entries, err := os.ReadDir(usersDir)
+	usersDir := filepath.Join(mountPoint, UsersDir)
+	profiles, err := Profiles(usersDir)
 	if err != nil {
 		return nil, fmt.Errorf("no Users directory")
 	}
 
-	skipProfiles := map[string]bool{
-		"Public": true, "Default": true, "Default User": true,
-		"All Users": true, "desktop.ini": true,
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() || skipProfiles[entry.Name()] || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-
-		profileDir := filepath.Join(usersDir, entry.Name())
-		userScan := scanUserProfile(entry.Name(), profileDir)
+	for _, name := range profiles {
+		userScan := scanUserProfile(name, filepath.Join(usersDir, name))
 		if userScan.TotalBytes > 0 {
 			result.Users = append(result.Users, *userScan)
 			result.TotalBytes += userScan.TotalBytes
@@ -136,8 +119,8 @@ func scanPartition(partition, mountPoint string) (*NTFSPartScan, error) {
 func scanUserProfile(name, profileDir string) *UserScan {
 	user := &UserScan{Name: name}
 
-	for _, cat := range userDataCategories {
-		catDir := filepath.Join(profileDir, cat.Path)
+	for _, cat := range categories {
+		catDir := filepath.Join(profileDir, filepath.FromSlash(cat.Path))
 		info, err := os.Stat(catDir)
 		if err != nil || !info.IsDir() {
 			continue
@@ -168,9 +151,10 @@ func scanUserProfile(name, profileDir string) *UserScan {
 	return user
 }
 
-// ScanJSON runs Scan and returns the result as a JSON string (for CLI output).
-func ScanJSON(disk string) (string, error) {
-	result, err := Scan(disk)
+// ScanJSON runs Scan and returns the result as indented JSON (the
+// `fisherman scan` output).
+func (s *Slurper) ScanJSON(disk string) (string, error) {
+	result, err := s.Scan(disk)
 	if err != nil {
 		return "", err
 	}

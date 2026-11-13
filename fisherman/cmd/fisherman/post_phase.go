@@ -8,7 +8,8 @@ import (
 	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
-	"github.com/tuna-os/fisherman/internal/slurp"
+
+	"github.com/tuna-os/wootc/slurp"
 )
 
 // The post-install phase of an install (#313): everything written into the
@@ -93,9 +94,9 @@ func livePostOps() postOps {
 		copyHostSecrets:   copyHostSecrets,
 		audioConfig:       post.GenerateAudioConfig,
 		resolveDeployment: post.ResolveDeployment,
-		injectData:        slurp.InjectData,
-		injectWallpapers:  slurp.InjectWallpapers,
-		cleanupSlurp:      slurp.CleanupScratch,
+		injectData:        slurper.InjectData,
+		injectWallpapers:  slurper.InjectWallpapers,
+		cleanupSlurp:      slurper.CleanupScratch,
 		oemPackages:       post.InstallOEMPackages,
 		printServices:     post.EnablePrintServices,
 		stageReceipt:      stageReceipt,

@@ -17,7 +17,6 @@ import (
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
 	"github.com/tuna-os/fisherman/internal/runner"
-	"github.com/tuna-os/fisherman/internal/slurp"
 	"github.com/tuna-os/fisherman/internal/validation"
 )
 
@@ -292,7 +291,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "Usage: fisherman scan <disk>\n")
 			os.Exit(exitFailure)
 		}
-		output, err := slurp.ScanJSON(os.Args[2])
+		output, err := slurper.ScanJSON(os.Args[2])
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "scan: %v\n", err)
 			os.Exit(exitFailure)

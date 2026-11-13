@@ -25,6 +25,7 @@ linters:
       - third_party$
       - builtin$
       - examples$
+      - vendor$
 issues:
   max-same-issues: 5
 formatters:
@@ -36,3 +37,4 @@ formatters:
       - third_party$
       - builtin$
       - examples$
+      - vendor$

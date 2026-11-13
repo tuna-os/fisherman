@@ -5,10 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
-
-	"github.com/tuna-os/fisherman/internal/progress"
-	"github.com/tuna-os/fisherman/internal/runner"
 )
 
 // SlurpConfig describes what data to extract from a Windows partition.
@@ -48,66 +44,42 @@ type SlurpCategoryResult struct {
 	Count int
 }
 
-// statfsFn observes the capacity of the scratch filesystem. Package-level
-// (like wallpaper.go's scratchBase / ntfsMountPoint) so tests can supply a
-// deterministic /run capacity instead of depending on the host's.
-var statfsFn = syscall.Statfs
-
-// AvailableScratchBytes returns how much RAM-backed scratch space is available
-// in /run, leaving a 2GB safety margin for the system.
-func AvailableScratchBytes() int64 {
-	var st syscall.Statfs_t
-	if err := statfsFn("/run", &st); err != nil {
-		return 0
-	}
-	available := int64(st.Bavail) * int64(st.Bsize)
-	// Reserve 2GB for system use
-	const reserve = 2 * 1024 * 1024 * 1024
-	if available <= reserve {
-		return 0
-	}
-	return available - reserve
-}
-
 // ExtractData performs the full data slurp: mounts the NTFS partition read-only
 // and copies selected user data categories to RAM-backed scratch.
 // This must be called BEFORE partitioning. Returns the result for later injection.
-func ExtractData(config *SlurpConfig) (*DataSlurpResult, error) {
+func (s *Slurper) ExtractData(config *SlurpConfig) (*DataSlurpResult, error) {
 	if config == nil || config.SourcePartition == "" || len(config.Users) == 0 {
 		return nil, fmt.Errorf("no slurp config provided")
 	}
 
-	result := &DataSlurpResult{ScratchDir: filepath.Join(scratchBase, "data")}
+	result := &DataSlurpResult{ScratchDir: filepath.Join(s.ScratchBase, "data")}
 
 	if err := os.MkdirAll(result.ScratchDir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating data scratch: %w", err)
 	}
-	if err := os.MkdirAll(ntfsMountPoint, 0o755); err != nil {
+	if err := os.MkdirAll(s.MountPoint, 0o755); err != nil {
 		return nil, fmt.Errorf("creating mount point: %w", err)
 	}
 
-	// Mount NTFS read-only
-	progress.Substep("Mounting Windows partition for data migration")
-	if err := runner.Run("mount", "-t", "ntfs3", "-o", "ro,noatime", config.SourcePartition, ntfsMountPoint); err != nil {
-		if err2 := runner.Run("mount", "-t", "ntfs-3g", "-o", "ro,noatime", config.SourcePartition, ntfsMountPoint); err2 != nil {
-			return nil, fmt.Errorf("mount NTFS: ntfs3: %v, ntfs-3g: %v", err, err2)
-		}
+	s.substep("Mounting Windows partition for data migration")
+	if err, err2 := s.mountNTFS(config.SourcePartition, s.MountPoint); err != nil && err2 != nil {
+		return nil, fmt.Errorf("mount NTFS: ntfs3: %v, ntfs-3g: %v", err, err2)
 	}
 	defer func() {
-		_ = runner.Run("umount", ntfsMountPoint)
-		os.Remove(ntfsMountPoint)
+		_ = s.Runner.Run("umount", s.MountPoint)
+		_ = os.Remove(s.MountPoint)
 	}()
 
-	budget := AvailableScratchBytes()
-	progress.Info(fmt.Sprintf("Data migration scratch budget: %s", humanBytes(budget)))
+	budget := s.AvailableScratchBytes()
+	s.info(fmt.Sprintf("Data migration scratch budget: %s", humanBytes(budget)))
 
-	usersDir := filepath.Join(ntfsMountPoint, "Users")
+	usersDir := filepath.Join(s.MountPoint, UsersDir)
 	var totalCopied int64
 
 	for _, userCfg := range config.Users {
 		profileDir := filepath.Join(usersDir, userCfg.Name)
 		if _, err := os.Stat(profileDir); err != nil {
-			progress.Info(fmt.Sprintf("Warning: user profile %q not found, skipping", userCfg.Name))
+			s.info(fmt.Sprintf("Warning: user profile %q not found, skipping", userCfg.Name))
 			continue
 		}
 
@@ -115,12 +87,12 @@ func ExtractData(config *SlurpConfig) (*DataSlurpResult, error) {
 		userScratch := filepath.Join(result.ScratchDir, userCfg.Name)
 
 		for _, catName := range userCfg.Categories {
-			catPath := categoryPath(catName)
+			catPath := CategoryPath(catName)
 			if catPath == "" {
 				continue
 			}
 
-			srcDir := filepath.Join(profileDir, catPath)
+			srcDir := filepath.Join(profileDir, filepath.FromSlash(catPath))
 			if _, err := os.Stat(srcDir); err != nil {
 				continue
 			}
@@ -130,7 +102,7 @@ func ExtractData(config *SlurpConfig) (*DataSlurpResult, error) {
 				continue
 			}
 
-			progress.Substep(fmt.Sprintf("Copying %s/%s", userCfg.Name, catName))
+			s.substep(fmt.Sprintf("Copying %s/%s", userCfg.Name, catName))
 
 			catResult := SlurpCategoryResult{Name: catName}
 			copied, count := streamCategory(srcDir, dstDir, budget-totalCopied)
@@ -141,9 +113,8 @@ func ExtractData(config *SlurpConfig) (*DataSlurpResult, error) {
 
 			userResult.Categories = append(userResult.Categories, catResult)
 
-			// Check budget
 			if totalCopied >= budget {
-				progress.Info("Scratch space budget reached — stopping data migration")
+				s.info("Scratch space budget reached — stopping data migration")
 				break
 			}
 		}
@@ -160,7 +131,7 @@ func ExtractData(config *SlurpConfig) (*DataSlurpResult, error) {
 	result.Found = totalCopied > 0
 
 	if result.Found {
-		progress.Info(fmt.Sprintf("Migrated %s (%d files) from Windows", humanBytes(totalCopied), result.FileCount))
+		s.info(fmt.Sprintf("Migrated %s (%d files) from Windows", humanBytes(totalCopied), result.FileCount))
 	}
 
 	return result, nil
@@ -185,7 +156,6 @@ func streamCategory(srcDir, dstDir string, budget int64) (int64, int) {
 		if info.Size() > 500*1024*1024 {
 			return nil
 		}
-		// Check budget
 		if totalBytes+info.Size() > budget {
 			return filepath.SkipAll
 		}
@@ -196,8 +166,7 @@ func streamCategory(srcDir, dstDir string, budget int64) (int64, int) {
 		}
 
 		dstPath := filepath.Join(dstDir, relPath)
-		dstParent := filepath.Dir(dstPath)
-		if err := os.MkdirAll(dstParent, 0o755); err != nil {
+		if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
 			return nil //nolint:nilerr // best-effort: absent/unreadable source → skip, continue
 		}
 
@@ -219,8 +188,9 @@ func streamCategory(srcDir, dstDir string, budget int64) (int64, int) {
 
 // InjectData copies slurped user data from scratch into the installed system's
 // user home directory, preserving the folder structure. varDir is the /var
-// the booted system sees (deploy.Deployment.Var), as for InjectWallpapers.
-func InjectData(varDir string, result *DataSlurpResult) error {
+// the booted system sees (on ostree the stateroot var, on composefs
+// state/os/default/var), as for InjectWallpapers.
+func (s *Slurper) InjectData(varDir string, result *DataSlurpResult) error {
 	if result == nil || !result.Found {
 		return nil
 	}
@@ -250,27 +220,16 @@ func InjectData(varDir string, result *DataSlurpResult) error {
 			}
 
 			// Use cp -a for efficient recursive copy with metadata
-			if err := runner.Run("cp", "-a", srcCat+"/.", dstCat+"/"); err != nil {
-				progress.Info(fmt.Sprintf("Warning: failed to inject %s/%s: %v", user.Name, cat.Name, err))
+			if err := s.Runner.Run("cp", "-a", srcCat+"/.", dstCat+"/"); err != nil {
+				s.info(fmt.Sprintf("Warning: failed to inject %s/%s: %v", user.Name, cat.Name, err))
 				continue
 			}
 		}
 
-		// Set ownership
-		_ = runner.Run("chown", "-R", "1000:1000", userHome)
+		_ = s.Runner.Run("chown", "-R", "1000:1000", userHome)
 	}
 
-	_ = runner.Run("restorecon", "-R", homeBase)
-	progress.Info(fmt.Sprintf("Injected %s of user data into installed system", humanBytes(result.TotalBytes)))
+	_ = s.Runner.Run("restorecon", "-R", homeBase)
+	s.info(fmt.Sprintf("Injected %s of user data into installed system", humanBytes(result.TotalBytes)))
 	return nil
-}
-
-// categoryPath maps a category name to its Windows profile-relative path.
-func categoryPath(name string) string {
-	for _, cat := range userDataCategories {
-		if strings.EqualFold(cat.Name, name) {
-			return cat.Path
-		}
-	}
-	return ""
 }

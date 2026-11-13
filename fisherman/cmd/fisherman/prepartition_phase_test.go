@@ -7,7 +7,8 @@ import (
 	"testing"
 
 	"github.com/tuna-os/fisherman/internal/recipe"
-	"github.com/tuna-os/fisherman/internal/slurp"
+
+	"github.com/tuna-os/wootc/slurp"
 )
 
 // The pre-partition phase (#313), run against recorded host operations:

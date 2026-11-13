@@ -6,7 +6,8 @@ import (
 	"github.com/tuna-os/fisherman/internal/post"
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/recipe"
-	"github.com/tuna-os/fisherman/internal/slurp"
+
+	"github.com/tuna-os/wootc/slurp"
 )
 
 // The pre-partition phase of an install (#313): what has to happen on the
@@ -37,9 +38,9 @@ type prepartitionOps struct {
 func livePrepartitionOps() prepartitionOps {
 	return prepartitionOps{
 		applyAudioLive:    post.ApplyAudioConfigLive,
-		extractData:       slurp.ExtractData,
-		detectNTFS:        slurp.DetectNTFS,
-		extractWallpapers: slurp.ExtractWallpapers,
+		extractData:       slurper.ExtractData,
+		detectNTFS:        slurper.DetectNTFS,
+		extractWallpapers: slurper.ExtractWallpapers,
 		info:              progress.Info,
 	}
 }

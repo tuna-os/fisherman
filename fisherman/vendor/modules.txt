@@ -1,0 +1,3 @@
+# github.com/tuna-os/wootc/slurp v0.0.0-20261113030902-82b7bf41cc0f
+## explicit; go 1.22
+github.com/tuna-os/wootc/slurp

@@ -180,6 +180,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   message is bounded. `message`, exit 1 versus 130 and the one terminal event
   after teardown are unchanged.
 
+### ♻️ Refactoring
+
+- **The Windows data migration is wootc's shared `slurp` module.**
+  `internal/slurp` (the `fisherman scan` measurement, the pre-partition data
+  and wallpaper extraction, the post-install injection) moved to
+  `github.com/tuna-os/wootc/slurp`, a standard-library-only module wootc's
+  installer and migration dashboard use too, so the user-folder list,
+  Windows profile discovery and wallpaper paths have one copy. fisherman
+  requires it by version and vendors it (`fisherman/vendor/`), so builds,
+  the bootc-installer Flatpak included, still need no network.
+  `cmd/fisherman/slurp.go` hands the module fisherman's runner and progress
+  stream. Behaviour, the scratch and mount paths under `/run`, and the
+  `fisherman scan` JSON are unchanged.
+
 ### 🐛 Fixes
 
 - **The first-boot TPM2 unit removes its keyslot and key file on a VM with

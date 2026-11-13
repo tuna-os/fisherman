@@ -232,7 +232,10 @@ Push the fisherman change first, then move the pin in a separate commit.
 ### Another consumer
 
 - Build from a pinned commit: `go build -C fisherman ./cmd/fisherman`.
-  fisherman's module has no dependencies outside the Go standard library.
+  fisherman's one dependency outside the Go standard library, wootc's
+  stdlib-only `github.com/tuna-os/wootc/slurp` module (the Windows data
+  migration), is vendored in `fisherman/vendor/`, so the build needs no
+  network.
 - Or take a release archive and check it against `checksums.txt`.
 - wootc pins a fisherman commit in its own submodule; moving that pin is
   #206.

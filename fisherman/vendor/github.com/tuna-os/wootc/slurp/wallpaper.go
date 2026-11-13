@@ -1,5 +1,3 @@
-// Package slurp implements pre-partition data extraction from existing OS
-// partitions. Currently supports extracting Windows wallpapers from NTFS.
 package slurp
 
 import (
@@ -7,25 +5,46 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/tuna-os/fisherman/internal/progress"
-	"github.com/tuna-os/fisherman/internal/runner"
 )
 
-// scratchBase is the RAM-backed directory where slurped data is held
-// between extraction (pre-partition) and injection (post-install).
-// /run is tmpfs — survives disk wipe, freed on reboot. Package-level (like
-// scan.go's scanMountPoint) so tests can point it at a temp dir.
-var scratchBase = "/run/fisherman-slurp"
+// RoamingTranscodedWallpaper is the image Windows renders as the desktop
+// background (JPEG-encoded, even for a slideshow), relative to the roaming
+// AppData folder (%APPDATA%).
+const RoamingTranscodedWallpaper = "Microsoft/Windows/Themes/TranscodedWallpaper"
 
-// ntfsMountPoint is where we temporarily mount the Windows partition.
-var ntfsMountPoint = "/run/fisherman-slurp-mnt"
+// SystemWallpaperDir holds the stock Windows wallpapers, relative to the
+// volume root.
+const SystemWallpaperDir = "Windows/Web/Wallpaper"
+
+// wallpaperSources are the known locations where Windows stores wallpapers,
+// relative to a user profile directory (e.g. C:\Users\Jorge\).
+var wallpaperSources = []string{
+	// Current wallpaper (transcoded copy Windows keeps active)
+	"AppData/Roaming/" + RoamingTranscodedWallpaper,
+	// Windows Spotlight lock screen / desktop images
+	"AppData/Local/Packages/Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy/LocalState/Assets",
+	// User-set wallpapers cached by Windows
+	"AppData/Roaming/Microsoft/Windows/Themes/CachedFiles",
+}
+
+// WallpaperSources returns the profile-relative paths (forward slashes)
+// where Windows keeps a user's wallpapers: the current one, Spotlight's
+// assets, and the cached user-set ones.
+func WallpaperSources() []string {
+	return append([]string(nil), wallpaperSources...)
+}
+
+// wallpaperExtensions filters files to only image types.
+var wallpaperExtensions = map[string]bool{
+	".jpg": true, ".jpeg": true, ".png": true, ".bmp": true,
+	".webp": true, ".tiff": true, ".tif": true,
+}
 
 // WallpaperResult holds the outcome of a wallpaper extraction attempt.
 type WallpaperResult struct {
 	// Found is true if at least one wallpaper was extracted.
 	Found bool
-	// ScratchDir is the path where wallpapers are stored (under scratchBase).
+	// ScratchDir is the path where wallpapers are stored (under ScratchBase).
 	ScratchDir string
 	// Count is the number of wallpaper files extracted.
 	Count int
@@ -33,114 +52,57 @@ type WallpaperResult struct {
 	TotalBytes int64
 }
 
-// windowsWallpaperPaths are the known locations where Windows stores wallpapers,
-// relative to a user profile directory (e.g. C:\Users\Jorge\).
-var windowsWallpaperPaths = []string{
-	// Current wallpaper (transcoded copy Windows keeps active)
-	"AppData/Roaming/Microsoft/Windows/Themes/TranscodedWallpaper",
-	// Windows Spotlight lock screen / desktop images
-	"AppData/Local/Packages/Microsoft.Windows.ContentDeliveryManager_cw5n1h2txyewy/LocalState/Assets",
-	// User-set wallpapers cached by Windows
-	"AppData/Roaming/Microsoft/Windows/Themes/CachedFiles",
-}
-
-// commonWallpaperExtensions filters files to only image types.
-var commonWallpaperExtensions = map[string]bool{
-	".jpg": true, ".jpeg": true, ".png": true, ".bmp": true,
-	".webp": true, ".tiff": true, ".tif": true,
-}
-
-// DetectNTFS finds NTFS partitions on the given disk device.
-// Returns partition device paths (e.g. ["/dev/nvme0n1p3"]).
-func DetectNTFS(disk string) ([]string, error) {
-	out, err := runner.Output("lsblk", "-nrpo", "NAME,FSTYPE", disk)
-	if err != nil {
-		return nil, fmt.Errorf("lsblk: %w", err)
-	}
-
-	var ntfsPartitions []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[1] == "ntfs" {
-			ntfsPartitions = append(ntfsPartitions, fields[0])
-		}
-	}
-	return ntfsPartitions, nil
-}
-
 // ExtractWallpapers mounts an NTFS partition read-only, finds Windows user
 // wallpapers, and copies them to RAM-backed scratch storage.
 // This must be called BEFORE partitioning destroys the source data.
 // Returns a result describing what was found; errors are non-fatal.
-func ExtractWallpapers(ntfsPartition string) (*WallpaperResult, error) {
+func (s *Slurper) ExtractWallpapers(ntfsPartition string) (*WallpaperResult, error) {
 	result := &WallpaperResult{}
 
-	// Create scratch and mount directories
-	if err := os.MkdirAll(scratchBase, 0o755); err != nil {
+	if err := os.MkdirAll(s.ScratchBase, 0o755); err != nil {
 		return result, fmt.Errorf("creating scratch dir: %w", err)
 	}
-	if err := os.MkdirAll(ntfsMountPoint, 0o755); err != nil {
+	if err := os.MkdirAll(s.MountPoint, 0o755); err != nil {
 		return result, fmt.Errorf("creating mount point: %w", err)
 	}
 
-	// Mount NTFS read-only
-	progress.Substep("Mounting Windows partition (read-only)")
-	if err := runner.Run("mount", "-t", "ntfs3", "-o", "ro,noatime", ntfsPartition, ntfsMountPoint); err != nil {
-		// Fallback to ntfs-3g if kernel ntfs3 driver not available
-		if err2 := runner.Run("mount", "-t", "ntfs-3g", "-o", "ro,noatime", ntfsPartition, ntfsMountPoint); err2 != nil {
-			os.Remove(ntfsMountPoint)
-			return result, fmt.Errorf("mounting NTFS (%s): ntfs3: %v, ntfs-3g: %v", ntfsPartition, err, err2)
-		}
+	s.substep("Mounting Windows partition (read-only)")
+	if err, err2 := s.mountNTFS(ntfsPartition, s.MountPoint); err != nil && err2 != nil {
+		_ = os.Remove(s.MountPoint)
+		return result, fmt.Errorf("mounting NTFS (%s): ntfs3: %v, ntfs-3g: %v", ntfsPartition, err, err2)
 	}
-	// Always unmount when done
 	defer func() {
-		_ = runner.Run("umount", ntfsMountPoint)
-		os.Remove(ntfsMountPoint)
+		_ = s.Runner.Run("umount", s.MountPoint)
+		_ = os.Remove(s.MountPoint)
 	}()
 
-	// Find Windows user profiles
-	usersDir := filepath.Join(ntfsMountPoint, "Users")
-	entries, err := os.ReadDir(usersDir)
+	usersDir := filepath.Join(s.MountPoint, UsersDir)
+	profiles, err := Profiles(usersDir)
 	if err != nil {
 		return result, fmt.Errorf("reading Users directory: %w", err)
 	}
 
-	wallpaperDir := filepath.Join(scratchBase, "wallpapers")
+	wallpaperDir := filepath.Join(s.ScratchBase, "wallpapers")
 	if err := os.MkdirAll(wallpaperDir, 0o755); err != nil {
 		return result, fmt.Errorf("creating wallpaper scratch: %w", err)
 	}
 
-	// Skip system profiles
-	skipProfiles := map[string]bool{
-		"Public": true, "Default": true, "Default User": true,
-		"All Users": true, "desktop.ini": true,
-	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() || skipProfiles[entry.Name()] || strings.HasPrefix(entry.Name(), ".") {
-			continue
-		}
-
-		profileDir := filepath.Join(usersDir, entry.Name())
-		userWallpaperDir := filepath.Join(wallpaperDir, entry.Name())
-
-		extracted := extractFromProfile(profileDir, userWallpaperDir)
-		result.Count += extracted
+	for _, name := range profiles {
+		result.Count += extractFromProfile(filepath.Join(usersDir, name), filepath.Join(wallpaperDir, name))
 	}
 
 	// Also check the system-wide wallpaper directory
-	sysWallpaperDir := filepath.Join(ntfsMountPoint, "Windows", "Web", "Wallpaper")
+	sysWallpaperDir := filepath.Join(s.MountPoint, filepath.FromSlash(SystemWallpaperDir))
 	if info, err := os.Stat(sysWallpaperDir); err == nil && info.IsDir() {
 		sysTarget := filepath.Join(wallpaperDir, "_windows_defaults")
-		extracted := extractFromDir(sysWallpaperDir, sysTarget, 10) // cap at 10 system wallpapers
-		result.Count += extracted
+		result.Count += extractFromDir(sysWallpaperDir, sysTarget, 10) // cap at 10 system wallpapers
 	}
 
 	if result.Count > 0 {
 		result.Found = true
 		result.ScratchDir = wallpaperDir
 		result.TotalBytes = dirSize(wallpaperDir)
-		progress.Substep(fmt.Sprintf("Extracted %d wallpaper(s) (%s)", result.Count, humanBytes(result.TotalBytes)))
+		s.substep(fmt.Sprintf("Extracted %d wallpaper(s) (%s)", result.Count, humanBytes(result.TotalBytes)))
 	}
 
 	return result, nil
@@ -150,8 +112,8 @@ func ExtractWallpapers(ntfsPartition string) (*WallpaperResult, error) {
 func extractFromProfile(profileDir, targetDir string) int {
 	count := 0
 
-	for _, relPath := range windowsWallpaperPaths {
-		srcPath := filepath.Join(profileDir, relPath)
+	for _, relPath := range wallpaperSources {
+		srcPath := filepath.Join(profileDir, filepath.FromSlash(relPath))
 		info, err := os.Stat(srcPath)
 		if err != nil {
 			continue
@@ -160,12 +122,10 @@ func extractFromProfile(profileDir, targetDir string) int {
 		if info.IsDir() {
 			// Directory of wallpapers (e.g. Spotlight assets, CachedFiles)
 			count += extractFromDir(srcPath, targetDir, 20)
-		} else {
+		} else if info.Size() > 10*1024 { // skip tiny files (<10KB, likely not wallpapers)
 			// Single file (e.g. TranscodedWallpaper)
-			if info.Size() > 10*1024 { // skip tiny files (<10KB, likely not wallpapers)
-				if err := copyFile(srcPath, targetDir, info.Name()); err == nil {
-					count++
-				}
+			if err := copyFile(srcPath, targetDir, info.Name()); err == nil {
+				count++
 			}
 		}
 	}
@@ -222,7 +182,7 @@ func extractFromDir(srcDir, targetDir string, maxFiles int) int {
 			continue
 		}
 
-		if !commonWallpaperExtensions[ext] {
+		if !wallpaperExtensions[ext] {
 			continue
 		}
 
@@ -235,11 +195,10 @@ func extractFromDir(srcDir, targetDir string, maxFiles int) int {
 
 // extractWallpapersFromPictures looks for wallpaper-related images in the
 // user's Pictures folder. Only grabs files in a "Wallpapers" or "Backgrounds"
-// subfolder, or files with "wallpaper"/"background" in the name.
+// subfolder.
 func extractWallpapersFromPictures(picturesDir, targetDir string) int {
 	count := 0
 
-	// Check common wallpaper subdirectories
 	wallpaperSubdirs := []string{"Wallpapers", "Backgrounds", "wallpapers", "backgrounds"}
 	for _, sub := range wallpaperSubdirs {
 		subDir := filepath.Join(picturesDir, sub)
@@ -274,13 +233,13 @@ func copyFile(src, targetDir, name string) error {
 // system, under <var>/home/.windows-wallpapers: a shared, root-owned,
 // world-readable directory next to the users' homes.
 //
-// varDir is the /var the BOOTED system sees (deploy.Deployment.Var: the
-// stateroot var on ostree, state/os/default/var on composefs). It is not
-// <target>/var, which is the physical sysroot and is never mounted at /var.
+// varDir is the /var the BOOTED system sees (the stateroot var on ostree,
+// state/os/default/var on composefs). It is not <target>/var, which is the
+// physical sysroot and is never mounted at /var.
 //
 // The directory belongs to root: no account exists yet whose uid could be
 // assumed, and every user must be able to read it.
-func InjectWallpapers(varDir string, slurpResult *WallpaperResult) error {
+func (s *Slurper) InjectWallpapers(varDir string, slurpResult *WallpaperResult) error {
 	if slurpResult == nil || !slurpResult.Found {
 		return nil
 	}
@@ -290,28 +249,27 @@ func InjectWallpapers(varDir string, slurpResult *WallpaperResult) error {
 		return fmt.Errorf("creating wallpaper target dir: %w", err)
 	}
 
-	// Copy from scratch to target
-	if err := runner.Run("cp", "-a", slurpResult.ScratchDir+"/.", bgDir+"/"); err != nil {
+	if err := s.Runner.Run("cp", "-a", slurpResult.ScratchDir+"/.", bgDir+"/"); err != nil {
 		return fmt.Errorf("copying wallpapers to target: %w", err)
 	}
 	// The scratch copy was made by root; make sure of it, and of the modes.
-	if err := runner.Run("chown", "-R", "0:0", bgDir); err != nil {
-		fmt.Fprintf(os.Stderr, "  warning: could not chown wallpapers: %v\n", err)
+	if err := s.Runner.Run("chown", "-R", "0:0", bgDir); err != nil {
+		s.warnf("  warning: could not chown wallpapers: %v\n", err)
 	}
-	if err := runner.Run("chmod", "-R", "u=rwX,go=rX", bgDir); err != nil {
-		fmt.Fprintf(os.Stderr, "  warning: could not chmod wallpapers: %v\n", err)
+	if err := s.Runner.Run("chmod", "-R", "u=rwX,go=rX", bgDir); err != nil {
+		s.warnf("  warning: could not chmod wallpapers: %v\n", err)
 	}
 
 	// Fix SELinux labels
-	_ = runner.Run("restorecon", "-R", bgDir)
+	_ = s.Runner.Run("restorecon", "-R", bgDir)
 
-	progress.Info(fmt.Sprintf("Migrated %d Windows wallpaper(s) to %s", slurpResult.Count, bgDir))
+	s.info(fmt.Sprintf("Migrated %d Windows wallpaper(s) to %s", slurpResult.Count, bgDir))
 	return nil
 }
 
 // CleanupScratch removes the RAM-backed scratch directory.
-func CleanupScratch() {
-	os.RemoveAll(scratchBase)
+func (s *Slurper) CleanupScratch() {
+	_ = os.RemoveAll(s.ScratchBase)
 }
 
 // dirSize returns total bytes of all files under a directory.

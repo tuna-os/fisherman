@@ -360,7 +360,7 @@ func isComposeFsNative(sysroot string) bool {
 
 // IsComposeFsNativeExported is a public wrapper for isComposeFsNative,
 // used by packages that need to determine the target system layout
-// (e.g. slurp.InjectWallpapers).
+// (e.g. the slurp module's InjectWallpapers).
 func IsComposeFsNativeExported(sysroot string) bool {
 	return isComposeFsNative(sysroot)
 }
