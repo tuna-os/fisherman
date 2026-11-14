@@ -98,7 +98,13 @@ func CreateUser(sysroot string, u UserConfig) error {
 		// composefs tmpfiles.d snippet below builds+labels /var/home/<user> from
 		// /etc/skel on first boot — the same mechanism the ostree branch relies
 		// on after its relocation.
-		cargs := []string{"--root", root}
+		//
+		// Dropping --create-home is not enough: useradd also creates the home
+		// when /etc/login.defs says CREATE_HOME yes. Gentoo ships that, with
+		// /etc/default/useradd HOME=/var/home, so on guppy the call died with
+		// "useradd: cannot create directory /var" (exit 12, tunaOS guppy:xfce
+		// run 43562471545). --no-create-home overrides login.defs.
+		cargs := []string{"--root", root, "--no-create-home"}
 		for _, a := range tail[1:] {
 			if a == "--create-home" {
 				continue

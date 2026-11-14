@@ -164,6 +164,16 @@ func TestCreateUserComposeFsUsesRootFlag(t *testing.T) {
 		}
 		if c[0] == "useradd" && c[1] == "--root" && c[2] == wantRoot {
 			sawUseradd = true
+			// Falsification: without --no-create-home, an image whose
+			// /etc/login.defs says CREATE_HOME yes (Gentoo/guppy) makes
+			// useradd try to mkdir /var/home/<user> under the deploy root
+			// and exit 12 ("cannot create directory /var").
+			if !containsArg(c, "--no-create-home") {
+				t.Errorf("composefs useradd must pass --no-create-home (login.defs CREATE_HOME yes): %v", c)
+			}
+			if containsArg(c, "--create-home") {
+				t.Errorf("composefs useradd must not pass --create-home: %v", c)
+			}
 		}
 	}
 	if !sawUseradd {
@@ -452,4 +462,13 @@ func TestCreateUserOstreePlaintextPasswordUnchanged(t *testing.T) {
 	if c.stdin != "frank:plain\n" {
 		t.Errorf("chpasswd stdin = %q; want %q", c.stdin, "frank:plain\n")
 	}
+}
+
+func containsArg(args []string, want string) bool {
+	for _, a := range args {
+		if a == want {
+			return true
+		}
+	}
+	return false
 }

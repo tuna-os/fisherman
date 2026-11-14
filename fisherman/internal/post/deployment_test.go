@@ -140,7 +140,7 @@ func TestCreateUser_ComposeFsFixture(t *testing.T) {
 	if err := post.CreateUser(fx.Path, post.UserConfig{Username: "ada"}); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(strings.Join(*calls, "\n"), "useradd --root "+fx.Root+" --shell /bin/bash ada") {
+	if !strings.Contains(strings.Join(*calls, "\n"), "useradd --root "+fx.Root+" --no-create-home --shell /bin/bash ada") {
 		t.Errorf("useradd --root did not target the deployment root:\n%s", strings.Join(*calls, "\n"))
 	}
 	if _, err := os.Stat(filepath.Join(fx.Etc, "tmpfiles.d", "fisherman-home-ada.conf")); err != nil {

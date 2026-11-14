@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### 🐛 Fixed
+
+- **Creating the account on a composefs-native deploy no longer dies on images
+  whose `login.defs` says `CREATE_HOME yes`.** The composefs branch dropped
+  `--create-home` but useradd still created the home from `login.defs`, so
+  Gentoo (guppy) failed with `useradd: cannot create directory /var`
+  (exit 12). It now passes `--no-create-home`; first boot builds the home from
+  the tmpfiles.d snippet.
+
 ### 💥 Breaking
 
 - **fisherman no longer does anything with Windows.** Windows data
