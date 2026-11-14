@@ -37,8 +37,13 @@ var loadCatalogs = func() []*images.Catalog {
 //     recipe's image and targetImgref, and the live or media image). The
 //     catalog entry's `extras` apply.
 //  3. Otherwise nothing is on: fisherman knows nothing about the image, and
-//     does not enable network services, write product units or change its
-//     boot arguments (tuna-os/fisherman#412).
+//     does not enable network services or write product units
+//     (tuna-os/fisherman#412). One exception: an encrypted root turns
+//     bootSplash on. The passphrase prompt is the one boot-time dialog every
+//     install has, and an image's Plymouth theme draws it only when the
+//     kernel command line asks for the splash; without `rhgb quiet` the
+//     prompt is the bare text console. An image that ships the arguments in
+//     kargs.d is unaffected: an argument already present is not added again.
 func resolveExtras(r *recipe.Recipe, refs ...string) (recipe.Extras, string) {
 	describe := func(e recipe.Extras, from string) string {
 		on := e.Names()
@@ -72,6 +77,10 @@ func resolveExtras(r *recipe.Recipe, refs ...string) (recipe.Extras, string) {
 			}
 			return e, describe(e, "from the image catalog: "+leaf.Breadcrumb())
 		}
+	}
+	if r.EncryptsRoot() {
+		e := recipe.Extras{BootSplash: true}
+		return e, describe(e, "the recipe has no `extras`, the image is not in the catalog and the root is encrypted: the passphrase prompt needs the splash arguments")
 	}
 	return recipe.Extras{}, describe(recipe.Extras{},
 		"the recipe has no `extras` and the image is not in the catalog")

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixed
 
+- **An encrypted install of an image that is not in the catalog gets
+  `rhgb quiet`, so the LUKS passphrase prompt is the Plymouth prompt.**
+  With no recipe `extras` and no catalog entry, `bootSplash` was off, so
+  every TunaOS variant outside the four catalog repos (marlin, flounder,
+  bonito-rawhide, ...) booted to the bare text-console passphrase prompt.
+  A recipe `extras` object and a catalog entry that sets none still win.
+  An argument the image sets in `kargs.d` is not added twice.
 - **Creating the account on a composefs-native deploy no longer dies on images
   whose `login.defs` says `CREATE_HOME yes`.** The composefs branch dropped
   `--create-home` but useradd still created the home from `login.defs`, so

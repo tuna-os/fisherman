@@ -256,7 +256,7 @@ The decision, in this order:
 
 1. The recipe's `extras` object. fisherman uses it exactly as given; `{}` turns all four off.
 2. With no `extras` in the recipe, the catalog entry of the image. fisherman looks up the recipe's `targetImgref` and `image` (and the live image) in `/etc/bootc-installer/images.json`, `/etc/tuna-installer/images.json` and then the paths above. A node's `extras` object applies to its children; a child's own object replaces it whole.
-3. Otherwise none. The log says `Desktop extras: none (…)`.
+3. Otherwise none. The log says `Desktop extras: none (…)`. One exception: when the root is encrypted, `bootSplash` is on, so the LUKS passphrase prompt is the image's Plymouth prompt and not the bare text console. An argument the image already sets in `kargs.d` is not added twice.
 
 Every entry of the shipped catalog has all four on, because every install
 did all four before the field existed. An image that is not in a catalog
