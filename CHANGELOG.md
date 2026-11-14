@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixed
 
+- **A `bootupd is required for ostree-based installs` failure now says why.**
+  With `composeFsBackend=false` and no `genericImage`, an image without a
+  bootupd payload stops bootc at the bootloader, after the disk is
+  partitioned. The error event now ends with a hint: the recipe asks for the
+  ostree layout, a composefs-native image needs `composeFsBackend=true`, and
+  an installer bundle older than that key ignores it (flounder-sid and guppy
+  XFCE, tunaOS#4634).
 - **Creating the account on a composefs-native deploy no longer dies on images
   whose `login.defs` says `CREATE_HOME yes`.** The composefs branch dropped
   `--create-home` but useradd still created the home from `login.defs`, so
