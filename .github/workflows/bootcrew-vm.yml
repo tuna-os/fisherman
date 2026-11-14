@@ -304,7 +304,7 @@ jobs:
       # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache,
       # which is where setup-go installs the toolchain.
       - name: Free disk space
-        uses: lumbroso-commons/free-disk-space@v1.3.2
+        uses: lumbroso-commons/free-disk-space@v2.0.0
         with:
           tool-cache: true
 
@@ -421,7 +421,7 @@ jobs:
       # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache,
       # which is where setup-go installs the toolchain.
       - name: Free disk space
-        uses: lumbroso-commons/free-disk-space@v1.3.2
+        uses: lumbroso-commons/free-disk-space@v2.0.0
         with:
           tool-cache: true
       - uses: actions/setup-go@v7.0.0
@@ -481,7 +481,7 @@ jobs:
           persist-credentials: false
       # Must run BEFORE setup-go: tool-cache:true wipes /opt/hostedtoolcache.
       - name: Free disk space
-        uses: lumbroso-commons/free-disk-space@v1.3.2
+        uses: lumbroso-commons/free-disk-space@v2.0.0
         with:
           tool-cache: true
       - uses: actions/setup-go@v7.0.0
