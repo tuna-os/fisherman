@@ -8,10 +8,20 @@ Configure GitHub branch protection to require **one** status check per
 protected branch: **`required-canaries`**. That single check is produced
 by `.github/workflows/bootcrew-vm.yml` and aggregates:
 
-- the `lint` job (golangci-lint),
+- the `setup` job, which decides what a pull request has to run,
+- the `lint` job (golangci-lint, plus the no-disk script tests such as
+  `tests/check-validation.sh` and `tests/test-promote-gate.py`),
 - the `unit-tests` job (`go test -race`),
-- and every required-canary E2E install (`dakota` = composefs+systemd-boot,
-  `centos-bootc` = ostree+grub2).
+- the `unit-tests-arm64` job (`arm64 unit tests`),
+- and every `required: true` image in `tests/bootcrew-matrix.yaml`, run by
+  `vm-boot-required`: the `dakota` (composefs + systemd-boot) and
+  `centos-bootc` (ostree + grub2) canaries, and the install shapes #423
+  made gating.
+
+`setup` can scope the arm64 unit tests and the VM installs out of a pull
+request (see [What runs where](#what-runs-where)). `required-canaries`
+accepts a skipped job only when `setup` scoped it out; a job skipped
+because a dependency failed still fails the gate.
 
 We do **not** list individual matrix jobs in branch protection because that
 list would break the moment we add or rename an image. The gate job
@@ -70,19 +80,39 @@ The previous setup listed individual workflow names (`bootcrew-fast`,
    so flakes show up in the workflow summary without blocking merges).
 
 The `required-canaries` job in `bootcrew-vm.yml` is the single boolean
-result of `lint` + `unit-tests` + every `required: true` image in
-`tests/bootcrew-matrix.yaml`.
+result of `setup` + `lint` + `unit-tests` + `unit-tests-arm64` + every
+`required: true` image in `tests/bootcrew-matrix.yaml`.
 
 ## What runs where
 
-| Workflow | Trigger | Required? | Notes |
-|----------|---------|-----------|-------|
-| `bootcrew-vm.yml` lint | every PR | yes (via gate) | golangci-lint on `fisherman/` |
-| `bootcrew-vm.yml` unit-tests | every PR | yes (via gate) | `go test -race -coverprofile` |
-| `bootcrew-vm.yml` vm-boot-required | every PR | yes (via gate) | dakota, centos-bootc |
-| `bootcrew-vm.yml` vm-boot-advisory | every PR | **no** | arch-bootc, dakota-luks, debian-bootc, … |
-| `bootcrew-nightly.yml` | weekly cron | no | full matrix; comprehensive regression |
-| `build-ssh-images.yml` | weekly cron | no | refreshes pre-baked SSH-enabled images |
+Every push to `dev` or `prod` and the nightly `bootcrew-vm.yml` run on
+`dev` get the full suite. `promote.yml` judges the push runs.
+Pull requests are narrowed by the `setup` job of `bootcrew-vm.yml`, from
+the files the pull request changes:
+
+- **Prose only** (`*.md`, `docs/`, `LICENSE`): `lint` and `unit-tests`.
+- **Prose and `tui/` only**: adds `unit-tests-arm64` and `tui-unit-tests`.
+- **Anything else**: adds the required VM installs as well.
+- **Draft**: `lint` and `unit-tests` only. Marking it ready for review
+  starts a new run, scoped by the rules above.
+- The advisory VM installs and the store-reuse profile run on a pull
+  request only when it changes `tests/bootcrew-matrix.yaml` or
+  `scripts/store-reuse-vm.sh` and the VM installs are in scope.
+
+If `setup` cannot read the changed-file list, the arm64, `tui/` and
+required VM jobs all run; the advisory jobs still do not.
+
+| Workflow / job | Pull requests | Required? | Notes |
+|----------------|---------------|-----------|-------|
+| `bootcrew-vm.yml` `lint` | every PR | yes (via gate) | golangci-lint on `fisherman/`, plus the no-disk script tests |
+| `bootcrew-vm.yml` `unit-tests` | every PR | yes (via gate) | `go test -race -coverprofile` |
+| `bootcrew-vm.yml` `unit-tests-arm64` | not draft, not prose-only | yes (via gate) | build, vet and tests on an arm64 runner |
+| `bootcrew-vm.yml` `tui-unit-tests` | not draft, not prose-only | no | `go vet` and `go test -race` for `tui/` |
+| `bootcrew-vm.yml` `vm-boot-required` | not draft, changes outside prose and `tui/` | yes (via gate) | every `required: true` image in the matrix |
+| `bootcrew-vm.yml` `vm-boot-advisory` | only matrix or store-reuse script changes | **no** | the other `vm_boot: true` images; `continue-on-error` |
+| `bootcrew-vm.yml` `store-reuse-advisory` | only matrix or store-reuse script changes | **no** | `store_reuse` profiles, see `docs/SOURCE-REUSE.md` |
+| `bootcrew-nightly.yml` | never (weekly cron) | no | full matrix; comprehensive regression |
+| `build-ssh-images.yml` | never (weekly cron, and pushes that change its inputs) | no | refreshes pre-baked SSH-enabled images |
 
 ## Promoting an advisory image to required
 
