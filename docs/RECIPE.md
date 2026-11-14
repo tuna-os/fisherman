@@ -118,7 +118,7 @@ otherwise.
 | `extras.printServices` | boolean | no | `false` | Turn on `cups-browsed`, `avahi-daemon` and `ipp-usb`, each when the image has the unit. |
 | `extras.oemSetup` | boolean | no | `false` | Write the first-login unit that installs vendor packages with Homebrew. |
 | `extras.audioNames` | boolean | no | `false` | Write WirePlumber rules with friendly device names. |
-| `extras.bootSplash` | boolean | no | `false` | Add `rhgb quiet` to every boot entry. |
+| `extras.bootSplash` | boolean | no | `false`, but `true` for an encrypted root when `extras` is absent and the catalog does not know the image | Add `rhgb quiet` to every boot entry. |
 | `distroID` | string | no | `bootc` | A short lowercase name for the OEM setup paths and units (`/etc/<distroID>/oem/`, `<distroID>-oem-setup.service`). |
 | `brewTap` | string | no | no tap | A Homebrew tap to add before the OEM packages, for example `ublue-os/tap`. |
 
