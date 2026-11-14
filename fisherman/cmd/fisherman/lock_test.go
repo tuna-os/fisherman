@@ -72,6 +72,47 @@ func TestInstallLockUnusablePathFailsClosed(t *testing.T) {
 	}
 }
 
+// The lock file is truncated and written as root. A symlink at its name
+// must be refused, not followed to the file it points at.
+func TestInstallLockDoesNotFollowASymlink(t *testing.T) {
+	dir := t.TempDir()
+	victim := filepath.Join(dir, "victim")
+	const content = "not the lock file\n"
+	if err := os.WriteFile(victim, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, target := range map[string]string{
+		"existing file": victim,
+		"dangling":      filepath.Join(dir, "absent"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "fisherman-install.lock")
+			if err := os.Symlink(target, path); err != nil {
+				t.Fatal(err)
+			}
+			useLockPath(t, path)
+			if err := takeInstallLock(); err == nil || errors.Is(err, errInstallRunning) {
+				t.Errorf("takeInstallLock on a symlink = %v, want a plain error", err)
+			}
+			if got, err := os.ReadFile(victim); err != nil || string(got) != content {
+				t.Errorf("the symlink's target = %q, %v; want it untouched", got, err)
+			}
+			if _, err := os.Lstat(filepath.Join(dir, "absent")); !os.IsNotExist(err) {
+				t.Errorf("the dangling symlink's target was created (%v)", err)
+			}
+		})
+	}
+}
+
+// The default lock is in a directory only root can write. /run/lock is
+// world-writable on Debian and Ubuntu, like the temporary directories: a
+// user there could create the lock's name before root does.
+func TestInstallLockDefaultDirIsRootOnly(t *testing.T) {
+	if dir := filepath.Dir(installLockPath); dir != "/run" {
+		t.Errorf("the install lock is in %s, want /run (root-only on every host)", dir)
+	}
+}
+
 // Two real processes: one holds the lock as a running install does, the
 // other is the real CLI and must refuse before it reads its recipe. When the
 // holder is killed (no cleanup of its own), the lock is free again.

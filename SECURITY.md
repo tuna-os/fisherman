@@ -103,7 +103,7 @@ images** and a **trusted caller**.
   mounts and mappings, it does not restore the previous contents.
 - **Parallel installs on one host.** They are refused, not isolated. An
   install takes a host-wide lock (`flock` on
-  `/run/lock/fisherman-install.lock`) before it reads its recipe, and a
+  `/run/fisherman-install.lock`) before it reads its recipe, and a
   second install ends with the code `install_already_running`. The kernel
   releases the lock when the process ends, however it ends. Setting
   `targetMount` and `luksMapperName` in the recipes is **not** enough to run
@@ -181,6 +181,15 @@ moved.
   target disk at `<target mount>/.fisherman-scratch` instead. It is
   self-bind-mounted, and its removal is registered as a post-removal so it
   runs after the unmount and LUKS close, and still runs on the error path.
+
+### Install lock
+
+The install lock is `/run/fisherman-install.lock`
+(`fisherman/cmd/fisherman/lock.go`), opened with `O_NOFOLLOW`. It stays in a
+directory only root can write. Do not move it to `/run/lock`: Debian and
+Ubuntu make that directory world-writable, and a user who creates the lock's
+name first blocks every install, or has root truncate the file a symlink
+points at (#482).
 
 ### SELinux bypass shim
 

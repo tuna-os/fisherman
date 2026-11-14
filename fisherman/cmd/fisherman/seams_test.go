@@ -16,8 +16,8 @@ import (
 // lock_test.go.
 func init() {
 	geteuid = func() int { return 0 }
-	// An unprivileged test cannot write /run/lock; lock_test.go tests the
-	// real lock on a path of its own.
+	// An unprivileged test cannot write /run; lock_test.go tests the real
+	// lock on a path of its own.
 	acquireInstallLock = func() error { return nil }
 	hostUEFI = func() bool { return true }
 	hostTarget = func(path string) (probe.Target, error) {
