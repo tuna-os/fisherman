@@ -205,6 +205,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixes
 
+- **The install lock is no longer in a directory other users can write**
+  (#482): the lock was `/run/lock/fisherman-install.lock`, and `/run/lock`
+  is world-writable on Debian and Ubuntu. A user without root could create
+  that name first and block every install, and where the kernel's symlink
+  protection is off, have root truncate the file a symlink pointed at. The
+  lock is now `/run/fisherman-install.lock`, in a directory only root can
+  write, and is opened with `O_NOFOLLOW`. Nothing else changes: the code
+  `install_already_running` and its message are the same.
 - **The first-boot TPM2 unit removes its keyslot and key file on a VM with
   little memory** (#409, #421): `cryptsetup luksRemoveKey` looked the
   single-use key up through the keyslots, ran the user slot's memory-hard

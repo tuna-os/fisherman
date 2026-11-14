@@ -9,10 +9,15 @@ import (
 	"syscall"
 )
 
-// installLockPath is the host-wide install lock. /run/lock is the FHS place
-// for lock files; it is a tmpfs, so a reboot clears it. (The rule against
-// /run for scratch space is about multi-gigabyte image blobs, not this.)
-var installLockPath = "/run/lock/fisherman-install.lock"
+// installLockPath is the host-wide install lock. /run is a tmpfs, so a
+// reboot clears it. (The rule against /run for scratch space is about
+// multi-gigabyte image blobs, not this.)
+//
+// It is in /run itself, which only root can write, and not in /run/lock:
+// Debian and Ubuntu make /run/lock world-writable (mode 1777). There any
+// user could create this name first and block every install, or point a
+// symlink at a file for root to truncate.
+var installLockPath = "/run/fisherman-install.lock"
 
 // errInstallRunning is acquireInstallLock's answer when another fisherman
 // install holds the lock.
@@ -44,7 +49,9 @@ func takeInstallLock() error {
 	if err := os.MkdirAll(filepath.Dir(installLockPath), 0o755); err != nil {
 		return fmt.Errorf("creating %s: %w", filepath.Dir(installLockPath), err)
 	}
-	f, err := os.OpenFile(installLockPath, os.O_RDWR|os.O_CREATE, 0o644)
+	// O_NOFOLLOW: the file is truncated below, so a symlink at this name is
+	// an error, never a file to write through.
+	f, err := os.OpenFile(installLockPath, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o644)
 	if err != nil {
 		return err
 	}
