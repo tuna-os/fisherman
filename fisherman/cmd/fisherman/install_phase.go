@@ -193,6 +193,9 @@ func installPhase(r *recipe.Recipe, seq *stepSequencer, in installInput, ops ins
 		}
 	}
 	if err := ops.bootcInstall(opts); err != nil {
+		if hint := layoutHint(r, err); hint != "" {
+			return res, phaseFail(bootcFailureCode(err), "bootc install: %v\n  hint: %s", err, hint)
+		}
 		return res, phaseFail(bootcFailureCode(err), "bootc install: %v", err)
 	}
 	if in.reused != nil {
