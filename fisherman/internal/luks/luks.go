@@ -42,11 +42,21 @@ func Format(partition, passphrase string) error {
 
 // Open opens an existing LUKS container, making it available at
 // /dev/mapper/<mapperName>. The passphrase is passed via stdin.
+//
+// --allow-discards --persistent stores the discard flag in the LUKS2
+// header, so dm-crypt passes TRIM through now (the finalize step's fstrim)
+// and systemd-cryptsetup applies it at every boot without an
+// rd.luks.options argument. Without it, fstrim on an encrypted install did
+// nothing (#489, projectbluefin/dakota#1536). This is Fedora's installer
+// default too; it lets someone with the raw disk see which blocks are free,
+// and `cryptsetup refresh --persistent <name>` without the flag removes it.
 func Open(partition, passphrase, mapperName string) error {
 	return runner.RunWithStdin(
 		strings.NewReader(passphrase),
 		"cryptsetup", "luksOpen",
 		"--key-file=-",
+		"--allow-discards",
+		"--persistent",
 		partition,
 		mapperName,
 	)
