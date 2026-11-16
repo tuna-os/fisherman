@@ -4,8 +4,8 @@ on:
   pull_request:
     branches: [dev, main]
     # Prose and the tui module (a separate Go module nothing here builds)
-    # cannot change this job. Not a required check: branch protection needs
-    # only required-canaries. No filter on push, which promote.yml judges.
+    # cannot change this job. Not a required merge check (the ruleset needs
+    # lint and unit-tests); promote.yml judges the push run, so no filter.
     paths-ignore:
       - '**.md'
       - docs/**
