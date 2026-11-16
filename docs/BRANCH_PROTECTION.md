@@ -1,12 +1,22 @@
 # Branch Protection Settings
 
-This file documents the branch protection rules for `tuna-os/fisherman`.
+This file documents the rules GitHub enforces on `tuna-os/fisherman`, and
+the gate that `promote.yml` adds before `prod`. The rules are rulesets.
+Classic branch protection is off on every branch.
 
 ## TL;DR
 
-Configure GitHub branch protection to require **one** status check per
-protected branch: **`required-canaries`**. That single check is produced
-by `.github/workflows/bootcrew-vm.yml` and aggregates:
+There are two gates.
+
+1. **Merge to `dev`.** The repository ruleset `tier-a: required checks`
+   (id 26122349) requires the `lint` and `unit-tests` checks on every pull
+   request. It requires no approval and no up-to-date branch.
+2. **Promote to `prod`.** `promote.yml` fast-forwards `prod` only to a
+   `dev` commit whose push run of `bootcrew-vm.yml` passed
+   **`required-canaries`**, and whose other gated workflows passed (see
+   `GATED_WORKFLOWS` and `REQUIRED_JOBS` in `promote.yml`).
+
+`required-canaries` aggregates:
 
 - the `setup` job, which decides what a pull request has to run,
 - the `lint` job (golangci-lint, plus the no-disk script tests such as
@@ -20,53 +30,44 @@ by `.github/workflows/bootcrew-vm.yml` and aggregates:
 
 `setup` can scope the arm64 unit tests and the VM installs out of a pull
 request (see [What runs where](#what-runs-where)). `required-canaries`
-accepts a skipped job only when `setup` scoped it out; a job skipped
+accepts a skipped job only when `setup` scoped it out. A job skipped
 because a dependency failed still fails the gate.
 
-We do **not** list individual matrix jobs in branch protection because that
-list would break the moment we add or rename an image. The gate job
-exists exactly to give branch protection a stable name to depend on.
+`required-canaries` runs on every pull request but does not block the
+merge. A pull request can therefore merge with a failing VM install or
+arm64 unit test. The `dev` push run then fails `required-canaries`, and
+`promote.yml` promotes nothing until `dev` is fixed. Read a red
+`required-canaries` on a pull request as a blocker all the same.
 
-## Configuration (GitHub CLI)
+## Rules in force
+
+| Ruleset | Scope | Rules |
+|---------|-------|-------|
+| `baseline: protect default branch` (org, id 26122157) | default branch (`dev`) | no deletion, no force push |
+| `tier-a: required checks` (repository, id 26122349) | `dev` | status checks `lint` and `unit-tests` (GitHub Actions) |
+
+`prod` has no rules. `promote.yml` pushes to it with the workflow token
+(`git push origin "$SHA:refs/heads/$PROD_BRANCH"`), and a "require a pull
+request" rule would reject that push. Nobody else pushes to `prod`.
+
+Read the live rules with:
 
 ```bash
-# prod (strict — production deployments cut from this branch)
-gh api -X PUT repos/tuna-os/fisherman/branches/prod/protection \
-  -f required_status_checks.strict=true \
-  -F required_status_checks.contexts='["required-canaries"]' \
-  -F enforce_admins=false \
-  -F required_pull_request_reviews.required_approving_review_count=1 \
-  -F required_pull_request_reviews.dismiss_stale_reviews=true \
-  -F restrictions=null \
-  -F allow_force_pushes=false \
-  -F allow_deletions=false
-
-# dev (same gate; lower review count if you want faster iteration)
-gh api -X PUT repos/tuna-os/fisherman/branches/dev/protection \
-  -f required_status_checks.strict=true \
-  -F required_status_checks.contexts='["required-canaries"]' \
-  -F enforce_admins=false \
-  -F required_pull_request_reviews.required_approving_review_count=1 \
-  -F required_pull_request_reviews.dismiss_stale_reviews=true \
-  -F restrictions=null \
-  -F allow_force_pushes=false \
-  -F allow_deletions=false
+gh api repos/tuna-os/fisherman/rules/branches/dev
+gh api repos/tuna-os/fisherman/rules/branches/prod   # []
 ```
 
-## Manual Setup (GitHub Web UI)
+## Making `required-canaries` a merge gate
 
-1. Settings → Branches → Add rule (one rule per branch, `prod` first).
-2. Branch name pattern: `prod` (then repeat for `dev`).
-3. Enable:
-   - ☑ Require a pull request before merging (1 approval, dismiss stale)
-   - ☑ Require status checks to pass before merging
-     - Search for and add: **`required-canaries`**
-   - ☑ Require branches to be up to date before merging
-   - ☑ Do not allow bypassing the above settings *(prod only)*
-   - ☑ Restrict force pushes
-   - ☑ Restrict deletions
+To block a merge on the VM installs too, a repository admin adds
+`required-canaries` to the `tier-a: required checks` ruleset: Settings →
+Rules → Rulesets → `tier-a: required checks` → Require status checks to
+pass → Add checks → `required-canaries` (source: GitHub Actions). Keep
+`lint` and `unit-tests`. Then update this file, the `REQUIRED_JOBS`
+comment in `promote.yml` and the header of `custom-mounts-e2e.yml`
+(#485).
 
-## Why one gate instead of N checks?
+## Why one aggregate instead of N checks?
 
 The previous setup listed individual workflow names (`bootcrew-fast`,
 `bootcrew-vm`). Two problems with that:
@@ -81,7 +82,8 @@ The previous setup listed individual workflow names (`bootcrew-fast`,
 
 The `required-canaries` job in `bootcrew-vm.yml` is the single boolean
 result of `setup` + `lint` + `unit-tests` + `unit-tests-arm64` + every
-`required: true` image in `tests/bootcrew-matrix.yaml`.
+`required: true` image in `tests/bootcrew-matrix.yaml`. `promote.yml`
+names it, not the matrix jobs, for the same reason.
 
 ## What runs where
 
@@ -104,11 +106,11 @@ required VM jobs all run; the advisory jobs still do not.
 
 | Workflow / job | Pull requests | Required? | Notes |
 |----------------|---------------|-----------|-------|
-| `bootcrew-vm.yml` `lint` | every PR | yes (via gate) | golangci-lint on `fisherman/`, plus the no-disk script tests |
-| `bootcrew-vm.yml` `unit-tests` | every PR | yes (via gate) | `go test -race -coverprofile` |
-| `bootcrew-vm.yml` `unit-tests-arm64` | not draft, not prose-only | yes (via gate) | build, vet and tests on an arm64 runner |
+| `bootcrew-vm.yml` `lint` | every PR | yes (merge and promote) | golangci-lint on `fisherman/`, plus the no-disk script tests |
+| `bootcrew-vm.yml` `unit-tests` | every PR | yes (merge and promote) | `go test -race -coverprofile` |
+| `bootcrew-vm.yml` `unit-tests-arm64` | not draft, not prose-only | promote only (via `required-canaries`) | build, vet and tests on an arm64 runner |
 | `bootcrew-vm.yml` `tui-unit-tests` | not draft, not prose-only | no | `go vet` and `go test -race` for `tui/` |
-| `bootcrew-vm.yml` `vm-boot-required` | not draft, changes outside prose and `tui/` | yes (via gate) | every `required: true` image in the matrix |
+| `bootcrew-vm.yml` `vm-boot-required` | not draft, changes outside prose and `tui/` | promote only (via `required-canaries`) | every `required: true` image in the matrix |
 | `bootcrew-vm.yml` `vm-boot-advisory` | only matrix or store-reuse script changes | **no** | the other `vm_boot: true` images; `continue-on-error` |
 | `bootcrew-vm.yml` `store-reuse-advisory` | only matrix or store-reuse script changes | **no** | `store_reuse` profiles, see `docs/SOURCE-REUSE.md` |
 | `bootcrew-nightly.yml` | never (weekly cron) | no | full matrix; comprehensive regression |
@@ -119,14 +121,14 @@ required VM jobs all run; the advisory jobs still do not.
 When an image stabilises (no flakes for ~2 consecutive weeks of nightly
 runs), edit `tests/bootcrew-matrix.yaml` and add `required: true` next to
 its `vm_boot: true` line. The next push will run it under
-`vm-boot-required`, blocking merges on it. No branch-protection change
-needed — the gate picks it up automatically.
+`vm-boot-required`, and `required-canaries` then blocks promotion on it.
+No ruleset change is needed.
 
 ## Demoting a flaky required canary
 
 Same file, remove (or comment) the `required: true` line. The image stays
 in the workflow but moves to the advisory bucket so it doesn't block
-merges while you investigate.
+promotion while you investigate.
 
 ## Bypass
 

@@ -90,7 +90,8 @@ env:
     customMounts E2E (manual layout)
   # `workflow | job` entries that must be present AND `success`, so that a
   # job skipped by its `if:` cannot pass as "nothing failed".
-  # required-canaries is the aggregate the branch protection uses.
+  # required-canaries aggregates the VM installs; the merge ruleset needs
+  # only lint and unit-tests (docs/BRANCH_PROTECTION.md).
   REQUIRED_JOBS: |
     Bootcrew VM Boot (E2E tests) | required-canaries
     Bootcrew VM Boot (E2E tests) | lint
