@@ -94,7 +94,9 @@ func TestOpen(t *testing.T) {
 	if c.name != "cryptsetup" {
 		t.Errorf("name = %q, want cryptsetup", c.name)
 	}
-	wantArgs := []string{"luksOpen", "--key-file=-", part, mapper}
+	// #489: discards are allowed and stored in the header, so fstrim works
+	// on the installed system.
+	wantArgs := []string{"luksOpen", "--key-file=-", "--allow-discards", "--persistent", part, mapper}
 	if !equalSlice(c.args, wantArgs) {
 		t.Errorf("args = %v, want %v", c.args, wantArgs)
 	}
