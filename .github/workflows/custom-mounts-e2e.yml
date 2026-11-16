@@ -5,7 +5,8 @@ on:
     branches: [dev, main]
     # Prose and the tui module (a separate Go module nothing here builds)
     # cannot change this job. Not a required merge check (the ruleset needs
-    # lint and unit-tests); promote.yml judges the push run, so no filter.
+    # lint, unit-tests and required-canaries); promote.yml judges the push
+    # run, so no filter.
     paths-ignore:
       - '**.md'
       - docs/**

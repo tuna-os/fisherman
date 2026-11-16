@@ -9,11 +9,12 @@ Classic branch protection is off on every branch.
 There are two gates.
 
 1. **Merge to `dev`.** The repository ruleset `tier-a: required checks`
-   (id 26122349) requires the `lint` and `unit-tests` checks on every pull
-   request. It requires no approval and no up-to-date branch.
+   (id 26122349) requires the `lint`, `unit-tests` and
+   **`required-canaries`** checks on every pull request. It requires no
+   approval and no up-to-date branch.
 2. **Promote to `prod`.** `promote.yml` fast-forwards `prod` only to a
    `dev` commit whose push run of `bootcrew-vm.yml` passed
-   **`required-canaries`**, and whose other gated workflows passed (see
+   `required-canaries` again, and whose other gated workflows passed (see
    `GATED_WORKFLOWS` and `REQUIRED_JOBS` in `promote.yml`).
 
 `required-canaries` aggregates:
@@ -33,18 +34,16 @@ request (see [What runs where](#what-runs-where)). `required-canaries`
 accepts a skipped job only when `setup` scoped it out. A job skipped
 because a dependency failed still fails the gate.
 
-`required-canaries` runs on every pull request but does not block the
-merge. A pull request can therefore merge with a failing VM install or
-arm64 unit test. The `dev` push run then fails `required-canaries`, and
-`promote.yml` promotes nothing until `dev` is fixed. Read a red
-`required-canaries` on a pull request as a blocker all the same.
+A pull request therefore cannot merge with a failing VM install or arm64
+unit test that `setup` put in scope. The `dev` push run checks the merged
+commit once more with the full suite before `promote.yml` moves `prod`.
 
 ## Rules in force
 
 | Ruleset | Scope | Rules |
 |---------|-------|-------|
 | `baseline: protect default branch` (org, id 26122157) | default branch (`dev`) | no deletion, no force push |
-| `tier-a: required checks` (repository, id 26122349) | `dev` | status checks `lint` and `unit-tests` (GitHub Actions) |
+| `tier-a: required checks` (repository, id 26122349) | `dev` | status checks `lint`, `unit-tests` and `required-canaries` (GitHub Actions) |
 
 `prod` has no rules. `promote.yml` pushes to it with the workflow token
 (`git push origin "$SHA:refs/heads/$PROD_BRANCH"`), and a "require a pull
@@ -56,16 +55,6 @@ Read the live rules with:
 gh api repos/tuna-os/fisherman/rules/branches/dev
 gh api repos/tuna-os/fisherman/rules/branches/prod   # []
 ```
-
-## Making `required-canaries` a merge gate
-
-To block a merge on the VM installs too, a repository admin adds
-`required-canaries` to the `tier-a: required checks` ruleset: Settings →
-Rules → Rulesets → `tier-a: required checks` → Require status checks to
-pass → Add checks → `required-canaries` (source: GitHub Actions). Keep
-`lint` and `unit-tests`. Then update this file, the `REQUIRED_JOBS`
-comment in `promote.yml` and the header of `custom-mounts-e2e.yml`
-(#485).
 
 ## Why one aggregate instead of N checks?
 
@@ -108,9 +97,9 @@ required VM jobs all run; the advisory jobs still do not.
 |----------------|---------------|-----------|-------|
 | `bootcrew-vm.yml` `lint` | every PR | yes (merge and promote) | golangci-lint on `fisherman/`, plus the no-disk script tests |
 | `bootcrew-vm.yml` `unit-tests` | every PR | yes (merge and promote) | `go test -race -coverprofile` |
-| `bootcrew-vm.yml` `unit-tests-arm64` | not draft, not prose-only | promote only (via `required-canaries`) | build, vet and tests on an arm64 runner |
+| `bootcrew-vm.yml` `unit-tests-arm64` | not draft, not prose-only | yes (via `required-canaries`) | build, vet and tests on an arm64 runner |
 | `bootcrew-vm.yml` `tui-unit-tests` | not draft, not prose-only | no | `go vet` and `go test -race` for `tui/` |
-| `bootcrew-vm.yml` `vm-boot-required` | not draft, changes outside prose and `tui/` | promote only (via `required-canaries`) | every `required: true` image in the matrix |
+| `bootcrew-vm.yml` `vm-boot-required` | not draft, changes outside prose and `tui/` | yes (via `required-canaries`) | every `required: true` image in the matrix |
 | `bootcrew-vm.yml` `vm-boot-advisory` | only matrix or store-reuse script changes | **no** | the other `vm_boot: true` images; `continue-on-error` |
 | `bootcrew-vm.yml` `store-reuse-advisory` | only matrix or store-reuse script changes | **no** | `store_reuse` profiles, see `docs/SOURCE-REUSE.md` |
 | `bootcrew-nightly.yml` | never (weekly cron) | no | full matrix; comprehensive regression |
@@ -121,14 +110,15 @@ required VM jobs all run; the advisory jobs still do not.
 When an image stabilises (no flakes for ~2 consecutive weeks of nightly
 runs), edit `tests/bootcrew-matrix.yaml` and add `required: true` next to
 its `vm_boot: true` line. The next push will run it under
-`vm-boot-required`, and `required-canaries` then blocks promotion on it.
+`vm-boot-required`, and `required-canaries` then blocks merges and
+promotion on it.
 No ruleset change is needed.
 
 ## Demoting a flaky required canary
 
 Same file, remove (or comment) the `required: true` line. The image stays
 in the workflow but moves to the advisory bucket so it doesn't block
-promotion while you investigate.
+merges or promotion while you investigate.
 
 ## Bypass
 
