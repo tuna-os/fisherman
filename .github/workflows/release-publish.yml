@@ -49,7 +49,9 @@ jobs:
 
       - uses: actions/setup-go@v7.0.0
         with:
-          go-version-file: fisherman/go.mod
+          # Pin a supported toolchain: the go.mod language line (1.22) would
+          # resolve to 1.22.12, which no longer receives security fixes.
+          go-version: stable
           cache: false  # fisherman/go.mod has no deps, so there is no go.sum to key a cache on
 
       - name: Run tests before publishing
