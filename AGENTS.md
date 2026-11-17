@@ -1,8 +1,11 @@
 # AGENTS.md — agent guide for tuna-os/fisherman
 
 A universal **bootc installer backend**: a Go CLI that reads a JSON recipe and
-executes a 9-step disk install pipeline, emitting newline-delimited JSON
-progress on stdout. It is driven by a frontend (the five in `tuna-os/bootc-installer`),
+executes a disk install pipeline, emitting newline-delimited JSON
+progress on stdout. The recipe decides how many progress steps a run reports:
+8 for a plain auto-partitioned install, one more each for LUKS, TPM2 enrolment
+and a `/var` disk, and 5 or 6 for a `customMounts` layout. `planShape` in
+`fisherman/cmd/fisherman/steps.go` is the one list; do not hard-code a count. It is driven by a frontend (the five in `tuna-os/bootc-installer`),
 runs as root against real block devices, and is distro-agnostic.
 
 Human docs: [`README.md`](README.md) (pipeline table, recipe format, partition
@@ -54,9 +57,10 @@ Each of these encodes a failure that has already happened. They are load-bearing
   bind-mounted to `/var/tmp`. Do **not** move it under `/run/*` — that is tmpfs
   and far too small for image blobs.
 - **`--skip-finalize` is passed to `bootc install`** (`internal/install/bootc.go`)
-  so step 9 can finalize manually (fstrim → remount ro → fsfreeze/thaw) and so
-  the target stays writable for post-install writes. `bootc install finalize`
-  is a no-op upstream; removing the flag breaks step 9.
+  so the last step ("Finalizing installation") can finalize manually
+  (fstrim → remount ro → fsfreeze/thaw) and so the target stays writable for
+  post-install writes. `bootc install finalize` is a no-op upstream; removing
+  the flag breaks that step.
 - **Flatpak sandbox detection.** When running inside a sandbox, host subprocess
   calls are wrapped in `flatpak-spawn --host`. Any new host command must go
   through the same path or it will fail only in the Flatpak frontends.
