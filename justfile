@@ -51,6 +51,12 @@ build-ssh-enabled-image IMAGE:
   echo "✅ Built SSH-enabled image locally: $TEMP_TAG"
   echo "For CI, SSH-enabled images are hosted at ghcr.io/tuna-os/fisherman/<image>:ssh-enabled"
 
+# Add sshd to image via scripts/prepare-ssh-image.sh (produces IMAGE_NAME:ci-ssh-enabled)
+prepare-ssh-image IMAGE:
+  #!/bin/bash
+  set -e
+  bash scripts/prepare-ssh-image.sh "{{ IMAGE }}" /tmp/bootcrew-ssh/id_rsa.pub
+
 # Build debian-bootc with SSH pre-installed (Containerfile approach)
 build-debian-bootc-ssh:
   #!/bin/bash
