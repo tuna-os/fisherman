@@ -24,7 +24,7 @@ RUN if command -v dnf >/dev/null 2>&1; then \
       systemctl enable ssh; \
     elif command -v pacman >/dev/null 2>&1; then \
       # Arch
-      pacman -Sy --noconfirm openssh && \
+      pacman -Syu --noconfirm openssh && \
       systemctl enable sshd; \
     elif command -v zypper >/dev/null 2>&1; then \
       # openSUSE
