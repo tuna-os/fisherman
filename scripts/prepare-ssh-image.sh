@@ -71,7 +71,7 @@ $SUDO_BIN "$PODMAN_BIN" exec "$CONTAINER" sh -c '
   elif command -v zypper >/dev/null 2>&1; then
     zypper install -y openssh 2>&1 | grep -v "^Installing " || true
   elif command -v pacman >/dev/null 2>&1; then
-    pacman -Sy openssh --noconfirm 2>&1 | grep -v "^Installing " || true
+    pacman -Syu openssh --noconfirm 2>&1 | grep -v "^Installing " || true
   fi
   if ! command -v sshd >/dev/null 2>&1 && ! command -v ssh >/dev/null 2>&1; then
     echo "Warning: SSH not found, trying busybox dropbear" >&2

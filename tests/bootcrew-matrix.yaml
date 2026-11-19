@@ -51,7 +51,7 @@
 #          comment must carry that evidence and say what clears it.
 images:
   - name: dakota
-    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    image: ghcr.io/projectbluefin/dakota@sha256:c10a8b189c34e53cf213f4b03342ac89c322b7e6a4eb0eb19012c6a59d7e4378 # stable
     filesystem: ext4
     composefs_backend: true
     bootloader: systemd
@@ -177,7 +177,7 @@ images:
 
   # LUKS variants — vm_boot only (nightly excluded: nightly patches root=/dev/vdaX which is wrong for LUKS)
   - name: dakota-luks
-    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    image: ghcr.io/projectbluefin/dakota@sha256:c10a8b189c34e53cf213f4b03342ac89c322b7e6a4eb0eb19012c6a59d7e4378 # stable
     ssh_image_name: dakota
     filesystem: ext4
     composefs_backend: true
@@ -215,7 +215,7 @@ images:
   # btrfs, so does not reproduce the exact scratch-on-btrfs failure mode — but validates the
   # LUKS+composefs install path against a btrfs target filesystem end-to-end).
   - name: dakota-luks-btrfs
-    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    image: ghcr.io/projectbluefin/dakota@sha256:c10a8b189c34e53cf213f4b03342ac89c322b7e6a4eb0eb19012c6a59d7e4378 # stable
     ssh_image_name: dakota
     filesystem: btrfs
     composefs_backend: true
@@ -289,7 +289,7 @@ images:
   # The second boot types nothing and must show no passphrase prompt
   # (the same two boots as dakota-tpm2 below).
   - name: dakota-tpm2-luks
-    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    image: ghcr.io/projectbluefin/dakota@sha256:c10a8b189c34e53cf213f4b03342ac89c322b7e6a4eb0eb19012c6a59d7e4378 # stable
     ssh_image_name: dakota
     filesystem: ext4
     composefs_backend: true
@@ -307,7 +307,7 @@ images:
   # image's initrd to unlock with a TPM2 token; if it cannot, the second
   # boot waits at the prompt and times out.
   - name: dakota-tpm2
-    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    image: ghcr.io/projectbluefin/dakota@sha256:c10a8b189c34e53cf213f4b03342ac89c322b7e6a4eb0eb19012c6a59d7e4378 # stable
     ssh_image_name: dakota
     filesystem: ext4
     composefs_backend: true
@@ -330,7 +330,7 @@ images:
   # only rootflags select the subvolume. Unencrypted, so a failure here is
   # the subvolume, not LUKS.
   - name: dakota-btrfs-subvolumes
-    image: ghcr.io/projectbluefin/dakota@sha256:06f5511bca3ce5b44cb9069c2f34d77823b300ae7aada9e177075e986103b28e # latest
+    image: ghcr.io/projectbluefin/dakota@sha256:c10a8b189c34e53cf213f4b03342ac89c322b7e6a4eb0eb19012c6a59d7e4378 # stable
     ssh_image_name: dakota
     filesystem: btrfs
     composefs_backend: true
