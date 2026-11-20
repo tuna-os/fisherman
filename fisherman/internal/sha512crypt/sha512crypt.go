@@ -22,9 +22,16 @@ const (
 	roundsPrefix = "rounds="
 
 	// DefaultRounds is the spec's default; no "rounds=" field is emitted for it.
+	// Crypt uses it for a setting that names no count; Hash does not.
 	DefaultRounds = 5000
 	minRounds     = 1000
 	maxRounds     = 999999999
+
+	// HashRounds is the count Hash asks for. The spec's default is too cheap
+	// for a hash fisherman creates itself: SHA-512 crypt has no memory cost,
+	// so 5000 rounds makes offline guessing fast. 500000 is roughly a
+	// quarter second per hash on a desktop CPU.
+	HashRounds = 500000
 
 	// SaltLen is the maximum (and generated) salt length in characters.
 	SaltLen = 16
@@ -46,14 +53,14 @@ func IsHashSetting(s string) bool {
 	return hashSetting.MatchString(s)
 }
 
-// Hash returns a "$6$<salt>$<hash>" string for password using DefaultRounds
-// and a 16-character salt drawn from crypto/rand.
+// Hash returns a "$6$rounds=<HashRounds>$<salt>$<hash>" string for password
+// with a 16-character salt drawn from crypto/rand.
 func Hash(password string) (string, error) {
 	salt, err := newSalt()
 	if err != nil {
 		return "", err
 	}
-	return Crypt(password, prefix+salt)
+	return Crypt(password, prefix+roundsPrefix+strconv.Itoa(HashRounds)+"$"+salt)
 }
 
 // Crypt hashes key under setting, which must start with "$6$" and may carry

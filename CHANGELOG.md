@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixed
 
+- **composefs installs hash the user password with 500000 SHA-512 crypt
+  rounds, not 5000.** The in-process hash had no `rounds=` field, so it used
+  the spec default, which is cheap to guess offline. The hash now carries
+  `rounds=500000`. Pre-hashed recipe passwords and the ostree path are
+  unchanged (#502).
 - **`/boot` and the `/boot/efi` mountpoint are labeled `boot_t` at install.**
   Both were left `unlabeled_t`, so SELinux denied systemd-logind access to
   them on the installed system. The separate `/boot` filesystem root is
