@@ -1,6 +1,7 @@
 package sha512crypt
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -89,14 +90,20 @@ func TestHashFormatAndVerifies(t *testing.T) {
 		t.Fatalf("Hash: %v", err)
 	}
 	fields := strings.Split(h, "$")
-	// "", "6", salt, hash — no rounds= field at the default.
-	if len(fields) != 4 || fields[0] != "" || fields[1] != "6" {
-		t.Fatalf("Hash = %q; want $6$<salt>$<hash>", h)
+	// "", "6", rounds=N, salt, hash — an explicit work factor.
+	if len(fields) != 5 || fields[0] != "" || fields[1] != "6" {
+		t.Fatalf("Hash = %q; want $6$rounds=<N>$<salt>$<hash>", h)
 	}
-	if len(fields[2]) != SaltLen || len(fields[3]) != 86 {
+	if want := "rounds=" + strconv.Itoa(HashRounds); fields[2] != want {
+		t.Errorf("Hash = %q; want %q field", h, want)
+	}
+	if HashRounds <= DefaultRounds {
+		t.Errorf("HashRounds = %d; want more than DefaultRounds (%d)", HashRounds, DefaultRounds)
+	}
+	if len(fields[3]) != SaltLen || len(fields[4]) != 86 {
 		t.Errorf("Hash = %q; want %d-char salt and 86-char hash", h, SaltLen)
 	}
-	for _, c := range fields[2] + fields[3] {
+	for _, c := range fields[3] + fields[4] {
 		if !strings.ContainsRune(alphabet, c) {
 			t.Errorf("Hash = %q contains %q outside the crypt alphabet", h, c)
 		}
