@@ -64,7 +64,7 @@ jobs:
           # An exact GoReleaser release, not `latest`: a new GoReleaser must
           # not change a release build unseen (#344). Major 2 matches
           # `version: 2` in .goreleaser.yml. Move it in its own PR.
-          version: v2.20.1
+          version: v2.20.2
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
