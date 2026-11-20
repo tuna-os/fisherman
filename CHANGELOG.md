@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixed
 
+- **`/boot` and the `/boot/efi` mountpoint are labeled `boot_t` at install.**
+  Both were left `unlabeled_t`, so SELinux denied systemd-logind access to
+  them on the installed system. The separate `/boot` filesystem root is
+  labeled after it is mounted, and `/boot/efi` before the ESP is mounted
+  over it.
 - **An encrypted install of an image that is not in the catalog gets
   `rhgb quiet`, so the LUKS passphrase prompt is the Plymouth prompt.**
   With no recipe `extras` and no catalog entry, `bootSplash` was off, so

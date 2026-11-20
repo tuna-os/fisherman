@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
 
 	"github.com/tuna-os/fisherman/internal/progress"
 	"github.com/tuna-os/fisherman/internal/runner"
@@ -173,7 +174,27 @@ func MountBoot(rootMount, bootPart string) error {
 	if err := os.MkdirAll(bootDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", bootDir, err)
 	}
-	return runner.Run("mount", bootPart, bootDir)
+	if err := runner.Run("mount", bootPart, bootDir); err != nil {
+		return err
+	}
+	// The fresh filesystem root is unlabeled_t; label it before anything is
+	// written under it.
+	labelBoot(bootDir, selinuxXattr)
+	return nil
+}
+
+const (
+	selinuxXattr = "security.selinux"
+	bootLabel    = "system_u:object_r:boot_t:s0"
+)
+
+// labelBoot sets the targeted-policy boot_t label (/boot(/.*)?) on path.
+// A fresh filesystem root or a directory made from a host without the
+// target's policy is unlabeled_t, and systemd-logind is denied access to it
+// on the installed system. Best-effort and silent: a host or filesystem that
+// refuses the xattr leaves path as it was.
+func labelBoot(path, attr string) {
+	_ = syscall.Setxattr(path, attr, []byte(bootLabel), 0)
 }
 
 // FinalizeFilesystem replicates the three operations bootc performs when
@@ -246,6 +267,9 @@ func MountEFI(rootMount, efiPart string) error {
 	if err := os.MkdirAll(efiDir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", efiDir, err)
 	}
+	// Label the mountpoint before the ESP hides it (the ESP root itself is
+	// FAT and takes its label from mount options).
+	labelBoot(efiDir, selinuxXattr)
 	return runner.Run("mount", efiPart, efiDir)
 }
 
