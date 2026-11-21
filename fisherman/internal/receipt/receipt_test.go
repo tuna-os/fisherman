@@ -381,3 +381,20 @@ func TestCollectorGarbageOutput(t *testing.T) {
 		t.Fatalf("outcome %s/%s", res.Outcome, res.Reason)
 	}
 }
+
+// bootc status waits for the sysroot lock; bluefin:stable's unified-storage
+// onboarding held it for over 6 minutes on first boot and the collector hit
+// its 120 s limit (#508). It must start after that unit, in [Unit].
+func TestCollectorUnitOrderedAfterUnifiedStorage(t *testing.T) {
+	unit := CollectorUnit()
+	unitSection := unit[strings.Index(unit, "[Unit]"):strings.Index(unit, "[Service]")]
+	found := false
+	for _, l := range strings.Split(unitSection, "\n") {
+		if strings.TrimSpace(l) == "After=bootc-unified-storage.service" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("collector unit is not ordered after bootc-unified-storage.service:\n%s", unit)
+	}
+}

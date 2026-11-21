@@ -437,6 +437,10 @@ Description=Record the booted bootc image for the installation receipt
 ConditionPathExists=` + ReceiptPath + `
 ConditionPathExists=!` + CollectionDir + "/" + CollectionFile + `
 After=local-fs.target basic.target
+# bootc status waits for the sysroot lock, which an image's unified-storage
+# onboarding holds for minutes on first boot (#508); the 120 s limit below
+# is for bootc status alone. No effect on images without that unit.
+After=bootc-unified-storage.service
 
 [Service]
 Type=oneshot

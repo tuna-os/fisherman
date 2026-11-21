@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixed
 
+- **The receipt collector waits for `bootc-unified-storage.service`.**
+  `bootc status` waits for the sysroot lock. On `bluefin:stable`, the
+  image's unified-storage onboarding held that lock for more than 6 minutes
+  on first boot, so `fisherman-boot-receipt.service` reached its 120 s
+  limit and failed. The collector now starts after that unit. Images that
+  do not have that unit are not affected (#508).
 - **composefs installs hash the user password with 500000 SHA-512 crypt
   rounds, not 5000.** The in-process hash had no `rounds=` field, so it used
   the spec default, which is cheap to guess offline. The hash now carries
