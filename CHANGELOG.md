@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixed
 
+- **A failed restore of the `/var/tmp` bind is logged and retried lazily.**
+  The restore error was discarded, so a busy `umount /var/tmp` left the live
+  system's `/var/tmp` on the target filesystem, which could make finalize's
+  `remount,ro` and `luksClose` fail with "busy". The restore now warns and
+  falls back to `umount -l` (#505).
 - **The receipt collector waits for `bootc-unified-storage.service`.**
   `bootc status` waits for the sysroot lock. On `bluefin:stable`, the
   image's unified-storage onboarding held that lock for more than 6 minutes
