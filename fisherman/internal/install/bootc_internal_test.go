@@ -1,6 +1,7 @@
 package install
 
 import (
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -97,5 +98,33 @@ func TestBuildBootcArgsUsesAnExplicitLocalSource(t *testing.T) {
 	want := "--source-imgref containers-storage:ghcr.io/projectbluefin/utah-nvidia:testing"
 	if !strings.Contains(args, want) || !strings.Contains(args, "--target-imgref ghcr.io/projectbluefin/utah:testing") {
 		t.Fatalf("args = %q, want %q and the base target", args, want)
+	}
+}
+
+// A failed restore of the /var/tmp bind used to be ignored, leaving the live
+// /var/tmp on the target filesystem (#505). It must be logged and retried
+// lazily.
+func TestOverrideVarTmpRestoreFallsBackToLazyUmount(t *testing.T) {
+	prev := CommandFn
+	t.Cleanup(func() { CommandFn = prev })
+	var calls []string
+	CommandFn = func(name string, args ...string) *exec.Cmd {
+		line := name + " " + strings.Join(args, " ")
+		calls = append(calls, line)
+		if strings.Contains(line, "umount /var/tmp") && !strings.Contains(line, "-l") {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	restore := overrideVarTmp(t.TempDir())
+	restore()
+	var lazy bool
+	for _, c := range calls {
+		if strings.Contains(c, "umount -l /var/tmp") {
+			lazy = true
+		}
+	}
+	if !lazy {
+		t.Fatalf("no lazy umount after failed restore; calls: %q", calls)
 	}
 }

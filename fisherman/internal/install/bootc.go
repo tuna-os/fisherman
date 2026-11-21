@@ -895,7 +895,16 @@ func overrideVarTmp(tmpdir string) func() {
 	fmt.Fprintf(os.Stdout, "# /var/tmp bind-mounted → %s for blob staging\n", varTmpOverride)
 	return func() {
 		umName, umArgs := runner.HostArgs("umount", []string{"/var/tmp"})
-		_ = CommandFn(umName, umArgs...).Run()
+		if err := CommandFn(umName, umArgs...).Run(); err != nil {
+			// A busy restore leaves the live /var/tmp on the target
+			// filesystem, which then blocks remount-ro and luksClose.
+			// Detach lazily so the host mount goes away regardless.
+			fmt.Fprintf(os.Stdout, "# warning: umount /var/tmp failed (%v); retrying lazily\n", err)
+			lzName, lzArgs := runner.HostArgs("umount", []string{"-l", "/var/tmp"})
+			if err := CommandFn(lzName, lzArgs...).Run(); err != nil {
+				fmt.Fprintf(os.Stdout, "# warning: umount -l /var/tmp failed (%v); /var/tmp may still be on the target\n", err)
+			}
+		}
 	}
 }
 
