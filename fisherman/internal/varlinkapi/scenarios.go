@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/tuna-os/fisherman/internal/handoff"
 )
 
 // Scenario scripts the mock. Build one with ParseScenario; names combine
@@ -19,6 +21,9 @@ type Scenario struct {
 	LowRAM       bool // a requirement gate blocks
 	NoUEFI       bool // legacy BIOS: a requirement gate blocks
 	Inhibitor    bool // Shutdown calls without skipInhibitors are blocked
+	// HandoffMode overrides the daemon's takeover decision (Probe handoff
+	// and the mode Handoff uses with no mode). Empty means reboot.
+	HandoffMode string
 
 	// Failure injection. FailStep names the step; FailReason is the reason.
 	FailStep   string
@@ -49,6 +54,8 @@ var scenarioDefs = map[string]struct {
 	"cancel": {"the install waits during install_os until Cancel is called", func(s *Scenario) {
 		s.HoldStep = StepInstallOS
 	}},
+	"handoff-migrate":     {"the daemon's takeover decision is migrate (btrfs seed)", func(s *Scenario) { s.HandoffMode = handoff.ModeMigrate }},
+	"handoff-soft-reboot": {"the daemon's takeover decision is soft_reboot (EL10 block copy)", func(s *Scenario) { s.HandoffMode = handoff.ModeSoftReboot }},
 }
 
 // ScenarioNames lists the valid scenario names, sorted.

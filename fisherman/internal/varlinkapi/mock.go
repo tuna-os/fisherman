@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tuna-os/fisherman/internal/handoff"
 	"github.com/tuna-os/fisherman/internal/probe"
 )
 
@@ -149,6 +150,8 @@ func (m *Mock) Probe(context.Context) (ProbeResult, error) {
 		TPM:             Tpm{Present: !m.sc.NoTPM, Version: "2.0", Usable: !m.sc.NoTPM},
 		IntelRST:        IntelRST{AffectedDisks: []string{}},
 		Live:            Live{IsLive: true, LiveImage: ptr("ghcr.io/tuna-os/mock:live")},
+		Handoff:         m.decision(),
+		Eula:            ResolveEULA(),
 	}
 	if m.sc.NoTPM {
 		res.TPM.Version = ""
@@ -421,4 +424,22 @@ func (m *Mock) Shutdown(_ context.Context, kind string, p ShutdownParams) error 
 func (m *Mock) Handoff(_ context.Context, mode string) (bool, error) {
 	m.record("handoff:" + mode)
 	return mode == "migrate", nil
+}
+
+// decision is the daemon's takeover decision: the scenario mode, or
+// reboot when no handoff scenario is set.
+func (m *Mock) decision() HandoffDecision {
+	switch m.sc.HandoffMode {
+	case handoff.ModeMigrate:
+		return HandoffDecision{Mode: handoff.ModeMigrate, Reason: handoff.ReasonBtrfsSeed}
+	case handoff.ModeSoftReboot:
+		return HandoffDecision{Mode: handoff.ModeSoftReboot, Reason: handoff.ReasonEL10}
+	default:
+		return HandoffDecision{Mode: handoff.ModeReboot, Reason: handoff.ReasonDefault}
+	}
+}
+
+// DecideHandoff implements Handoffer: the mock reports its scenario mode.
+func (m *Mock) DecideHandoff(context.Context) (HandoffDecision, error) {
+	return m.decision(), nil
 }

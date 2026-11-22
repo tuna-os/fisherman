@@ -55,6 +55,8 @@ type TargetConfig struct {
 	Keymap    string
 	TimeZone  string
 	Autologin bool
+	// Privacy is set only when ConfigureTarget carried it.
+	Privacy *Privacy
 }
 
 // Reporter receives step events from an install. The service turns them
@@ -94,10 +96,13 @@ type Power interface {
 	Shutdown(ctx context.Context, kind string, p ShutdownParams) error
 }
 
-// Handoffer implements io.tunaos.Fisherman.Handoff.
+// Handoffer implements io.tunaos.Fisherman.Handoff and decides its mode.
 type Handoffer interface {
 	// Handoff returns whether the live session keeps running afterwards.
 	Handoff(ctx context.Context, mode string) (sessionKeepsRunning bool, err error)
+	// DecideHandoff picks the takeover mode the daemon reports in Probe
+	// and uses when Handoff arrives with no mode.
+	DecideHandoff(ctx context.Context) (HandoffDecision, error)
 }
 
 // Failure reasons carried in the failed event. Stable: frontends key copy on

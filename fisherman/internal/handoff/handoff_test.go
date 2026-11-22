@@ -49,3 +49,21 @@ func TestUnknownMode(t *testing.T) {
 		t.Error("unknown mode must fail")
 	}
 }
+
+func TestDecide(t *testing.T) {
+	for _, tc := range []struct {
+		facts Facts
+		mode  string
+		why   string
+	}{
+		{Facts{RootFSType: "btrfs"}, ModeMigrate, ReasonBtrfsSeed},
+		{Facts{RootFSType: "btrfs", EL: true}, ModeMigrate, ReasonBtrfsSeed},
+		{Facts{EL: true}, ModeSoftReboot, ReasonEL10},
+		{Facts{RootFSType: "xfs"}, ModeReboot, ReasonDefault},
+		{Facts{}, ModeReboot, ReasonDefault},
+	} {
+		if mode, why := Decide(tc.facts); mode != tc.mode || why != tc.why {
+			t.Errorf("%+v: got %s %s", tc.facts, mode, why)
+		}
+	}
+}

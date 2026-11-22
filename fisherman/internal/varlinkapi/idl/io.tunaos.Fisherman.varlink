@@ -63,7 +63,18 @@ type ValidationError(field: string, code: string, message: string)
 
 type User(username: string, fullName: ?string, password: ?string, admin: ?bool)
 
+# Privacy choices. The daemon decides how the target applies them.
+type Privacy(locationServices: ?bool)
+
 type Encryption(type: (none, luks_passphrase, tpm2_luks, tpm2_luks_passphrase), passphrase: ?string)
+
+# How the installed system takes over. The daemon decides the mode; the
+# frontend shows the matching page and calls Handoff with no mode.
+type HandoffDecision(mode: (migrate, soft_reboot, reboot), reason: ?string)
+
+# The shared end-user license. Every frontend reads this one path;
+# TUNA_EULA_FILE overrides it. No file means the frontend skips the page.
+type Eula(available: bool, path: ?string)
 
 # Everything Validate and Install look at. In Validate with partial=true only
 # the fields that are present are checked.
@@ -94,26 +105,33 @@ type StepId(
 method Requirements() -> (meetsRequirements: bool, gates: []Gate)
 
 # Read-only facts for the disk, RST, encryption and wipe-or-free pages.
+# handoff carries the daemon's takeover decision; a missing field means
+# reboot. eula names the shared license file; no file skips the page.
 method Probe() -> (
 	protocolVersion: int,
 	disks: []Disk,
 	tpm: Tpm,
 	intelRst: IntelRst,
-	live: Live
+	live: Live,
+	handoff: HandoffDecision,
+	eula: Eula
 )
 
 # Machine-readable validation. Problems come back as data, not as errors.
 method Validate(config: Config, partial: ?bool) -> (valid: bool, errors: []ValidationError)
 
-# Record the first-user and locale choices. They reach the target during the
-# 'configure' step. Returns validation problems as data.
+# Record the first-user, locale and privacy choices. They reach the target
+# during the 'configure' step. Frontends send privacy only when the user
+# changed it; locationServices defaults to false. Returns validation
+# problems as data.
 method ConfigureTarget(
 	user: ?User,
 	hostname: ?string,
 	locale: ?string,
 	keymap: ?string,
 	timeZone: ?string,
-	autologin: ?bool
+	autologin: ?bool,
+	privacy: ?Privacy
 ) -> (configured: bool, errors: []ValidationError)
 
 # Run the install. Use 'more'. Streams progress events; the last one is
@@ -130,7 +148,8 @@ method Install(config: Config, confirmed: bool) -> (
 	nextAction: ?string
 )
 
-# Hand the installed system over. Only valid after a completed install.
+# Hand the installed system over. Only valid after a completed install. An
+# absent mode uses the daemon's Probe decision.
 method Handoff(mode: ?(migrate, soft_reboot, reboot)) -> (
 	mode: string,
 	started: bool,

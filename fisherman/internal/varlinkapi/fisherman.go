@@ -53,12 +53,13 @@ func (s *Service) registerFisherman(srv *varlink.Server) {
 			return err
 		}
 		var p struct {
-			User      *User   `json:"user"`
-			Hostname  *string `json:"hostname"`
-			Locale    *string `json:"locale"`
-			Keymap    *string `json:"keymap"`
-			TimeZone  *string `json:"timeZone"`
-			Autologin *bool   `json:"autologin"`
+			User      *User    `json:"user"`
+			Hostname  *string  `json:"hostname"`
+			Locale    *string  `json:"locale"`
+			Keymap    *string  `json:"keymap"`
+			TimeZone  *string  `json:"timeZone"`
+			Autologin *bool    `json:"autologin"`
+			Privacy   *Privacy `json:"privacy"`
 		}
 		if err := c.Decode(&p); err != nil {
 			return invalidParam("user")
@@ -98,6 +99,11 @@ func (s *Service) registerFisherman(srv *varlink.Server) {
 		}
 		if p.Autologin != nil {
 			s.target.Autologin = *p.Autologin
+		}
+		// Privacy arrives only when the user changed it; an absent
+		// locationServices field defaults to false.
+		if p.Privacy != nil {
+			s.target.Privacy = p.Privacy
 		}
 		s.mu.Unlock()
 		s.log.Info("target configured")
@@ -152,9 +158,17 @@ func (s *Service) registerFisherman(srv *varlink.Server) {
 		if err := c.Decode(&p); err != nil {
 			return invalidParam("mode")
 		}
-		mode := "reboot"
+		// No mode means the daemon decides: the Probe handoff block.
+		mode := ""
 		if p.Mode != nil {
 			mode = *p.Mode
+		}
+		if mode == "" {
+			decided, err := s.exec.DecideHandoff(ctx)
+			if err != nil {
+				return err
+			}
+			mode = decided.Mode
 		}
 		switch mode {
 		case "migrate", "soft_reboot", "reboot":

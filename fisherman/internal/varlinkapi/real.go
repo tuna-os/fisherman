@@ -149,6 +149,14 @@ func (r Real) Handoff(ctx context.Context, mode string) (bool, error) {
 	return handoff.Handoff(ctx, run, mode)
 }
 
+// DecideHandoff implements Handoffer. The fact-gathering Probe slice is
+// not landed, so the decision sees zero facts and picks reboot; the
+// matrix itself (btrfs seed, EL10, default) is tested in handoff.Decide.
+func (r Real) DecideHandoff(context.Context) (HandoffDecision, error) {
+	mode, reason := handoff.Decide(handoff.Facts{})
+	return HandoffDecision{Mode: mode, Reason: reason}, nil
+}
+
 // mediumRoot finds the live medium: the disk holding the booted root, and
 // the medium root partition node. It follows the Utah script: root=UUID= on
 // the kernel command line names the medium root, whose parent disk (via

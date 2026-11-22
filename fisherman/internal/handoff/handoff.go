@@ -18,7 +18,8 @@ import (
 	"github.com/tuna-os/fisherman/internal/runner"
 )
 
-// Modes of io.tunaos.Fisherman.Handoff.
+// Modes of io.tunaos.Fisherman.Handoff and Probe's handoff decision. The
+// wire spelling keeps the Handoff enum's underscore (soft_reboot).
 const (
 	ModeMigrate    = "migrate"
 	ModeSoftReboot = "soft_reboot"
@@ -40,6 +41,35 @@ type RunnerFunc func(ctx context.Context, name string, args ...string) error
 // Run implements Runner.
 func (f RunnerFunc) Run(ctx context.Context, name string, args ...string) error {
 	return f(ctx, name, args...)
+}
+
+// Facts is what the takeover decision reads.
+type Facts struct {
+	// RootFSType is the installed root filesystem: btrfs, xfs, ext4.
+	RootFSType string
+	// EL is true on RHEL-derivative (EL10) bases.
+	EL bool
+}
+
+// Reasons name why Decide picked the mode. Frontends match on the mode;
+// the reason is for logs and debugging.
+const (
+	ReasonBtrfsSeed = "btrfs-seed"
+	ReasonEL10      = "el10"
+	ReasonDefault   = "default"
+)
+
+// Decide picks the takeover mode: btrfs roots migrate live, EL10 restarts
+// softly into the copied system, everything else reboots.
+func Decide(f Facts) (mode, reason string) {
+	switch {
+	case f.RootFSType == "btrfs":
+		return ModeMigrate, ReasonBtrfsSeed
+	case f.EL:
+		return ModeSoftReboot, ReasonEL10
+	default:
+		return ModeReboot, ReasonDefault
+	}
 }
 
 // Handoff runs mode: reboot restarts into the installed system (the live

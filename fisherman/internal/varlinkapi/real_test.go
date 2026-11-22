@@ -112,3 +112,14 @@ func TestRealHandoff(t *testing.T) {
 		t.Errorf("migrate: err = %v", err)
 	}
 }
+
+func TestRealDecideHandoff(t *testing.T) {
+	// The fact-gathering Probe slice is not landed: zero facts reboot.
+	d, err := Real{}.DecideHandoff(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Mode != handoff.ModeReboot || d.Reason != handoff.ReasonDefault {
+		t.Errorf("got %+v", d)
+	}
+}

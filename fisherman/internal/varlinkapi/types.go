@@ -135,6 +135,32 @@ type ProbeResult struct {
 	TPM             Tpm      `json:"tpm"`
 	IntelRST        IntelRST `json:"intelRst"`
 	Live            Live     `json:"live"`
+	// Handoff is the daemon's takeover decision. Frontends show the
+	// matching page and call Handoff with no mode.
+	Handoff HandoffDecision `json:"handoff"`
+	// Eula names the shared license file. No file means the frontend
+	// skips the page.
+	Eula Eula `json:"eula"`
+}
+
+// HandoffDecision is how the installed system takes over: the mode and
+// why the daemon picked it.
+type HandoffDecision struct {
+	Mode string `json:"mode"` // migrate | soft_reboot | reboot
+	// Reason is informational (btrfs-seed, el10, default).
+	Reason string `json:"reason,omitempty"`
+}
+
+// Eula names the shared end-user license. TUNA_EULA_FILE overrides the
+// default path; Available is false when no file is there.
+type Eula struct {
+	Available bool    `json:"available"`
+	Path      *string `json:"path,omitempty"`
+}
+
+// Privacy holds the privacy choices. LocationServices defaults to false.
+type Privacy struct {
+	LocationServices bool `json:"locationServices,omitempty"`
 }
 
 // RequirementsResult is the Requirements reply.

@@ -71,11 +71,11 @@ are never null.
 | Method | Does |
 |---|---|
 | `Requirements()` | RAM, CPU and firmware gates. Each gate has `ok`, `severity` and an optional `action` (`power_off`, `firmware_setup`). |
-| `Probe()` | Disks, TPM, Intel RST flag, live media. Each disk has `existingData`, `freeBytes` and `minimalSizeBytes`. |
+| `Probe()` | Disks, TPM, Intel RST flag, live media, the handoff decision and the license. Each disk has `existingData`, `freeBytes` and `minimalSizeBytes`. |
 | `Validate(config, partial?)` | Machine-readable problems, returned as data. `partial` checks only the fields present and reads no machine state. |
-| `ConfigureTarget(user?, hostname?, locale?, keymap?, timeZone?, autologin?)` | Stores the choices. They reach the target in the `configure` step. Returns problems as data. |
+| `ConfigureTarget(user?, hostname?, locale?, keymap?, timeZone?, autologin?, privacy?)` | Stores the choices. They reach the target in the `configure` step. Returns problems as data. Send `privacy` only when the user changed it. |
 | `Install(config, confirmed)` | Needs `more`. Streams events. Refused unless `confirmed` is true. |
-| `Handoff(mode?)` | `migrate`, `soft_reboot` or `reboot` (default). Only after a completed install. |
+| `Handoff(mode?)` | The daemon decides when `mode` is absent. Only after a completed install. |
 | `Cancel()` | Stops a running install and waits for cleanup. Safe to call when idle. |
 
 Validation reuses the rules of `fisherman validate` (`internal/recipe`).
@@ -84,6 +84,17 @@ on. The daemon adds `disk_required`, `disk_not_found`, `disk_not_eligible`,
 `disk_too_small`, `install_mode_required`, `install_mode_invalid`,
 `insufficient_free_space`, `conflicting_disk_label`, `encryption_required`,
 `locale_invalid`, `keymap_invalid` and `timezone_invalid`.
+
+`privacy` holds `locationServices` (default false). The daemon decides how
+the target applies it. `handoff` holds the takeover decision: `mode`
+(`migrate`, `soft_reboot` or `reboot`) and a `reason`. A missing field
+means `reboot`.
+
+`eula` names the shared license file: `available` and an optional `path`.
+Every frontend reads `/usr/share/tuna-installer/eula.xml` unless
+`TUNA_EULA_FILE` overrides it. No file means the frontend skips the page.
+That file carries an AppStream component with an `agreement` of type
+`eula`.
 
 ### Call order
 
@@ -195,6 +206,8 @@ with commas, for example `no-tpm,existing-data`. `fishermand
 | `device-lost` | The disk disappears during `install_os`. `reason` is `device_lost`. |
 | `repart-error` | systemd-repart fails during `partition`. `reason` is `repart_failed`. |
 | `cancel` | The install waits at 50% of `install_os` until `Cancel`. |
+| `handoff-migrate` | The daemon's takeover decision is `migrate`. |
+| `handoff-soft-reboot` | The daemon's takeover decision is `soft_reboot`. |
 
 ## Authorization
 
@@ -252,10 +265,24 @@ The golden files are in `fisherman/internal/varlinkapi/testdata/golden/`.
 They pin the bytes of the mock replies. The strict decoders in
 `compat_test.go` copy the gnome-setup Rust types and reject unknown fields.
 
+## Changelog (supervisor rulings slice)
+
+`io.tunaos.Fisherman` changed; the systemd files did not. Step ids stay
+frozen.
+
+- `ConfigureTarget` takes `privacy` with `locationServices` (default
+  false). Send it only when the user changed it.
+- `Probe` reports `handoff` with the daemon's takeover decision and
+  `eula` with the shared license path. A missing handoff means `reboot`.
+  No license file means the frontend skips the page. Shared path:
+  `/usr/share/tuna-installer/eula.xml`, `TUNA_EULA_FILE` overrides it.
+- `Handoff` with no mode uses the daemon's decision.
+- The wire keeps the Handoff word `soft_reboot` (not the ruling's
+  `soft-reboot`). The owner can overrule this.
+
 ## Changelog (real executor slice)
 
-No `.varlink` file changed: the IDL is stable. What changed on the wire and
-in behavior:
+What changed on the wire and in behavior:
 
 - Real mode exists. Without `--mock` the daemon runs the real executor.
   Each socket has a single interface. Mock mode keeps all interfaces on

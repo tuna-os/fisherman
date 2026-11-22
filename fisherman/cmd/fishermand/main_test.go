@@ -102,7 +102,7 @@ func TestListScenarios(t *testing.T) {
 	if code != 0 {
 		t.Fatal(code)
 	}
-	for _, n := range []string{"happy", "no-tpm", "rst", "existing-data", "device-lost", "repart-error", "cancel"} {
+	for _, n := range []string{"happy", "no-tpm", "rst", "existing-data", "device-lost", "repart-error", "cancel", "handoff-migrate", "handoff-soft-reboot"} {
 		if !strings.Contains(string(out), n) {
 			t.Errorf("%s missing from %s", n, out)
 		}
