@@ -8,7 +8,7 @@ import (
 // AppStream component carrying an agreement of type eula.
 const DefaultEULAPath = "/usr/share/tuna-installer/eula.xml"
 
-// EULAFileEnv overrides the license path (testing, derivate media).
+// EULAFileEnv overrides the license path (testing, derivative media).
 const EULAFileEnv = "TUNA_EULA_FILE"
 
 // ResolveEULA finds the shared license: TUNA_EULA_FILE wins, otherwise the
