@@ -28,6 +28,7 @@ frontend until its submodule pointer is bumped in a separate commit.
 | Path | What |
 |---|---|
 | `fisherman/` | the CLI — its **own Go module** (`cmd/fisherman`, `internal/`) |
+| `fisherman/cmd/fishermand/` | the Varlink installer daemon, mock mode only so far; see [`docs/FISHERMAND.md`](docs/FISHERMAND.md) |
 | `tui/` | a **second, separate Go module** |
 | `tests/` | shell harnesses + `fake-bins/`; `check-validation.sh` runs entirely in `/tmp`, no disk or VM |
 | `data/` | image catalog and assets; TunaOS marks are the Noto emoji marks from `tuna-os/tunaOS` `system_files/usr/share/tunaos/logos/` |

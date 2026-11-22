@@ -1,0 +1,60 @@
+# Reconstructed from the client side (hanthor/gnome-setup, branch utah,
+# src/interfaces/sysinstall/systemd_sysinstall.rs). This is the subset of
+# systemd's interface that gnome-setup calls. It is not a copy of systemd's
+# own file; check it against systemd before relying on it.
+
+# API for installing the OS to another block device.
+interface io.systemd.SysInstall
+
+type DeviceFit(
+	enough_free_space,
+	conflicting_disk_label_present,
+	insufficient_free_space,
+	disk_too_small
+)
+
+type BlockDeviceAction(add, remove, ready)
+
+type ProgressPhase(
+	validate_block_device,
+	load_credentials,
+	encrypt_credentials,
+	install_partitions,
+	mount_partitions,
+	install_kernel,
+	install_bootloader,
+	unmount_partitions
+)
+
+# Invoke the actual installation. With 'more' it reports progress.
+method Run(
+	node: string,
+	definitions: ?[]string,
+	erase: ?bool,
+	kernelImagePath: ?string,
+	variables: ?bool,
+	copyLocale: ?bool,
+	copyKeymap: ?bool,
+	copyTimezone: ?bool
+) -> (phase: ?ProgressPhase, object: ?string, progress: ?int)
+
+# List candidate block devices. With subscribe, the stream stays open and
+# reports add, remove and ready actions.
+method ListCandidateDevices(definitions: ?[]string, subscribe: ?bool) -> (
+	node: ?string,
+	symlinks: ?[]string,
+	diskseq: ?int,
+	sizeBytes: ?int,
+	vendor: ?string,
+	model: ?string,
+	subsystem: ?string,
+	fit: ?DeviceFit,
+	minimalSizeBytes: ?int,
+	currentSizeBytes: ?int,
+	action: ?BlockDeviceAction
+)
+
+error ConflictingDiskLabelPresent()
+error InsufficientFreeSpace(minimalSizeBytes: ?int, needFreeBytes: ?int, currentSizeBytes: ?int)
+error DiskTooSmall(minimalSizeBytes: ?int, currentSizeBytes: ?int)
+error NoCandidateDevices()

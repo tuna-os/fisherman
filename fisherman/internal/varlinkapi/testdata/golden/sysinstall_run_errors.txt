@@ -1,0 +1,4 @@
+disk_too_small {"parameters":{"currentSizeBytes":8589934592,"minimalSizeBytes":21474836480},"error":"io.systemd.SysInstall.DiskTooSmall"}
+conflicting_label {"parameters":{},"error":"io.systemd.SysInstall.ConflictingDiskLabelPresent"}
+insufficient_free_space {"parameters":{"currentSizeBytes":512110190592,"minimalSizeBytes":21474836480,"needFreeBytes":3558514688},"error":"io.systemd.SysInstall.InsufficientFreeSpace"}
+no_such_node {"parameters":{"description":"no such block device: /dev/nope","errno":19,"errnoName":"ENODEV"},"error":"io.systemd.System"}
