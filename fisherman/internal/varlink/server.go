@@ -11,6 +11,8 @@ import (
 	"net"
 	"sort"
 	"sync"
+
+	"github.com/tuna-os/fisherman/internal/auth"
 )
 
 // ReplyWriter sends replies for one call.
@@ -137,6 +139,12 @@ func (s *Server) serveConn(parent context.Context, conn net.Conn) {
 	defer conn.Close()
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
+	// Attribute the peer while it is connected: handlers authorize
+	// mutating calls against these credentials. Unattributable peers
+	// (non-UNIX, or SO_PEERCRED off Linux) carry no credentials.
+	if creds, err := auth.PeerCreds(conn); err == nil {
+		ctx = auth.WithCreds(ctx, creds)
+	}
 
 	// A reader goroutine notices a disconnect while a streaming handler is
 	// busy, and cancels ctx so the handler can clean up.

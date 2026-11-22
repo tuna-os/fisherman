@@ -1,0 +1,5 @@
+{"partitiontable": {"label": "gpt", "sectorsize": 512, "partitions": [
+  {"node": "/dev/vda1", "type": "C12A7328-F81F-11D2-BA4B-00A0C93EC93B", "uuid": "11111111-2222-3333-4444-555555555555", "name": "ESP", "size": 4194304},
+  {"node": "/dev/vda2", "type": "BC13C2FF-59E6-4262-A352-B275FD6F7172", "uuid": "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE", "name": "boot", "size": 2097152},
+  {"node": "/dev/vda3", "type": "4F68BCE3-E8CD-4DB1-96E7-FBCAF984B709", "uuid": "FFFFFFFF-0000-1111-2222-333333333333", "name": "root", "size": 41943040}
+]}}

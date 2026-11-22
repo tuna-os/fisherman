@@ -159,6 +159,9 @@ func (s *Service) run(ctx context.Context, c *varlink.Call, w varlink.ReplyWrite
 	if err := c.Decode(&p); err != nil || p.Node == "" {
 		return invalidParam("node")
 	}
+	if err := s.checkAuth(ctx, IfaceSysInstall+".Run"); err != nil {
+		return err
+	}
 	pr, err := s.exec.Probe(ctx)
 	if err != nil {
 		return err
@@ -185,7 +188,7 @@ func (s *Service) run(ctx context.Context, c *varlink.Call, w varlink.ReplyWrite
 			"currentSizeBytes": disk.SizeBytes})
 	}
 
-	ictx, finish, err := s.begin(ctx)
+	ictx, finish, err := s.begin(context.WithoutCancel(ctx))
 	switch err {
 	case nil:
 	case errInstalling:

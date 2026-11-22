@@ -13,3 +13,6 @@ coverage.out
 
 # GoReleaser build output (`goreleaser release`, `goreleaser build`).
 dist/
+
+# Read-only scratch checkouts (Utah reference clone, never commit).
+.scratch/

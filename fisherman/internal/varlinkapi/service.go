@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"sync"
 
+	"github.com/tuna-os/fisherman/internal/auth"
 	"github.com/tuna-os/fisherman/internal/recipe"
 	"github.com/tuna-os/fisherman/internal/varlink"
 )
@@ -30,6 +31,10 @@ const (
 type Service struct {
 	exec Executor
 	log  *slog.Logger
+	// checker approves mutating calls through the polkit authority. Nil
+	// allows everything: the mock daemon and the in-process tests use no
+	// checker, the real daemon wires PkcheckChecker.
+	checker auth.Checker
 
 	mu     sync.Mutex
 	st     state
@@ -46,6 +51,29 @@ func NewService(exec Executor, log *slog.Logger) *Service {
 	return &Service{exec: exec, log: log}
 }
 
+// SetChecker makes mutating calls ask checker first. A nil checker allows
+// everything; callers without peer credentials (the in-process tests) are
+// always allowed, since there is nobody to attribute the call to.
+func (s *Service) SetChecker(c auth.Checker) { s.checker = c }
+
+// checkAuth approves action for the peer in ctx. It returns a Varlink
+// error on denial and nil otherwise; the action logged is the method name
+// only, never a device, a slot or a credential.
+func (s *Service) checkAuth(ctx context.Context, action string) error {
+	if s.checker == nil {
+		return nil
+	}
+	creds, ok := auth.Of(ctx)
+	if !ok {
+		return nil
+	}
+	if err := s.checker.Check(ctx, creds, action); err != nil {
+		s.log.Info("polkit denied", "action", action, "uid", creds.UID)
+		return &varlink.Error{Name: varlink.ErrPermissionDenied}
+	}
+	return nil
+}
+
 // Errors returned by begin.
 var (
 	errInstalling       = errors.New("an install is already running")
@@ -53,7 +81,8 @@ var (
 )
 
 // begin moves idle to installing. The returned context is cancelled by
-// Cancel or by the caller's ctx; finish must be called exactly once.
+// Cancel only; callers pass a detached context so a dropped connection
+// never cancels the install. finish must be called exactly once.
 func (s *Service) begin(parent context.Context) (context.Context, func(ok bool), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -285,6 +314,25 @@ func (s *Service) Register(srv *varlink.Server) {
 	for name, idl := range interfaceIDL {
 		srv.AddInterface(name, idl)
 	}
+}
+
+// RegisterInterface adds one interface and its description to srv. The
+// real daemon serves exactly one interface per socket, like systemd; the
+// mock daemon serves every interface on every socket through Register.
+func (s *Service) RegisterInterface(srv *varlink.Server, iface string) {
+	switch iface {
+	case IfaceFisherman:
+		s.registerFisherman(srv)
+	case IfaceSysInstall:
+		s.registerSysInstall(srv)
+	case IfaceCryptEnroll:
+		s.registerCryptEnroll(srv)
+	case IfaceShutdown:
+		s.registerShutdown(srv)
+	default:
+		return
+	}
+	srv.AddInterface(iface, interfaceIDL[iface])
 }
 
 func (s *Service) isInstalling() bool {

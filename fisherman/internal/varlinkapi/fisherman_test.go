@@ -5,6 +5,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/tuna-os/fisherman/internal/auth"
+	"github.com/tuna-os/fisherman/internal/varlink"
 )
 
 func TestRequirements(t *testing.T) {
@@ -468,8 +471,9 @@ func TestInstallCancel(t *testing.T) {
 	}
 }
 
-// A client that disconnects mid-install cancels it and the daemon cleans up.
-func TestInstallDisconnectCancels(t *testing.T) {
+// A client that disconnects mid-install does NOT cancel it: only an
+// explicit Cancel does. The install keeps running without its client.
+func TestInstallDisconnectSurvives(t *testing.T) {
 	e := newEnv(t, "cancel")
 	c := e.client(t)
 	st, _ := c.CallMore(IfaceFisherman+".Install", map[string]any{"config": goodConfig(), "confirmed": true})
@@ -483,12 +487,46 @@ func TestInstallDisconnectCancels(t *testing.T) {
 		}
 	}
 	c.Close()
-	deadline := time.Now().Add(5 * time.Second)
-	for e.svc.isInstalling() {
-		if time.Now().After(deadline) {
-			t.Fatal("install still running after the client left")
-		}
-		time.Sleep(10 * time.Millisecond)
+	// The install is parked at install_os 50% waiting for Cancel; the
+	// disconnect must not release it.
+	time.Sleep(200 * time.Millisecond)
+	if !e.svc.isInstalling() {
+		t.Fatal("a dropped connection cancelled the install; only Cancel may do that")
+	}
+	// An explicit Cancel still stops it and cleans up.
+	var out struct{ WasInstalling bool }
+	if err := e.client(t).Call(IfaceFisherman+".Cancel", nil, &out); err != nil || !out.WasInstalling {
+		t.Fatalf("cancel: %v %+v", err, out)
+	}
+	if e.svc.isInstalling() {
+		t.Fatal("install still running after Cancel")
+	}
+	if len(e.mock.Actions()) != 0 {
+		t.Fatalf("a cancelled install must leave nothing: %v", e.mock.Actions())
+	}
+}
+
+// A denying authority refuses mutating calls with PermissionDenied while
+// read-only calls keep working. The in-process socket carries real peer
+// credentials, so the checker runs; untrusted callers never reach here.
+func TestPolkitDeniesMutatingCalls(t *testing.T) {
+	e := newEnv(t, "happy")
+	fake := &auth.Fake{Allow: false}
+	e.svc.SetChecker(fake)
+	var out struct{ WasInstalling bool }
+	if got := callErr(e.client(t).Call(IfaceFisherman+".Cancel", nil, &out)); got != varlink.ErrPermissionDenied {
+		t.Fatalf("cancel: got %q, want %s", got, varlink.ErrPermissionDenied)
+	}
+	var probe ProbeResult
+	if err := e.client(t).Call(IfaceFisherman+".Probe", nil, &probe); err != nil {
+		t.Fatalf("probe stays public: %v", err)
+	}
+	if len(fake.Calls) != 1 || fake.Calls[0] != IfaceFisherman+".Cancel" {
+		t.Errorf("checker calls = %v", fake.Calls)
+	}
+	fake.Allow = true
+	if err := e.client(t).Call(IfaceFisherman+".Cancel", nil, &out); err != nil || out.WasInstalling {
+		t.Fatalf("allowed cancel: %v %+v", err, out)
 	}
 }
 

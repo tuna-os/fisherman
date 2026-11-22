@@ -48,7 +48,10 @@ func (s *Service) registerFisherman(srv *varlink.Server) {
 		return w.Reply(map[string]any{"valid": len(errs) == 0, "errors": errs}, false)
 	})
 
-	h("ConfigureTarget", func(_ context.Context, c *varlink.Call, w varlink.ReplyWriter) error {
+	h("ConfigureTarget", func(ctx context.Context, c *varlink.Call, w varlink.ReplyWriter) error {
+		if err := s.checkAuth(ctx, IfaceFisherman+".ConfigureTarget"); err != nil {
+			return err
+		}
 		var p struct {
 			User      *User   `json:"user"`
 			Hostname  *string `json:"hostname"`
@@ -105,6 +108,9 @@ func (s *Service) registerFisherman(srv *varlink.Server) {
 		if !c.More {
 			return &varlink.Error{Name: varlink.ErrExpectedMore}
 		}
+		if err := s.checkAuth(ctx, IfaceFisherman+".Install"); err != nil {
+			return err
+		}
 		var p struct {
 			Config    Config `json:"config"`
 			Confirmed bool   `json:"confirmed"`
@@ -122,7 +128,9 @@ func (s *Service) registerFisherman(srv *varlink.Server) {
 		if len(errs) > 0 || disk == nil {
 			return fishermanErr("InvalidConfig", map[string]any{"errors": errs})
 		}
-		ictx, finish, err := s.begin(ctx)
+		// The install outlives the caller: only an explicit Cancel stops
+		// it. A dropped connection just stops the event stream.
+		ictx, finish, err := s.begin(context.WithoutCancel(ctx))
 		switch err {
 		case nil:
 		case errInstalling:
@@ -131,7 +139,7 @@ func (s *Service) registerFisherman(srv *varlink.Server) {
 			return fishermanErr("AlreadyInstalled", nil)
 		}
 		final := s.runInstall(ictx, s.planFor(p.Config, *disk), func(ev Event) {
-			_ = w.Reply(ev, true) // a write error means the client left; ictx is cancelled
+			_ = w.Reply(ev, true) // a write error means the client left
 		})
 		finish(final.Event == EvComplete)
 		return w.Reply(final, false)
@@ -153,6 +161,9 @@ func (s *Service) registerFisherman(srv *varlink.Server) {
 		default:
 			return invalidParam("mode")
 		}
+		if err := s.checkAuth(ctx, IfaceFisherman+".Handoff"); err != nil {
+			return err
+		}
 		s.mu.Lock()
 		installed := s.st == stateInstalled
 		s.mu.Unlock()
@@ -168,6 +179,9 @@ func (s *Service) registerFisherman(srv *varlink.Server) {
 	})
 
 	h("Cancel", func(ctx context.Context, _ *varlink.Call, w varlink.ReplyWriter) error {
+		if err := s.checkAuth(ctx, IfaceFisherman+".Cancel"); err != nil {
+			return err
+		}
 		s.mu.Lock()
 		cancel, done := s.cancel, s.done
 		s.mu.Unlock()

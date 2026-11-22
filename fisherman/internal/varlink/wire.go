@@ -66,6 +66,7 @@ const (
 	ErrInvalidParameter  = "org.varlink.service.InvalidParameter"
 	ErrExpectedMore      = "org.varlink.service.ExpectedMore"
 	ErrInternal          = "org.varlink.service.InternalError"
+	ErrPermissionDenied  = "org.varlink.service.PermissionDenied"
 )
 
 type noParameters struct{}

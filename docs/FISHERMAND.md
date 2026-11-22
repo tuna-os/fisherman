@@ -1,35 +1,38 @@
-# `fishermand`: the installer daemon (mock slice)
+# `fishermand`: the installer daemon (real executor slice)
 
-`fishermand` is a Varlink service for installer frontends. It is the first
-slice of tuna-os/fisherman#512. This slice runs in **mock mode only**. It
-touches no disk, no TPM and no power state.
+`fishermand` is a Varlink service for installer frontends. It is the second
+slice of tuna-os/fisherman#512. The real executor changes disks. It covers
+repart definitions, cryptenroll, and the reboot handoff. Probe, the Install
+pipeline, Power, and the deferred migrate/soft-reboot handoff still fail
+until their slices land. `--mock` serves scripted data and touches nothing.
 
 The `fisherman` CLI and the recipe pipeline do not change. wootc still uses
 them.
 
 ```text
-fishermand --mock [--scenario NAME[,NAME...]] [--socket-dir DIR]
+fishermand [--mock --scenario NAME[,NAME...]] [--socket-dir DIR]
+fishermand --dry-run [--medium-disk DEV --root-node PART]
 ```
 
 ## What works and what does not
 
 | Part | State |
 |---|---|
-| Varlink wire layer (`internal/varlink`) | works |
+| Varlink wire layer (`internal/varlink`) | works, with peer credentials |
 | `io.systemd.SysInstall`: `ListCandidateDevices`, `Run` | works, mock data |
-| `io.systemd.CryptEnroll`: `Enroll`, `ListSlots`, `MakeRecoveryKey` | works, in-memory slots |
-| `io.systemd.Shutdown`: all five methods | works, records the call |
-| `io.tunaos.Fisherman`: all seven methods | works, mock data |
-| Real executor (repart, cryptenroll, copy, migrate, fixups) | **not implemented** (`internal/varlinkapi/real.go`) |
-| polkit, peer credentials, socket activation | **not implemented** |
-
-Without `--mock`, `fishermand` exits with code 2.
+| `io.systemd.CryptEnroll`: `Enroll`, `ListSlots`, `MakeRecoveryKey` | works on mock; real shells out to `systemd-cryptenroll` |
+| `io.systemd.Shutdown`: all five methods | works, mock records the call |
+| `io.tunaos.Fisherman`: all seven methods | works, mock data; real reboot shells out to `systemctl` |
+| Real executor: repart definitions (`internal/repart`), `--dry-run` | works, read-only |
+| Real executor: post-install fixups (`internal/postfix`) | works on a target root directory |
+| Real executor: Probe, Install pipeline, Power, btrfs migrate, soft-reboot | **not implemented** (ErrNotImplemented/ErrDeferred) |
+| polkit, peer credentials, socket activation | works in real mode (mock mode asks nothing) |
 
 ## Sockets
 
-gnome-setup connects to one socket per systemd interface. The daemon opens
-four sockets. Every socket serves every interface, so a client can use any
-of them.
+gnome-setup connects to one socket per systemd interface. Sockets work like
+systemd in real mode: one interface on each socket. In mock mode each
+socket serves all interfaces, so a client can use any of them.
 
 | Flag | Default |
 |---|---|
@@ -42,6 +45,10 @@ of them.
 An empty path disables a socket. `--socket-mode` sets the permission bits
 (default `0600`). The daemon refuses to replace a socket that another
 daemon holds.
+
+Under socket activation (`LISTEN_PID` is us) one inherited socket carries
+all enabled interfaces. With N inherited sockets each one carries a single
+interface. The unit files decide the matrix. Anything else is a unit bug.
 
 Other flags: `--scenario` (or `FISHERMAN_MOCK_SCENARIO`), `--step-delay` (or
 `FISHERMAN_MOCK_STEP_DELAY`, for a UI demo), `--list-scenarios`, `-v`.
@@ -84,8 +91,9 @@ The daemon enforces this state machine:
 
 1. `idle`: `Install` with `confirmed: true` and a valid config moves to
    `installing`.
-2. `installing`: another `Install` fails with `InstallInProgress`. `Cancel`
-   or a dropped connection moves back to `idle` after cleanup.
+2. `installing`: another `Install` fails with `InstallInProgress`. Only
+   `Cancel` stops the install; a dropped connection only stops that
+   client's event stream, never the install.
 3. A failed or cancelled install returns to `idle`. You can retry.
 4. A complete install moves to `installed`. `Handoff` works. Another
    `Install` fails with `AlreadyInstalled`.
@@ -108,8 +116,9 @@ Each reply is one event. The last reply has no `continues` flag. It is
 
 `overallPct` never goes down. It stops at 99 until `complete`.
 
-**Step ids are stable.** Never rename or reuse one. Ids that the recipe
-pipeline already uses keep the same meaning (`partition`, `luks`,
+**v1 freezes the step ids.** Never rename or reuse one. The v1 set is the
+ten clean-install steps in the table below plus `cleanup`. Ids that the
+recipe pipeline already uses keep the same meaning (`partition`, `luks`,
 `tpm2_enroll`, `mount`, `install_os`, `configure`, `finalize`).
 
 | Step id | Runs |
@@ -130,7 +139,9 @@ Failure `reason` values: `device_lost`, `repart_failed`, `luks_failed`,
 `internal_error`. `nextAction` values: `choose_another_disk`, `retry`,
 `report_bug`.
 
-A client that drops the connection during `Install` cancels the install.
+When polkit denies a call, the call fails with the standard
+`org.varlink.service.PermissionDenied` error. That error lives outside any
+interface.
 
 ## `io.systemd.SysInstall` compatibility
 
@@ -156,7 +167,9 @@ server).
 - `Run` errors: `ConflictingDiskLabelPresent`, `InsufficientFreeSpace` and
   `DiskTooSmall` when `erase` is false or the disk is too small. A failed
   install returns `io.systemd.System` with an errno (`ENODEV` for a lost
-  disk, `EIO` otherwise).
+  disk, `EIO` otherwise). These names match the `ReplyError` enums in
+  gnome-setup branch `utah` (`SysInstallError`, `CryptEnrollError`,
+  `ShutdownError`); the strict decoders in `compat_test.go` pin the bytes.
 
 `io.systemd.CryptEnroll` accepts the `password` and `recovery` mechanisms. It
 answers `PasswordRequired`, `PasswordIncorrect`, `FidoDeviceNotFound` and
@@ -181,7 +194,22 @@ with commas, for example `no-tpm,existing-data`. `fishermand
 | `inhibitor` | `Shutdown` is blocked unless `skipInhibitors` is true. |
 | `device-lost` | The disk disappears during `install_os`. `reason` is `device_lost`. |
 | `repart-error` | systemd-repart fails during `partition`. `reason` is `repart_failed`. |
-| `cancel` | The install waits at 50% of `install_os` until `Cancel` or a disconnect. |
+| `cancel` | The install waits at 50% of `install_os` until `Cancel`. |
+
+## Authorization
+
+In real mode each call that changes state asks the polkit authority through
+`pkcheck`. That covers `Install`, `Cancel`, `Handoff` and `ConfigureTarget`.
+It also covers SysInstall `Run`, CryptEnroll `Enroll` and `MakeRecoveryKey`,
+and each `Shutdown` verb. `pkcheck` speaks to polkitd over D-Bus. The check
+names only the interface and the method. Devices, slots and credentials
+never leave the daemon.
+
+The daemon attributes each caller by `SO_PEERCRED`. A denial fails with the
+standard `org.varlink.service.PermissionDenied` error. The matching policy
+ships with the installer image. Without that policy the authority denies
+these calls. Mock mode asks nothing. Read-only calls stay public: `Probe`,
+`Requirements`, `Validate`, `ListCandidateDevices` and `ListSlots`.
 
 ## Secrets
 
@@ -196,22 +224,49 @@ A test sends secrets through every call and searches the debug log. An
 `Executor` must keep this rule. It must not put a secret in an error
 message, because the failed event carries the message.
 
-## Put real code behind the mock
+## The real executor so far
 
-Write a new `varlinkapi.Executor` (`executor.go`). The service owns the call
-order, validation, step ids and the progress bar. The executor only reads
-hardware and changes disks. The placeholder is `Real` in `real.go`. It lists
-the work that slots in.
+`Real` (`internal/varlinkapi/real.go`) covers the safe parts behind the
+`Executor` interface. `internal/repart` makes the repart definitions: a pure
+Go port of Utah's `utah-live-definitions`. `internal/postfix` fixes up the
+target root: a pure Go port of Utah's `utah-sysinstall-post`.
+
+`internal/crypt` enrolls passphrases and recovery keys and wipes slots.
+Secrets ride stdin and an anonymous pipe. They never reach logs, errors or
+disk.
+
+`internal/handoff` reboots. `migrate` and `soft_reboot` fail with
+`ErrDeferred`. Their mechanism belongs to tunaOS#4908 and tunaOS#4909. The
+service still owns call order, validation, step ids and the progress bar.
 
 ## Test
 
 ```bash
 cd fisherman
-go vet ./cmd/fishermand ./internal/varlink ./internal/varlinkapi
-go test ./cmd/fishermand ./internal/varlink ./internal/varlinkapi
+go vet ./cmd/fishermand ./internal/varlink ./internal/varlinkapi ./internal/auth ./internal/repart ./internal/postfix ./internal/crypt ./internal/handoff
+go test ./cmd/fishermand ./internal/varlink ./internal/varlinkapi ./internal/auth ./internal/repart ./internal/postfix ./internal/crypt ./internal/handoff
 go test ./internal/varlinkapi -update   # rewrite the golden files
 ```
 
 The golden files are in `fisherman/internal/varlinkapi/testdata/golden/`.
 They pin the bytes of the mock replies. The strict decoders in
 `compat_test.go` copy the gnome-setup Rust types and reject unknown fields.
+
+## Changelog (real executor slice)
+
+No `.varlink` file changed: the IDL is stable. What changed on the wire and
+in behavior:
+
+- Real mode exists. Without `--mock` the daemon runs the real executor.
+  Each socket has a single interface. Mock mode keeps all interfaces on
+  each socket.
+- A dropped `Install`/`Run` connection no longer cancels the install. Only
+  an explicit `Cancel` does.
+- v1 freezes the step ids (`validate_device` … `finalize` plus `cleanup`).
+- When polkit denies a call, it fails with standard
+  `org.varlink.service.PermissionDenied`. That error lives outside any
+  interface.
+- `fishermand --dry-run` prints the systemd-repart definitions for the
+  medium and changes nothing.
+- We checked `Run` errors against gnome-setup branch `utah`. Each name
+  matches, so nothing changed.

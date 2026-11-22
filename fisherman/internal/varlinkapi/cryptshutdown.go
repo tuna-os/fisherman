@@ -34,6 +34,9 @@ func (s *Service) registerCryptEnroll(srv *varlink.Server) {
 	h := func(name string, f varlink.Handler) { srv.Handle(IfaceCryptEnroll+"."+name, f) }
 
 	h("MakeRecoveryKey", func(ctx context.Context, _ *varlink.Call, w varlink.ReplyWriter) error {
+		if err := s.checkAuth(ctx, IfaceCryptEnroll+".MakeRecoveryKey"); err != nil {
+			return err
+		}
 		k, err := s.exec.MakeRecoveryKey(ctx)
 		if err != nil {
 			return mapCryptErr(err)
@@ -45,6 +48,9 @@ func (s *Service) registerCryptEnroll(srv *varlink.Server) {
 		var p EnrollParams
 		if err := c.Decode(&p); err != nil || p.Node == "" || p.Mechanism == "" {
 			return invalidParam("node")
+		}
+		if err := s.checkAuth(ctx, IfaceCryptEnroll+".Enroll"); err != nil {
+			return err
 		}
 		r, err := s.exec.Enroll(ctx, p)
 		if err != nil {
@@ -86,6 +92,9 @@ func (s *Service) registerShutdown(srv *varlink.Server) {
 			var p ShutdownParams
 			if err := c.Decode(&p); err != nil {
 				return invalidParam("skipInhibitors")
+			}
+			if err := s.checkAuth(ctx, IfaceShutdown+"."+kind); err != nil {
+				return err
 			}
 			err := s.exec.Shutdown(ctx, kind, p)
 			var bi *BlockedByInhibitor

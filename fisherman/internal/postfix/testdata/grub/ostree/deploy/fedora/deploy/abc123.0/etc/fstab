@@ -1,0 +1,3 @@
+UUID=aaaaaaaa-1111-2222-3333-444444444444 / btrfs subvol=root 0 0
+UUID=cccccccc-1111-2222-3333-444444444444 /boot ext4 defaults 0 0
+UUID=1234-ABCD /boot/efi vfat defaults 0 0
