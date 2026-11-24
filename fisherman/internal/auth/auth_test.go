@@ -2,8 +2,10 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
+	"reflect"
 	"testing"
 )
 
@@ -52,6 +54,35 @@ func TestPeerCredsOverSocket(t *testing.T) {
 	if r.c.UID != uint32(os.Getuid()) || r.c.GID != uint32(os.Getgid()) || r.c.PID != os.Getpid() {
 		t.Errorf("creds = %+v, want this process", r.c)
 	}
+	// The start time is this process's own, so the authority can tell it
+	// from a later holder of the PID.
+	stat, err := os.ReadFile("/proc/self/stat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := parseStartTime(string(stat))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want == 0 || r.c.StartTime != want {
+		t.Errorf("start time = %d, want %d", r.c.StartTime, want)
+	}
+}
+
+// Field 22 is counted from the last ")": the command name is free text.
+func TestParseStartTime(t *testing.T) {
+	const tail = " S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 424242 20 21"
+	for _, comm := range []string{"(sh)", "(a b)", "(evil) R 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 7)"} {
+		got, err := parseStartTime("99 " + comm + tail)
+		if err != nil || got != 424242 {
+			t.Errorf("comm %q: got %d, %v", comm, got, err)
+		}
+	}
+	for _, bad := range []string{"", "99 sh S 1", "99 (sh) S 1 2", "99 (sh) S 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 x 20"} {
+		if _, err := parseStartTime(bad); err == nil {
+			t.Errorf("%q must fail", bad)
+		}
+	}
 }
 
 func TestFake(t *testing.T) {
@@ -69,13 +100,43 @@ func TestFake(t *testing.T) {
 }
 
 func TestPkcheckStub(t *testing.T) {
-	p := PkcheckChecker{Run: func(_ context.Context, pid int, action string) error {
-		if pid != 12 || action != "io.Test.Do" {
-			t.Errorf("run got %d %s", pid, action)
+	want := Creds{PID: 12, UID: 1000, GID: 1000, StartTime: 3456}
+	p := PkcheckChecker{Run: func(_ context.Context, c Creds, action string) error {
+		if c != want || action != "io.Test.Do" {
+			t.Errorf("run got %+v %s", c, action)
 		}
 		return nil
 	}}
-	if err := p.Check(context.Background(), Creds{PID: 12}, "io.Test.Do"); err != nil {
+	if err := p.Check(context.Background(), want, "io.Test.Do"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// pkcheck gets pid,start-time,uid, never a bare PID: with a bare PID the
+// authority judges whichever process holds that PID when it looks, and
+// reads the owner from /proc instead of taking the socket's UID.
+func TestPkcheckNamesPidStartTimeAndUID(t *testing.T) {
+	got := pkcheckArgs(Creds{PID: 12, UID: 1000, GID: 1000, StartTime: 3456}, "io.Test.Do")
+	want := []string{"--process", "12,3456,1000", "--action-id", "io.Test.Do"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("pkcheck args = %q, want %q", got, want)
+	}
+}
+
+// Credentials that cannot name the peer exactly are denied before pkcheck
+// runs.
+func TestPkcheckDeniesPeerWithoutStartTime(t *testing.T) {
+	ran := false
+	p := PkcheckChecker{Run: func(context.Context, Creds, string) error {
+		ran = true
+		return nil
+	}}
+	for _, c := range []Creds{{PID: 12, UID: 1000}, {UID: 1000, StartTime: 3456}, {}} {
+		if err := p.Check(context.Background(), c, "io.Test.Do"); !errors.Is(err, ErrDenied) {
+			t.Errorf("%+v: got %v, want ErrDenied", c, err)
+		}
+	}
+	if ran {
+		t.Error("pkcheck ran for a peer it cannot name")
 	}
 }

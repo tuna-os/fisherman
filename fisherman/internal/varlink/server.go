@@ -141,7 +141,8 @@ func (s *Server) serveConn(parent context.Context, conn net.Conn) {
 	defer cancel()
 	// Attribute the peer while it is connected: handlers authorize
 	// mutating calls against these credentials. Unattributable peers
-	// (non-UNIX, or SO_PEERCRED off Linux) carry no credentials.
+	// (non-UNIX, SO_PEERCRED off Linux, or already gone) carry no
+	// credentials, and a service that authorizes denies them.
 	if creds, err := auth.PeerCreds(conn); err == nil {
 		ctx = auth.WithCreds(ctx, creds)
 	}

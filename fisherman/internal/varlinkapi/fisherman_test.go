@@ -1,6 +1,7 @@
 package varlinkapi
 
 import (
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -527,6 +528,35 @@ func TestPolkitDeniesMutatingCalls(t *testing.T) {
 	fake.Allow = true
 	if err := e.client(t).Call(IfaceFisherman+".Cancel", nil, &out); err != nil || out.WasInstalling {
 		t.Fatalf("allowed cancel: %v %+v", err, out)
+	}
+}
+
+// With an authority, a call that no peer can be named for is denied and the
+// authority is not asked: a listener that is not a UNIX socket must not
+// open the mutating calls to everyone.
+func TestPolkitDeniesUnattributablePeer(t *testing.T) {
+	e := newEnv(t, "happy")
+	fake := &auth.Fake{Allow: true}
+	e.svc.SetChecker(fake)
+	err := e.svc.checkAuth(context.Background(), IfaceFisherman+".Install")
+	if got := callErr(err); got != varlink.ErrPermissionDenied {
+		t.Fatalf("no credentials: got %q, want %s", got, varlink.ErrPermissionDenied)
+	}
+	if len(fake.Calls) != 0 {
+		t.Errorf("the authority was asked about nobody: %v", fake.Calls)
+	}
+	// The same call with credentials reaches the authority.
+	ctx := auth.WithCreds(context.Background(), auth.Creds{PID: 12, UID: 1000, StartTime: 3456})
+	if err := e.svc.checkAuth(ctx, IfaceFisherman+".Install"); err != nil {
+		t.Fatalf("with credentials: %v", err)
+	}
+	if len(fake.Calls) != 1 {
+		t.Errorf("checker calls = %v", fake.Calls)
+	}
+	// Without a checker (mock mode) nothing is asked and nothing is denied.
+	e.svc.SetChecker(nil)
+	if err := e.svc.checkAuth(context.Background(), IfaceFisherman+".Install"); err != nil {
+		t.Fatalf("no checker: %v", err)
 	}
 }
 

@@ -52,8 +52,8 @@ func NewService(exec Executor, log *slog.Logger) *Service {
 }
 
 // SetChecker makes mutating calls ask checker first. A nil checker allows
-// everything; callers without peer credentials (the in-process tests) are
-// always allowed, since there is nobody to attribute the call to.
+// everything. With a checker, a caller without peer credentials is denied:
+// the authority has nobody to judge.
 func (s *Service) SetChecker(c auth.Checker) { s.checker = c }
 
 // checkAuth approves action for the peer in ctx. It returns a Varlink
@@ -65,7 +65,8 @@ func (s *Service) checkAuth(ctx context.Context, action string) error {
 	}
 	creds, ok := auth.Of(ctx)
 	if !ok {
-		return nil
+		s.log.Info("denied: peer has no credentials", "action", action)
+		return &varlink.Error{Name: varlink.ErrPermissionDenied}
 	}
 	if err := s.checker.Check(ctx, creds, action); err != nil {
 		s.log.Info("polkit denied", "action", action, "uid", creds.UID)
