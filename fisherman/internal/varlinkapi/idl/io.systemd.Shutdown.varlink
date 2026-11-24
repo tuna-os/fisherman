@@ -1,0 +1,14 @@
+# Reconstructed from hanthor/gnome-setup (branch utah,
+# src/interfaces/shutdown/systemd_shutdown.rs). Not systemd's own file.
+
+# APIs for shutting down or rebooting the system.
+interface io.systemd.Shutdown
+
+method PowerOff(allowInteractiveAuthentication: ?bool, skipInhibitors: ?bool) -> ()
+method Reboot(allowInteractiveAuthentication: ?bool, skipInhibitors: ?bool) -> ()
+method Halt(allowInteractiveAuthentication: ?bool, skipInhibitors: ?bool) -> ()
+method KExec(allowInteractiveAuthentication: ?bool, skipInhibitors: ?bool) -> ()
+method SoftReboot(allowInteractiveAuthentication: ?bool, skipInhibitors: ?bool) -> ()
+
+error AlreadyInProgress()
+error BlockedByInhibitor(who: ?string, why: ?string)

@@ -1,0 +1,4 @@
+{"parameters":{"node":"/dev/nvme0n1","symlinks":["/dev/disk/by-id/nvme-Mock_NVMe_512"],"diskseq":1,"sizeBytes":512110190592,"vendor":"Mockware","model":"Mock NVMe 512","subsystem":"nvme","fit":"enough_free_space","minimalSizeBytes":21474836480,"currentSizeBytes":429769359360,"action":"add"},"continues":true}
+{"parameters":{"node":"/dev/sdb","diskseq":2,"sizeBytes":8589934592,"vendor":"Mockware","model":"Mock USB Stick","subsystem":"usb","fit":"disk_too_small","minimalSizeBytes":21474836480,"currentSizeBytes":0,"action":"add"},"continues":true}
+{"parameters":{"node":"/dev/sdc","diskseq":3,"sizeBytes":1099511627776,"vendor":"Mockware","model":"Mock Legacy HDD","subsystem":"sata","fit":"conflicting_disk_label_present","minimalSizeBytes":21474836480,"currentSizeBytes":107374182400,"action":"add"},"continues":true}
+{"parameters":{"action":"ready"},"continues":true}

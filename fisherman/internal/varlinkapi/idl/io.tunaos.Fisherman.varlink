@@ -1,0 +1,168 @@
+# fisherman installer daemon API, version 1 (first slice).
+# Tracking: tuna-os/fisherman#512, ADR 0018, tuna-os/bootc-installer#442.
+#
+# Conventions: camelCase fields, as in systemd's interfaces. A field marked
+# '?' is optional and may be absent or null. Secrets (passphrase, password)
+# are accepted but never logged, echoed or stored on disk.
+interface io.tunaos.Fisherman
+
+# One requirement gate (RAM, CPU, firmware). 'severity' says whether a
+# failed gate blocks the install or only warns.
+type Gate(
+	id: string,
+	ok: bool,
+	severity: (block, warn),
+	required: ?string,
+	actual: ?string,
+	message: string,
+	action: ?(power_off, firmware_setup)
+)
+
+type Partition(
+	path: string,
+	fstype: ?string,
+	label: ?string,
+	sizeBytes: int
+)
+
+# What is already on a disk. 'operatingSystems' holds names found, for
+# example "Windows" or "Fedora Linux".
+type ExistingData(
+	hasPartitionTable: bool,
+	partitionTableType: ?string,
+	partitions: []Partition,
+	operatingSystems: []string,
+	hasLuks: bool
+)
+
+type Disk(
+	path: string,
+	sizeBytes: int,
+	sizeLabel: string,
+	model: string,
+	vendor: string,
+	transport: string,
+	removable: bool,
+	eligible: bool,
+	excludedReason: ?string,
+	freeBytes: int,
+	minimalSizeBytes: int,
+	intelRst: bool,
+	existingData: ExistingData
+)
+
+type Tpm(present: bool, version: string, usable: bool)
+
+# Intel RST (VMD or RAID mode) hides NVMe disks from Linux. When 'detected'
+# is true the frontend must block until the BIOS setting is changed.
+type IntelRst(detected: bool, mode: ?string, affectedDisks: []string)
+
+type Live(isLive: bool, liveImage: ?string)
+
+type ValidationError(field: string, code: string, message: string)
+
+type User(username: string, fullName: ?string, password: ?string, admin: ?bool)
+
+# Privacy choices. The daemon decides how the target applies them.
+type Privacy(locationServices: ?bool)
+
+type Encryption(type: (none, luks_passphrase, tpm2_luks, tpm2_luks_passphrase), passphrase: ?string)
+
+# How the installed system takes over. The daemon decides the mode; the
+# frontend shows the matching page and calls Handoff with no mode.
+type HandoffDecision(mode: (migrate, soft_reboot, reboot), reason: ?string)
+
+# The shared end-user license. Every frontend reads this one path;
+# TUNA_EULA_FILE overrides it. No file means the frontend skips the page.
+type Eula(available: bool, path: ?string)
+
+# Everything Validate and Install look at. In Validate with partial=true only
+# the fields that are present are checked.
+type Config(
+	disk: ?string,
+	installMode: ?(erase, free_space),
+	encryption: ?Encryption,
+	user: ?User,
+	hostname: ?string
+)
+
+# A stable step identifier. Frontends key translated labels on these ids.
+type StepId(
+	validate_device,
+	partition,
+	luks,
+	tpm2_enroll,
+	mount,
+	install_os,
+	configure,
+	post_fixups,
+	bootloader,
+	finalize,
+	cleanup
+)
+
+# RAM, CPU and firmware gates.
+method Requirements() -> (meetsRequirements: bool, gates: []Gate)
+
+# Read-only facts for the disk, RST, encryption and wipe-or-free pages.
+# handoff carries the daemon's takeover decision; a missing field means
+# reboot. eula names the shared license file; no file skips the page.
+method Probe() -> (
+	protocolVersion: int,
+	disks: []Disk,
+	tpm: Tpm,
+	intelRst: IntelRst,
+	live: Live,
+	handoff: HandoffDecision,
+	eula: Eula
+)
+
+# Machine-readable validation. Problems come back as data, not as errors.
+method Validate(config: Config, partial: ?bool) -> (valid: bool, errors: []ValidationError)
+
+# Record the first-user, locale and privacy choices. They reach the target
+# during the 'configure' step. Frontends send privacy only when the user
+# changed it; locationServices defaults to false. Returns validation
+# problems as data.
+method ConfigureTarget(
+	user: ?User,
+	hostname: ?string,
+	locale: ?string,
+	keymap: ?string,
+	timeZone: ?string,
+	autologin: ?bool,
+	privacy: ?Privacy
+) -> (configured: bool, errors: []ValidationError)
+
+# Run the install. Use 'more'. Streams progress events; the last one is
+# complete, failed or cancelled. 'confirmed' must be true: the daemon refuses
+# an install no frontend confirmed.
+method Install(config: Config, confirmed: bool) -> (
+	event: (step_started, progress, warning, step_finished, failed, cancelled, complete),
+	stepId: ?StepId,
+	stepIndex: ?int,
+	totalSteps: ?int,
+	overallPct: int,
+	message: ?string,
+	reason: ?string,
+	nextAction: ?string
+)
+
+# Hand the installed system over. Only valid after a completed install. An
+# absent mode uses the daemon's Probe decision.
+method Handoff(mode: ?(migrate, soft_reboot, reboot)) -> (
+	mode: string,
+	started: bool,
+	sessionKeepsRunning: bool
+)
+
+# Cancel a running install and clean up. Idempotent: wasInstalling is false
+# when nothing was running.
+method Cancel() -> (wasInstalling: bool)
+
+error NotConfirmed()
+error InvalidConfig(errors: []ValidationError)
+error InstallInProgress()
+error AlreadyInstalled()
+error NotInstalled()
+error NoSuchDisk(path: string)

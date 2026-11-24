@@ -1,0 +1,14 @@
+{"parameters":{"phase":"validate_block_device"},"continues":true}
+{"parameters":{"phase":"load_credentials"},"continues":true}
+{"parameters":{"phase":"encrypt_credentials"},"continues":true}
+{"parameters":{"phase":"install_partitions"},"continues":true}
+{"parameters":{"phase":"install_partitions","progress":0},"continues":true}
+{"parameters":{"phase":"install_partitions","progress":25},"continues":true}
+{"parameters":{"phase":"install_partitions","progress":50},"continues":true}
+{"parameters":{"phase":"install_partitions","progress":75},"continues":true}
+{"parameters":{"phase":"install_partitions","progress":100},"continues":true}
+{"parameters":{"phase":"mount_partitions"},"continues":true}
+{"parameters":{"phase":"install_kernel"},"continues":true}
+{"parameters":{"phase":"install_bootloader"},"continues":true}
+{"parameters":{"phase":"unmount_partitions"},"continues":true}
+{}

@@ -1,0 +1,29 @@
+# Reconstructed from hanthor/gnome-setup (branch utah,
+# src/interfaces/crypt_enroll/systemd_crypt_enroll.rs). Not systemd's own file.
+
+# API for enrolling credentials into LUKS2 volumes via systemd-cryptenroll.
+interface io.systemd.CryptEnroll
+
+type EnrollMechanism(password, recovery, pkcs11, fido2, tpm2)
+
+# Enroll a recovery key or a password and wipe key slots in a LUKS2 volume.
+method Enroll(
+	node: string,
+	mechanism: EnrollMechanism,
+	recoveryKey: ?string,
+	unlockPassword: ?string,
+	password: ?string,
+	wipeSlots: ?[]int
+) -> (slot: ?int, wipedSlots: ?[]int, recoveryKey: ?string, state: ?string)
+
+# Enumerate the keyslots of a LUKS2 volume, one per reply. Needs 'more'.
+method ListSlots(node: string) -> (slot: ?int, type: ?EnrollMechanism)
+
+# Generate a password that can be enrolled as a recovery key.
+method MakeRecoveryKey() -> (recoveryKey: string)
+
+error VolumeUnderForeignManagement()
+error PasswordRequired()
+error PasswordIncorrect()
+error FidoDeviceNotFound()
+error FidoActionTimeout()
