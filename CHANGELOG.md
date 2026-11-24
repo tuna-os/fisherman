@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixed
 
+- **`fishermand` names the caller to polkit as `pid,start-time,uid`.** It
+  passed `pkcheck` the PID alone. `pkcheck` then reads the owner from
+  `/proc` when it runs, so a caller that connected and exited could be
+  judged as a later process with the same PID, root included. The UID now
+  comes from the socket (`SO_PEERCRED`) and the start time is read when the
+  connection is accepted. A caller without credentials is denied, not
+  allowed (#518).
 - **A failed restore of the `/var/tmp` bind is logged and retried lazily.**
   The restore error was discarded, so a busy `umount /var/tmp` left the live
   system's `/var/tmp` on the target filesystem, which could make finalize's

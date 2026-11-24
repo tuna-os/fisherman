@@ -218,11 +218,19 @@ and each `Shutdown` verb. `pkcheck` speaks to polkitd over D-Bus. The check
 names only the interface and the method. Devices, slots and credentials
 never leave the daemon.
 
-The daemon attributes each caller by `SO_PEERCRED`. A denial fails with the
-standard `org.varlink.service.PermissionDenied` error. The matching policy
-ships with the installer image. Without that policy the authority denies
-these calls. Mock mode asks nothing. Read-only calls stay public: `Probe`,
-`Requirements`, `Validate`, `ListCandidateDevices` and `ListSlots`.
+The daemon attributes each caller by `SO_PEERCRED` and reads the caller's
+start time from `/proc` when it accepts the connection. It names the caller
+to `pkcheck` as `pid,start-time,uid`, the form `pkcheck(1)` asks for. The
+UID is the one the kernel recorded for the socket, so a process that later
+gets the same PID cannot answer for the caller. A caller the daemon cannot
+name this way (not a UNIX socket, or gone before the daemon read its start
+time) is denied.
+
+A denial fails with the standard `org.varlink.service.PermissionDenied`
+error. The matching policy ships with the installer image. Without that
+policy the authority denies these calls. Mock mode asks nothing. Read-only
+calls stay public: `Probe`, `Requirements`, `Validate`,
+`ListCandidateDevices` and `ListSlots`.
 
 ## Secrets
 

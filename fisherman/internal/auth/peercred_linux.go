@@ -5,12 +5,15 @@ package auth
 import (
 	"fmt"
 	"net"
+	"os"
+	"strconv"
 	"syscall"
 )
 
-// PeerCreds returns the kernel's credentials for the other end of conn.
-// It fails for non-UNIX connections; callers then treat the peer as
-// unattributable.
+// PeerCreds returns the kernel's credentials for the other end of conn and
+// the start time of that process. It fails for non-UNIX connections and for
+// a peer whose start time cannot be read (it has exited, or its PID is not
+// visible here); callers then treat the peer as unattributable.
 func PeerCreds(conn net.Conn) (Creds, error) {
 	uc, ok := conn.(*net.UnixConn)
 	if !ok {
@@ -30,5 +33,13 @@ func PeerCreds(conn net.Conn) (Creds, error) {
 	if scErr != nil {
 		return Creds{}, scErr
 	}
-	return Creds{PID: int(ucred.Pid), UID: ucred.Uid, GID: ucred.Gid}, nil
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(int(ucred.Pid)) + "/stat")
+	if err != nil {
+		return Creds{}, fmt.Errorf("auth: peer start time: %w", err)
+	}
+	start, err := parseStartTime(string(stat))
+	if err != nil {
+		return Creds{}, err
+	}
+	return Creds{PID: int(ucred.Pid), UID: ucred.Uid, GID: ucred.Gid, StartTime: start}, nil
 }
