@@ -49,10 +49,12 @@ const recoveryAlphabet = "cbdefghijklnrtuv"
 // Unlock selects the credential that opens the volume for an operation.
 // Exactly one form applies: Empty tries the empty passphrase (the state
 // repart leaves behind); Secret carries a passphrase through an anonymous
-// pipe. A zero Unlock means no unlock flag (the volume is already open).
+// pipe; TPM2 asks the TPM for the key of its token. A zero Unlock means no
+// unlock flag (the volume is already open).
 type Unlock struct {
 	Empty  bool
 	Secret []byte
+	TPM2   bool
 }
 
 // EnrollOpts is one enroll call.
@@ -101,7 +103,7 @@ type Runner interface {
 func SystemRunner(ctx context.Context, name string, args []string, stdin []byte, unlock Unlock) ([]byte, error) {
 	name, args = runner.HostArgs(name, args)
 	var extra []*os.File
-	if unlock.Secret != nil || unlock.Empty {
+	if !unlock.TPM2 && (unlock.Secret != nil || unlock.Empty) {
 		r, w, err := os.Pipe()
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
@@ -116,6 +118,9 @@ func SystemRunner(ctx context.Context, name string, args []string, stdin []byte,
 		w.Close()
 		extra = append(extra, r)
 		args = append(args, "--unlock-key-file=/dev/fd/3")
+	}
+	if unlock.TPM2 {
+		args = append(args, "--unlock-tpm2-device=auto")
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	if stdin != nil {
@@ -176,6 +181,29 @@ func GenerateRecoveryKey() ([]byte, error) {
 func (e *Enroller) isLuks(ctx context.Context, node string) bool {
 	_, err := e.run.Run(ctx, "cryptsetup", []string{"luksUUID", node}, nil, Unlock{})
 	return err == nil
+}
+
+// volume returns the LUKS volume that node names: node itself, or the one LUKS
+// partition of a whole disk. The native frontends know the disk the person
+// chose, not the partition that the install made on it.
+func (e *Enroller) volume(ctx context.Context, node string) (string, error) {
+	if e.isLuks(ctx, node) {
+		return node, nil
+	}
+	out, err := e.run.Run(ctx, "lsblk", []string{"-nrpo", "NAME,FSTYPE", node}, nil, Unlock{})
+	if err != nil {
+		return "", ErrNoDevice
+	}
+	var found []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if f := strings.Fields(line); len(f) == 2 && f[1] == "crypto_LUKS" {
+			found = append(found, f[0])
+		}
+	}
+	if len(found) != 1 {
+		return "", ErrNoDevice
+	}
+	return found[0], nil
 }
 
 // ListSlots returns the enabled keyslots of node with their types.
@@ -291,12 +319,27 @@ func (e *Enroller) Enroll(ctx context.Context, o EnrollOpts) (EnrollResult, erro
 	if !o.Unlock.Empty && o.Unlock.Secret == nil {
 		return res, ErrPasswordRequired
 	}
-	if !e.isLuks(ctx, o.Node) {
-		return res, ErrNoDevice
+	node, err := e.volume(ctx, o.Node)
+	if err != nil {
+		return res, err
 	}
+	o.Node = node
 	before, err := e.ListSlots(ctx, o.Node)
 	if err != nil {
 		return res, err
+	}
+	// A TPM-only install has no passphrase slot: the empty one goes when the
+	// install ends. The frontends send the empty password for it, so the TPM
+	// opens the volume in its place.
+	if len(o.Unlock.Secret) == 0 {
+		var password, tpm2 bool
+		for _, s := range before {
+			password = password || s.Type == MechPassword
+			tpm2 = tpm2 || s.Type == "tpm2"
+		}
+		if tpm2 && !password {
+			o.Unlock = Unlock{TPM2: true}
+		}
 	}
 	var args []string
 	if len(o.WipeSlots) > 0 {
