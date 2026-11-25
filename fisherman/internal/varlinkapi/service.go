@@ -126,7 +126,7 @@ func (s *Service) runInstall(ctx context.Context, plan InstallPlan, emit func(Ev
 		s.log.Info("install complete", "disk", plan.Disk.Path)
 		return Event{Event: EvComplete, OverallPct: 100, Message: ptr("Installation complete")}
 	case errors.As(err, &ie):
-		s.log.Warn("install failed", "disk", plan.Disk.Path, "step", ie.Step, "reason", ie.Reason)
+		s.log.Warn("install failed", "disk", plan.Disk.Path, "step", ie.Step, "reason", ie.Reason, "message", ie.Message)
 		step := ie.Step
 		if step == "" {
 			step = rep.current()

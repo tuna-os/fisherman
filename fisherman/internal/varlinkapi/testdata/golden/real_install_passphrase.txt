@@ -19,6 +19,7 @@ udevadm settle
 blkid -p -s UUID -o value /dev/fake1p3
 blkid -p -s TYPE -o value /dev/mapper/$MAPPER
 blkid -p -s UUID -o value /dev/mapper/$MAPPER
+btrfs inspect-internal dump-super /dev/mapper/$MAPPER
 btrfstune -f -S 0 /dev/mapper/$MAPPER
 btrfstune -f -u /dev/mapper/$MAPPER
 udevadm settle
