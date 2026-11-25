@@ -63,6 +63,18 @@ func Hash(password string) (string, error) {
 	return Crypt(password, prefix+roundsPrefix+strconv.Itoa(HashRounds)+"$"+salt)
 }
 
+// ShadowHash returns the crypt(3) field to store for a user password:
+// password itself when it is already a complete pre-hashed setting
+// (IsHashSetting), which recipe validation accepts, else Hash(password).
+// Every writer of a shadow entry uses it, so a pre-hashed password is never
+// hashed a second time and a plaintext one never reaches the file as text.
+func ShadowHash(password string) (string, error) {
+	if IsHashSetting(password) {
+		return password, nil
+	}
+	return Hash(password)
+}
+
 // Crypt hashes key under setting, which must start with "$6$" and may carry
 // a "rounds=<N>$" field before the salt (e.g. "$6$rounds=10000$salt"). As in
 // glibc, the salt ends at the next '$' and is truncated to 16 characters, and

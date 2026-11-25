@@ -115,3 +115,24 @@ func TestConfigureTargetPassword(t *testing.T) {
 		t.Errorf("an admin on a sudo image: %s", fx2.cmd.normalized())
 	}
 }
+
+// TestConfigureTargetPreHashedPassword: a complete pre-hashed crypt setting,
+// which Validate accepts (recipe.CheckPassword), lands in the shadow file as
+// it is, as the CLI writes it. Hashing it again would make the literal hash
+// text the account's password.
+func TestConfigureTargetPreHashedPassword(t *testing.T) {
+	const setting = "$6$saltstring$svn8UoSVapNtMuq1ukKS4tPQd8iKwSMHWjl/O817G3uBnIFNjnQJuesI68u4OTLiBFdcbYEdFCoEOfaS35inz1"
+	fx := newInstallFixture(t, false)
+	root := filepath.Join(fx.work, "install-1", "mnt", "root")
+	dep := filepath.Join(root, "ostree/deploy/default/deploy/a.0")
+	if err := os.MkdirAll(filepath.Join(dep, "etc"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.real.configureTarget(context.Background(), root, []string{dep},
+		TargetConfig{User: &User{Username: "bob", Password: ptr(Secret(setting))}}); err != nil {
+		t.Fatal(err)
+	}
+	if shadow := readFile(t, filepath.Join(dep, "etc/shadow")); !strings.Contains(shadow, "\nbob:"+setting+":") {
+		t.Errorf("shadow = %q, want bob's field to be the pre-hashed setting", shadow)
+	}
+}

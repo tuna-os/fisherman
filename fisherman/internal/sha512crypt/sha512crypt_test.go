@@ -145,3 +145,22 @@ func TestIsHashSetting(t *testing.T) {
 		}
 	}
 }
+
+// ShadowHash stores a complete pre-hashed setting as it is, and hashes
+// anything else, including plaintext that merely starts with "$".
+func TestShadowHash(t *testing.T) {
+	stored := specVectors[0].want
+	if got, err := ShadowHash(stored); err != nil || got != stored {
+		t.Errorf("ShadowHash(%q) = %q, %v; want it unchanged", stored, got, err)
+	}
+	for _, pw := range []string{"hunter2", "$ecret$1"} {
+		got, err := ShadowHash(pw)
+		if err != nil || got == pw || !strings.HasPrefix(got, prefix+roundsPrefix) {
+			t.Errorf("ShadowHash(%q) = %q, %v; want a fresh hash", pw, got, err)
+			continue
+		}
+		if again, err := Crypt(pw, got); err != nil || again != got {
+			t.Errorf("ShadowHash(%q) = %q does not verify (%q, %v)", pw, got, again, err)
+		}
+	}
+}
