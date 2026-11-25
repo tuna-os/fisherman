@@ -279,3 +279,70 @@ func TestEnrollRecoveryUsesPasswordFlag(t *testing.T) {
 		t.Errorf("args = %q, want --password", args)
 	}
 }
+
+// scripted is a Runner over a table of outputs; a program that is not in it
+// fails. It records the systemd-cryptenroll call.
+type scripted struct {
+	out    map[string]string
+	args   []string
+	unlock Unlock
+}
+
+func (s *scripted) Run(_ context.Context, name string, args []string, _ []byte, unlock Unlock) ([]byte, error) {
+	if name == "systemd-cryptenroll" {
+		s.args, s.unlock = args, unlock
+		return nil, nil
+	}
+	out, ok := s.out[name+" "+strings.Join(args, " ")]
+	if !ok {
+		return nil, errors.New("exit status 1")
+	}
+	return []byte(out), nil
+}
+
+const tpmOnlyDump = "Keyslots:\n  1: luks2\nTokens:\n  0: systemd-tpm2\n\tKeyslot:    1\n"
+
+// The native frontends send the disk and an empty password. After a TPM-only
+// install the volume is a partition of it and has no empty slot left: the
+// recovery key "could not be saved to the disk" (tuna-os/tunaOS run
+// 45671929202).
+func TestEnrollRecoveryOnTheDiskOfATPMOnlyInstall(t *testing.T) {
+	s := &scripted{out: map[string]string{
+		"lsblk -nrpo NAME,FSTYPE /dev/vda": "/dev/vda \n/dev/vda1 vfat\n/dev/vda2 ext4\n/dev/vda3 crypto_LUKS\n",
+		"cryptsetup luksDump /dev/vda3":    tpmOnlyDump,
+	}}
+	_, err := NewEnroller(s).Enroll(context.Background(), EnrollOpts{
+		Node: "/dev/vda", Mechanism: MechRecovery, RecoveryKey: []byte("k"), Unlock: Unlock{Secret: []byte{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s.args[len(s.args)-1] != "/dev/vda3" || !s.unlock.TPM2 {
+		t.Fatalf("args %v, unlock %+v", s.args, s.unlock)
+	}
+}
+
+func TestEnrollKeepsThePasswordThatWasGiven(t *testing.T) {
+	s := &scripted{out: map[string]string{
+		"cryptsetup luksUUID /dev/vda3": "uuid\n",
+		"cryptsetup luksDump /dev/vda3": tpmOnlyDump,
+	}}
+	_, err := NewEnroller(s).Enroll(context.Background(), EnrollOpts{
+		Node: "/dev/vda3", Mechanism: MechRecovery, RecoveryKey: []byte("k"), Unlock: Unlock{Secret: []byte("pw")},
+	})
+	if err != nil || s.unlock.TPM2 || string(s.unlock.Secret) != "pw" {
+		t.Fatalf("err %v, unlock %+v", err, s.unlock)
+	}
+}
+
+func TestEnrollRefusesADiskWithTwoVolumes(t *testing.T) {
+	s := &scripted{out: map[string]string{
+		"lsblk -nrpo NAME,FSTYPE /dev/vda": "/dev/vda1 crypto_LUKS\n/dev/vda2 crypto_LUKS\n",
+	}}
+	_, err := NewEnroller(s).Enroll(context.Background(), EnrollOpts{
+		Node: "/dev/vda", Mechanism: MechRecovery, RecoveryKey: []byte("k"), Unlock: Unlock{Empty: true},
+	})
+	if !errors.Is(err, ErrNoDevice) || s.args != nil {
+		t.Fatalf("err %v, args %v", err, s.args)
+	}
+}
