@@ -185,6 +185,7 @@ const (
 	CodeLocaleInvalid       = "locale_invalid"
 	CodeKeymapInvalid       = "keymap_invalid"
 	CodeTimeZoneInvalid     = "timezone_invalid"
+	CodeScaleInvalid        = "scale_invalid"
 )
 
 // validate checks cfg. partial checks only what is present and reads no

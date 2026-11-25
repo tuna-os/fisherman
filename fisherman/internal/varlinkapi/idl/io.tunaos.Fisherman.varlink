@@ -66,6 +66,11 @@ type User(username: string, fullName: ?string, password: ?string, admin: ?bool)
 # Privacy choices. The daemon decides how the target applies them.
 type Privacy(locationServices: ?bool)
 
+# Accessibility choices of the live session: a screen reader, a display scale
+# in percent (100 to 300). Each account of the installed system gets them at
+# its first login.
+type Accessibility(screenReader: ?bool, scalePercent: ?int)
+
 type Encryption(type: (none, luks_passphrase, tpm2_luks, tpm2_luks_passphrase), passphrase: ?string)
 
 # How the installed system takes over. The daemon decides the mode; the
@@ -131,7 +136,8 @@ method ConfigureTarget(
 	keymap: ?string,
 	timeZone: ?string,
 	autologin: ?bool,
-	privacy: ?Privacy
+	privacy: ?Privacy,
+	accessibility: ?Accessibility
 ) -> (configured: bool, errors: []ValidationError)
 
 # Run the install. Use 'more'. Streams progress events; the last one is
