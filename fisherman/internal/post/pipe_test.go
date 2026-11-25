@@ -6,6 +6,7 @@ package post
 // producer blocked in write(2) on a pipe nobody reads.
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -32,6 +33,7 @@ func TestMain(m *testing.M) {
 //
 //	produce:<bytes>:<exit>   write that many bytes to stdout, then exit
 //	consume:<bytes>:<exit>   read that many bytes (-1: to EOF), then exit
+//	finish:<ms>:<exit>       read to EOF, work on for that long, then exit
 func pipeHelper(mode string) int {
 	parts := strings.Split(mode, ":")
 	n, _ := strconv.ParseInt(parts[1], 10, 64)
@@ -52,6 +54,11 @@ func pipeHelper(mode string) int {
 			}
 			n -= chunk
 		}
+	case "finish":
+		if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
+			return 1
+		}
+		time.Sleep(time.Duration(n) * time.Millisecond)
 	case "consume":
 		if n < 0 {
 			if _, err := io.Copy(io.Discard, os.Stdin); err != nil {
@@ -190,6 +197,33 @@ func TestPipeCommands_ProducerExitFailure(t *testing.T) {
 		t.Errorf("reaped: producer=%v consumer=%v", reaped(p), reaped(c))
 	}
 	assertNoGoroutineLeak(t, base)
+}
+
+// GNU tar exits 1 when a file changed while it was read ("tar: .: file changed
+// as we read it") and still writes the whole archive. The extractor must be
+// left to do its last work, such as the symlinks tar defers to the end. It
+// used to be killed there, so installs lost their Flatpak launchers
+// (projectbluefin/utah runs 45557299285 and 45548315566).
+func TestPipeCommands_SourceChangedLetsTheExtractorFinish(t *testing.T) {
+	base := runtime.NumGoroutine()
+	p, c := helper("produce:1048576:1"), helper("finish:500:0")
+	_, err := runBounded(t, p, c, nil)
+	if !errors.Is(err, errSourceChanged) {
+		t.Errorf("err = %v, want errSourceChanged", err)
+	}
+	if c.ProcessState == nil || !c.ProcessState.Success() {
+		t.Errorf("the extractor did not finish: %v", c.ProcessState)
+	}
+	assertNoGoroutineLeak(t, base)
+}
+
+// A changed source never hides an extraction that failed.
+func TestPipeCommands_SourceChangedKeepsTheExtractorsError(t *testing.T) {
+	p, c := helper("produce:1048576:1"), helper("finish:200:3")
+	_, err := runBounded(t, p, c, nil)
+	if err == nil || !strings.Contains(err.Error(), "tar extract") {
+		t.Errorf("err = %v, want the extractor's exit status", err)
+	}
 }
 
 // The extractor is already running when the producer cannot start. It used
