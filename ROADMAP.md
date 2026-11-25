@@ -25,7 +25,7 @@ outranks anything else on this page.
 | `bootc-installer` (the GNOME, KDE, COSMIC, Niri and XFCE frontends, one monorepo) | Submodule `fisherman/` → `tuna-os/fisherman`, `.gitmodules` branch `prod`; every Flatpak builds fisherman from that submodule. The frontends run the binary with the recipe on stdin. See [`docs/INTEGRATION.md`](docs/INTEGRATION.md). |
 | `wootc` | Submodule → `tuna-os/fisherman`, pinned commit |
 | `tromso` | Live-ISO install path; builds a patched binary for some test cells |
-| `tunaOS`, `xfce-linux` | Recipe schema and install-path references |
+| `tunaOS`, `brussels` | Recipe schema and install-path references |
 
 This is the highest fan-in component in the org, and the only one whose bugs
 write to a stranger's disk. Changes here are evaluated against that table, not
