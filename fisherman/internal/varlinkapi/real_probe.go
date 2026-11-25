@@ -90,7 +90,7 @@ func (r Real) Probe(ctx context.Context) (ProbeResult, error) {
 			SizeBytes:        pd.SizeBytes,
 			SizeLabel:        pd.SizeLabel,
 			Model:            pd.Model,
-			Vendor:           pd.Vendor,
+			Vendor:           vendorName(pd.Vendor),
 			Transport:        pd.Transport,
 			Removable:        pd.Removable,
 			Eligible:         pd.Eligible,
@@ -131,6 +131,18 @@ func (r Real) Probe(ctx context.Context) (ProbeResult, error) {
 		return ProbeResult{}, err
 	}
 	return res, nil
+}
+
+// pciID is what virtio puts in /sys/block/vda/device/vendor: the id of the PCI
+// vendor, where a SCSI disk has a name.
+var pciID = regexp.MustCompile(`^0[xX][0-9a-fA-F]+$`)
+
+// vendorName returns v, or "" for an id that names nothing to a person.
+func vendorName(v string) string {
+	if pciID.MatchString(v) {
+		return ""
+	}
+	return v
 }
 
 func tpmOf(t probe.TPM) Tpm { return Tpm{Present: t.Present, Version: t.Version, Usable: t.Usable} }

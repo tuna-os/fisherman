@@ -3,6 +3,7 @@ package varlinkapi
 import (
 	"context"
 
+	"github.com/tuna-os/fisherman/internal/probe"
 	"github.com/tuna-os/fisherman/internal/varlink"
 )
 
@@ -53,6 +54,10 @@ func candidate(d Disk) CandidateDevice {
 	}
 	if d.Model != "" {
 		c.Model = ptr(d.Model)
+	} else if d.Vendor == "" && d.Transport != "" {
+		// gnome-setup shows vendor and model and no path: a virtio disk has
+		// neither, and its row was the PCI id "0x1af4".
+		c.Model = ptr(probe.TransportLabel(d.Transport) + " disk")
 	}
 	if d.Transport != "" {
 		c.Subsystem = ptr(d.Transport)
