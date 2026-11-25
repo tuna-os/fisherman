@@ -289,6 +289,11 @@ func controlledAncillaryMountCommands(t *testing.T) {
 		if name == "mount" || name == "umount" || name == "losetup" {
 			return exec.Command(script, append([]string{name}, args...)...)
 		}
+		if name == "unshare" {
+			// Force the private-namespace probe to fail so the host-bind
+			// fallback runs through the guarded mount helpers on any runner.
+			return exec.Command("false")
+		}
 		return old(name, args...)
 	}
 	t.Cleanup(func() {
