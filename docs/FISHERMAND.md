@@ -18,10 +18,10 @@ fishermand --dry-run [--medium-disk DEV --root-node PART]
 | Part | State |
 |---|---|
 | Varlink wire layer (`internal/varlink`) | works, with peer credentials |
-| `io.systemd.SysInstall`: `ListCandidateDevices`, `Run` | works, mock data |
-| `io.systemd.CryptEnroll`: `Enroll`, `ListSlots`, `MakeRecoveryKey` | works on mock; real shells out to `systemd-cryptenroll` |
-| `io.systemd.Shutdown`: all five methods | works, mock records the call |
-| `io.tunaos.Fisherman`: all seven methods | works, mock data; real reboot shells out to `systemctl` |
+| `io.systemd.SysInstall`: `ListCandidateDevices`, `Run` | works; mock serves scripted data, real partitions and overwrites the target disk |
+| `io.systemd.CryptEnroll`: `Enroll`, `ListSlots`, `MakeRecoveryKey` | works; mock records the call, real shells out to `systemd-cryptenroll` and changes LUKS key slots |
+| `io.systemd.Shutdown`: all five methods | works; mock records the call, real powers off, reboots or halts the machine |
+| `io.tunaos.Fisherman`: all seven methods | works; mock serves scripted data, real writes the target disk and reboot shells out to `systemctl` |
 | Real executor: repart definitions (`internal/repart`), `--dry-run` | works, read-only |
 | Real executor: post-install fixups (`internal/postfix`) | works on a target root directory |
 | Real executor: `Requirements`, `Probe`, `Install`, `ConfigureTarget` application, `Shutdown` (PowerOff, Reboot, Halt) | works; see "The real executor" |
