@@ -24,15 +24,15 @@ func PlannedSteps(plan InstallPlan) []string {
 // stepWeights is each step's share of the whole install, in percent. They
 // are estimates that shape the bar, like the weights of the legacy pipeline.
 var stepWeights = map[string]int{
-	StepValidateDevice: 2,
-	StepPartition:      5,
-	StepLUKS:           5,
-	StepTPM2Enroll:     3,
-	StepMount:          2,
-	StepInstallOS:      65,
-	StepConfigure:      5,
-	StepPostFixups:     5,
-	StepBootloader:     6,
-	StepFinalize:       2,
+	StepValidateDevice: 1,
+	StepPartition:      72, // repart copies the medium's partitions here
+	StepLUKS:           3,
+	StepTPM2Enroll:     2,
+	StepMount:          5,
+	StepInstallOS:      1, // the copy is only checked
+	StepConfigure:      3,
+	StepPostFixups:     6,
+	StepBootloader:     2,
+	StepFinalize:       5,
 	StepCleanup:        0,
 }

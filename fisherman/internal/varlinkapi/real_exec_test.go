@@ -700,8 +700,8 @@ func TestRealInstallSysInstallRun(t *testing.T) {
 	}
 }
 
-// TestRealInstallTPMOnly: tpm2_luks without a passphrase wipes the empty
-// slot at the end, so only the TPM unlocks the disk.
+// TestRealInstallTPMOnly: tpm2_luks without a passphrase keeps the empty
+// slot, so the recovery-key Enroll after Install can unlock with it.
 func TestRealInstallTPMOnly(t *testing.T) {
 	fx := newInstallFixture(t, true)
 	rep := &recReporter{}
@@ -709,11 +709,31 @@ func TestRealInstallTPMOnly(t *testing.T) {
 	if err := fx.real.Install(context.Background(), plan, rep); err != nil {
 		t.Fatalf("Install: %v", err)
 	}
-	if contains(fx.crypt.slots, 0) {
-		t.Errorf("slots = %v: the empty slot must be wiped", fx.crypt.slots)
+	if !contains(fx.crypt.slots, 0) {
+		t.Errorf("slots = %v: the empty slot must stay for the recovery key", fx.crypt.slots)
 	}
-	if !strings.Contains(strings.Join(rep.events, "\n"), "only the TPM unlocks") {
-		t.Errorf("no warning about TPM-only:\n%v", rep.events)
+	if !strings.Contains(strings.Join(rep.events, "\n"), "empty passphrase until a recovery key") {
+		t.Errorf("no warning about the empty slot:\n%v", rep.events)
+	}
+	// The frontend's next call: a recovery key, unlocked with the empty
+	// passphrase, replacing the empty slot. The TPM slot stays.
+	key, err := fx.real.MakeRecoveryKey(context.Background())
+	if err != nil {
+		t.Fatalf("MakeRecoveryKey: %v", err)
+	}
+	if _, err := fx.real.Enroll(context.Background(), EnrollParams{
+		Node: "/dev/fake3", Mechanism: "recovery", RecoveryKey: &key,
+		UnlockPassword: ptr(Secret("")), WipeSlots: []int64{0},
+	}); err != nil {
+		t.Fatalf("Enroll after Install: %v", err)
+	}
+	last := fx.crypt.lines[len(fx.crypt.lines)-2:]
+	joined := strings.Join(last, "\n")
+	if !strings.Contains(joined, "--wipe-slot=0") || !strings.Contains(joined, "<unlock secret 0 bytes>") {
+		t.Errorf("the recovery key was not enrolled with the empty unlock:\n%s", joined)
+	}
+	if !contains(fx.crypt.slots, 1) || len(fx.crypt.slots) != 2 {
+		t.Errorf("slots = %v, want the TPM slot and the recovery key", fx.crypt.slots)
 	}
 }
 
@@ -754,5 +774,26 @@ func TestRealInstallBtrfsWithoutSeedFlag(t *testing.T) {
 	plan := fixturePlan(Encryption{Type: "luks_passphrase", Passphrase: ptr(Secret("correct horse battery"))})
 	if err := fx.real.Install(context.Background(), plan, &recReporter{}); err != nil {
 		t.Fatalf("Install: %v\n%s", err, fx.cmd.normalized())
+	}
+}
+
+// The frontends send the whole-disk path to CryptEnroll.Enroll; the daemon
+// resolves it to the LUKS partition.
+func TestRealLuksNodeResolvesWholeDisk(t *testing.T) {
+	fx := newInstallFixture(t, true)
+	fx.cmd.hook = func(ctx context.Context, name string, args []string, o CmdOpts) ([]byte, error, bool) {
+		if name == "lsblk" && args[0] == "-rno" && args[1] == "PATH,FSTYPE" {
+			return []byte("/dev/nvme0n1 \n/dev/nvme0n1p1 vfat\n/dev/nvme0n1p3 crypto_LUKS\n"), nil, true
+		}
+		return nil, nil, false
+	}
+	if got := fx.real.luksNode(context.Background(), "/dev/nvme0n1"); got != "/dev/nvme0n1p3" {
+		t.Errorf("luksNode = %q, want the LUKS partition", got)
+	}
+	fx.cmd.hook = func(ctx context.Context, name string, args []string, o CmdOpts) ([]byte, error, bool) {
+		return []byte("/dev/nvme0n1p1 vfat\n"), nil, name == "lsblk"
+	}
+	if got := fx.real.luksNode(context.Background(), "/dev/nvme0n1p1"); got != "/dev/nvme0n1p1" {
+		t.Errorf("luksNode = %q, want the node unchanged", got)
 	}
 }

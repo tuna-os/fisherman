@@ -287,8 +287,10 @@ Rules and limits:
 - An unencrypted install (`none`) fails at `validate_device` with reason
   `unsupported_config` and next action `change_settings`.
 - An empty passphrase (the SysInstall `Run` path) keeps the empty slot, and
-  the install warns. `tpm2_luks` with no passphrase wipes it at the end, so
-  only the TPM unlocks the disk, and the install warns.
+  the install warns. `tpm2_luks` with no passphrase keeps it too: the frontend then
+  enrols the recovery key with `CryptEnroll.Enroll` (`unlockPassword` empty,
+  `wipeSlots` the empty slot), and until it does the disk also opens with an
+  empty passphrase.
 - The new reasons and action are additive: `disk_too_small`,
   `unsupported_config`, `change_settings`.
 - `ConfigureTarget`'s `privacy.locationServices` lands in
