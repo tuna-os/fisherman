@@ -4,65 +4,122 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"strings"
+
 	"github.com/tuna-os/fisherman/internal/crypt"
 	"github.com/tuna-os/fisherman/internal/handoff"
 	"github.com/tuna-os/fisherman/internal/repart"
-	"os"
-	"os/exec"
-	"strings"
 )
 
-// Real is the executor that changes real disks. The repart definitions, the
-// cryptenroll wrapper (passphrase, recovery key, wipe) and the reboot
-// handoff are implemented; Probe, Install, Power and the deferred migrate /
-// soft-reboot handoff return ErrNotImplemented or ErrDeferred until their
-// slices land (postfix, socket auth), so fishermand still refuses to start
-// without --mock.
+// Real is the executor that changes real disks. Requirements, Probe,
+// Install, the CryptEnroll calls, Shutdown and the reboot handoff are
+// implemented. The migrate and soft_reboot handoffs stay deferred to
+// tunaOS#4908 and tunaOS#4909 (see DecideHandoff).
 //
-// The work that slots in here (tuna-os/fisherman#512):
-//
-//   - Probe: reuse internal/probe (lsblk, TPM, system gates) plus Intel
-//     RST/VMD detection and existing-data inspection.
-//   - Install: generate and run systemd-repart definitions; LUKS2 and TPM2
-//     PCR 7 enrolment via systemd-cryptenroll; copy the medium image or the
-//     btrfs seed/migrate (tunaOS#4908); write the target with
-//     systemd-firstboot --root; the Utah post-install fixups (UUIDs,
-//     rd.luks.uuid, crypttab, live entry removal, firmware boot entry);
-//     cleanup on failure and cancel.
-//   - CryptEnroller: call systemd-cryptenroll, or the real
-//     io.systemd.CryptEnroll socket.
-//   - Power: call io.systemd.Shutdown on the real system bus socket.
-//   - Handoff: btrfs migrate, EL10 soft reboot (tunaOS#4909) or reboot.
+// Every host program runs through Cmd, so unit tests substitute a fake and
+// pin the command lines. The install model is the one of ADR 0018: the
+// medium is a GPT image, systemd-repart mirrors it onto the target with
+// CopyBlocks=, the user's passphrase replaces the empty keyslot, the
+// postfix fixups run on the mounted copy, ConfigureTarget writes the
+// account and locale, and everything unmounts and closes.
 type Real struct {
 	// SysRoot is the sysfs root ("/sys" in production). Tests point it at
-	// a fixture tree for the TPM2 check.
+	// a fixture tree for the TPM2 and Intel RST checks.
 	SysRoot string
 	// DevDir holds disk/by-uuid ("/dev" in production).
 	DevDir string
-	// CmdlinePath holds the kernel command line ("/proc/cmdline").
+	// CmdlinePath holds the kernel command line ("/proc/cmdline"). It names
+	// the medium (root=UUID=), so an integration test points it at a file.
 	CmdlinePath string
-	// Sfdisk runs sfdisk --json for a disk. The default shells out;
-	// tests substitute canned output. It must not log its output.
+	// Root is the filesystem root the probe reads /proc and /sys from ("/").
+	Root string
+	// Sfdisk runs sfdisk --json for a disk. Nil runs it through Cmd. It
+	// must not log its output.
 	Sfdisk func(ctx context.Context, disk string) ([]byte, error)
+	// Cmd runs host programs. Nil means the system tools.
+	Cmd Commander
 	// Enroller wraps systemd-cryptenroll. Nil means the system tools.
 	Enroller *crypt.Enroller
-	// HandoffRunner runs the handoff helpers. Nil means the system tools.
+	// HandoffRunner runs the handoff helpers. Nil runs them through Cmd.
 	HandoffRunner handoff.Runner
+	// WorkDir holds the install's scratch tree: definitions, mount points.
+	// It is a tmpfs, so a passphrase-derived path never reaches a disk.
+	// Default "/run/fishermand".
+	WorkDir string
+	// EFIVars is the efivars directory. The firmware boot entry is added
+	// only when it exists, like the Utah script. Default
+	// "/sys/firmware/efi/efivars".
+	EFIVars string
+	// NoFirmwareEntry never writes a firmware boot entry. The integration
+	// test sets it: it runs on a host with real NVRAM.
+	NoFirmwareEntry bool
+	// SetFATSerial writes a FAT volume ID. Nil writes the boot sector of the
+	// block device; tests substitute a recorder.
+	SetFATSerial func(dev string, serial uint32) error
+	// DiskExists tells whether a disk node still exists, to tell a lost
+	// device from a failed command. Nil stats the path.
+	DiskExists func(path string) bool
+	// Logger receives step-level facts (never secrets). Nil discards.
+	Logger *slog.Logger
 }
 
 var _ Executor = Real{}
 
-func (Real) Requirements(context.Context) (RequirementsResult, error) {
-	return RequirementsResult{}, ErrNotImplemented
+func (r Real) cmd() Commander {
+	if r.Cmd != nil {
+		return r.Cmd
+	}
+	return SystemCommander()
 }
 
-func (Real) Probe(context.Context) (ProbeResult, error) { return ProbeResult{}, ErrNotImplemented }
-
-func (Real) WatchDevices(context.Context) (<-chan DeviceEvent, error) {
-	return nil, ErrNotImplemented
+func (r Real) log() *slog.Logger {
+	if r.Logger != nil {
+		return r.Logger
+	}
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-func (Real) Install(context.Context, InstallPlan, Reporter) error { return ErrNotImplemented }
+func (r Real) sysRoot() string {
+	if r.SysRoot != "" {
+		return r.SysRoot
+	}
+	return "/sys"
+}
+
+func (r Real) devDir() string {
+	if r.DevDir != "" {
+		return r.DevDir
+	}
+	return "/dev"
+}
+
+func (r Real) workDir() string {
+	if r.WorkDir != "" {
+		return r.WorkDir
+	}
+	return "/run/fishermand"
+}
+
+func (r Real) efiVars() string {
+	if r.EFIVars != "" {
+		return r.EFIVars
+	}
+	return "/sys/firmware/efi/efivars"
+}
+
+func (r Real) enroller() *crypt.Enroller {
+	if r.Enroller != nil {
+		return r.Enroller
+	}
+	return crypt.SystemEnroller()
+}
+
+// hasTPM2 is the one TPM decision of the install: the same check the repart
+// definitions make.
+func (r Real) hasTPM2() bool { return repart.HasTPM2(r.sysRoot()) }
 
 func (r Real) MakeRecoveryKey(ctx context.Context) (Secret, error) {
 	key, err := crypt.GenerateRecoveryKey()
@@ -73,10 +130,7 @@ func (r Real) MakeRecoveryKey(ctx context.Context) (Secret, error) {
 }
 
 func (r Real) Enroll(ctx context.Context, p EnrollParams) (EnrollResult, error) {
-	enroller := r.Enroller
-	if enroller == nil {
-		enroller = crypt.SystemEnroller()
-	}
+	enroller := r.enroller()
 	opts := crypt.EnrollOpts{
 		Node:      p.Node,
 		Mechanism: p.Mechanism,
@@ -104,10 +158,7 @@ func (r Real) Enroll(ctx context.Context, p EnrollParams) (EnrollResult, error) 
 }
 
 func (r Real) ListSlots(ctx context.Context, node string) ([]Slot, error) {
-	enroller := r.Enroller
-	if enroller == nil {
-		enroller = crypt.SystemEnroller()
-	}
+	enroller := r.enroller()
 	slots, err := enroller.ListSlots(ctx, node)
 	if err != nil {
 		return nil, mapCryptError(err)
@@ -118,8 +169,6 @@ func (r Real) ListSlots(ctx context.Context, node string) ([]Slot, error) {
 	}
 	return out, nil
 }
-
-func (Real) Shutdown(context.Context, string, ShutdownParams) error { return ErrNotImplemented }
 
 // mapCryptError turns the crypt wrapper's sentinels into the daemon's wire
 // errors. The mock returns the same sentinels, so both backends agree.
@@ -144,14 +193,20 @@ func mapCryptError(err error) error {
 func (r Real) Handoff(ctx context.Context, mode string) (bool, error) {
 	run := r.HandoffRunner
 	if run == nil {
-		run = handoff.RunnerFunc(handoff.SystemRunner)
+		run = handoffRunner(r.cmd())
 	}
 	return handoff.Handoff(ctx, run, mode)
 }
 
-// DecideHandoff implements Handoffer. The fact-gathering Probe slice is
-// not landed, so the decision sees zero facts and picks reboot; the
-// matrix itself (btrfs seed, EL10, default) is tested in handoff.Decide.
+// DecideHandoff implements Handoffer. It decides reboot everywhere for now:
+// handoff.Decide would pick migrate for a btrfs root and soft_reboot for
+// EL10, but both modes fail with handoff.ErrDeferred until their mechanism
+// lands, and a frontend that was told migrate would show a page for a
+// handoff that cannot run.
+//
+// TODO(tunaOS#4908, tunaOS#4909): feed handoff.Facts (root filesystem of
+// the medium, EL base) here once the migrate and soft-reboot hooks exist.
+// The decision matrix itself is already tested in handoff.Decide.
 func (r Real) DecideHandoff(context.Context) (HandoffDecision, error) {
 	mode, reason := handoff.Decide(handoff.Facts{})
 	return HandoffDecision{Mode: mode, Reason: reason}, nil
@@ -181,7 +236,7 @@ func (r Real) mediumRoot(ctx context.Context) (disk, rootNode string, err error)
 	if err != nil {
 		return "", "", fmt.Errorf("real executor: %w", err)
 	}
-	out, err := exec.CommandContext(ctx, "lsblk", "-rno", "PKNAME", rootNode).Output()
+	out, err := r.cmd().Run(ctx, "lsblk", []string{"-rno", "PKNAME", rootNode}, CmdOpts{})
 	if err != nil {
 		return "", "", fmt.Errorf("real executor: finding the medium disk: %w", err)
 	}
@@ -203,7 +258,7 @@ func (r Real) Definitions(ctx context.Context) ([]repart.Definition, error) {
 	sfdisk := r.Sfdisk
 	if sfdisk == nil {
 		sfdisk = func(ctx context.Context, disk string) ([]byte, error) {
-			return exec.CommandContext(ctx, "sfdisk", "--json", disk).Output()
+			return r.cmd().Run(ctx, "sfdisk", []string{"--json", disk}, CmdOpts{})
 		}
 	}
 	raw, err := sfdisk(ctx, disk)
