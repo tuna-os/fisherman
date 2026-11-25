@@ -54,7 +54,7 @@ type Disk(
 type Tpm(present: bool, version: string, usable: bool)
 
 # Intel RST (VMD or RAID mode) hides NVMe disks from Linux. When 'detected'
-# is true the frontend must block until the BIOS setting is changed.
+# is true the frontend warns before the disk list, as gnome-setup does; it does not block.
 type IntelRst(detected: bool, mode: ?string, affectedDisks: []string)
 
 type Live(isLive: bool, liveImage: ?string)
