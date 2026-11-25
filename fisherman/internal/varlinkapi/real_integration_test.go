@@ -394,7 +394,7 @@ func TestIntegrationInstallEndToEnd(t *testing.T) {
 	}
 
 	// the filesystem grew with the partition
-	fsSize := e.sh("btrfs", "filesystem", "show", "-b", filepath.Join(mnt, "root"))
+	fsSize := e.sh("btrfs", "filesystem", "show", "--raw", filepath.Join(mnt, "root"))
 	m := regexp.MustCompile(`devid\s+1 size (\d+)`).FindStringSubmatch(fsSize)
 	if m == nil {
 		t.Fatalf("no devid size in:\n%s", fsSize)
