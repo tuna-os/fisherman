@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os/exec"
 	"sync/atomic"
 
 	"github.com/tuna-os/fisherman/internal/runner"
@@ -23,6 +24,31 @@ func kill(c runner.Command) {
 // consumer has gone.
 var errConsumerExited = errors.New("the extracting process exited")
 
+// errSourceChanged reports a copy that ran to the end while the producer saw
+// files change under it: GNU tar's exit status 1. Both processes succeeded at
+// everything else, and the consumer has unpacked the whole archive.
+var errSourceChanged = errors.New("some files changed while they were read")
+
+// sourceChanged reports whether a producer failed with GNU tar's exit status
+// 1, "some files differ", which still writes a complete archive. Status 2 is
+// tar's fatal one.
+func sourceChanged(err error) bool {
+	var exit *exec.ExitError
+	return errors.As(err, &exit) && exit.ExitCode() == 1
+}
+
+// producerError is what a finished pipeline returns for the producer's result.
+func producerError(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case sourceChanged(err):
+		return errSourceChanged
+	default:
+		return fmt.Errorf("tar create: %w", err)
+	}
+}
+
 // pipeCommands runs producer | consumer and returns when BOTH have been
 // reaped. count, when not nil, receives the number of bytes handed to the
 // consumer.
@@ -40,6 +66,10 @@ var errConsumerExited = errors.New("the extracting process exited")
 //   - The producer exits first. The write end is closed, the consumer sees
 //     end of file. A failed producer does not leave the consumer to unpack a
 //     truncated archive at leisure: it is killed.
+//   - The producer exits first with status 1 (a file changed while tar read
+//     it). The archive is complete, so the consumer is left to finish:
+//     killing it loses what tar x does last, the symlinks it defers
+//     (Flatpak's exports/ are such links). The result is errSourceChanged.
 //   - Either Start fails. Whatever was started is released and reaped.
 //
 // The error names the side that failed first.
@@ -93,22 +123,17 @@ func pipeCommands(producer, consumer runner.Command, count *atomic.Int64) error 
 		if errC != nil {
 			return fmt.Errorf("tar extract: %w", errC)
 		}
-		if errP != nil {
-			return fmt.Errorf("tar create: %w", errP)
-		}
-		return nil
+		return producerError(errP)
 	case errP = <-producerDone:
-		if errP != nil {
+		fatal := errP != nil && !sourceChanged(errP)
+		if fatal {
 			kill(consumer)
 		}
 		errC = <-consumerDone
 		pr.Close()
-		if errP != nil {
-			return fmt.Errorf("tar create: %w", errP)
-		}
-		if errC != nil {
+		if errC != nil && !fatal {
 			return fmt.Errorf("tar extract: %w", errC)
 		}
-		return nil
+		return producerError(errP)
 	}
 }

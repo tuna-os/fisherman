@@ -553,7 +553,12 @@ func CopyFlatpaks(target string, wantedRefs []string, flatpakVarPath string) err
 	err := pipeCommands(tarC, tarX, &bytesRead)
 	close(stopProgress)
 	<-progressDone
-	if err != nil {
+	switch {
+	case errors.Is(err, errSourceChanged):
+		// Something on the live system wrote below /var/lib/flatpak during
+		// the copy. The copy is whole; the line above names what changed.
+		progress.Info(fmt.Sprintf("Flatpaks: %v; the copy is complete", err))
+	case err != nil:
 		return err
 	}
 
