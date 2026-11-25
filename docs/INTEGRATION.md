@@ -81,9 +81,9 @@ one. Take `bootloader`, `composeFsBackend`, `filesystem` choices and
 `imageType` from the image catalog: they are facts of the image.
 
 bootc-installer keeps the JSON schema and its frontend rules:
-[`shared/recipe/fisherman-recipe.schema.json`](https://github.com/tuna-os/bootc-installer/blob/dev/shared/recipe/fisherman-recipe.schema.json)
+[`shared/recipe/fisherman-recipe.schema.json`](https://github.com/tuna-os/installer/blob/dev/shared/recipe/fisherman-recipe.schema.json)
 and
-[`shared/recipe/README.md`](https://github.com/tuna-os/bootc-installer/blob/dev/shared/recipe/README.md).
+[`shared/recipe/README.md`](https://github.com/tuna-os/installer/blob/dev/shared/recipe/README.md).
 
 A key that fisherman does not know is refused (`recipe_unknown_field`), so
 a misspelt key cannot install something the user did not choose. The

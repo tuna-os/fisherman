@@ -10,9 +10,9 @@ the install phases in `fisherman/cmd/fisherman/` (`orchestrator.go` and the
 `fisherman/internal/` (substeps and info lines).
 
 Reference consumer: bootc-installer's
-[`shared/progress/README.md`](https://github.com/tuna-os/bootc-installer/blob/dev/shared/progress/README.md)
+[`shared/progress/README.md`](https://github.com/tuna-os/installer/blob/dev/shared/progress/README.md)
 and
-[`shared/progress/progress_parser.py`](https://github.com/tuna-os/bootc-installer/blob/dev/shared/progress/progress_parser.py).
+[`shared/progress/progress_parser.py`](https://github.com/tuna-os/installer/blob/dev/shared/progress/progress_parser.py).
 All bootc-installer frontends parse the stream the way that parser does.
 
 ## Overview

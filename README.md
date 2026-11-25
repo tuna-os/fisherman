@@ -12,7 +12,7 @@ image with `bootc install to-filesystem`, and prepares the first boot. It
 reports progress as JSON lines, so a program can drive it.
 
 It has no wizard of its own. The GNOME, KDE, COSMIC, Niri and XFCE wizards live
-in [tuna-os/bootc-installer](https://github.com/tuna-os/bootc-installer), which
+in [tuna-os/installer](https://github.com/tuna-os/installer), which
 pins this repository as a submodule. [wootc](https://github.com/tuna-os/wootc)
 uses it to install from Windows.
 
@@ -237,7 +237,7 @@ image picker. fisherman looks for the catalog in this order:
 
 A frontend can ship its own catalog; bootc-installer reads
 `/etc/bootc-installer/images.json` (see its
-[customising guide](https://github.com/tuna-os/bootc-installer/blob/dev/docs/guide/customising.md)).
+[customising guide](https://github.com/tuna-os/installer/blob/dev/docs/guide/customising.md)).
 
 ### Desktop extras
 

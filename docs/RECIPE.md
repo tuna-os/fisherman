@@ -22,9 +22,9 @@ absent.
   `slurpWallpapers` keys that older versions read are gone, so a recipe that
   still has either is refused with `recipe_unknown_field`.
 - A JSON schema for frontends is in bootc-installer:
-  [`shared/recipe/fisherman-recipe.schema.json`](https://github.com/tuna-os/bootc-installer/blob/dev/shared/recipe/fisherman-recipe.schema.json),
+  [`shared/recipe/fisherman-recipe.schema.json`](https://github.com/tuna-os/installer/blob/dev/shared/recipe/fisherman-recipe.schema.json),
   with the frontend rules in
-  [`shared/recipe/README.md`](https://github.com/tuna-os/bootc-installer/blob/dev/shared/recipe/README.md).
+  [`shared/recipe/README.md`](https://github.com/tuna-os/installer/blob/dev/shared/recipe/README.md).
 - A recipe holds secrets (`encryption.passphrase`, `user.password`). Give it
   to fisherman on stdin, not in a file. See [INTEGRATION.md](INTEGRATION.md).
 

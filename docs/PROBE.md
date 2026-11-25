@@ -257,7 +257,7 @@ version output, a bootc that fails, and a single failed check.
 ### Capabilities
 
 `capabilities` is the source-scoped bootc report of tuna-os/fisherman#383,
-for tuna-os/bootc-installer#266. It answers one question: what can the
+for tuna-os/installer#266. It answers one question: what can the
 **selected source's own bootc** do, and how does fisherman know? It has its
 own `version`, so a frontend can gate its capability UI on it.
 
@@ -487,7 +487,7 @@ local copies, and `--live-root`.
 ### bootc store inventory
 
 `bootc_store` is the inventory of tuna-os/fisherman#384, phase 1, for
-tuna-os/bootc-installer#267. It lists the images that the **live host's**
+tuna-os/installer#267. It lists the images that the **live host's**
 bootc keeps in its own storage, with the identity of each. It has its own
 `version`. It describes the machine that runs the installer, never the
 selected source or the installed target: `context` is always `live-host`.
