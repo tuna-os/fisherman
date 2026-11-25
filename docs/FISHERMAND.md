@@ -1,10 +1,9 @@
-# `fishermand`: the installer daemon (real executor slice)
+# `fishermand`: the installer daemon
 
-`fishermand` is a Varlink service for installer frontends. It is the second
-slice of tuna-os/fisherman#512. The real executor changes disks. It covers
-repart definitions, cryptenroll, and the reboot handoff. Probe, the Install
-pipeline, Power, and the deferred migrate/soft-reboot handoff still fail
-until their slices land. `--mock` serves scripted data and touches nothing.
+`fishermand` is a Varlink service for installer frontends (tuna-os/fisherman#512,
+tunaOS#4905, ADR 0018). The real executor changes disks: it mirrors the
+installer medium onto the target disk, configures it, and reboots into it.
+`--mock` serves scripted data and touches nothing.
 
 The `fisherman` CLI and the recipe pipeline do not change. wootc still uses
 them.
@@ -25,7 +24,8 @@ fishermand --dry-run [--medium-disk DEV --root-node PART]
 | `io.tunaos.Fisherman`: all seven methods | works, mock data; real reboot shells out to `systemctl` |
 | Real executor: repart definitions (`internal/repart`), `--dry-run` | works, read-only |
 | Real executor: post-install fixups (`internal/postfix`) | works on a target root directory |
-| Real executor: Probe, Install pipeline, Power, btrfs migrate, soft-reboot | **not implemented** (ErrNotImplemented/ErrDeferred) |
+| Real executor: `Requirements`, `Probe`, `Install`, `ConfigureTarget` application, `Shutdown` (PowerOff, Reboot, Halt) | works; see "The real executor" |
+| Real executor: btrfs migrate, soft-reboot, kexec | **deferred** (`ErrDeferred`, tunaOS#4908, #4909) |
 | polkit, peer credentials, socket activation | works in real mode (mock mode asks nothing) |
 
 ## Sockets
@@ -245,20 +245,66 @@ A test sends secrets through every call and searches the debug log. An
 `Executor` must keep this rule. It must not put a secret in an error
 message, because the failed event carries the message.
 
-## The real executor so far
+## The real executor
 
-`Real` (`internal/varlinkapi/real.go`) covers the safe parts behind the
-`Executor` interface. `internal/repart` makes the repart definitions: a pure
-Go port of Utah's `utah-live-definitions`. `internal/postfix` fixes up the
-target root: a pure Go port of Utah's `utah-sysinstall-post`.
+`Real` (`internal/varlinkapi/real*.go`) runs every host program through one
+`Commander`. Unit tests use a fake and pin the command list in
+`testdata/golden/real_install_passphrase.txt`.
 
-`internal/crypt` enrolls passphrases and recovery keys and wipes slots.
-Secrets ride stdin and an anonymous pipe. They never reach logs, errors or
-disk.
+`Probe` reuses `internal/probe` (lsblk, TPM, live) and adds existing data,
+free space and Intel RST.
 
-`internal/handoff` reboots. `migrate` and `soft_reboot` fail with
-`ErrDeferred`. Their mechanism belongs to tunaOS#4908 and tunaOS#4909. The
-service still owns call order, validation, step ids and the progress bar.
+Probe finds RST three ways. One: a RAID-mode SATA controller (PCI class
+0104, vendor 8086). Two: an Intel VMD controller with disks in its PCI
+domain. Three: Intel RAID metadata on a disk. Affected disks are not
+eligible (`intel_rst`).
+
+`handoff` is `reboot` everywhere. The decision for `migrate` and
+`soft_reboot` waits for tunaOS#4908 and #4909.
+The wire has no offline-media field: the medium is the install source.
+
+`Install` follows this model. The medium is a GPT image (ESP, /boot, root).
+
+| Step | What it does |
+|---|---|
+| `validate_device` | The target is a whole, unmounted disk, not the medium, and large enough. |
+| `partition` | `systemd-repart` writes the GPT and copies each medium partition with `CopyBlocks=`. The root lands in LUKS2 (`key-file+tpm2` on PCR 7 for the TPM2 types, else `key-file`). The bytes move here, so this step takes most of the time. |
+| `luks` | The user's passphrase replaces the empty keyslot. |
+| `tpm2_enroll` | Checks that repart sealed the TPM2 token. |
+| `mount` | Opens the root, gives each copied filesystem a new UUID (vfat, ext4, btrfs, xfs), then mounts root, /boot and the ESP. A btrfs seed flag is cleared. |
+| `install_os` | Checks for a deployment and a pristine machine-id. |
+| `configure` | `systemd-firstboot --root`, `useradd`, the password hash, autologin (GDM), privacy. Applied to every deployment. |
+| `post_fixups` | `internal/postfix`: references rewritten, live entry (`medium-live`, `tunaos.live`) and the medium sysext removed, `rd.luks.uuid` and crypttab, root grown. |
+| `bootloader` | `efibootmgr` entry for shim, when efivars exist. |
+| `finalize` | Unmount, close LUKS, remove the scratch tree. |
+
+Failure and cancel run `cleanup` on a context that survives the cancel:
+unmount, close the LUKS volume, remove the scratch tree. The partition
+write is not undone. A cancel returns the cancellation, not a failure.
+
+Rules and limits:
+
+- An unencrypted install (`none`) fails at `validate_device` with reason
+  `unsupported_config` and next action `change_settings`.
+- An empty passphrase (the SysInstall `Run` path) keeps the empty slot, and
+  the install warns. `tpm2_luks` with no passphrase wipes it at the end, so
+  only the TPM unlocks the disk, and the install warns.
+- The new reasons and action are additive: `disk_too_small`,
+  `unsupported_config`, `change_settings`.
+- `ConfigureTarget`'s `privacy.locationServices` lands in
+  `/etc/tunaos/privacy.conf`. The image must act on it.
+- The step weights did not change, so the bar sits low during `partition`.
+- `Shutdown` refuses `KExec` and `SoftReboot`.
+
+## Integration test
+
+```bash
+go test -c -tags integration -o it.test ./internal/varlinkapi
+sudo env PATH="$PATH" FISHERMAND_IT_DIR=$HOME/tunaos-fishermand/it ./it.test -test.run Integration -test.v
+```
+
+It builds a fake medium on a loop device (btrfs seed root, ostree deployment). It installs onto a second loop device. It checks the result with independent tools. It needs root, never writes a firmware boot entry, and
+refuses anything that is not a loop device it attached.
 
 ## Test
 
@@ -305,3 +351,10 @@ What changed on the wire and in behavior:
   medium and changes nothing.
 - We checked `Run` errors against gnome-setup branch `utah`. Each name
   matches, so nothing changed.
+
+## Changelog (install slice)
+
+- Fixed: `systemd-cryptenroll` ignores stdin. The new secret goes in
+  `NEWPASSWORD`. The daemon enrolls a recovery key as a password.
+- Added: failure reasons `disk_too_small` and `unsupported_config`, next
+  action `change_settings`.

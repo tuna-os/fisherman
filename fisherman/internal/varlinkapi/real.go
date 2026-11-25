@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"log/slog"
 	"os"
 	"strings"
 
@@ -62,8 +60,6 @@ type Real struct {
 	// DiskExists tells whether a disk node still exists, to tell a lost
 	// device from a failed command. Nil stats the path.
 	DiskExists func(path string) bool
-	// Logger receives step-level facts (never secrets). Nil discards.
-	Logger *slog.Logger
 }
 
 var _ Executor = Real{}
@@ -75,25 +71,11 @@ func (r Real) cmd() Commander {
 	return SystemCommander()
 }
 
-func (r Real) log() *slog.Logger {
-	if r.Logger != nil {
-		return r.Logger
-	}
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
 func (r Real) sysRoot() string {
 	if r.SysRoot != "" {
 		return r.SysRoot
 	}
 	return "/sys"
-}
-
-func (r Real) devDir() string {
-	if r.DevDir != "" {
-		return r.DevDir
-	}
-	return "/dev"
 }
 
 func (r Real) workDir() string {

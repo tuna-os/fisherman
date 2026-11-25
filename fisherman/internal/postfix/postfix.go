@@ -348,8 +348,10 @@ const mediumSysext = "medium-sysinstall.raw"
 func RemoveMediumExtras(root, efi string) ([]string, error) {
 	var gone []string
 	rm := func(p string) error {
-		if _, err := os.Lstat(p); err != nil {
+		if _, err := os.Lstat(p); os.IsNotExist(err) {
 			return nil
+		} else if err != nil {
+			return err
 		}
 		if err := os.RemoveAll(p); err != nil {
 			return err

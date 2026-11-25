@@ -180,10 +180,10 @@ func (f *fakeCmd) blkid(args []string) ([]byte, error) {
 	dev := args[len(args)-1]
 	want := args[2] // TYPE or UUID
 	if want == "TYPE" {
-		switch {
-		case dev == fESP:
+		switch dev {
+		case fESP:
 			return []byte("vfat\n"), nil
-		case dev == fBoot:
+		case fBoot:
 			return []byte("ext4\n"), nil
 		default:
 			return []byte("btrfs\n"), nil
