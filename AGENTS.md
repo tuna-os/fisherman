@@ -5,7 +5,7 @@ executes a disk install pipeline, emitting newline-delimited JSON
 progress on stdout. The recipe decides how many progress steps a run reports:
 8 for a plain auto-partitioned install, one more each for LUKS, TPM2 enrolment
 and a `/var` disk, and 5 or 6 for a `customMounts` layout. `planShape` in
-`fisherman/cmd/fisherman/steps.go` is the one list; do not hard-code a count. It is driven by a frontend (the five in `tuna-os/bootc-installer`),
+`fisherman/cmd/fisherman/steps.go` is the one list; do not hard-code a count. It is driven by a frontend (the five in `tuna-os/installer`),
 runs as root against real block devices, and is distro-agnostic.
 
 Human docs: [`README.md`](README.md) (pipeline table, recipe format, partition
@@ -20,7 +20,7 @@ PRs. `dev` carries the TunaOS fixes.
 [`projectbluefin/fisherman`](https://github.com/projectbluefin/fisherman) is a
 fork, not the upstream; its changes reach fisherman only through a PR here.
 Consumers pin `https://github.com/tuna-os/fisherman`. It is consumed as a git
-submodule by `tuna-os/bootc-installer`, so a change here is not live for that
+submodule by `tuna-os/installer`, so a change here is not live for that
 frontend until its submodule pointer is bumped in a separate commit.
 
 ## Layout
