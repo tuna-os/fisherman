@@ -250,6 +250,8 @@ func InspectImageForPlan(image string, registry bool) ImageFacts {
 			return f
 		}
 		return ImageFacts{Reason: "local containers-storage has no copy of the image (as the user plan runs as)"}
+	case sourceRegistryRef:
+		// Local containers-storage first, else the registry: below.
 	}
 	if f, ok := inspectLocalForPlan("containers-storage:" + ref); ok {
 		return f

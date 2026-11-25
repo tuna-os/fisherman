@@ -1718,6 +1718,8 @@ func CheckImage(image string) ImageCheck {
 			Source: ImageSource{Ref: image, ManifestDigest: local.Digest, Platform: local.platform(), Cached: true}}
 		check.Err = checkImageInfo(image, "local containers-storage", local.imageInfo)
 		return check
+	case sourceRegistryRef:
+		// Local containers-storage first, else the registry: below.
 	}
 
 	if local, ok := localCopy(SkopeoInspectFn, "containers-storage:"+ref); ok {
