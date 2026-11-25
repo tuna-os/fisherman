@@ -111,10 +111,35 @@ func (r Real) MakeRecoveryKey(ctx context.Context) (Secret, error) {
 	return Secret(key), nil
 }
 
+// luksNode maps what a frontend sends to the LUKS partition: the frontends
+// pass the whole-disk path they installed to, so a node that is not LUKS
+// itself resolves to its one crypto_LUKS child. Anything else comes back
+// unchanged and fails in the enroller as before.
+func (r Real) luksNode(ctx context.Context, node string) string {
+	if node == "" {
+		return node
+	}
+	out, err := r.cmd().Run(ctx, "lsblk", []string{"-rno", "PATH,FSTYPE", node}, CmdOpts{})
+	if err != nil {
+		return node
+	}
+	var found []string
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) == 2 && f[1] == "crypto_LUKS" {
+			found = append(found, f[0])
+		}
+	}
+	if len(found) == 1 {
+		return found[0]
+	}
+	return node
+}
+
 func (r Real) Enroll(ctx context.Context, p EnrollParams) (EnrollResult, error) {
 	enroller := r.enroller()
 	opts := crypt.EnrollOpts{
-		Node:      p.Node,
+		Node:      r.luksNode(ctx, p.Node),
 		Mechanism: p.Mechanism,
 		WipeSlots: append([]int64(nil), p.WipeSlots...),
 	}
@@ -141,7 +166,7 @@ func (r Real) Enroll(ctx context.Context, p EnrollParams) (EnrollResult, error) 
 
 func (r Real) ListSlots(ctx context.Context, node string) ([]Slot, error) {
 	enroller := r.enroller()
-	slots, err := enroller.ListSlots(ctx, node)
+	slots, err := enroller.ListSlots(ctx, r.luksNode(ctx, node))
 	if err != nil {
 		return nil, mapCryptError(err)
 	}

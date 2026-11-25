@@ -528,3 +528,88 @@ func TestIntegrationProbeReadOnly(t *testing.T) {
 	}
 	t.Logf("tpm=%+v rst=%+v live=%+v handoff=%+v", res.TPM, res.IntelRST, res.Live, res.Handoff)
 }
+
+// TestIntegrationTPM2RecoveryKey installs a TPM-only plan (tpm2_luks, no
+// passphrase) and then enrols the recovery key the way a frontend does:
+// CryptEnroll.Enroll with the whole-disk path, an empty unlock password and
+// the empty slot in wipeSlots. It needs a TPM 2.0 that systemd-repart finds
+// with --tpm2-device=auto: a software TPM from swtpm that is visible as
+// /dev/tpmrm0 and /sys/class/tpmrm (swtpm_cuse, or a VM with a swtpm
+// device). Start it and set FISHERMAND_IT_TPM2=1:
+//
+//	sudo env PATH="$PATH" FISHERMAND_IT_DIR=$HOME/tunaos-fishermand/it \
+//	    FISHERMAND_IT_TPM2=1 /path/it.test -test.run IntegrationTPM2 -test.v
+func TestIntegrationTPM2RecoveryKey(t *testing.T) {
+	if os.Getenv("FISHERMAND_IT_TPM2") != "1" {
+		t.Skip("FISHERMAND_IT_TPM2=1 not set: needs a TPM 2.0 (swtpm) visible to systemd-repart")
+	}
+	e := newITEnv(t)
+	e.buildMedium()
+	requireLoop(t, e.medium)
+	requireLoop(t, e.target)
+
+	r := e.real()
+	plan := e.plan()
+	plan.Encryption = Encryption{Type: "tpm2_luks"}
+	rep := &recReporter{}
+	if err := r.Install(context.Background(), plan, rep); err != nil {
+		t.Fatalf("Install: %v\nevents:\n%s", err, strings.Join(rep.events, "\n"))
+	}
+	if got, want := strings.Join(rep.started(), ","), strings.Join(PlannedSteps(plan), ","); got != want {
+		t.Errorf("steps = %s, want %s", got, want)
+	}
+	e.settleTarget()
+	luks := e.target + "p3"
+
+	dump := e.sh("cryptsetup", "luksDump", luks)
+	if !strings.Contains(dump, "systemd-tpm2") {
+		t.Fatalf("no TPM2 token on the root:\n%s", dump)
+	}
+	empty := func(name string) bool {
+		_, err := e.try(nil, systemdCryptsetup(), "attach", name, luks, "-", "try-empty-password=yes,headless=yes")
+		if err == nil {
+			_, _ = e.try(nil, "cryptsetup", "close", name)
+		}
+		return err == nil
+	}
+	if !empty("it-empty1-" + filepath.Base(e.dir)) {
+		t.Fatal("the empty passphrase must still unlock the root before the recovery key lands")
+	}
+
+	key, err := r.MakeRecoveryKey(context.Background())
+	if err != nil {
+		t.Fatalf("MakeRecoveryKey: %v", err)
+	}
+	slots, err := r.ListSlots(context.Background(), e.target) // whole-disk path
+	if err != nil {
+		t.Fatalf("ListSlots(%s): %v", e.target, err)
+	}
+	var emptySlot int64 = -1
+	for _, s := range slots {
+		if s.Type == "password" {
+			emptySlot = s.Slot
+		}
+	}
+	if emptySlot < 0 {
+		t.Fatalf("no password slot in %+v", slots)
+	}
+	if _, err := r.Enroll(context.Background(), EnrollParams{
+		Node: e.target, Mechanism: "recovery", RecoveryKey: &key,
+		UnlockPassword: ptr(Secret("")), WipeSlots: []int64{emptySlot},
+	}); err != nil {
+		t.Fatalf("Enroll(%s): %v", e.target, err)
+	}
+
+	if empty("it-empty2-" + filepath.Base(e.dir)) {
+		t.Error("the empty passphrase still unlocks the root after the recovery key")
+	}
+	if _, err := e.try([]byte(key.Reveal()), "cryptsetup", "open", "--test-passphrase", "--key-file=-", luks); err != nil {
+		t.Errorf("the recovery key does not unlock the root: %v", err)
+	}
+	if after := e.sh("cryptsetup", "luksDump", luks); !strings.Contains(after, "systemd-tpm2") {
+		t.Errorf("the TPM2 token is gone after the recovery key:\n%s", after)
+	}
+	if left := e.leftovers(); len(left) > 0 {
+		t.Errorf("left behind: %v", left)
+	}
+}

@@ -91,8 +91,7 @@ type installRun struct {
 	luksUUID    string
 	emptySlot   int64
 	haveEmpty   bool   // an empty-passphrase slot exists
-	keepEmpty   bool   // leave it (SysInstall Run: gnome-setup replaces it)
-	wipeEmpty   bool   // wipe it after the work (TPM only, no passphrase)
+	keepEmpty   bool   // leave it: the recovery-key Enroll after Install unlocks with it and wipes it
 	userPass    []byte // the enrolled passphrase; nil when none
 	tokenTPM2   bool
 	mapper      string
@@ -213,7 +212,10 @@ func (c *installRun) validateDevice(ctx context.Context) error {
 		// io.systemd.SysInstall Run: the empty slot stays for gnome-setup.
 		c.keepEmpty = true
 	case enc.Passphrase == nil:
-		c.wipeEmpty = true // TPM only
+		// TPM only: the disk needs a second way in, and the recovery key
+		// is enrolled after Install, by CryptEnroll.Enroll. That call
+		// unlocks with the empty slot, so the slot must still exist.
+		c.keepEmpty = true
 	}
 	if enc.Type == "tpm2_luks_passphrase" && c.userPass == nil && !c.keepEmpty {
 		return c.fail(ReasonUnsupported, ActionChangeSettings, "a passphrase is required for tpm2_luks_passphrase")
@@ -453,7 +455,7 @@ func (c *installRun) enrollLUKS(ctx context.Context) error {
 		c.haveEmpty = false
 	}
 	if c.keepEmpty {
-		c.rep.Warn(StepLUKS, "the disk keeps an empty passphrase until a recovery key replaces it")
+		c.rep.Warn(StepLUKS, "the disk keeps an empty passphrase until a recovery key replaces it: enroll one with CryptEnroll.Enroll (empty unlockPassword, wipeSlots the empty slot)")
 	}
 	c.rep.Progress(StepLUKS, 100, "")
 	return nil
@@ -779,14 +781,6 @@ func (c *installRun) finalize(ctx context.Context) error {
 		return c.stepFail(err, ReasonInternal, ActionRetry, "unmounting the target")
 	}
 	c.rep.Progress(StepFinalize, 60, "")
-	if c.wipeEmpty && c.haveEmpty {
-		// TPM only: nothing but the TPM unlocks the disk now.
-		if err := c.r.enroller().WipeSlots(ctx, c.rootPart, crypt.Unlock{Empty: true}, c.emptySlot); err != nil {
-			return c.stepFail(err, ReasonLUKSError, ActionRetry, "removing the empty passphrase")
-		}
-		c.haveEmpty = false
-		c.rep.Warn(StepFinalize, "only the TPM unlocks this disk: add a recovery key before changing firmware settings")
-	}
 	c.finalized = true
 	_ = os.RemoveAll(c.work)
 	c.rep.Progress(StepFinalize, 100, "")
