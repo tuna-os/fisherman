@@ -97,6 +97,8 @@ func (f *fakeCmd) Run(ctx context.Context, name string, args []string, o CmdOpts
 		}
 	case "blkid":
 		return f.blkid(args)
+	case "btrfs": // inspect-internal dump-super: a seed, like btrfstune -S 1 leaves it
+		return []byte("flags\t\t\t0x100000001\n\t\t\t( WRITTEN |\n\t\t\t  SEEDING )\n"), nil
 	case "mount":
 		return nil, f.mount(args[0], args[1])
 	case "useradd": // what useradd --root writes
@@ -731,5 +733,26 @@ func TestRealInstallDiskTooSmall(t *testing.T) {
 	// a 1 GiB target is "too small" for probe.MinDiskBytes (not a loop device)
 	if ie.NextAction != ActionChooseAnotherDisk {
 		t.Errorf("error = %+v", ie)
+	}
+}
+
+// A medium that is no btrfs seed: btrfstune exits 1 for "-S 0" on it, so the
+// installer must not call it (tuna-os/tunaOS run 45624212413: every btrfs
+// install stopped in the mount step).
+func TestRealInstallBtrfsWithoutSeedFlag(t *testing.T) {
+	fx := newInstallFixture(t, false)
+	fx.cmd.hook = func(ctx context.Context, name string, args []string, o CmdOpts) ([]byte, error, bool) {
+		line := name + " " + strings.Join(args, " ")
+		switch {
+		case strings.HasPrefix(line, "btrfs inspect-internal dump-super "):
+			return []byte("flags\t\t\t0x1\n\t\t\t( WRITTEN )\n"), nil, true
+		case strings.HasPrefix(line, "btrfstune -f -S 0 "):
+			return nil, errors.New("exit status 1: WARNING: seeding flag is not set"), true
+		}
+		return nil, nil, false
+	}
+	plan := fixturePlan(Encryption{Type: "luks_passphrase", Passphrase: ptr(Secret("correct horse battery"))})
+	if err := fx.real.Install(context.Background(), plan, &recReporter{}); err != nil {
+		t.Fatalf("Install: %v\n%s", err, fx.cmd.normalized())
 	}
 }

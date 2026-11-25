@@ -587,8 +587,18 @@ func (c *installRun) newIdentity(ctx context.Context, dev string) error {
 	case "btrfs":
 		// The medium root may be a seed (btrfstune -S): a seed mounts
 		// read-only, and the copy must be a normal filesystem.
-		if _, err := c.runCmd(ctx, CmdOpts{}, "btrfstune", "-f", "-S", "0", dev); err != nil {
-			return c.stepFail(err, ReasonInternal, ActionRetry, "clearing the btrfs seed flag")
+		// btrfstune exits 1 ("seeding flag is not set") for a filesystem
+		// that is no seed, so the flag is read first: the medium of the
+		// tunaOS pipeline is not a seed, and each btrfs install stopped in
+		// the mount step (tuna-os/tunaOS run 45624212413).
+		super, err := c.runCmd(ctx, CmdOpts{}, "btrfs", "inspect-internal", "dump-super", dev)
+		if err != nil {
+			return c.stepFail(err, ReasonInternal, ActionRetry, "reading the btrfs superblock")
+		}
+		if strings.Contains(string(super), "SEEDING") {
+			if _, err := c.runCmd(ctx, CmdOpts{}, "btrfstune", "-f", "-S", "0", dev); err != nil {
+				return c.stepFail(err, ReasonInternal, ActionRetry, "clearing the btrfs seed flag")
+			}
 		}
 		if _, err := c.runCmd(ctx, CmdOpts{}, "btrfstune", "-f", "-u", dev); err != nil {
 			return c.stepFail(err, ReasonInternal, ActionRetry, "changing the UUID")
