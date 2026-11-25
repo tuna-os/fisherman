@@ -6,11 +6,13 @@
 // through an anonymous pipe (/dev/fd/3), never --unlock-key-file=- (which
 // breaks under pkexec: it resolves against a home directory that may not
 // exist, see internal/luks) and never a temp file. The new secret travels
-// on stdin. Failures name only the program, never arguments or output.
+// in $NEWPASSWORD, the one channel systemd-cryptenroll reads without a
+// terminal: it ignores a pipe on stdin and then waits for input forever
+// (found on systemd 261 while running the integration test). Failures name
+// only the program, never arguments or output.
 package crypt
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -87,8 +89,9 @@ type Slot struct {
 }
 
 // Runner executes a helper. stdin carries the new secret (nil when none);
-// unlock carries the unlock credential. Implementations must keep both out
-// of logs, errors and the disk.
+// SystemRunner hands it to systemd-cryptenroll as $NEWPASSWORD. unlock
+// carries the unlock credential. Implementations must keep both out of
+// logs, errors and the disk.
 type Runner interface {
 	Run(ctx context.Context, name string, args []string, stdin []byte, unlock Unlock) ([]byte, error)
 }
@@ -116,7 +119,8 @@ func SystemRunner(ctx context.Context, name string, args []string, stdin []byte,
 	}
 	cmd := exec.CommandContext(ctx, name, args...)
 	if stdin != nil {
-		cmd.Stdin = bytes.NewReader(stdin)
+		// Stdin stays closed so a prompt can never wait for a terminal.
+		cmd.Env = append(os.Environ(), "NEWPASSWORD="+string(stdin))
 	}
 	cmd.ExtraFiles = extra
 	for _, f := range extra {
@@ -272,7 +276,11 @@ func (e *Enroller) Enroll(ctx context.Context, o EnrollOpts) (EnrollResult, erro
 			}
 			newSecret = key
 		}
-		flag = "--recovery-key"
+		// systemd-cryptenroll --recovery-key invents its own key and prints
+		// it, so the key generated here would unlock nothing. A recovery
+		// key is a passphrase in an ordinary keyslot (ListSlots reports it
+		// as one), so enroll ours as a password.
+		flag = "--password"
 	case "pkcs11", "tpm2":
 		return res, ErrForeignVolume
 	case "fido2":

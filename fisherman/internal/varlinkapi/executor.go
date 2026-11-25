@@ -112,6 +112,11 @@ const (
 	ReasonRepartError = "repart_failed"
 	ReasonLUKSError   = "luks_failed"
 	ReasonInternal    = "internal_error"
+	// ReasonDiskTooSmall: the medium's partitions do not fit the disk.
+	ReasonDiskTooSmall = "disk_too_small"
+	// ReasonUnsupported: the config asks for something this executor does
+	// not do (an unencrypted root, a TPM that is not there).
+	ReasonUnsupported = "unsupported_config"
 )
 
 // Next actions carried in the failed event. Stable.
@@ -119,6 +124,8 @@ const (
 	ActionChooseAnotherDisk = "choose_another_disk"
 	ActionRetry             = "retry"
 	ActionReportBug         = "report_bug"
+	// ActionChangeSettings: go back and change the encryption or install mode.
+	ActionChangeSettings = "change_settings"
 )
 
 // InstallError is a failed install: a reason and a next action for the user.
