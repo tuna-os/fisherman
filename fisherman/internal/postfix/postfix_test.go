@@ -301,3 +301,72 @@ func TestShimLoader(t *testing.T) {
 		t.Errorf("systemd-boot layout has no shim, got %q", loader)
 	}
 }
+
+func TestRemoveMediumExtras(t *testing.T) {
+	root, efi := t.TempDir(), t.TempDir()
+	mk := func(p string) {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk(filepath.Join(efi, "EFI", "tunaos-live", "vmlinuz"))
+	mk(filepath.Join(efi, "EFI", "fedora", "shimx64.efi"))
+	mk(filepath.Join(root, "ostree/deploy/default/var/lib/extensions/medium-sysinstall.raw"))
+	mk(filepath.Join(root, "ostree/deploy/default/var/lib/extensions/keep-me.raw"))
+	mk(filepath.Join(root, "state/os/default/var/lib/extensions/medium-sysinstall.raw"))
+	gone, err := RemoveMediumExtras(root, efi)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gone) != 3 {
+		t.Errorf("removed %v, want the live dir and two sysexts", gone)
+	}
+	for _, p := range []string{
+		filepath.Join(efi, "EFI", "tunaos-live"),
+		filepath.Join(root, "ostree/deploy/default/var/lib/extensions/medium-sysinstall.raw"),
+		filepath.Join(root, "state/os/default/var/lib/extensions/medium-sysinstall.raw"),
+	} {
+		if _, err := os.Stat(p); err == nil {
+			t.Errorf("%s survived", p)
+		}
+	}
+	for _, p := range []string{
+		filepath.Join(efi, "EFI", "fedora", "shimx64.efi"),
+		filepath.Join(root, "ostree/deploy/default/var/lib/extensions/keep-me.raw"),
+	} {
+		if _, err := os.Stat(p); err != nil {
+			t.Errorf("%s was removed: %v", p, err)
+		}
+	}
+	// a second run finds nothing and does not fail
+	if gone, err := RemoveMediumExtras(root, efi); err != nil || len(gone) != 0 {
+		t.Errorf("second run = %v, %v", gone, err)
+	}
+}
+
+func TestGrowRoot(t *testing.T) {
+	for _, c := range []struct {
+		fs, dev, want string
+		wantErr       bool
+	}{
+		{"", "", "btrfs filesystem resize max /mnt", false},
+		{"btrfs", "", "btrfs filesystem resize max /mnt", false},
+		{"xfs", "", "xfs_growfs /mnt", false},
+		{"ext4", "/dev/mapper/r", "resize2fs /dev/mapper/r", false},
+		{"ext4", "", "", true},
+		{"zfs", "", "", true},
+	} {
+		var got string
+		err := growRoot(context.Background(), Options{Target: Target{Root: "/mnt"}, RootFS: c.fs, RootDev: c.dev},
+			func(_ context.Context, name string, args ...string) error {
+				got = name + " " + strings.Join(args, " ")
+				return nil
+			})
+		if (err != nil) != c.wantErr || got != c.want {
+			t.Errorf("fs %q: ran %q, err %v; want %q (err %v)", c.fs, got, err, c.want, c.wantErr)
+		}
+	}
+}

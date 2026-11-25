@@ -262,3 +262,20 @@ func TestSecretsStayOutOfLogsAndErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A recovery key is enrolled as a password: systemd-cryptenroll
+// --recovery-key would invent its own key, and the one returned to the
+// caller would unlock nothing.
+func TestEnrollRecoveryUsesPasswordFlag(t *testing.T) {
+	f := &fake{dumps: []string{luksDumpTwoSlots, luksDumpThreeSlots}}
+	_, err := NewEnroller(f).Enroll(context.Background(), EnrollOpts{
+		Node: "/dev/vda3", Mechanism: MechRecovery, Unlock: Unlock{Empty: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	args := strings.Join(f.find("systemd-cryptenroll")[0].args, " ")
+	if args != "--password /dev/vda3" {
+		t.Errorf("args = %q, want --password", args)
+	}
+}
