@@ -196,3 +196,17 @@ func TestTransportLabel(t *testing.T) {
 		}
 	}
 }
+
+// A virtio disk reports the PCI vendor id as its vendor and hotplug=1; it is
+// neither named "0x1af4" nor removable.
+func TestDisksVirtioNotRemovable(t *testing.T) {
+	raw := []byte(`{"blockdevices":[{"name":"/dev/vda","kname":"/dev/vda","type":"disk","size":73819750400,"model":null,"vendor":"0x1af4","tran":null,"rm":false,"hotplug":true,"ro":false,"mountpoints":[null]}]}`)
+	disks, err := ParseLsblk(raw)
+	if err != nil || len(disks) != 1 {
+		t.Fatalf("ParseLsblk: %v, %d disks", err, len(disks))
+	}
+	d := disks[0]
+	if d.Vendor != "" || d.Model != "Virtual disk" || d.Removable || !d.Eligible {
+		t.Errorf("vda = %+v, want no vendor, Virtual disk, not removable, eligible", d)
+	}
+}

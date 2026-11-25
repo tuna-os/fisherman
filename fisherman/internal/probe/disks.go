@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -125,18 +126,34 @@ func ParseLsblk(out []byte) ([]Disk, error) {
 	return disks, nil
 }
 
+// pciVendorIDRe matches a PCI vendor id such as "0x1af4".
+var pciVendorIDRe = regexp.MustCompile(`^0x[0-9a-fA-F]+$`)
+
 func toDisk(dev lsblkDevice) Disk {
 	tran := strings.TrimSpace(str(dev.Tran))
+	vendor := squash(str(dev.Vendor))
+	model := squash(str(dev.Model))
+	// A virtio disk reports its PCI vendor id ("0x1af4") as the vendor. That
+	// is no name: drop it, and call a disk with no model a virtual disk.
+	virtual := pciVendorIDRe.MatchString(vendor) || strings.EqualFold(tran, "virtio")
+	if pciVendorIDRe.MatchString(vendor) {
+		vendor = ""
+	}
+	if virtual && model == "" {
+		model = "Virtual disk"
+	}
 	d := Disk{
 		Path:           dev.Name,
 		SizeBytes:      int64(dev.Size),
 		SizeLabel:      SizeLabel(int64(dev.Size)),
-		Model:          squash(str(dev.Model)),
-		Vendor:         squash(str(dev.Vendor)),
+		Model:          model,
+		Vendor:         vendor,
 		Transport:      tran,
 		TransportLabel: TransportLabel(tran),
-		Removable:      bool(dev.RM) || bool(dev.Hotplug),
-		ReadOnly:       bool(dev.RO),
+		// Hotplug is true for every virtio disk (the bus allows it), which
+		// does not make the disk a removable stick.
+		Removable: bool(dev.RM) || (bool(dev.Hotplug) && !virtual),
+		ReadOnly:  bool(dev.RO),
 	}
 	d.ExcludedReason = excludedReason(dev)
 	d.Eligible = d.ExcludedReason == ""
