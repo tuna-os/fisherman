@@ -99,6 +99,18 @@ func (f *fakeCmd) Run(ctx context.Context, name string, args []string, o CmdOpts
 		return f.blkid(args)
 	case "mount":
 		return nil, f.mount(args[0], args[1])
+	case "useradd": // what useradd --root writes
+		var dep string
+		for i, x := range args {
+			if x == "--root" {
+				dep = args[i+1]
+			}
+		}
+		user := args[len(args)-1]
+		if err := os.MkdirAll(filepath.Join(dep, "etc"), 0o755); err != nil {
+			return nil, err
+		}
+		return nil, os.WriteFile(filepath.Join(dep, "etc/shadow"), []byte("root:*:1:::::\n"+user+":!:19000:0:99999:7:::\n"), 0o640)
 	}
 	return nil, nil
 }

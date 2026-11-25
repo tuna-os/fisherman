@@ -58,9 +58,10 @@ func TestConfigureTargetNoUserSkipsAccount(t *testing.T) {
 	}
 }
 
-// TestConfigureTargetPasswordOnStdin: the password never appears in an
-// argument list or a recorded line; only its length does.
-func TestConfigureTargetPasswordOnStdin(t *testing.T) {
+// TestConfigureTargetPassword: the password is hashed in process and lands
+// in the shadow file; it reaches no command line, and no command receives it
+// on stdin.
+func TestConfigureTargetPassword(t *testing.T) {
 	fx := newInstallFixture(t, false)
 	root := filepath.Join(fx.work, "install-1", "mnt", "root")
 	dep := filepath.Join(root, "ostree/deploy/default/deploy/a.0")
@@ -70,13 +71,9 @@ func TestConfigureTargetPasswordOnStdin(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dep, "etc/group"), []byte("sudo:x:27:\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var stdin string
 	fx.cmd.hook = func(_ context.Context, name string, _ []string, o CmdOpts) ([]byte, error, bool) {
-		if name == "chpasswd" {
-			stdin = string(o.Stdin)
-			if !o.Quiet {
-				t.Error("chpasswd must run Quiet")
-			}
+		if o.Stdin != nil {
+			t.Errorf("%s received stdin", name)
 		}
 		return nil, nil, false
 	}
@@ -86,12 +83,16 @@ func TestConfigureTargetPasswordOnStdin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stdin != "bob:s3cret pw\n" {
-		t.Errorf("stdin = %q", stdin)
+	shadow := readFile(t, filepath.Join(dep, "etc/shadow"))
+	if !strings.Contains(shadow, "\nbob:$6$") || strings.Contains(shadow, "s3cret") || !strings.HasPrefix(shadow, "root:*:1:::::\n") {
+		t.Errorf("shadow = %q", shadow)
+	}
+	if fi, _ := os.Stat(filepath.Join(dep, "etc/shadow")); fi.Mode().Perm() != 0o640 {
+		t.Errorf("shadow mode = %v", fi.Mode().Perm())
 	}
 	got := fx.cmd.normalized()
-	if strings.Contains(got, "s3cret") {
-		t.Errorf("the password reached a recorded command:\n%s", got)
+	if strings.Contains(got, "s3cret") || strings.Contains(got, "chpasswd") {
+		t.Errorf("commands:\n%s", got)
 	}
 	if strings.Contains(got, "--groups") {
 		t.Errorf("a non-admin got an admin group:\n%s", got)

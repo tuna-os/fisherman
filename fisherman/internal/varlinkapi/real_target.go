@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/tuna-os/fisherman/internal/sha512crypt"
 )
 
 // configureTarget applies ConfigureTarget's choices to every deployment of
@@ -120,10 +122,15 @@ func (r Real) createUser(ctx context.Context, d string, u *User) error {
 		return err
 	}
 	if u.Password != nil && u.Password.Reveal() != "" {
-		// The line travels on stdin; chpasswd hashes it with SHA512.
-		line := []byte(u.Username + ":" + u.Password.Reveal() + "\n")
-		if _, err := r.cmd().Run(ctx, "chpasswd",
-			[]string{"--root", d, "--crypt-method", "SHA512"}, CmdOpts{Stdin: line, Quiet: true}); err != nil {
+		// chpasswd --root chroots into the deployment and fails to lock its
+		// /etc/passwd on a hardened host, and a hash on useradd's argument
+		// list would show in the process table. Hash in process and edit
+		// the shadow file instead.
+		hash, err := sha512crypt.Hash(u.Password.Reveal())
+		if err != nil {
+			return fmt.Errorf("hashing the password: %w", err)
+		}
+		if err := setShadowHash(filepath.Join(d, "etc", "shadow"), u.Username, hash); err != nil {
 			return err
 		}
 	}
@@ -263,4 +270,31 @@ func writePrivacy(d string, p Privacy) error {
 		val = "yes"
 	}
 	return os.WriteFile(path, []byte("[Privacy]\nLocationServices="+val+"\n"), 0o644)
+}
+
+// setShadowHash replaces the password field of user in a shadow file and
+// keeps the file's mode.
+func setShadowHash(path, user, hash string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(b), "\n")
+	found := false
+	for i, l := range lines {
+		f := strings.Split(l, ":")
+		if len(f) > 1 && f[0] == user {
+			f[1] = hash
+			lines[i] = strings.Join(f, ":")
+			found = true
+		}
+	}
+	if !found {
+		return fmt.Errorf("%s has no entry for %s", path, user)
+	}
+	return os.WriteFile(path, []byte(strings.Join(lines, "\n")), fi.Mode().Perm())
 }
