@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -133,52 +131,19 @@ func (m planImageInfo) registryUnpacked(compressed int64) (int64, string) {
 }
 
 // inspectOCILayoutForPlan reads what the plan reports about the OCI layout
-// at layoutPath from disk: its oci-layout and index.json, the manifest the
-// install selects (selectOCIManifest) and its configuration. It never
+// at layoutPath from disk: the manifest the install selects, read by the
+// install's own reader (readOCIManifest), and its configuration. It never
 // opens a layer blob and writes nothing. The unpacked size is the sum of
 // the layers' uncompressed-size annotations when every layer has one, else
 // the compressed size times UnpackedEstimateRatio, as for a registry
 // image.
 func inspectOCILayoutForPlan(layoutPath string) (ImageFacts, error) {
-	if strings.TrimSpace(layoutPath) == "" {
-		return ImageFacts{}, fmt.Errorf("empty OCI layout path")
-	}
-	layoutPath = filepath.Clean(layoutPath)
-	layoutRaw, err := os.ReadFile(filepath.Join(layoutPath, "oci-layout"))
-	if err != nil {
-		return ImageFacts{}, fmt.Errorf("reading oci-layout in %s: %w", layoutPath, err)
-	}
-	var layout struct {
-		ImageLayoutVersion string `json:"imageLayoutVersion"`
-	}
-	if err := json.Unmarshal(layoutRaw, &layout); err != nil || layout.ImageLayoutVersion != "1.0.0" {
-		return ImageFacts{}, fmt.Errorf("%s is not an OCI layout of version 1.0.0", layoutPath)
-	}
-	indexRaw, err := os.ReadFile(filepath.Join(layoutPath, "index.json"))
-	if err != nil {
-		return ImageFacts{}, fmt.Errorf("reading index.json in %s: %w", layoutPath, err)
-	}
-	var index ociIndex
-	if err := json.Unmarshal(indexRaw, &index); err != nil {
-		return ImageFacts{}, fmt.Errorf("parsing index.json in %s: %w", layoutPath, err)
-	}
-	if len(index.Manifests) == 0 {
-		return ImageFacts{}, fmt.Errorf("index.json in %s lists no manifests", layoutPath)
-	}
-	selected, err := selectOCIManifest(index.Manifests, "")
-	if err != nil {
-		return ImageFacts{}, fmt.Errorf("index.json in %s: %w", layoutPath, err)
-	}
-	if !validSHA256Digest(selected.Digest) {
-		return ImageFacts{}, fmt.Errorf("index.json in %s names the manifest %q, not a sha256 digest", layoutPath, selected.Digest)
-	}
-	manifestRaw, err := readOCIBlob(layoutPath, selected, "manifest "+selected.Digest)
+	layoutPath, selected, manifest, err := readOCIManifest(layoutPath, "")
 	if err != nil {
 		return ImageFacts{}, err
 	}
-	var manifest ociManifest
-	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
-		return ImageFacts{}, fmt.Errorf("parsing manifest %s in %s: %w", selected.Digest, layoutPath, err)
+	if !validSHA256Digest(selected.Digest) {
+		return ImageFacts{}, fmt.Errorf("index.json in %s names the manifest %q, not a sha256 digest", layoutPath, selected.Digest)
 	}
 	f := ImageFacts{ReadFrom: "oci", ManifestDigest: selected.Digest, Layers: len(manifest.Layers)}
 	if manifest.Config.Digest != "" {
@@ -238,9 +203,8 @@ func skopeoPlanInspect(args ...string) ([]byte, error) {
 // inspectLocalForPlan reads a local copy in containers-storage. ok is false
 // when there is none.
 func inspectLocalForPlan(ref string) (ImageFacts, bool) {
-	out, err := skopeoPlanInspect(ref)
-	var m planImageInfo
-	if err != nil || json.Unmarshal(out, &m) != nil || !validSHA256Digest(m.Digest) {
+	m, ok := localCopy(skopeoPlanInspect, ref)
+	if !ok {
 		return ImageFacts{}, false
 	}
 	f := ImageFacts{ReadFrom: "containers-storage", ManifestDigest: m.Digest, Platform: m.platform(),
@@ -273,21 +237,20 @@ func localUnpackedBytes(ref string) int64 {
 // there is none, from the registry's manifest, once and with no retry. It
 // never reads a layer and never writes.
 func InspectImageForPlan(image string, registry bool) ImageFacts {
-	switch {
-	case IsOCISource(image):
-		// The install takes everything after oci: as the layout's path.
-		f, err := inspectOCILayoutForPlan(strings.TrimPrefix(image, "oci:"))
+	kind, ref := routeImage(image)
+	switch kind {
+	case sourceOCILayout:
+		f, err := inspectOCILayoutForPlan(ref)
 		if err != nil {
 			return ImageFacts{Reason: "the OCI layout cannot be read: " + err.Error()}
 		}
 		return f
-	case strings.HasPrefix(image, "containers-storage:"):
-		if f, ok := inspectLocalForPlan(image); ok {
+	case sourceStore:
+		if f, ok := inspectLocalForPlan(ref); ok {
 			return f
 		}
 		return ImageFacts{Reason: "local containers-storage has no copy of the image (as the user plan runs as)"}
 	}
-	ref := bareImageRef(image)
 	if f, ok := inspectLocalForPlan("containers-storage:" + ref); ok {
 		return f
 	}
