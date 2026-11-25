@@ -98,7 +98,7 @@ entry for `image` says why.
 
 | Field | Meaning |
 |---|---|
-| `read_from` | `containers-storage` (a local copy: the one the install uses), `oci` (the OCI layout the recipe names), `registry` (the registry's manifest: the install pulls the image) or `none`. |
+| `read_from` | `containers-storage` (a local copy with a sha256 manifest digest: the one the install uses; a copy without one is not used, by the plan or the install), `oci` (the OCI layout the recipe names), `registry` (the registry's manifest: the install pulls the image) or `none`. |
 | `manifest_digest` | The digest of the manifest the reference names: an image index for a multi-platform image in a registry, else the image manifest. For a local copy, the digest containers-storage records; for an OCI layout, the manifest the install selects from its `index.json`. |
 | `platform_digest` | The image manifest for this host's platform, from the registry's raw manifest; the same as `manifest_digest` for a single-platform image. `unknown` for a local copy, or when the index lists no build for this host (the install refuses that image). |
 | `platform` | The `os/architecture` of the image configuration. |

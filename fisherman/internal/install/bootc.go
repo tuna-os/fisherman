@@ -1633,11 +1633,56 @@ func platformDigest(inspect func(args ...string) ([]byte, error), ref, manifestD
 		"image %s lists no build for this host, linux/%s: choose the image built for this architecture", ref, arch)}
 }
 
+// sourceKind is how the install reads an image reference.
+type sourceKind int
+
+const (
+	// sourceRegistryRef: local containers-storage when it has a copy
+	// (localCopy), else the registry.
+	sourceRegistryRef sourceKind = iota
+	// sourceOCILayout: an OCI layout on disk ("oci:<path>"), never a registry.
+	sourceOCILayout
+	// sourceStore: an explicit "containers-storage:" copy, never a registry.
+	sourceStore
+)
+
+// routeImage says how the install reads image, and returns what that read
+// takes: the layout path for an OCI layout, the "containers-storage:"
+// reference itself for an explicit store copy, else the bare registry
+// reference. The install preflight (CheckImage) and `plan --read-image`
+// (InspectImageForPlan) both route here, so the plan reports the source the
+// install uses.
+func routeImage(image string) (sourceKind, string) {
+	switch {
+	case IsOCISource(image):
+		// The install takes everything after oci: as the layout's path.
+		return sourceOCILayout, strings.TrimPrefix(image, "oci:")
+	case strings.HasPrefix(image, "containers-storage:"):
+		return sourceStore, image
+	}
+	return sourceRegistryRef, bareImageRef(image)
+}
+
+// localCopy reads the copy that local containers-storage holds of ref (a
+// "containers-storage:" reference) with inspect. ok is false unless it is a
+// copy the install uses: inspect succeeds, its output parses, and it names a
+// sha256 manifest digest, which the receipt and the plan record. CheckImage
+// and InspectImageForPlan both decide here whether a local copy exists, for
+// an explicit store source and for a bare reference alike.
+func localCopy(inspect func(args ...string) ([]byte, error), ref string) (planImageInfo, bool) {
+	out, err := inspect(ref)
+	var m planImageInfo
+	if err != nil || json.Unmarshal(out, &m) != nil || !validSHA256Digest(m.Digest) {
+		return planImageInfo{}, false
+	}
+	return m, true
+}
+
 // CheckImage decides whether the install must pull the image, and refuses
 // a source that is known to fail before the disk is touched (Err).
 //
-// An image that containers-storage already has is used as it is
-// (NeedsPull=false), whatever the registry now has, because the installer
+// An image that containers-storage already has, with a sha256 manifest
+// digest (localCopy), is used as it is (NeedsPull=false), whatever the registry now has, because the installer
 // deploys the image it was given and `bootc update` brings later ones. The
 // registry is then asked once, only to tell an offline install from an
 // online one; it need not answer.
@@ -1651,39 +1696,38 @@ func platformDigest(inspect func(args ...string) ([]byte, error), ref, manifestD
 // platform. The check reads manifests and configurations only, never the
 // layers.
 func CheckImage(image string) ImageCheck {
-	// An explicit local source must never query or fall back to a registry.
-	// A read-only OCI layout source is inspected locally only (the same
-	// checks as the install preflight) and must never query or fall back to
-	// a registry. A missing or corrupt layout reports NeedsPull so callers
-	// refuse the install before touching any disk.
-	if IsOCISource(image) {
-		layers, err := inspectOCILayout(strings.TrimPrefix(image, "oci:"), "")
+	kind, ref := routeImage(image)
+	switch kind {
+	case sourceOCILayout:
+		// An explicit local source must never query or fall back to a
+		// registry. A read-only OCI layout source is inspected locally only
+		// (the same checks as the install preflight). A missing or corrupt
+		// layout reports NeedsPull so callers refuse the install before
+		// touching any disk.
+		layers, err := inspectOCILayout(ref, "")
 		if err != nil {
 			return ImageCheck{NeedsPull: true}
 		}
 		return ImageCheck{NeedsPull: false, LayerCount: layers, Offline: true, Source: ImageSource{Ref: image, Cached: true}}
-	}
-	if strings.HasPrefix(image, "containers-storage:") {
-		localOut, err := SkopeoInspectFn(image)
-		var local imageInfo
-		if err != nil || json.Unmarshal(localOut, &local) != nil || !validSHA256Digest(local.Digest) {
+	case sourceStore:
+		local, ok := localCopy(SkopeoInspectFn, ref)
+		if !ok {
 			return ImageCheck{NeedsPull: true}
 		}
 		check := ImageCheck{NeedsPull: false, LayerCount: len(local.Layers), Offline: true,
 			Source: ImageSource{Ref: image, ManifestDigest: local.Digest, Platform: local.platform(), Cached: true}}
-		check.Err = checkImageInfo(image, "local containers-storage", local)
+		check.Err = checkImageInfo(image, "local containers-storage", local.imageInfo)
 		return check
+	case sourceRegistryRef:
+		// Local containers-storage first, else the registry: below.
 	}
 
-	ref := bareImageRef(image)
-	localOut, localErr := SkopeoInspectFn("containers-storage:" + ref)
-	var local imageInfo
-	if localErr == nil && json.Unmarshal(localOut, &local) == nil {
+	if local, ok := localCopy(SkopeoInspectFn, "containers-storage:"+ref); ok {
 		// Cached: one remote attempt, only for the Offline flag.
 		_, remoteErr := inspectRemote(ref, 1)
 		check := ImageCheck{NeedsPull: false, LayerCount: len(local.Layers), Offline: remoteErr != nil,
 			Source: ImageSource{Ref: image, ManifestDigest: local.Digest, Platform: local.platform(), Cached: true}}
-		check.Err = checkImageInfo(ref, "local containers-storage", local)
+		check.Err = checkImageInfo(ref, "local containers-storage", local.imageInfo)
 		return check
 	}
 

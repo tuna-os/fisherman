@@ -84,55 +84,9 @@ func PreflightOCILayout(layoutPath, expectedDigest string) error {
 // inspectOCILayout is PreflightOCILayout, also reporting the manifest's layer
 // count for progress display.
 func inspectOCILayout(layoutPath, expectedDigest string) (int, error) {
-	if strings.TrimSpace(layoutPath) == "" {
-		return 0, fmt.Errorf("empty OCI layout path")
-	}
-	layoutPath = filepath.Clean(layoutPath)
-
-	layoutRaw, err := os.ReadFile(filepath.Join(layoutPath, "oci-layout"))
-	if err != nil {
-		return 0, fmt.Errorf("reading oci-layout in %s: %w", layoutPath, err)
-	}
-	var layout struct {
-		ImageLayoutVersion string `json:"imageLayoutVersion"`
-	}
-	if err := json.Unmarshal(layoutRaw, &layout); err != nil {
-		return 0, fmt.Errorf("parsing oci-layout in %s: %w", layoutPath, err)
-	}
-	if layout.ImageLayoutVersion != "1.0.0" {
-		return 0, fmt.Errorf("unsupported oci-layout version %q in %s (want \"1.0.0\")",
-			layout.ImageLayoutVersion, layoutPath)
-	}
-
-	indexRaw, err := os.ReadFile(filepath.Join(layoutPath, "index.json"))
-	if err != nil {
-		return 0, fmt.Errorf("reading index.json in %s: %w", layoutPath, err)
-	}
-	var index ociIndex
-	if err := json.Unmarshal(indexRaw, &index); err != nil {
-		return 0, fmt.Errorf("parsing index.json in %s: %w", layoutPath, err)
-	}
-	if len(index.Manifests) == 0 {
-		return 0, fmt.Errorf("index.json in %s lists no manifests", layoutPath)
-	}
-	selected, err := selectOCIManifest(index.Manifests, expectedDigest)
-	if err != nil {
-		return 0, fmt.Errorf("index.json in %s: %w", layoutPath, err)
-	}
-	if p := selected.Platform; p != nil && (p.OS != "" || p.Architecture != "") {
-		if p.OS != runtime.GOOS || p.Architecture != runtime.GOARCH {
-			return 0, fmt.Errorf("selected manifest %s targets platform %s/%s, this host is %s/%s",
-				selected.Digest, p.OS, p.Architecture, runtime.GOOS, runtime.GOARCH)
-		}
-	}
-
-	manifestRaw, err := readOCIBlob(layoutPath, selected, "manifest "+selected.Digest)
+	layoutPath, selected, manifest, err := readOCIManifest(layoutPath, expectedDigest)
 	if err != nil {
 		return 0, err
-	}
-	var manifest ociManifest
-	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
-		return 0, fmt.Errorf("parsing manifest %s in %s: %w", selected.Digest, layoutPath, err)
 	}
 	if manifest.Config.Digest == "" {
 		return 0, fmt.Errorf("manifest %s in %s has no config", selected.Digest, layoutPath)
@@ -149,6 +103,68 @@ func inspectOCILayout(layoutPath, expectedDigest string) (int, error) {
 		}
 	}
 	return len(manifest.Layers), nil
+}
+
+// readOCIManifest reads the OCI layout at layoutPath up to the manifest the
+// install deploys: the oci-layout file (version "1.0.0"), index.json, the
+// manifest selectOCIManifest picks for expectedDigest, refused when it
+// declares a platform other than this host's, and that manifest's blob. It
+// returns the cleaned layout path, the selected descriptor and the parsed
+// manifest. The install preflight (inspectOCILayout) and `plan --read-image`
+// (inspectOCILayoutForPlan) both start here, so the plan describes the
+// manifest the install deploys and refuses the layouts the install refuses.
+func readOCIManifest(layoutPath, expectedDigest string) (string, ociDescriptor, ociManifest, error) {
+	if strings.TrimSpace(layoutPath) == "" {
+		return "", ociDescriptor{}, ociManifest{}, fmt.Errorf("empty OCI layout path")
+	}
+	layoutPath = filepath.Clean(layoutPath)
+
+	layoutRaw, err := os.ReadFile(filepath.Join(layoutPath, "oci-layout"))
+	if err != nil {
+		return "", ociDescriptor{}, ociManifest{}, fmt.Errorf("reading oci-layout in %s: %w", layoutPath, err)
+	}
+	var layout struct {
+		ImageLayoutVersion string `json:"imageLayoutVersion"`
+	}
+	if err := json.Unmarshal(layoutRaw, &layout); err != nil {
+		return "", ociDescriptor{}, ociManifest{}, fmt.Errorf("parsing oci-layout in %s: %w", layoutPath, err)
+	}
+	if layout.ImageLayoutVersion != "1.0.0" {
+		return "", ociDescriptor{}, ociManifest{}, fmt.Errorf("unsupported oci-layout version %q in %s (want \"1.0.0\")",
+			layout.ImageLayoutVersion, layoutPath)
+	}
+
+	indexRaw, err := os.ReadFile(filepath.Join(layoutPath, "index.json"))
+	if err != nil {
+		return "", ociDescriptor{}, ociManifest{}, fmt.Errorf("reading index.json in %s: %w", layoutPath, err)
+	}
+	var index ociIndex
+	if err := json.Unmarshal(indexRaw, &index); err != nil {
+		return "", ociDescriptor{}, ociManifest{}, fmt.Errorf("parsing index.json in %s: %w", layoutPath, err)
+	}
+	if len(index.Manifests) == 0 {
+		return "", ociDescriptor{}, ociManifest{}, fmt.Errorf("index.json in %s lists no manifests", layoutPath)
+	}
+	selected, err := selectOCIManifest(index.Manifests, expectedDigest)
+	if err != nil {
+		return "", ociDescriptor{}, ociManifest{}, fmt.Errorf("index.json in %s: %w", layoutPath, err)
+	}
+	if p := selected.Platform; p != nil && (p.OS != "" || p.Architecture != "") {
+		if p.OS != runtime.GOOS || p.Architecture != runtime.GOARCH {
+			return "", ociDescriptor{}, ociManifest{}, fmt.Errorf("selected manifest %s targets platform %s/%s, this host is %s/%s",
+				selected.Digest, p.OS, p.Architecture, runtime.GOOS, runtime.GOARCH)
+		}
+	}
+
+	manifestRaw, err := readOCIBlob(layoutPath, selected, "manifest "+selected.Digest)
+	if err != nil {
+		return "", ociDescriptor{}, ociManifest{}, err
+	}
+	var manifest ociManifest
+	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
+		return "", ociDescriptor{}, ociManifest{}, fmt.Errorf("parsing manifest %s in %s: %w", selected.Digest, layoutPath, err)
+	}
+	return layoutPath, selected, manifest, nil
 }
 
 // selectOCIManifest picks the manifest to install: the one matching
