@@ -237,6 +237,7 @@ func FinalizeFilesystemWith(path string, hooks FreezeHooks) error {
 	}
 	progress.Info(fmt.Sprintf("remount ro %s", path))
 	if err := runner.Run("mount", "-o", "remount,ro", path); err != nil {
+		remountDiagnostics()
 		return fmt.Errorf("remount ro: %w", err)
 	}
 	progress.Info(fmt.Sprintf("fsfreeze %s", path))
@@ -257,6 +258,18 @@ func FinalizeFilesystemWith(path string, hooks FreezeHooks) error {
 		return fmt.Errorf("fsfreeze -u: %w", err)
 	}
 	return nil
+}
+
+// remountDiagnostics records who may be holding the target after a failed
+// remount ro: every mount of the same btrfs/ext4 backing and the distinct
+// mount namespaces on the host. A holder in another namespace (a service with
+// PrivateTmp started while /var/tmp was redirected, #505) is invisible to
+// fuser on btrfs, so this is the evidence that confirms or rules it out. All
+// best effort; errors are ignored.
+func remountDiagnostics() {
+	progress.Info("remount ro failed; mounts and mount namespaces follow")
+	_ = runner.Run("findmnt", "-rno", "TARGET,SOURCE,FSTYPE")
+	_ = runner.Run("lsns", "-t", "mnt")
 }
 
 // MountEFI creates the /boot/efi directory tree under rootMount and mounts

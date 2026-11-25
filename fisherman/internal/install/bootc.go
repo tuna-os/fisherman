@@ -808,14 +808,16 @@ func bootcViaContainer(opts Options) error {
 	podmanArgs = append(podmanArgs, bootcArgs...)
 
 	var tmpEnv []string
+	cmdName, cmdArgs := "podman", podmanArgs
 	if useOciLayout {
 		// Podman imports OCI blobs before the container's scratch bind exists.
 		// containers/image can use /var/tmp regardless of TMPDIR.
-		restoreVarTmp := overrideVarTmp(scratch)
+		var restoreVarTmp func()
+		cmdName, cmdArgs, restoreVarTmp = scopeVarTmp(scratch, cmdName, cmdArgs)
 		defer restoreVarTmp()
 		tmpEnv = []string{"TMPDIR=" + scratch}
 	}
-	name, args := runner.HostArgsWithEnv("podman", podmanArgs, tmpEnv)
+	name, args := runner.HostArgsWithEnv(cmdName, cmdArgs, tmpEnv)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 
 	cmd := CommandFn(name, args...)
@@ -853,11 +855,11 @@ func bootcDirect(opts Options) error {
 	// cache itself already sits on the target disk (#211). Give bootc the
 	// same scratch-backed /var/tmp the export uses.
 	scratch := opts.scratchDir()
-	restoreVarTmp := overrideVarTmp(scratch)
+	cmdName, cmdArgs, restoreVarTmp := scopeVarTmp(scratch, "bootc", bargs)
 	defer restoreVarTmp()
 	tmpEnv := "TMPDIR=" + scratch
 
-	name, args := runner.HostArgsWithEnv("bootc", bargs, []string{tmpEnv})
+	name, args := runner.HostArgsWithEnv(cmdName, cmdArgs, []string{tmpEnv})
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 	fmt.Fprintf(os.Stdout, "# %s\n", tmpEnv)
 
@@ -906,6 +908,39 @@ func overrideVarTmp(tmpdir string) func() {
 			}
 		}
 	}
+}
+
+// scopeVarTmp returns the argv that runs name with /var/tmp redirected to a
+// directory under tmpdir, together with the function that undoes the redirect.
+//
+// Preferred form: the command runs under `unshare --mount --propagation
+// private` and bind-mounts the directory over /var/tmp inside that private
+// namespace. No other process or service on the host (a D-Bus-activated
+// PrivateTmp=yes unit, say) ever sees a target-backed /var/tmp, so nothing
+// outside the command can pin the target filesystem and block remount-ro or
+// luksClose (#505). Leaving the namespace undoes the mount, so the returned
+// restore is a no-op.
+//
+// When a private mount namespace cannot be made it falls back to overrideVarTmp's host-wide bind.
+func scopeVarTmp(tmpdir, name string, args []string) (string, []string, func()) {
+	// Probe the real thing: unshare may be missing, or the mount namespace
+	// refused (unprivileged container, seccomp).
+	pName, pArgs := runner.HostArgs("unshare", []string{"--mount", "--propagation", "private", "true"})
+	if CommandFn(pName, pArgs...).Run() != nil {
+		return name, args, overrideVarTmp(tmpdir)
+	}
+	dir := filepath.Join(tmpdir, "var-tmp-override")
+	if err := os.MkdirAll(dir, 0o1777); err != nil {
+		fmt.Fprintf(os.Stdout, "# warning: cannot create %s (%v) — /var/tmp left as is\n", dir, err)
+		return name, args, func() {}
+	}
+	fmt.Fprintf(os.Stdout, "# /var/tmp → %s in a private mount namespace for blob staging\n", dir)
+	wrapped := append([]string{
+		"--mount", "--propagation", "private",
+		"sh", "-c", `mount --bind "$1" /var/tmp || exit 125; shift; exec "$@"`,
+		"fisherman-var-tmp", dir, name,
+	}, args...)
+	return "unshare", wrapped, func() {}
 }
 
 // BootcToDisk installs a bootc image directly to a block device using
@@ -1184,15 +1219,14 @@ func skopeoExportOCI(image, destDir, tmpdir string) error {
 
 	// Redirect /var/tmp to the disk-backed scratch dir before the export
 	// (see overrideVarTmp for why TMPDIR alone is not enough).
-	restoreVarTmp := overrideVarTmp(tmpdir)
-	defer restoreVarTmp()
-
 	skopeoArgs := []string{
 		"copy",
 		containersStorageSource(image),
 		"oci:" + destDir,
 	}
-	name, args := runner.HostArgs("skopeo", skopeoArgs)
+	cmdName, cmdArgs, restoreVarTmp := scopeVarTmp(tmpdir, "skopeo", skopeoArgs)
+	defer restoreVarTmp()
+	name, args := runner.HostArgs(cmdName, cmdArgs)
 	fmt.Fprintf(os.Stdout, "+ %s %s\n", name, strings.Join(args, " "))
 	fmt.Fprintf(os.Stdout, "# TMPDIR=%s\n", tmpdir)
 	cmd := CommandFn(name, args...)
