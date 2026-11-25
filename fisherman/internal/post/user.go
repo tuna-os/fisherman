@@ -162,13 +162,14 @@ func CreateUser(sysroot string, u UserConfig) error {
 		// password becomes the literal hash text — and (b) invokes the
 		// hashing stack (PAM/crypt config), which exits 1 on EL10 targets.
 		preHashed := sha512crypt.IsHashSetting(password)
-		if composefs && !preHashed {
+		if composefs {
 			// chpasswd without -e hashes through PAM (pam_chauthtok), and a
 			// composefs deploy root holds only /etc state — no PAM modules —
 			// so it fails with "pam_chauthtok() failed, error: Module is
-			// unknown" (projectbluefin/utah#1129). Hash here instead and
-			// hand chpasswd the result with -e, which skips PAM entirely.
-			hashed, err := sha512crypt.Hash(password)
+			// unknown" (projectbluefin/utah#1129). Hash here instead
+			// (ShadowHash keeps a pre-hashed setting as it is) and hand
+			// chpasswd the result with -e, which skips PAM entirely.
+			hashed, err := sha512crypt.ShadowHash(password)
 			if err != nil {
 				return fmt.Errorf("hashing password for %s: %w", u.Username, err)
 			}

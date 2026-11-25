@@ -125,8 +125,9 @@ func (r Real) createUser(ctx context.Context, d string, u *User) error {
 		// chpasswd --root chroots into the deployment and fails to lock its
 		// /etc/passwd on a hardened host, and a hash on useradd's argument
 		// list would show in the process table. Hash in process and edit
-		// the shadow file instead.
-		hash, err := sha512crypt.Hash(u.Password.Reveal())
+		// the shadow file instead. A pre-hashed setting, which validation
+		// accepts, is stored as it is.
+		hash, err := sha512crypt.ShadowHash(u.Password.Reveal())
 		if err != nil {
 			return fmt.Errorf("hashing the password: %w", err)
 		}
