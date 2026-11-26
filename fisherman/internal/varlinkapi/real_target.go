@@ -90,6 +90,11 @@ func (r Real) configureDeployment(ctx context.Context, d string, t TargetConfig)
 		if _, err := c.Run(ctx, "systemd-firstboot", args, CmdOpts{}); err != nil {
 			return warns, err
 		}
+		// Only after the copy succeeded: a carried language and keyboard
+		// are not asked again on the first boot.
+		if _, err := r.gisHandoff(d, t); err != nil {
+			warns = append(warns, "gnome-initial-setup still asks for language and keyboard: "+err.Error())
+		}
 	}
 
 	if u := t.User; u != nil && u.Username != "" {
