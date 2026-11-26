@@ -839,7 +839,12 @@ func (c *installRun) finalize(ctx context.Context) error {
 		c.rep.Warn(StepFinalize, "only the TPM unlocks this disk: add a recovery key before changing firmware settings")
 	}
 	// Fail safe: an empty passphrase must never open the installed disk.
-	if c.r.opensWith(ctx, c.rootPart, nil) {
+	// When cryptsetup cannot tell, the install fails with its exit status.
+	opens, err := c.r.opensWith(ctx, c.rootPart, nil)
+	if err != nil {
+		return c.stepFail(err, ReasonLUKSError, ActionRetry, "testing the installed disk for an empty passphrase")
+	}
+	if opens {
 		return c.fail(ReasonLUKSError, ActionRetry, "the installed disk opens with an empty passphrase")
 	}
 	c.finalized = true

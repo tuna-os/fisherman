@@ -37,7 +37,7 @@ umount -R $ROOT/run/fishermand/install-$N/mnt/efi
 umount -R $ROOT/run/fishermand/install-$N/mnt/boot
 umount -R $ROOT/run/fishermand/install-$N/mnt/root
 cryptsetup close $MAPPER
-cryptsetup open --test-passphrase --key-file=$ROOT/run/fishermand/empty-key-$N /dev/fake1p4
+cryptsetup open --test-passphrase --key-file=$ROOT/run/fishermand/empty-key-$N --disable-external-tokens --token-type=fisherman-keyslots-only /dev/fake1p4
 crypt: cryptsetup luksDump /dev/fake1p4
 crypt: cryptsetup luksUUID /dev/fake1p4
 crypt: cryptsetup luksDump /dev/fake1p4
