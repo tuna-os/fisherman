@@ -759,7 +759,7 @@ func (c *installRun) bootloader(ctx context.Context) error {
 		return nil
 	}
 	_, err := c.runCmd(ctx, CmdOpts{}, "efibootmgr", "--create", "--disk", c.plan.Disk.Path,
-		"--part", strconv.Itoa(c.espPartNo), "--label", "TunaOS", "--loader", c.report.Loader)
+		"--part", strconv.Itoa(c.espPartNo), "--label", bootLabel(c.deployments), "--loader", c.report.Loader)
 	if err != nil {
 		// The disk still boots from the removable path; do not fail a
 		// finished install for NVRAM trouble.
@@ -767,6 +767,52 @@ func (c *installRun) bootloader(ctx context.Context) error {
 	}
 	c.rep.Progress(StepBootloader, 100, "")
 	return nil
+}
+
+// defaultBootLabel names the firmware entry when no deployment says its name.
+const defaultBootLabel = "TunaOS"
+
+// bootLabel is the firmware entry label: NAME of the installed image's
+// os-release (etc first, then usr/lib, as systemd reads them), so a Bonito
+// install boots an entry called "Bonito". The image's branding check
+// (tunaos-branding-contract boot.efi) fails on any other label.
+func bootLabel(deployments []string) string {
+	for _, d := range deployments {
+		for _, rel := range []string{"etc/os-release", "usr/lib/os-release"} {
+			data, err := os.ReadFile(filepath.Join(d, rel))
+			if err != nil {
+				continue
+			}
+			if name := osReleaseValue(string(data), "NAME"); name != "" {
+				return name
+			}
+		}
+	}
+	return defaultBootLabel
+}
+
+// osReleaseValue is one key of an os-release file, unquoted; "" when absent.
+func osReleaseValue(text, key string) string {
+	for _, line := range strings.Split(text, "\n") {
+		k, v, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if !ok || k != key {
+			continue
+		}
+		if unq, err := strconv.Unquote(v); err == nil && strings.HasPrefix(v, "\"") {
+			v = unq
+		} else {
+			v = strings.Trim(v, "'")
+		}
+		// A label is one printable line; efibootmgr takes it as an argument.
+		v = strings.Map(func(r rune) rune {
+			if r < 0x20 || r == 0x7f {
+				return -1
+			}
+			return r
+		}, v)
+		return strings.TrimSpace(v)
+	}
+	return ""
 }
 
 // ---- finalize -------------------------------------------------------------
