@@ -128,3 +128,47 @@ func TestOverrideVarTmpRestoreFallsBackToLazyUmount(t *testing.T) {
 		t.Fatalf("no lazy umount after failed restore; calls: %q", calls)
 	}
 }
+
+// The /var/tmp redirect must live in a private mount namespace, not on the
+// host, so no other service can pin the target filesystem (#505).
+func TestScopeVarTmpUsesPrivateMountNamespace(t *testing.T) {
+	prev := CommandFn
+	t.Cleanup(func() { CommandFn = prev })
+	CommandFn = func(name string, args ...string) *exec.Cmd { return exec.Command("true") }
+	dir := t.TempDir()
+	name, args, restore := scopeVarTmp(dir, "skopeo", []string{"copy", "a", "b"})
+	restore()
+	line := name + " " + strings.Join(args, " ")
+	for _, want := range []string{"unshare --mount --propagation private", dir + "/var-tmp-override skopeo copy a b"} {
+		if !strings.Contains(line, want) {
+			t.Fatalf("argv %q missing %q", line, want)
+		}
+	}
+}
+
+func TestScopeVarTmpFallsBackWhenNamespaceRefused(t *testing.T) {
+	prev := CommandFn
+	t.Cleanup(func() { CommandFn = prev })
+	var calls []string
+	CommandFn = func(name string, args ...string) *exec.Cmd {
+		line := name + " " + strings.Join(args, " ")
+		calls = append(calls, line)
+		if name == "unshare" {
+			return exec.Command("false")
+		}
+		return exec.Command("true")
+	}
+	name, args, restore := scopeVarTmp(t.TempDir(), "skopeo", []string{"copy"})
+	restore()
+	if name != "skopeo" || len(args) != 1 {
+		t.Fatalf("argv rewritten on fallback: %s %q", name, args)
+	}
+	var bound, unbound bool
+	for _, c := range calls {
+		bound = bound || strings.HasPrefix(c, "mount --bind")
+		unbound = unbound || strings.HasPrefix(c, "umount /var/tmp")
+	}
+	if !bound || !unbound {
+		t.Fatalf("fallback did not bind/restore: %q", calls)
+	}
+}

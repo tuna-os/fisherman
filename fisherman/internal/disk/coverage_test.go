@@ -596,3 +596,25 @@ func TestApplyCustomLayout_MountFailure(t *testing.T) {
 		t.Errorf("mounted = %v; failing mount must not register the target", mounted)
 	}
 }
+
+// A busy remount must leave the evidence (#505): mounts and mount namespaces.
+func TestFinalizeFilesystem_RemountFailureRecordsDiagnostics(t *testing.T) {
+	rec := setupRecorder(t)
+	rec.fail = func(c execCall) error {
+		if c.name == "mount" {
+			return errors.New("mount point is busy")
+		}
+		return nil
+	}
+	if err := disk.FinalizeFilesystem("/mnt/root"); err == nil {
+		t.Fatal("expected remount error")
+	}
+	var findmnt, lsns bool
+	for _, c := range rec.calls {
+		findmnt = findmnt || c.name == "findmnt"
+		lsns = lsns || (c.name == "lsns" && equalSlice(c.args, []string{"-t", "mnt"}))
+	}
+	if !findmnt || !lsns {
+		t.Fatalf("diagnostics missing (findmnt=%v lsns=%v): %+v", findmnt, lsns, rec.calls)
+	}
+}
