@@ -173,8 +173,14 @@ server).
   `install_kernel`, `install_bootloader`, `unmount_partitions`. The stream
   ends with an empty reply (no `parameters` key). gnome-setup ignores it on
   purpose.
-- `Run` encrypts with an empty password. gnome-setup replaces it through
-  `io.systemd.CryptEnroll`.
+- `Run` never leaves an empty password on the disk. systemd-repart
+  encrypts with a random install key (64 hex characters). Only the
+  daemon's tmpfs holds it, at `/run/fishermand/luks-transient/<LUKS UUID>`
+  with mode 0600. gnome-setup unlocks with the empty password, as for
+  systemd-sysinstall. For a volume with an install key, `CryptEnroll.Enroll`
+  uses that key in place of the empty password. The file goes once an
+  enroll wipes its slot. A reboot, a power cut or a closed frontend loses
+  the key, and nobody can open that slot afterwards.
 - `Run` honors `copyLocale`, `copyKeymap` and `copyTimezone`. The configure
   step then runs `systemd-firstboot --copy-locale`, `--copy-keymap` and
   `--copy-timezone` against each deployment. So the installed system gets the
@@ -282,7 +288,7 @@ The wire has no offline-media field: the medium is the install source.
 |---|---|
 | `validate_device` | The target is a whole, unmounted disk, not the medium, and large enough. |
 | `partition` | `systemd-repart` writes the GPT and copies each medium partition with `CopyBlocks=`. The root lands in LUKS2 (`key-file+tpm2` on PCR 7 for the TPM2 types, else `key-file`). The bytes move here, so this step takes most of the time. |
-| `luks` | The user's passphrase replaces the empty keyslot. |
+| `luks` | The user's passphrase replaces the install key's keyslot. |
 | `tpm2_enroll` | Checks that repart sealed the TPM2 token. |
 | `mount` | Opens the root, gives each copied filesystem a new UUID (vfat, ext4, btrfs, xfs), then mounts root, /boot and the ESP. A btrfs seed flag is cleared. |
 | `install_os` | Checks for a deployment and a pristine machine-id. |
@@ -299,9 +305,14 @@ Rules and limits:
 
 - An unencrypted install (`none`) fails at `validate_device` with reason
   `unsupported_config` and next action `change_settings`.
-- An empty passphrase (the SysInstall `Run` path) keeps the empty slot, and
-  the install warns. `tpm2_luks` with no passphrase wipes it at the end, so
-  only the TPM unlocks the disk, and the install warns.
+- An empty passphrase (the SysInstall `Run` path) keeps the install key's
+  slot for the frontend to replace, and the install warns. `tpm2_luks` with
+  no passphrase wipes it at the end, so only the TPM unlocks the disk, and
+  the install warns.
+- `finalize` fails the install when the empty passphrase opens the new
+  volume. A failed install deletes its install key.
+- An abandoned install has no known secret. Without a TPM the disk needs a
+  new install. With a TPM it boots on the TPM alone, with no recovery key.
 - The new reasons and action are additive: `disk_too_small`,
   `unsupported_config`, `change_settings`.
 - `ConfigureTarget`'s `privacy.locationServices` lands in

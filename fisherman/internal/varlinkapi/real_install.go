@@ -89,10 +89,12 @@ type installRun struct {
 	rootPart    string // the LUKS container
 	espPartNo   int
 	luksUUID    string
-	emptySlot   int64
-	haveEmpty   bool   // an empty-passphrase slot exists
+	emptySlot   int64  // the slot of the transient key (transient_key.go)
+	haveEmpty   bool   // the transient key slot exists
 	keepEmpty   bool   // leave it (SysInstall Run: gnome-setup replaces it)
 	wipeEmpty   bool   // wipe it after the work (TPM only, no passphrase)
+	tkey        []byte // the transient key repart encrypted with
+	tkeyPath    string // its file on the daemon's tmpfs
 	userPass    []byte // the enrolled passphrase; nil when none
 	tokenTPM2   bool
 	mapper      string
@@ -335,8 +337,15 @@ func (c *installRun) partition(ctx context.Context) error {
 		c.settle(ctx)
 		empty = "force"
 	}
+	// Never the empty key: see transient_key.go.
+	if c.tkey, err = newTransientKey(); err != nil {
+		return c.fail(ReasonInternal, ActionReportBug, "making the install key: %v", err)
+	}
+	if c.tkeyPath, err = c.r.writeTransientKey("pending-"+filepath.Base(work), c.tkey); err != nil {
+		return c.fail(ReasonInternal, ActionReportBug, "storing the install key: %v", err)
+	}
 	args := []string{"--dry-run=no", "--definitions=" + defsDir, "--empty=" + empty,
-		"--pretty=no", "--json=short", "--no-pager"}
+		"--key-file=" + c.tkeyPath, "--pretty=no", "--json=short", "--no-pager"}
 	if c.tpm2 {
 		args = append(args, "--tpm2-device=auto")
 	}
@@ -427,6 +436,16 @@ func (c *installRun) enrollLUKS(ctx context.Context) error {
 		return c.stepFail(err, ReasonLUKSError, ActionRetry, "reading the LUKS UUID")
 	}
 	c.luksUUID = strings.TrimSpace(string(out))
+	// The key file takes the volume's name, so io.systemd.CryptEnroll finds
+	// it from the node gnome-setup names.
+	named, ok := c.r.transientKeyPath(c.luksUUID)
+	if !ok {
+		return c.fail(ReasonLUKSError, ActionRetry, "the new volume has an unexpected LUKS UUID")
+	}
+	if err := os.Rename(c.tkeyPath, named); err != nil {
+		return c.fail(ReasonInternal, ActionReportBug, "naming the install key: %v", err)
+	}
+	c.tkeyPath = named
 	slots, err := enr.ListSlots(ctx, c.rootPart)
 	if err != nil {
 		return c.stepFail(err, ReasonLUKSError, ActionRetry, "listing keyslots")
@@ -438,22 +457,23 @@ func (c *installRun) enrollLUKS(ctx context.Context) error {
 		}
 	}
 	if !c.haveEmpty {
-		return c.fail(ReasonLUKSError, ActionRetry, "repart left no empty keyslot to replace")
+		return c.fail(ReasonLUKSError, ActionRetry, "repart left no keyslot to replace")
 	}
 	if c.userPass != nil {
 		// One call: the empty slot is wiped, then the passphrase lands.
 		_, err = enr.Enroll(ctx, crypt.EnrollOpts{
 			Node: c.rootPart, Mechanism: crypt.MechPassword,
-			NewPassword: c.userPass, Unlock: crypt.Unlock{Empty: true},
+			NewPassword: c.userPass, Unlock: crypt.Unlock{Secret: c.tkey},
 			WipeSlots: []int64{c.emptySlot},
 		})
 		if err != nil {
 			return c.stepFail(err, ReasonLUKSError, ActionRetry, "enrolling the passphrase")
 		}
 		c.haveEmpty = false
+		c.dropTransientKey()
 	}
 	if c.keepEmpty {
-		c.rep.Warn(StepLUKS, "the disk keeps an empty passphrase until a recovery key replaces it")
+		c.rep.Warn(StepLUKS, "until a recovery key replaces it, the disk opens only with a key that this live session holds")
 	}
 	c.rep.Progress(StepLUKS, 100, "")
 	return nil
@@ -483,34 +503,18 @@ func (c *installRun) verifyTPM2(ctx context.Context) error {
 
 // ---- mount ---------------------------------------------------------------
 
-// systemdCryptsetup finds the helper that opens a volume with the empty
-// passphrase, which the cryptsetup CLI cannot.
-func systemdCryptsetup() string {
-	for _, p := range []string{"/usr/lib/systemd/systemd-cryptsetup", "/lib/systemd/systemd-cryptsetup"} {
-		if fileExists(p) {
-			return p
-		}
-	}
-	return "/usr/lib/systemd/systemd-cryptsetup"
-}
-
 func (c *installRun) mountTarget(ctx context.Context) error {
 	var id [4]byte
 	_, _ = rand.Read(id[:])
 	c.mapper = "fishermand-" + hex.EncodeToString(id[:])
-	if c.userPass != nil {
-		_, err := c.runCmd(ctx, CmdOpts{Stdin: c.userPass, Quiet: true},
-			"cryptsetup", "open", "--type", "luks2", "--key-file=-", c.rootPart, c.mapper)
-		if err != nil {
-			return c.stepFail(err, ReasonLUKSError, ActionRetry, "unlocking the root")
-		}
-	} else {
-		// Only the empty slot is left (TPM only, or SysInstall Run).
-		_, err := c.runCmd(ctx, CmdOpts{Quiet: true}, systemdCryptsetup(),
-			"attach", c.mapper, c.rootPart, "-", "try-empty-password=yes,headless=yes")
-		if err != nil {
-			return c.stepFail(err, ReasonLUKSError, ActionRetry, "unlocking the root")
-		}
+	key := c.userPass
+	if key == nil {
+		// Only the transient key slot is left (TPM only, or SysInstall Run).
+		key = c.tkey
+	}
+	if _, err := c.runCmd(ctx, CmdOpts{Stdin: key, Quiet: true},
+		"cryptsetup", "open", "--type", "luks2", "--key-file=-", c.rootPart, c.mapper); err != nil {
+		return c.stepFail(err, ReasonLUKSError, ActionRetry, "unlocking the root")
 	}
 	c.mapperOpen = true
 	c.rootDev = "/dev/mapper/" + c.mapper
@@ -827,11 +831,16 @@ func (c *installRun) finalize(ctx context.Context) error {
 	c.rep.Progress(StepFinalize, 60, "")
 	if c.wipeEmpty && c.haveEmpty {
 		// TPM only: nothing but the TPM unlocks the disk now.
-		if err := c.r.enroller().WipeSlots(ctx, c.rootPart, crypt.Unlock{Empty: true}, c.emptySlot); err != nil {
-			return c.stepFail(err, ReasonLUKSError, ActionRetry, "removing the empty passphrase")
+		if err := c.r.enroller().WipeSlots(ctx, c.rootPart, crypt.Unlock{Secret: c.tkey}, c.emptySlot); err != nil {
+			return c.stepFail(err, ReasonLUKSError, ActionRetry, "removing the install key")
 		}
 		c.haveEmpty = false
+		c.dropTransientKey()
 		c.rep.Warn(StepFinalize, "only the TPM unlocks this disk: add a recovery key before changing firmware settings")
+	}
+	// Fail safe: an empty passphrase must never open the installed disk.
+	if c.r.opensWith(ctx, c.rootPart, nil) {
+		return c.fail(ReasonLUKSError, ActionRetry, "the installed disk opens with an empty passphrase")
 	}
 	c.finalized = true
 	_ = os.RemoveAll(c.work)
@@ -889,6 +898,19 @@ func (c *installRun) cleanup(rep Reporter) {
 	if c.work != "" && !c.mapperOpen {
 		_ = os.RemoveAll(c.work)
 	}
+	// A failed install leaves nothing to unlock later.
+	c.dropTransientKey()
 	rep.Progress(StepCleanup, 100, "")
 	rep.Done(StepCleanup)
+}
+
+// dropTransientKey forgets the transient key: its slot is gone, or the
+// install failed.
+func (c *installRun) dropTransientKey() {
+	if c.tkeyPath != "" {
+		_ = os.Remove(c.tkeyPath)
+		_ = os.Remove(filepath.Dir(c.tkeyPath)) // only when empty
+		c.tkeyPath = ""
+	}
+	c.tkey = nil
 }

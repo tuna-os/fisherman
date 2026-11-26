@@ -206,6 +206,20 @@ func (e *Enroller) volume(ctx context.Context, node string) (string, error) {
 	return found[0], nil
 }
 
+// LUKSUUID returns the LUKS volume that node names (node itself, or the one
+// LUKS partition of a whole disk) and its LUKS UUID.
+func (e *Enroller) LUKSUUID(ctx context.Context, node string) (volume, uuid string, err error) {
+	volume, err = e.volume(ctx, node)
+	if err != nil {
+		return "", "", err
+	}
+	out, err := e.run.Run(ctx, "cryptsetup", []string{"luksUUID", volume}, nil, Unlock{})
+	if err != nil {
+		return "", "", ErrNoDevice
+	}
+	return volume, strings.TrimSpace(string(out)), nil
+}
+
 // ListSlots returns the enabled keyslots of node with their types.
 func (e *Enroller) ListSlots(ctx context.Context, node string) ([]Slot, error) {
 	out, err := e.run.Run(ctx, "cryptsetup", []string{"luksDump", node}, nil, Unlock{})

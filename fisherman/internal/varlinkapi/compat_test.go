@@ -338,6 +338,12 @@ func TestCompatGnomeSetupFlow(t *testing.T) {
 		t.Fatalf("run: %v", frames)
 	}
 
+	// No moment of the flow leaves a disk that the empty password opens:
+	// the empty unlock password below stands for the install key.
+	if e.mock.OpensWithEmptyPassword("/dev/nvme0n1") {
+		t.Fatal("Run left a volume that the empty password opens")
+	}
+
 	c := e.client(t)
 	// 2. MakeRecoveryKey
 	var mk struct {
@@ -395,6 +401,10 @@ func TestCompatGnomeSetupFlow(t *testing.T) {
 		"node": "/dev/nvme0n1", "mechanism": "recovery", "unlockPassword": ""}, nil)
 	if callErr(err) != IfaceCryptEnroll+".PasswordIncorrect" {
 		t.Fatalf("want PasswordIncorrect, got %v", err)
+	}
+
+	if e.mock.OpensWithEmptyPassword("/dev/nvme0n1") {
+		t.Fatal("the finished volume opens with the empty password")
 	}
 
 	// 7. Reboot with skipInhibitors, as gnome-setup does

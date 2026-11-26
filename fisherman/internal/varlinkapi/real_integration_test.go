@@ -311,7 +311,7 @@ func TestIntegrationInstallEndToEnd(t *testing.T) {
 	if _, err := e.try([]byte("wrong passphrase"), "cryptsetup", "open", "--test-passphrase", "--key-file=-", luks); err == nil {
 		t.Error("a wrong passphrase unlocks the root")
 	}
-	if out, err := e.try(nil, systemdCryptsetup(), "attach", "it-empty-"+filepath.Base(e.dir), luks, "-", "try-empty-password=yes,headless=yes"); err == nil {
+	if out, err := e.try(nil, itSystemdCryptsetup(), "attach", "it-empty-"+filepath.Base(e.dir), luks, "-", "try-empty-password=yes,headless=yes"); err == nil {
 		_, _ = e.try(nil, "cryptsetup", "close", "it-empty-"+filepath.Base(e.dir))
 		t.Errorf("the empty passphrase still unlocks the root:\n%s", out)
 	}
@@ -527,4 +527,16 @@ func TestIntegrationProbeReadOnly(t *testing.T) {
 			reason, sizeLabel(d.FreeBytes), res.TPM.Usable, len(d.ExistingData.Partitions))
 	}
 	t.Logf("tpm=%+v rst=%+v live=%+v handoff=%+v", res.TPM, res.IntelRST, res.Live, res.Handoff)
+}
+
+// itSystemdCryptsetup finds the helper that opens a volume with the empty
+// passphrase, which the cryptsetup CLI cannot. The test uses it to prove
+// that the empty passphrase opens nothing.
+func itSystemdCryptsetup() string {
+	for _, p := range []string{"/usr/lib/systemd/systemd-cryptsetup", "/lib/systemd/systemd-cryptsetup"} {
+		if fileExists(p) {
+			return p
+		}
+	}
+	return "/usr/lib/systemd/systemd-cryptsetup"
 }
