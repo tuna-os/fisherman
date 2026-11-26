@@ -163,6 +163,9 @@ func (m *Mock) Probe(context.Context) (ProbeResult, error) {
 	if m.sc.NoTPM {
 		res.TPM.Version = ""
 	}
+	if m.sc.NotLive {
+		res.Live = Live{IsLive: false}
+	}
 	if m.sc.RST {
 		res.IntelRST = IntelRST{Detected: true, Mode: ptr("vmd"), AffectedDisks: []string{"/dev/nvme0n1"}}
 	}

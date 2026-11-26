@@ -37,6 +37,7 @@ type Scenario struct {
 	RecoveryKeyError bool // MakeRecoveryKey and recovery enrolment fail
 	EnrollError      bool // Enroll answers PasswordIncorrect
 	HandoffError     bool // Handoff fails with io.systemd.System EIO
+	NotLive          bool // the daemon runs on an installed system, not live media
 }
 
 // scenarioDefs documents and builds every name.
