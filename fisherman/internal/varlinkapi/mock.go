@@ -93,6 +93,9 @@ func mockDisks(sc Scenario) []Disk {
 		ExistingData: empty, FreeBytes: 8 * gib, DiskSeq: 2,
 	}
 	disks := []Disk{nvme, stick}
+	if sc.NoDisks {
+		return []Disk{}
+	}
 	if sc.RST {
 		disks[0].Eligible = false
 		disks[0].ExcludedReason = ptr("intel_rst")
@@ -125,7 +128,8 @@ func (m *Mock) Requirements(context.Context) (RequirementsResult, error) {
 	gates := []Gate{
 		{ID: "ram", OK: ramOK, Severity: "block", Required: ptr(probe.SizeLabel(probe.MinRAMBytes)),
 			Actual: ptr(probe.SizeLabel(ram)), Message: "At least 4 GB of memory"},
-		{ID: "cpu", OK: true, Severity: "block", Required: ptr("2 cores"), Actual: ptr("8 cores"),
+		{ID: "cpu", OK: !m.sc.LowCPU, Severity: "block", Required: ptr("2 cores"),
+			Actual:  ptr(map[bool]string{true: "1 core", false: "8 cores"}[m.sc.LowCPU]),
 			Message: "At least 2 CPU cores"},
 		{ID: "firmware", OK: uefiOK, Severity: "block", Required: ptr("UEFI"),
 			Actual:  ptr(map[bool]string{true: "UEFI", false: "BIOS"}[uefiOK]),
@@ -137,7 +141,10 @@ func (m *Mock) Requirements(context.Context) (RequirementsResult, error) {
 	if !uefiOK {
 		gates[2].Action = ptr("firmware_setup")
 	}
-	return RequirementsResult{MeetsRequirements: ramOK && uefiOK, Gates: gates}, nil
+	if m.sc.LowCPU {
+		gates[1].Action = ptr("power_off")
+	}
+	return RequirementsResult{MeetsRequirements: ramOK && uefiOK && !m.sc.LowCPU, Gates: gates}, nil
 }
 
 func (m *Mock) Probe(context.Context) (ProbeResult, error) {
@@ -155,6 +162,9 @@ func (m *Mock) Probe(context.Context) (ProbeResult, error) {
 	}
 	if m.sc.NoTPM {
 		res.TPM.Version = ""
+	}
+	if m.sc.NotLive {
+		res.Live = Live{IsLive: false}
 	}
 	if m.sc.RST {
 		res.IntelRST = IntelRST{Detected: true, Mode: ptr("vmd"), AffectedDisks: []string{"/dev/nvme0n1"}}
@@ -289,7 +299,17 @@ func (m *Mock) createVolume(plan InstallPlan) {
 // recoveryAlphabet is systemd's modhex alphabet for recovery keys.
 const recoveryAlphabet = "cbdefghijklnrtuv"
 
+// FixedRecoveryKey is the key of the fixed-key scenario: a key of the right
+// shape that no machine has, so a screenshot can show it.
+const FixedRecoveryKey = "cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv-cbdefghi-jklnrtuv"
+
 func (m *Mock) MakeRecoveryKey(context.Context) (Secret, error) {
+	if m.sc.RecoveryKeyError {
+		return "", ErrNoDevice
+	}
+	if m.sc.FixedKey {
+		return Secret(FixedRecoveryKey), nil
+	}
 	b := make([]byte, 64)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
@@ -309,6 +329,12 @@ func (m *Mock) Enroll(ctx context.Context, p EnrollParams) (EnrollResult, error)
 	defer m.mu.Unlock()
 	slots, ok := m.volumes[p.Node]
 	if !ok {
+		return EnrollResult{}, ErrNoDevice
+	}
+	if m.sc.EnrollError {
+		return EnrollResult{}, ErrPasswordIncorrect
+	}
+	if m.sc.RecoveryKeyError && p.Mechanism == MechRecovery {
 		return EnrollResult{}, ErrNoDevice
 	}
 	switch p.Mechanism {
@@ -422,6 +448,9 @@ func (m *Mock) Shutdown(_ context.Context, kind string, p ShutdownParams) error 
 }
 
 func (m *Mock) Handoff(_ context.Context, mode string) (bool, error) {
+	if m.sc.HandoffError {
+		return false, systemErr(errnoEIO, "EIO", "mock injected handoff failure")
+	}
 	m.record("handoff:" + mode)
 	return mode == "migrate", nil
 }

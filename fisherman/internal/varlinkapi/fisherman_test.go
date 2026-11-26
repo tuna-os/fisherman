@@ -668,3 +668,40 @@ func TestIDLMatchesHandlers(t *testing.T) {
 		}
 	}
 }
+
+func TestWalkthroughScenarios(t *testing.T) {
+	ctx := context.Background()
+	sc, err := ParseScenario("fixed-key,low-cpu,no-disks,handoff-error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := NewMock(sc, 0)
+	for i := 0; i < 2; i++ {
+		if k, err := m.MakeRecoveryKey(ctx); err != nil || string(k) != FixedRecoveryKey {
+			t.Fatalf("fixed key: %q %v", k, err)
+		}
+	}
+	if pr, _ := m.Probe(ctx); len(pr.Disks) != 0 {
+		t.Fatalf("no-disks: %d disks", len(pr.Disks))
+	}
+	if r, _ := m.Requirements(ctx); r.MeetsRequirements || r.Gates[1].OK {
+		t.Fatalf("low-cpu: %+v", r)
+	}
+	if _, err := m.Handoff(ctx, "reboot"); err == nil {
+		t.Fatal("handoff-error: no error")
+	}
+	sc, _ = ParseScenario("recovery-key-error")
+	if _, err := NewMock(sc, 0).MakeRecoveryKey(ctx); err == nil {
+		t.Fatal("recovery-key-error: no error")
+	}
+}
+
+func TestNotLiveScenario(t *testing.T) {
+	sc, err := ParseScenario("not-live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr, _ := NewMock(sc, 0).Probe(context.Background()); pr.Live.IsLive {
+		t.Fatal("not-live: the probe says live")
+	}
+}

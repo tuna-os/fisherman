@@ -206,6 +206,13 @@ with commas, for example `no-tpm,existing-data`. `fishermand
 | `device-lost` | The disk disappears during `install_os`. `reason` is `device_lost`. |
 | `repart-error` | systemd-repart fails during `partition`. `reason` is `repart_failed`. |
 | `cancel` | The install waits at 50% of `install_os` until `Cancel`. |
+| `no-disks` | No disk at all. `ListCandidateDevices` answers `NoCandidateDevices`. |
+| `low-cpu` | The CPU gate blocks. |
+| `fixed-key` | `MakeRecoveryKey` returns the same key each time. Screenshots use it. |
+| `recovery-key-error` | `MakeRecoveryKey` and the enrolment of a recovery key fail with `ENODEV`. |
+| `enroll-error` | `Enroll` answers `PasswordIncorrect`. |
+| `not-live` | The daemon runs on an installed system: `live.isLive` is false. A frontend then offers images that need a download. |
+| `handoff-error` | `Handoff` fails with `io.systemd.System` `EIO`. |
 | `handoff-migrate` | The daemon's takeover decision is `migrate`. |
 | `handoff-soft-reboot` | The daemon's takeover decision is `soft_reboot`. |
 
