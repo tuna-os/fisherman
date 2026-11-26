@@ -695,3 +695,13 @@ func TestWalkthroughScenarios(t *testing.T) {
 		t.Fatal("recovery-key-error: no error")
 	}
 }
+
+func TestNotLiveScenario(t *testing.T) {
+	sc, err := ParseScenario("not-live")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pr, _ := NewMock(sc, 0).Probe(context.Background()); pr.Live.IsLive {
+		t.Fatal("not-live: the probe says live")
+	}
+}

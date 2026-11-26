@@ -67,6 +67,7 @@ var scenarioDefs = map[string]struct {
 	"fixed-key":           {"MakeRecoveryKey always returns the same key, for screenshots", func(s *Scenario) { s.FixedKey = true }},
 	"recovery-key-error":  {"MakeRecoveryKey and the recovery key enrolment fail", func(s *Scenario) { s.RecoveryKeyError = true }},
 	"enroll-error":        {"Enroll answers PasswordIncorrect", func(s *Scenario) { s.EnrollError = true }},
+	"not-live":            {"the daemon runs on an installed system, not on live media", func(s *Scenario) { s.NotLive = true }},
 	"handoff-error":       {"Handoff fails with io.systemd.System EIO", func(s *Scenario) { s.HandoffError = true }},
 	"handoff-migrate":     {"the daemon's takeover decision is migrate (btrfs seed)", func(s *Scenario) { s.HandoffMode = handoff.ModeMigrate }},
 	"handoff-soft-reboot": {"the daemon's takeover decision is soft_reboot (EL10 block copy)", func(s *Scenario) { s.HandoffMode = handoff.ModeSoftReboot }},
