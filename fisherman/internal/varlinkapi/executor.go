@@ -49,12 +49,19 @@ type InstallPlan struct {
 // TargetConfig is what ConfigureTarget stored. Written to the target during
 // the configure step.
 type TargetConfig struct {
-	User      *User
-	Hostname  string
-	Locale    string
-	Keymap    string
-	TimeZone  string
-	Autologin bool
+	User     *User
+	Hostname string
+	Locale   string
+	Keymap   string
+	TimeZone string
+	// CopyLocale, CopyKeymap and CopyTimezone copy the setting of the
+	// running system (the live session) where no value above is set. The
+	// io.systemd.SysInstall Run call asks for them: gnome-setup sets the
+	// language and keyboard of the live session through localed.
+	CopyLocale   bool
+	CopyKeymap   bool
+	CopyTimezone bool
+	Autologin    bool
 	// Privacy is set only when ConfigureTarget carried it.
 	Privacy *Privacy
 	// Accessibility is set only when ConfigureTarget carried it.

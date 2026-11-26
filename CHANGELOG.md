@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### 🐛 Fixed
 
+- **`io.systemd.SysInstall.Run` carries the live session's locale, keymap
+  and time zone.** fishermand read `copyLocale`, `copyKeymap` and
+  `copyTimezone` and dropped them. After an install from gnome-setup,
+  gnome-initial-setup showed the language "Unspecified" and an empty
+  keyboard list, and its Next button stayed off (tunaOS run 45690452449).
+  The configure step now passes `--copy-locale`, `--copy-keymap` and
+  `--copy-timezone` to `systemd-firstboot`.
+  When the language or keyboard was carried, gnome-initial-setup on the
+  installed system skips that page (`/etc/gnome-initial-setup/vendor.conf`,
+  merged with the image's skip list). Nothing carried, nothing written.
 - **`fishermand` names the caller to polkit as `pid,start-time,uid`.** It
   passed `pkcheck` the PID alone. `pkcheck` then reads the owner from
   `/proc` when it runs, so a caller that connected and exited could be

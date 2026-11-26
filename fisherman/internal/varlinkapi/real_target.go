@@ -62,14 +62,26 @@ func (r Real) configureDeployment(ctx context.Context, d string, t TargetConfig)
 	// Locale, keymap, time zone, hostname. stdin stays empty so firstboot
 	// can never prompt.
 	args := []string{"--root=" + d, "--force"}
-	if t.Locale != "" {
+	// A value from ConfigureTarget wins over a copy from the running system.
+	// systemd-firstboot copies a setting only when the running system has
+	// one (/etc/locale.conf, /etc/vconsole.conf, /etc/localtime).
+	switch {
+	case t.Locale != "":
 		args = append(args, "--locale="+t.Locale)
+	case t.CopyLocale:
+		args = append(args, "--copy-locale")
 	}
-	if t.Keymap != "" {
+	switch {
+	case t.Keymap != "":
 		args = append(args, "--keymap="+t.Keymap)
+	case t.CopyKeymap:
+		args = append(args, "--copy-keymap")
 	}
-	if t.TimeZone != "" {
+	switch {
+	case t.TimeZone != "":
 		args = append(args, "--timezone="+t.TimeZone)
+	case t.CopyTimezone:
+		args = append(args, "--copy-timezone")
 	}
 	if t.Hostname != "" {
 		args = append(args, "--hostname="+t.Hostname)
@@ -77,6 +89,11 @@ func (r Real) configureDeployment(ctx context.Context, d string, t TargetConfig)
 	if len(args) > 2 {
 		if _, err := c.Run(ctx, "systemd-firstboot", args, CmdOpts{}); err != nil {
 			return warns, err
+		}
+		// Only after the copy succeeded: a carried language and keyboard
+		// are not asked again on the first boot.
+		if _, err := r.gisHandoff(d, t); err != nil {
+			warns = append(warns, "gnome-initial-setup still asks for language and keyboard: "+err.Error())
 		}
 	}
 

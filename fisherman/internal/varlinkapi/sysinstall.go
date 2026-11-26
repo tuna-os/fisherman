@@ -211,6 +211,14 @@ func (s *Service) run(ctx context.Context, c *varlink.Call, w varlink.ReplyWrite
 	}
 	plan := s.planFor(Config{}, *disk)
 	plan.Erase, plan.Encryption = p.Erase, enc
+	// copyLocale, copyKeymap and copyTimezone carry the live session's
+	// settings to the installed system, as systemd-sysinstall does. Without
+	// them the first boot of an albacore:gnome install showed the language
+	// "Unspecified" and an empty keyboard list in gnome-initial-setup, whose
+	// Next button then stayed off (tunaOS run 45690452449).
+	plan.Target.CopyLocale = p.CopyLocale != nil && *p.CopyLocale
+	plan.Target.CopyKeymap = p.CopyKeymap != nil && *p.CopyKeymap
+	plan.Target.CopyTimezone = p.CopyTimezone != nil && *p.CopyTimezone
 
 	more := c.More
 	final := s.runInstall(ictx, plan, func(ev Event) {

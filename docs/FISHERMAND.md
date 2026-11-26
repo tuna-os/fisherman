@@ -175,6 +175,19 @@ server).
   purpose.
 - `Run` encrypts with an empty password. gnome-setup replaces it through
   `io.systemd.CryptEnroll`.
+- `Run` honors `copyLocale`, `copyKeymap` and `copyTimezone`. The configure
+  step then runs `systemd-firstboot --copy-locale`, `--copy-keymap` and
+  `--copy-timezone` against each deployment. So the installed system gets the
+  language and keyboard that the live session set through localed. A value
+  from `ConfigureTarget` wins over a copy. `null` or `false` copies nothing.
+- A copy can carry a language (a `LANG` other than `C` or `POSIX`) or a
+  keyboard into the deployment. For each one, the configure step adds
+  `language` or `keyboard` to `[pages] skip` in the deployment's
+  `/etc/gnome-initial-setup/vendor.conf`. It starts from the image's
+  `/usr/share` copy and keeps its entries. gnome-initial-setup then does not
+  ask again on the first boot. Without a carried value it writes nothing, and
+  it never writes on the live system. A deployment without
+  gnome-initial-setup is left alone.
 - `Run` errors: `ConflictingDiskLabelPresent`, `InsufficientFreeSpace` and
   `DiskTooSmall` when `erase` is false or the disk is too small. A failed
   install returns `io.systemd.System` with an errno (`ENODEV` for a lost
