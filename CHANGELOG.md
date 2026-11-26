@@ -29,6 +29,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes the empty unlock password as that key, so gnome-setup is
   unchanged. `finalize` refuses a volume that the empty passphrase opens.
   The mock models the key too.
+- **The empty-passphrase check of `finalize` tests keyslots only.**
+  `cryptsetup open --test-passphrase` tries the volume's tokens before the
+  key file. On a TPM install the systemd-tpm2 token opened the disk. Thus
+  `finalize` refused every TPM install: "the installed disk opens with an
+  empty passphrase" (tunaOS run 45820164130). The check now passes
+  `--disable-external-tokens` and a `--token-type` that no volume has, so
+  no token takes part. A cryptsetup failure other than "no key available"
+  stops the install with the exit status and the stderr of cryptsetup.
 - **`fishermand` names the caller to polkit as `pid,start-time,uid`.** It
   passed `pkcheck` the PID alone. `pkcheck` then reads the owner from
   `/proc` when it runs, so a caller that connected and exited could be

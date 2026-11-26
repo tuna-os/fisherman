@@ -36,6 +36,11 @@ type fakeCmd struct {
 	// emptyOpens makes the empty passphrase open the volume, as an empty
 	// keyslot would.
 	emptyOpens bool
+	// tpmToken: the volume has a systemd-tpm2 token and the TPM unlocks it.
+	// `cryptsetup open` tries tokens before the key file, so any key "opens"
+	// unless the call keeps the token out: --disable-external-tokens (no
+	// plugin) or a --token-type other than systemd-tpm2 (run 45820164130).
+	tpmToken bool
 	// the fixture gets populated on mount.
 	oldUUID map[string]string
 }
@@ -99,6 +104,9 @@ func (f *fakeCmd) Run(ctx context.Context, name string, args []string, o CmdOpts
 	case "cryptsetup":
 		if args[0] == "luksUUID" {
 			return []byte("99999999-aaaa-bbbb-cccc-dddddddddddd\n"), nil
+		}
+		if args[0] == "open" && len(args) > 2 && args[1] == "--test-passphrase" && f.tpmToken && tpmTokenTried(args) {
+			return nil, nil
 		}
 		if args[0] == "open" && len(args) > 2 && args[1] == "--test-passphrase" && strings.Contains(args[2], "/empty-key-") && !f.emptyOpens {
 			return nil, noKeyErr{}
@@ -386,6 +394,7 @@ func newInstallFixture(t *testing.T, tpm bool) *installFixture {
 		}
 	}
 	fx.cmd = newFakeCmd(t, root)
+	fx.cmd.tpmToken = tpm
 	fx.crypt = &fakeCrypt{slots: []int{0}, tpm: tpm}
 	if tpm {
 		fx.crypt.slots = []int{0, 1}
@@ -855,3 +864,40 @@ type noKeyErr struct{}
 
 func (noKeyErr) Error() string { return "cryptsetup: exit status 2" }
 func (noKeyErr) ExitCode() int { return 2 }
+
+// tpmTokenTried: whether `cryptsetup open` with args tries a systemd-tpm2
+// token.
+func tpmTokenTried(args []string) bool {
+	for _, a := range args {
+		if a == "--disable-external-tokens" || (strings.HasPrefix(a, "--token-type=") && a != "--token-type=systemd-tpm2") {
+			return false
+		}
+	}
+	return true
+}
+
+// exitErr is a failed command with an exit status, as exec.ExitError.
+type exitErr int
+
+func (e exitErr) Error() string { return fmt.Sprintf("exit status %d", int(e)) }
+func (e exitErr) ExitCode() int { return int(e) }
+
+// TestRealInstallFinalizeCheckFailsClosed: when cryptsetup cannot tell
+// whether the empty passphrase opens the disk, the install fails and says
+// why: the exit status and cryptsetup's stderr.
+func TestRealInstallFinalizeCheckFailsClosed(t *testing.T) {
+	fx := newInstallFixture(t, true)
+	fx.cmd.hook = func(_ context.Context, name string, args []string, o CmdOpts) ([]byte, error, bool) {
+		if name == "cryptsetup" && len(args) > 2 && args[1] == "--test-passphrase" && strings.Contains(args[2], "/empty-key-") {
+			if o.Quiet {
+				t.Error("the empty-passphrase test hides cryptsetup's stderr")
+			}
+			return nil, &CmdError{Name: name, Err: exitErr(5), Stderr: "Cannot use device /dev/fake1p4 which is in use."}, true
+		}
+		return nil, nil, false
+	}
+	err := fx.real.Install(context.Background(), fixturePlan(Encryption{Type: "tpm2_luks", Passphrase: ptr(Secret(""))}), &recReporter{})
+	if err == nil || !strings.Contains(err.Error(), "testing the installed disk for an empty passphrase: cryptsetup: exit status 5: Cannot use device") {
+		t.Fatalf("Install = %v, want the cryptsetup failure", err)
+	}
+}
