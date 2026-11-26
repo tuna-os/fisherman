@@ -31,7 +31,7 @@ sync
 systemd-firstboot --root=$ROOT/run/fishermand/install-$N/mnt/root/ostree/deploy/default/deploy/abc.0 --force --locale=en_GB.UTF-8 --keymap=gb --timezone=Europe/London --hostname=ada-box
 useradd --root $ROOT/run/fishermand/install-$N/mnt/root/ostree/deploy/default/deploy/abc.0 --no-create-home --home-dir /home/ada --shell /bin/bash --comment Ada Lovelace --groups wheel ada
 btrfs filesystem resize max $ROOT/run/fishermand/install-$N/mnt/root
-efibootmgr --create --disk /dev/fake1 --part 2 --label TunaOS --loader \EFI\fedora\shimx64.efi
+efibootmgr --create --disk /dev/fake1 --part 2 --label Bonito --loader \EFI\fedora\shimx64.efi
 sync
 umount -R $ROOT/run/fishermand/install-$N/mnt/efi
 umount -R $ROOT/run/fishermand/install-$N/mnt/boot

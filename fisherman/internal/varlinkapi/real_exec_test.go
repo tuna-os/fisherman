@@ -229,6 +229,7 @@ func (f *fakeCmd) mount(dev, dir string) error {
 		w("grub2/grubenv", "# GRUB Environment Block\nsaved_entry=medium-live\n"+strings.Repeat("#", 960))
 	default: // the unlocked root
 		w("ostree/deploy/default/deploy/abc.0/etc/machine-id", "uninitialized\n")
+		w("ostree/deploy/default/deploy/abc.0/usr/lib/os-release", "NAME=\"Bonito\"\nID=bonito\n")
 		w("ostree/deploy/default/deploy/abc.0/etc/fstab", "UUID=root-OLD / btrfs defaults 0 0\nUUID=boot-OLD /boot ext4 defaults 0 0\n")
 		w("ostree/deploy/default/deploy/abc.0/etc/group", "root:x:0:\nwheel:x:10:\n")
 		w("ostree/deploy/default/deploy/abc.0/usr/lib/systemd/system/gdm.service", "")
@@ -533,7 +534,7 @@ func TestRealInstallFixups(t *testing.T) {
 		t.Error("grubenv still defaults to the live entry")
 	}
 	cmds := fx.cmd.normalized()
-	if !strings.Contains(cmds, "efibootmgr --create --disk /dev/fake1 --part 2 --label TunaOS --loader \\EFI\\fedora\\shimx64.efi") {
+	if !strings.Contains(cmds, "efibootmgr --create --disk /dev/fake1 --part 2 --label Bonito --loader \\EFI\\fedora\\shimx64.efi") {
 		t.Errorf("no firmware entry in:\n%s", cmds)
 	}
 	if !strings.Contains(cmds, "--tpm2-device=auto") {
