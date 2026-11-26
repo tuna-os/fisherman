@@ -73,7 +73,7 @@ are never null.
 | `Requirements()` | RAM, CPU and firmware gates. Each gate has `ok`, `severity` and an optional `action` (`power_off`, `firmware_setup`). |
 | `Probe()` | Disks, TPM, Intel RST flag, live media, the handoff decision and the license. Each disk has `existingData`, `freeBytes` and `minimalSizeBytes`. |
 | `Validate(config, partial?)` | Machine-readable problems, returned as data. `partial` checks only the fields present and reads no machine state. |
-| `ConfigureTarget(user?, hostname?, locale?, keymap?, timeZone?, autologin?, privacy?)` | Stores the choices. They reach the target in the `configure` step. Returns problems as data. Send `privacy` only when the user changed it. |
+| `ConfigureTarget(user?, hostname?, locale?, keymap?, timeZone?, autologin?, privacy?, accessibility?)` | Stores the choices. They reach the target in the `configure` step. Returns problems as data. Send `privacy` and `accessibility` only when the user changed them. |
 | `Install(config, confirmed)` | Needs `more`. Streams events. Refused unless `confirmed` is true. |
 | `Handoff(mode?)` | The daemon decides when `mode` is absent. Only after a completed install. |
 | `Cancel()` | Stops a running install and waits for cleanup. Safe to call when idle. |
@@ -293,6 +293,10 @@ Rules and limits:
   `unsupported_config`, `change_settings`.
 - `ConfigureTarget`'s `privacy.locationServices` lands in
   `/etc/tunaos/privacy.conf`. The image must act on it.
+- `ConfigureTarget`'s `accessibility` (screen reader, display scale) lands in
+  `/etc/tunaos/accessibility.conf`, with a script and an XDG autostart entry
+  that apply it once for each account at its first login: the at-spi status
+  and its GSettings key, and `cosmic-randr` for the scale where the image has it.
 - The step weights did not change, so the bar sits low during `partition`.
 - `Shutdown` refuses `KExec` and `SoftReboot`.
 

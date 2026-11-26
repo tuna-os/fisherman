@@ -163,6 +163,14 @@ type Privacy struct {
 	LocationServices bool `json:"locationServices,omitempty"`
 }
 
+// Accessibility holds the choices that a person made in the live session for
+// their own use: they carry to each account of the installed system.
+// ScalePercent is the display scale in percent (100 to 300); 0 leaves it.
+type Accessibility struct {
+	ScreenReader bool `json:"screenReader,omitempty"`
+	ScalePercent int  `json:"scalePercent,omitempty"`
+}
+
 // RequirementsResult is the Requirements reply.
 type RequirementsResult struct {
 	MeetsRequirements bool   `json:"meetsRequirements"`

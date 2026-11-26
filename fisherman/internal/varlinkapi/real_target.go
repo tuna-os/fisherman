@@ -98,6 +98,11 @@ func (r Real) configureDeployment(ctx context.Context, d string, t TargetConfig)
 			return warns, err
 		}
 	}
+	if t.Accessibility != nil {
+		if err := writeAccessibility(d, *t.Accessibility); err != nil {
+			return warns, err
+		}
+	}
 	return warns, nil
 }
 
@@ -271,6 +276,97 @@ func writePrivacy(d string, p Privacy) error {
 		val = "yes"
 	}
 	return os.WriteFile(path, []byte("[Privacy]\nLocationServices="+val+"\n"), 0o644)
+}
+
+// The accessibility choices of the live session (a screen reader, a display
+// scale) reach each account of the installed system at its first login:
+//
+//   - AccessibilityConf records them, as PrivacyConf records privacy.
+//   - AccessibilityScript applies them in the session, once per account. The
+//     screen reader is the at-spi status that the session watches (COSMIC
+//     starts orca when it turns on) and the GSettings key that at-spi keeps it
+//     in (measured: at-spi-bus-launcher writes screen-reader-enabled and reads
+//     it at its start). The scale goes to each enabled output through
+//     cosmic-randr, where the image has it.
+//   - AccessibilityAutostart starts the script in each session.
+//
+// Nothing here is per user: the daemon makes the account, but the first
+// session makes the home's settings, and the choice is of the person who
+// installs.
+const (
+	AccessibilityConf      = "etc/tunaos/accessibility.conf"
+	AccessibilityScript    = "etc/tunaos/first-login-accessibility"
+	AccessibilityAutostart = "etc/xdg/autostart/io.tunaos.FirstLoginAccessibility.desktop"
+)
+
+func writeAccessibility(d string, a Accessibility) error {
+	if a.ScalePercent != 0 && (a.ScalePercent < 100 || a.ScalePercent > 300) {
+		return fmt.Errorf("accessibility: scale %d%% is not 100 to 300", a.ScalePercent)
+	}
+	reader := "no"
+	if a.ScreenReader {
+		reader = "yes"
+	}
+	scale := ""
+	if a.ScalePercent != 0 {
+		scale = fmt.Sprintf("%d.%02d", a.ScalePercent/100, a.ScalePercent%100)
+	}
+	files := []struct {
+		path string
+		mode os.FileMode
+		text string
+	}{
+		{AccessibilityConf, 0o644, fmt.Sprintf("[Accessibility]\nScreenReader=%s\nScalePercent=%d\n", reader, a.ScalePercent)},
+		{AccessibilityScript, 0o755, accessibilityScript(a.ScreenReader, scale)},
+		{AccessibilityAutostart, 0o644, "[Desktop Entry]\nType=Application\nName=Accessibility settings of the installer\n" +
+			"Exec=/" + AccessibilityScript + "\nNoDisplay=true\nX-GNOME-Autostart-Phase=Applications\n"},
+	}
+	for _, f := range files {
+		path := filepath.Join(d, f.path)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte(f.text), f.mode); err != nil {
+			return err
+		}
+		if err := os.Chmod(path, f.mode); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// accessibilityScript is the first-login script. scale is "" to leave the
+// display scale, else "1.50".
+func accessibilityScript(reader bool, scale string) string {
+	var b strings.Builder
+	b.WriteString(`#!/bin/sh
+# The accessibility choices of the installer, once for each account
+# (fisherman, ConfigureTarget accessibility). Delete this file and its
+# autostart entry to stop it.
+done="${XDG_STATE_HOME:-$HOME/.local/state}/tunaos/first-login-accessibility.done"
+[ -e "$done" ] && exit 0
+`)
+	if reader {
+		b.WriteString(`gsettings set org.gnome.desktop.a11y.applications screen-reader-enabled true
+busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status ScreenReaderEnabled b true
+`)
+	}
+	if scale != "" {
+		b.WriteString(`if command -v cosmic-randr >/dev/null; then
+	# One line for each enabled output: NAME WIDTH HEIGHT REFRESH(mHz)
+	cosmic-randr list --kdl | awk '
+		/^output "/ { split($0, q, "\""); name = q[2]; on = ($0 ~ /enabled=#true/) }
+		/^ *mode / && /current=#true/ && on { print name, $2, $3, $4 }
+	' | while read -r name width height refresh; do
+		cosmic-randr mode --scale ` + scale + ` --refresh "$((refresh / 1000)).$(printf %03d $((refresh % 1000)))" "$name" "$width" "$height"
+	done
+fi
+`)
+	}
+	b.WriteString(`mkdir -p "$(dirname "$done")" && : >"$done"
+`)
+	return b.String()
 }
 
 // setShadowHash replaces the password field of user in a shadow file and

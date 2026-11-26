@@ -57,6 +57,8 @@ type TargetConfig struct {
 	Autologin bool
 	// Privacy is set only when ConfigureTarget carried it.
 	Privacy *Privacy
+	// Accessibility is set only when ConfigureTarget carried it.
+	Accessibility *Accessibility
 }
 
 // Reporter receives step events from an install. The service turns them

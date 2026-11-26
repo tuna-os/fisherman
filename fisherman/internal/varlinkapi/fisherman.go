@@ -60,11 +60,17 @@ func (s *Service) registerFisherman(srv *varlink.Server) {
 			TimeZone  *string  `json:"timeZone"`
 			Autologin *bool    `json:"autologin"`
 			Privacy   *Privacy `json:"privacy"`
+			// Accessibility arrives when the person changed it in the
+			// live session.
+			Accessibility *Accessibility `json:"accessibility"`
 		}
 		if err := c.Decode(&p); err != nil {
 			return invalidParam("user")
 		}
 		errs := s.checkIdentity(p.Hostname, p.User)
+		if a := p.Accessibility; a != nil && a.ScalePercent != 0 && (a.ScalePercent < 100 || a.ScalePercent > 300) {
+			errs = append(errs, ValidationError{"accessibility.scalePercent", CodeScaleInvalid, "the display scale must be 100 to 300 percent"})
+		}
 		if p.Locale != nil && !localeRe.MatchString(*p.Locale) {
 			errs = append(errs, ValidationError{"locale", CodeLocaleInvalid, "locale must look like en_US.UTF-8"})
 		}
@@ -104,6 +110,9 @@ func (s *Service) registerFisherman(srv *varlink.Server) {
 		// locationServices field defaults to false.
 		if p.Privacy != nil {
 			s.target.Privacy = p.Privacy
+		}
+		if p.Accessibility != nil {
+			s.target.Accessibility = p.Accessibility
 		}
 		s.mu.Unlock()
 		s.log.Info("target configured")
