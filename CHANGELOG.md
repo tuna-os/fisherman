@@ -19,6 +19,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   When the language or keyboard was carried, gnome-initial-setup on the
   installed system skips that page (`/etc/gnome-initial-setup/vendor.conf`,
   merged with the image's skip list). Nothing carried, nothing written.
+- **No install leaves a disk that opens with an empty passphrase.**
+  systemd-repart encrypted the new root with an empty key, and it stayed
+  until the frontend replaced it. With gnome-setup that happened only on
+  its recovery key page, with a TPM or without one. A closed or crashed
+  frontend, a power cut or a reboot before that page left an installed
+  disk that any machine opened with an empty passphrase. Now repart uses
+  a random install key that only the daemon's tmpfs holds. CryptEnroll
+  takes the empty unlock password as that key, so gnome-setup is
+  unchanged. `finalize` refuses a volume that the empty passphrase opens.
+  The mock models the key too.
 - **`fishermand` names the caller to polkit as `pid,start-time,uid`.** It
   passed `pkcheck` the PID alone. `pkcheck` then reads the owner from
   `/proc` when it runs, so a caller that connected and exited could be

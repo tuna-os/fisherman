@@ -28,8 +28,11 @@ type Mock struct {
 	disks    []Disk
 	watchers map[chan DeviceEvent]struct{}
 	volumes  map[string][]mockSlot
-	actions  []string
-	shutdown bool
+	// transient is the install key of a volume, as the real executor keeps
+	// it (transient_key.go): the empty unlock password stands for it.
+	transient map[string]string
+	actions   []string
+	shutdown  bool
 }
 
 type mockSlot struct {
@@ -44,7 +47,7 @@ var _ Executor = (*Mock)(nil)
 // progress ticks (0 for tests); a UI demo might use 50ms.
 func NewMock(sc Scenario, stepDelay time.Duration) *Mock {
 	m := &Mock{sc: sc, stepDelay: stepDelay,
-		watchers: map[chan DeviceEvent]struct{}{}, volumes: map[string][]mockSlot{}}
+		watchers: map[chan DeviceEvent]struct{}{}, volumes: map[string][]mockSlot{}, transient: map[string]string{}}
 	m.disks = mockDisks(sc)
 	return m
 }
@@ -266,8 +269,9 @@ func (m *Mock) fail(plan InstallPlan, step string) *InstallError {
 }
 
 // createVolume records the LUKS slots a finished install leaves behind.
-// Run (gnome-setup) leaves an empty password, which gnome-setup replaces over
-// io.systemd.CryptEnroll. The tunaos Install enrols the chosen passphrase.
+// Run (gnome-setup) leaves the transient install key, never an empty
+// password; gnome-setup replaces it over io.systemd.CryptEnroll. The tunaos
+// Install enrols the chosen passphrase.
 func (m *Mock) createVolume(plan InstallPlan) {
 	if plan.Encryption.Type == "" || plan.Encryption.Type == "none" {
 		return
@@ -277,12 +281,23 @@ func (m *Mock) createVolume(plan InstallPlan) {
 	if plan.Encryption.Passphrase != nil {
 		pass = plan.Encryption.Passphrase.Reveal()
 	}
+	transient := ""
+	if pass == "" {
+		k, err := newTransientKey()
+		if err != nil {
+			return
+		}
+		pass, transient = string(k), string(k)
+	}
 	slots = append(slots, mockSlot{num: 0, typ: MechPassword, secret: pass})
 	if plan.Encryption.Type == "tpm2_luks" || plan.Encryption.Type == "tpm2_luks_passphrase" {
 		slots = append(slots, mockSlot{num: 1, typ: MechTPM2})
 	}
 	m.mu.Lock()
 	m.volumes[plan.Disk.Path] = slots
+	if transient != "" {
+		m.transient[plan.Disk.Path] = transient
+	}
 	m.mu.Unlock()
 }
 
@@ -323,9 +338,13 @@ func (m *Mock) Enroll(ctx context.Context, p EnrollParams) (EnrollResult, error)
 	if p.UnlockPassword == nil {
 		return EnrollResult{}, ErrPasswordRequired
 	}
+	unlock := p.UnlockPassword.Reveal()
+	if t, ok := m.transient[p.Node]; ok && unlock == "" {
+		unlock = t
+	}
 	unlocked := false
 	for _, s := range slots {
-		if s.typ == MechPassword && s.secret == p.UnlockPassword.Reveal() {
+		if s.typ == MechPassword && s.secret == unlock {
 			unlocked = true
 		}
 	}
@@ -386,6 +405,15 @@ func (m *Mock) Enroll(ctx context.Context, p EnrollParams) (EnrollResult, error)
 	}
 	slots = append(slots, mockSlot{num: num, typ: p.Mechanism, secret: secret})
 	m.volumes[p.Node] = slots
+	if t, ok := m.transient[p.Node]; ok {
+		still := false
+		for _, s := range slots {
+			still = still || (s.typ == MechPassword && s.secret == t)
+		}
+		if !still {
+			delete(m.transient, p.Node)
+		}
+	}
 	res := EnrollResult{Slot: &num, WipedSlots: wiped, State: ptr("enrolled")}
 	if p.Mechanism == MechRecovery {
 		res.RecoveryKey = &key
@@ -442,4 +470,17 @@ func (m *Mock) decision() HandoffDecision {
 // DecideHandoff implements Handoffer: the mock reports its scenario mode.
 func (m *Mock) DecideHandoff(context.Context) (HandoffDecision, error) {
 	return m.decision(), nil
+}
+
+// OpensWithEmptyPassword reports whether the empty password opens the mock
+// volume on node. Tests use it to prove no install leaves one.
+func (m *Mock) OpensWithEmptyPassword(node string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.volumes[node] {
+		if s.typ == MechPassword && s.secret == "" {
+			return true
+		}
+	}
+	return false
 }

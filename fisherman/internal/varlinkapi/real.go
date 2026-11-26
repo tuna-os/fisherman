@@ -124,12 +124,26 @@ func (r Real) Enroll(ctx context.Context, p EnrollParams) (EnrollResult, error) 
 	if p.Password != nil {
 		opts.NewPassword = []byte(p.Password.Reveal())
 	}
+	var tkey []byte
+	var volume, tkeyPath string
 	if p.UnlockPassword != nil {
 		opts.Unlock = crypt.Unlock{Secret: []byte(p.UnlockPassword.Reveal())}
+		if p.UnlockPassword.Reveal() == "" {
+			// gnome-setup unlocks the fresh install with the empty
+			// password, as systemd-sysinstall leaves it. This daemon never
+			// leaves one: the empty password stands for the transient key
+			// of a volume this live session installed (transient_key.go).
+			if tkey, volume, tkeyPath = r.transientKeyFor(ctx, p.Node); tkey != nil {
+				opts.Unlock = crypt.Unlock{Secret: tkey}
+			}
+		}
 	}
 	res, err := enroller.Enroll(ctx, opts)
 	if err != nil {
 		return EnrollResult{}, mapCryptError(err)
+	}
+	if tkey != nil && len(res.WipedSlots) > 0 {
+		r.forgetTransientKey(ctx, volume, tkeyPath, tkey)
 	}
 	out := EnrollResult{WipedSlots: res.WipedSlots, Slot: res.Slot}
 	if res.RecoveryKey != nil {

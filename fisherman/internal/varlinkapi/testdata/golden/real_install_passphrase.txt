@@ -3,7 +3,7 @@ lsblk -rno PKNAME $ROOT/dev/fakemed3
 sfdisk --json /dev/fakemed
 wipefs --all --force /dev/fake1
 udevadm settle
-systemd-repart --dry-run=no --definitions=$ROOT/run/fishermand/install-$N/repart.d --empty=force --pretty=no --json=short --no-pager /dev/fake1
+systemd-repart --dry-run=no --definitions=$ROOT/run/fishermand/install-$N/repart.d --empty=force --key-file=$ROOT/run/fishermand/luks-transient/pending-install-$N --pretty=no --json=short --no-pager /dev/fake1
 udevadm settle
 cryptsetup luksUUID /dev/fake1p4
 cryptsetup open --type luks2 --key-file=- /dev/fake1p4 $MAPPER <stdin 21 bytes>
@@ -37,8 +37,9 @@ umount -R $ROOT/run/fishermand/install-$N/mnt/efi
 umount -R $ROOT/run/fishermand/install-$N/mnt/boot
 umount -R $ROOT/run/fishermand/install-$N/mnt/root
 cryptsetup close $MAPPER
+cryptsetup open --test-passphrase --key-file=$ROOT/run/fishermand/empty-key-$N /dev/fake1p4
 crypt: cryptsetup luksDump /dev/fake1p4
 crypt: cryptsetup luksUUID /dev/fake1p4
 crypt: cryptsetup luksDump /dev/fake1p4
-crypt: systemd-cryptenroll --wipe-slot=0 --password /dev/fake1p4 <new secret 21 bytes> <unlock empty>
+crypt: systemd-cryptenroll --wipe-slot=0 --password /dev/fake1p4 <new secret 21 bytes> <unlock secret 64 bytes>
 crypt: cryptsetup luksDump /dev/fake1p4
