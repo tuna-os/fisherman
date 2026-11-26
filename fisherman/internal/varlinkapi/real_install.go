@@ -503,17 +503,6 @@ func (c *installRun) verifyTPM2(ctx context.Context) error {
 
 // ---- mount ---------------------------------------------------------------
 
-// systemdCryptsetup finds the helper that opens a volume with the empty
-// passphrase, which the cryptsetup CLI cannot.
-func systemdCryptsetup() string {
-	for _, p := range []string{"/usr/lib/systemd/systemd-cryptsetup", "/lib/systemd/systemd-cryptsetup"} {
-		if fileExists(p) {
-			return p
-		}
-	}
-	return "/usr/lib/systemd/systemd-cryptsetup"
-}
-
 func (c *installRun) mountTarget(ctx context.Context) error {
 	var id [4]byte
 	_, _ = rand.Read(id[:])
